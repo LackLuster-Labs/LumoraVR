@@ -12,23 +12,26 @@ public partial class DebugOverlay : Control
     [Export] public RichTextLabel StatsText;
     [Export] public RichTextLabel ConsoleText;
     [Export] public LineEdit ConsoleInput;
-    readonly StringBuilder statsTextStringBuilder = new();
-    readonly StringBuilder consoleTextStringBuilder = new();
+    
+    private readonly StringBuilder _statsTextStringBuilder = new();
+    private readonly StringBuilder _consoleTextStringBuilder = new();
 
-    readonly string boolLabel = "  [[color=silver]bool[/color]]";
-    readonly string intLabel = "  [[color=lime_green]int[/color]]";
-    readonly string floatLabel = "  [[color=deep_sky_blue]float[/color]]";
-    readonly string vector2Label = "  [[color=deep_sky_blue]vec2[/color]]";
-    readonly string vector3Label = "  [[color=deep_sky_blue]vec3[/color]]";
-    readonly string stringLabel = "  [[color=red]string[/color]]";
+    private const string BoolLabel = "  [[color=silver]bool[/color]]";
+    private const string IntLabel = "  [[color=lime_green]int[/color]]";
+    private const string FloatLabel = "  [[color=deep_sky_blue]float[/color]]";
+    private const string Vector2Label = "  [[color=deep_sky_blue]vec2[/color]]";
+    private const string Vector3Label = "  [[color=deep_sky_blue]vec3[/color]]";
+    private const string StringLabel = "  [[color=red]string[/color]]";
 
-    readonly string boolTrueValue = "[color=pale_green]true[/color]";
-    readonly string boolFalseValue = "[color=indian_red]false[/color]";
-    readonly string intValue = "[color=pale_green]{0}[/color]";
-    readonly string floatValue = "[color=sky_blue]{0}[/color]";
-    readonly string vector2Value = "([color=sky_blue]{0},{1}[/color])";
-    readonly string vector3Value = "([color=sky_blue]{0},{1},{2}[/color])";
-    readonly string stringValue = "[color=indian_red]\"{0}\"[/color]";
+    private const string BoolTrueValue = "[color=pale_green]true[/color]";
+    private const string BoolFalseValue = "[color=indian_red]false[/color]";
+    private const string IntValue = "[color=pale_green]{0}[/color]";
+    private const string FloatValue = "[color=sky_blue]{0}[/color]";
+    private const string Vector2Value = "([color=sky_blue]{0},{1}[/color])";
+    private const string Vector3Value = "([color=sky_blue]{0},{1},{2}[/color])";
+    private const string StringValue = "[color=indian_red]\"{0}\"[/color]";
+
+    private static string DoBoolLabel(bool value) => value ? BoolTrueValue : BoolFalseValue;
 
     public override void _Ready()
     {
@@ -50,17 +53,31 @@ public partial class DebugOverlay : Control
             switch (strings[0])
             {
                 case "clear":
-                    for (int i = 0; i < recentEntries.Length; i++)
+                    for (int i = 0; i < _recentEntries.Length; i++)
                     {
-                        recentEntries[i] = string.Empty;
+                        _recentEntries[i] = string.Empty;
                     }
                     break;
                 case "connect":
-                    if (strings.Length < 2)
+                    if (strings.Length < 3)
                     {
-                        Logger.Warn("Usage: connect <ip>");
+                        Logger.Warn("Usage: connect <{direct}/{nat}> <{ip:port}/{identifier}>");
                         return;
                     }
+
+                    var method = strings[1];
+
+                    if (method.StartsWith('d')) //direct
+                    {
+                        var split = strings[2].Split(":");
+                        if (split.Length != 2 || int.TryParse(split[1], out var port)) return;
+                        ClientManager.Instance.JoinServer(split[0], port);
+                    }
+                    else if (method.StartsWith('n')) //nat
+                    {
+                        ClientManager.Instance.JoinNatServer(strings[2]);
+                    }
+                    
                     //MultiplayerScene.Instance.ConnectToServer(strings[1]);
                     break;
                 case "respawn":
@@ -81,59 +98,55 @@ public partial class DebugOverlay : Control
         }
     }
 
-    string[] recentEntries = new string[24];
+    private string[] _recentEntries = new string[24];
     private void OnLogMessageWritten(string message)
     {
-        for (int i = recentEntries.Length - 1; i > 0; i--)
+        for (var i = _recentEntries.Length - 1; i > 0; i--)
         {
-            recentEntries[i] = recentEntries[i - 1];
+            _recentEntries[i] = _recentEntries[i - 1];
         }
-        recentEntries[0] = message;
+        _recentEntries[0] = message;
     }
 
     public override void _Process(double delta)
     {
         base._Process(delta);
 
-        statsTextStringBuilder.Clear();
-        statsTextStringBuilder.AppendLine("[code]");
+        _statsTextStringBuilder.Clear();
+        _statsTextStringBuilder.AppendLine("[code]");
 
-        statsTextStringBuilder.AppendLine("Game");
-        statsTextStringBuilder.AppendLine($"{intLabel} FPS: {string.Format(intValue, Engine.GetFramesPerSecond())}");
-        statsTextStringBuilder.AppendLine($"{intLabel} Physics TPS: {string.Format(intValue, Engine.PhysicsTicksPerSecond)}");
-        statsTextStringBuilder.AppendLine();
+        _statsTextStringBuilder.AppendLine("Game");
+        _statsTextStringBuilder.AppendLine($"{IntLabel} FPS: {string.Format(IntValue, Engine.GetFramesPerSecond())}");
+        _statsTextStringBuilder.AppendLine($"{IntLabel} Physics TPS: {string.Format(IntValue, Engine.PhysicsTicksPerSecond)}");
+        _statsTextStringBuilder.AppendLine();
 
-        statsTextStringBuilder.AppendLine("Networking");
-        statsTextStringBuilder.AppendLine($"{intLabel} Player Count: {string.Format(intValue, MultiplayerScene.Instance.PlayerList.Count)}");
-        statsTextStringBuilder.AppendLine();
+        _statsTextStringBuilder.AppendLine("Networking");
+        _statsTextStringBuilder.AppendLine($"{IntLabel} Player Count: {string.Format(IntValue, MultiplayerScene.Instance.PlayerList.Count)}");
+        _statsTextStringBuilder.AppendLine();
 
         var player = MultiplayerScene.Instance.GetLocalPlayer();
 
+        _statsTextStringBuilder.AppendLine("Player");
         if (player is not null)
         {
-            statsTextStringBuilder.AppendLine("Player");
-            statsTextStringBuilder.AppendLine($"{vector2Label} Movement: {string.Format(vector2Value, [InputManager.Movement.X.ToString("F2"), InputManager.Movement.Y.ToString("F2")])}");
-            statsTextStringBuilder.AppendLine($"{vector3Label} Velocity: {string.Format(vector3Value, [player.Velocity.X.ToString("F2"), player.Velocity.Y.ToString("F2"), player.Velocity.Z.ToString("F2")])}");
-            statsTextStringBuilder.AppendLine($"{boolLabel} Crouching: {(InputButton.Crouch.Held() ? string.Format(boolTrueValue, true) : string.Format(boolFalseValue, false))}");
-            statsTextStringBuilder.AppendLine($"{boolLabel} Sprinting: {(InputButton.Sprint.Held() ? string.Format(boolTrueValue, true) : string.Format(boolFalseValue, false))}");
-            statsTextStringBuilder.AppendLine($"{boolLabel} Jumping: {(InputButton.Jump.Held() ? string.Format(boolTrueValue, true) : string.Format(boolFalseValue, false))}");
-            statsTextStringBuilder.AppendLine($"{boolLabel} Grounded: {(player.IsOnFloor() ? string.Format(boolTrueValue, true) : string.Format(boolFalseValue, false))}");
-            statsTextStringBuilder.AppendLine();
+            _statsTextStringBuilder.AppendLine($"{Vector2Label} Movement: {string.Format(Vector2Value, InputManager.Movement.X.ToString("F2"), InputManager.Movement.Y.ToString("F2"))}");
+            _statsTextStringBuilder.AppendLine($"{Vector3Label} Velocity: {string.Format(Vector3Value, player.Velocity.X.ToString("F2"), player.Velocity.Y.ToString("F2"), player.Velocity.Z.ToString("F2"))}");
+            _statsTextStringBuilder.AppendLine($"{BoolLabel} Crouching: {DoBoolLabel(InputButton.Crouch.Held())}");
+            _statsTextStringBuilder.AppendLine($"{BoolLabel} Sprinting: {DoBoolLabel(InputButton.Sprint.Held())}");
+            _statsTextStringBuilder.AppendLine($"{BoolLabel} Jumping: {DoBoolLabel(InputButton.Jump.Held())}");
+            _statsTextStringBuilder.AppendLine($"{BoolLabel} Grounded: {DoBoolLabel(player.IsOnFloor())}");
         }
         else
-        {
-            statsTextStringBuilder.AppendLine("Player");
-            statsTextStringBuilder.AppendLine("  No player found.");
-            statsTextStringBuilder.AppendLine();
-        }
+            _statsTextStringBuilder.AppendLine("  No player found.");
+        _statsTextStringBuilder.AppendLine();
 
-        statsTextStringBuilder.AppendLine("[/code]");
-        StatsText.Text = statsTextStringBuilder.ToString();
+        _statsTextStringBuilder.AppendLine("[/code]");
+        StatsText.Text = _statsTextStringBuilder.ToString();
 
-        consoleTextStringBuilder.Clear();
-        consoleTextStringBuilder.AppendLine("[code]");
-        foreach (var t in recentEntries) consoleTextStringBuilder.AppendLine(t);
-        consoleTextStringBuilder.AppendLine("[/code]");
-        ConsoleText.Text = consoleTextStringBuilder.ToString();
+        _consoleTextStringBuilder.Clear();
+        _consoleTextStringBuilder.AppendLine("[code]");
+        foreach (var t in _recentEntries) _consoleTextStringBuilder.AppendLine(t);
+        _consoleTextStringBuilder.AppendLine("[/code]");
+        ConsoleText.Text = _consoleTextStringBuilder.ToString();
     }
 }

@@ -18,15 +18,9 @@ public partial class MeshRenderer : MeshInstance3D, IChildObject
             else
                 value.Set(m =>
                 {
-                    GD.Print($"doing meshprovider setaction");
-                    if (MeshProvider != value)
-                    {
-                        GD.Print("not equal anymore");
-                        return;
-                    }
+                    if (MeshProvider != value) return;
                     Mesh = m.Mesh;
                     Skin = m.Skin;
-                    GD.Print("set mesh and skin");
                 });
         }
     }

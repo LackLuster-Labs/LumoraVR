@@ -425,7 +425,7 @@ public partial class LiteNetLibMultiplayerPeer : MultiplayerPeerExtension
 
     public override int _GetUniqueId()
     {
-        if (!NetManager.IsRunning || (!IsServer && _clientConnectionStatus != ConnectionStatus.Connected)) GD.PrintErr("Not Active (this is not an error, you got disconnected)");
+        //if (!NetManager.IsRunning || (!IsServer && _clientConnectionStatus != ConnectionStatus.Connected)) GD.PrintErr("Not Active (this is not an error, you got disconnected)");
         return _localNetworkId;
     }
     public override bool _IsRefusingNewConnections() => _refuseNewConnections;

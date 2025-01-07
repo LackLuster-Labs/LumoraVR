@@ -43,7 +43,7 @@ public partial class HeadAndHandsAnimator : Node, IChildObject
     }
     public void Initialize(Dictionary<string, Variant> data)
     {
-        GD.Print(data);
+        //GD.Print(data);
         
         if (data.TryGetValue("headBone", out var bone)) HeadBone = bone.AsString();
         if (data.TryGetValue("leftHandBone", out var lbone)) LeftHandBone = lbone.AsString();

@@ -15,6 +15,7 @@ namespace Aquamarine.Source.Management
 {
     public partial class ClientManager : Node
     {
+        public static ClientManager Instance;
         public static bool ShowDebug = true;
 
         private XRInterface _xrInterface;
@@ -30,6 +31,8 @@ namespace Aquamarine.Source.Management
 
         public override void _Ready()
         {
+            Instance = this;
+            
             try
             {
                 InitializeInput();
@@ -39,6 +42,7 @@ namespace Aquamarine.Source.Management
                 {
                     var info = FetchServerInfo();
 
+                    /*
                     this.CreateTimer(2, () =>
                     {
                         if (info.IsCompletedSuccessfully && info.Result is not null && !string.IsNullOrEmpty(info.Result.SessionIdentifier))
@@ -52,6 +56,7 @@ namespace Aquamarine.Source.Management
                         }
                         GD.Print(Multiplayer.GetUniqueId());
                     });
+                    */
                 });
             }
             catch (Exception ex)
@@ -103,6 +108,13 @@ namespace Aquamarine.Source.Management
             }
         }
 
+        private void DisconnectFromCurrentServer()
+        {
+            if (_peer?.GetConnectionStatus() == MultiplayerPeer.ConnectionStatus.Connected) _multiplayerScene.Rpc(MultiplayerScene.MethodName.DisconnectPlayer);
+            _peer?.Close();
+            Multiplayer.MultiplayerPeer = null;
+        }
+
         public void JoinNatServer(string identifier)
         {
             if (string.IsNullOrEmpty(identifier))
@@ -111,9 +123,7 @@ namespace Aquamarine.Source.Management
                 return;
             }
 
-            if (_peer?.GetConnectionStatus() == MultiplayerPeer.ConnectionStatus.Connected) _multiplayerScene.Rpc(MultiplayerScene.MethodName.DisconnectPlayer);
-            _peer?.Close();
-            Multiplayer.MultiplayerPeer = null;
+            DisconnectFromCurrentServer();
             
             var token = $"client:{identifier}";
             GD.Print($"Attempting NAT punchthrough with token: {token}");
@@ -125,11 +135,19 @@ namespace Aquamarine.Source.Management
             
             _peer.PeerDisconnected += PeerOnPeerDisconnected;
             _peer.ClientConnectionSuccess += PeerOnClientConnectionSuccess;
+            _peer.ClientConnectionFail += PeerOnClientConnectionFail;
+        }
+        private void PeerOnClientConnectionFail()
+        {
+            _peer.ClientConnectionFail -= PeerOnClientConnectionFail;
+            _peer.ClientConnectionSuccess -= PeerOnClientConnectionSuccess;
+            SpawnLocalHome();
         }
         private void PeerOnClientConnectionSuccess()
         {
             MultiplayerScene.Instance.Rpc(MultiplayerScene.MethodName.SetPlayerName, System.Environment.MachineName);
             _peer.ClientConnectionSuccess -= PeerOnClientConnectionSuccess;
+            _peer.ClientConnectionFail -= PeerOnClientConnectionFail;
         }
         private void PeerOnPeerDisconnected(long id)
         {
@@ -140,12 +158,29 @@ namespace Aquamarine.Source.Management
 
         public void JoinServer(string address, int port)
         {
+            DisconnectFromCurrentServer();
+            
             _peer = new LiteNetLibMultiplayerPeer();
             _peer.CreateClient(address, port);
             Multiplayer.MultiplayerPeer = _peer;
             _isDirectConnection = true;
             
             _peer.ClientConnectionSuccess += PeerOnClientConnectionSuccess;
+            _peer.ClientConnectionFail += PeerOnClientConnectionFail;
+        }
+
+        public void JoinNatServerRelay(string identifier)
+        {
+            //TODO
+            
+            _peer = new LiteNetLibMultiplayerPeer();
+            _peer.CreateClient(SessionInfo.RelayServer.Address.ToString(), SessionInfo.RelayServer.Port, identifier);
+            Multiplayer.MultiplayerPeer = _peer;
+            _isDirectConnection = false;
+            
+            _peer.PeerDisconnected += PeerOnPeerDisconnected;
+            _peer.ClientConnectionSuccess += PeerOnClientConnectionSuccess;
+            _peer.ClientConnectionFail += PeerOnClientConnectionFail;
         }
 
         private async Task<SessionInfo> FetchServerInfo()
@@ -169,7 +204,7 @@ namespace Aquamarine.Source.Management
                 {
                     foreach (var session in sessions)
                     {
-                        GD.Print($"Session: {session.Name}, IP: {session.IP}, Port: {session.Port}, Identifier: {session.SessionIdentifier}");
+                        GD.Print($"Session: {session.Name}, Identifier: {session.SessionIdentifier}");
 
                         if (string.IsNullOrEmpty(session.SessionIdentifier))
                         {

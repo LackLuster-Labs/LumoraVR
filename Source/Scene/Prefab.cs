@@ -17,7 +17,7 @@ public class Prefab
     {
         if (root is null) return;
         
-        GD.Print("spawn obj");
+        //GD.Print("spawn obj");
         
         if (Cache.TryGetValue(prefab, out var p)) AssignPrefab(root, p);
         else

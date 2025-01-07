@@ -51,7 +51,7 @@ public static class AssetParser
 
         if (meshFile.Valid())
         {
-            GD.Print("valid mesh");
+            //GD.Print("valid mesh");
             var (mesh, skin) = meshFile.Instantiate();
             return new MeshAsset()
             {

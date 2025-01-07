@@ -34,6 +34,7 @@ namespace Aquamarine.Source.Management
 
         private string _publicIp;
         private string _worldName = "My World";
+        private string _worldIdentifier = "placeholder";
 
         public enum ServerType
         {
@@ -168,6 +169,7 @@ namespace Aquamarine.Source.Management
                     var writer = new NetDataWriter();
                     writer.Put((byte)0x01);
                     writer.Put(_worldName);
+                    writer.Put(_worldIdentifier);
                     MainServer.Send(writer, DeliveryMethod.ReliableOrdered);
                     break;
 
