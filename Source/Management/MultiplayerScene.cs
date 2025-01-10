@@ -8,6 +8,8 @@ using Godot;
 using Godot.Collections;
 using Array = Godot.Collections.Array;
 
+// namespace Aquamarine.Source.Management;
+
 namespace Aquamarine.Source.Management
 {
     public partial class MultiplayerScene : Node
@@ -31,6 +33,8 @@ namespace Aquamarine.Source.Management
         {
             if (IsInstanceValid(_local)) return _local;
 
+            if (Multiplayer.MultiplayerPeer is null) return _local;
+
             var local = Multiplayer.GetUniqueId();
             _local = PlayerRoot.GetChildren().OfType<PlayerCharacterController>().FirstOrDefault(i => i.Authority == local);
 
@@ -38,7 +42,7 @@ namespace Aquamarine.Source.Management
         }
 
         private PlayerCharacterController _local;
-        
+
         public override void _Ready()
         {
             base._Ready();
@@ -48,7 +52,7 @@ namespace Aquamarine.Source.Management
         public void SendUpdatedPlayerList()
         {
             if (!IsMultiplayerAuthority()) return;
-            
+
             var dict = new Dictionary();
 
             foreach (var playerPair in PlayerList)
@@ -58,9 +62,9 @@ namespace Aquamarine.Source.Management
                     {"name", playerPair.Value.Name },
                 };
             }
-                
+
             Rpc(MethodName.UpdatePlayerList, dict);
-            
+
             UpdatePlayerNametags();
         }
 
@@ -74,7 +78,7 @@ namespace Aquamarine.Source.Management
                 controller.Nametag.Text = player.Value.Name;
             }
         }
-        
+
         [Rpc(CallLocal = false, TransferChannel = SerializationHelpers.WorldUpdateChannel, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable)]
         private void UpdatePlayerList(Dictionary playerList)
         {
@@ -83,7 +87,7 @@ namespace Aquamarine.Source.Management
             foreach (var pair in playerList)
             {
                 var valueDict = pair.Value.AsGodotDictionary();
-                
+
                 var player = new PlayerInfo
                 {
                     Name = valueDict["name"].AsString(),
@@ -92,7 +96,7 @@ namespace Aquamarine.Source.Management
             }
 
             PlayerList = newList;
-            
+
             UpdatePlayerNametags();
         }
         [Rpc(MultiplayerApi.RpcMode.AnyPeer, TransferChannel = SerializationHelpers.SessionControlChannel, CallLocal = false)]
@@ -102,20 +106,20 @@ namespace Aquamarine.Source.Management
 
             var id = Multiplayer.GetRemoteSenderId();
             Logger.Log($"Player {id} has disconnected");
-            
+
             Multiplayer.MultiplayerPeer.DisconnectPeer(id);
         }
         [Rpc(MultiplayerApi.RpcMode.AnyPeer, TransferChannel = SerializationHelpers.SessionControlChannel, CallLocal = false)]
         public void SetPlayerName(string name)
         {
             if (!IsMultiplayerAuthority()) return;
-            
+
             if (!PlayerList.TryGetValue(Multiplayer.GetRemoteSenderId(), out var player)) return;
-            
+
             player.Name = name;
             SendUpdatedPlayerList();
         }
-        
+
         public void SendAllPrefabs(int? user = null)
         {
             if (!IsMultiplayerAuthority()) return;
@@ -130,14 +134,14 @@ namespace Aquamarine.Source.Management
         [Rpc(TransferChannel = SerializationHelpers.PrefabChannel)]
         private void RecievePrefab(string prefabName)
         {
-            
+
         }
-        
+
         public void RequestPrefab(string prefabName)
         {
-            
+
         }
-        
+
         //[Rpc(CallLocal = true, TransferMode = MultiplayerPeer.TransferModeEnum.Reliable, TransferChannel = SerializationHelpers.WorldUpdateChannel)]
         private void InternalSpawnPlayer(int authority, Vector3 position)
         {

@@ -1,4 +1,4 @@
-﻿using Aquamarine.Source.Helpers;
+using Aquamarine.Source.Helpers;
 using Aquamarine.Source.Input;
 using Aquamarine.Source.Logging;
 using Godot;
@@ -12,7 +12,7 @@ public partial class DebugOverlay : Control
     [Export] public RichTextLabel StatsText;
     [Export] public RichTextLabel ConsoleText;
     [Export] public LineEdit ConsoleInput;
-    
+
     private readonly StringBuilder _statsTextStringBuilder = new();
     private readonly StringBuilder _consoleTextStringBuilder = new();
 
@@ -47,7 +47,7 @@ public partial class DebugOverlay : Control
         ConsoleInput.Clear();
         var strings = newText.ToLower().Split(' ');
         if (strings.Length == 0) return;
-        var player = MultiplayerScene.Instance.GetLocalPlayer();
+        //var player = MultiplayerScene.Instance.GetLocalPlayer(); // TODO: We need checking to see if we are connected to a session
         try
         {
             switch (strings[0])
@@ -59,29 +59,18 @@ public partial class DebugOverlay : Control
                     }
                     break;
                 case "connect":
-                    if (strings.Length < 3)
+                    if (strings.Length < 2)
                     {
-                        Logger.Warn("Usage: connect <{direct}/{nat}> <{ip:port}/{identifier}>");
+                        //Logger.Warn("Usage: connect <{direct}/{nat}> <{ip:port}/{identifier}>");
+                        Logger.Warn("Usage: connect <{secret}>");
                         return;
                     }
 
-                    var method = strings[1];
+                    ClientManager.Instance.JoinSession(strings[1]);
 
-                    if (method.StartsWith('d')) //direct
-                    {
-                        var split = strings[2].Split(":");
-                        if (split.Length != 2 || int.TryParse(split[1], out var port)) return;
-                        ClientManager.Instance.JoinServer(split[0], port);
-                    }
-                    else if (method.StartsWith('n')) //nat
-                    {
-                        ClientManager.Instance.JoinNatServer(strings[2]);
-                    }
-                    
-                    //MultiplayerScene.Instance.ConnectToServer(strings[1]);
                     break;
                 case "respawn":
-                    player?.Respawn();
+                    //player?.Respawn();
                     break;
                 case "exit":
                     GetTree().Quit();

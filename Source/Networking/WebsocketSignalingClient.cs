@@ -67,7 +67,7 @@ public partial class WebsocketSignalingClient : Node
         {
             if (!ParseMessage())
             {
-                GD.Print("Error parsing malformed message form server.");
+                Logger.Error("Error parsing malformed message form server.");
             }
         }
 

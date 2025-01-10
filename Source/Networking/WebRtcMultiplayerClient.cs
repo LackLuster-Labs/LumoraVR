@@ -85,7 +85,6 @@ public partial class WebRtcMultiplayerClient : WebsocketSignalingClient
 			return;
 		}
 
-		GD.Print($"Created new WebRTC offer with type {type}");
 		rtcPeer.GetPeer(id)["connection"].As<WebRtcPeerConnection>().SetLocalDescription(type, data);
 
 		if (type == "offer")
@@ -100,7 +99,7 @@ public partial class WebRtcMultiplayerClient : WebsocketSignalingClient
 
 	private void OnConnected(int id, bool useMesh)
 	{
-		GD.Print($"Connected {id}; Using mesh:{mesh}");
+		Logger.Log($"Connected {id}; Using mesh:{mesh}");
 
 		if (useMesh)
 		{
@@ -130,25 +129,25 @@ public partial class WebRtcMultiplayerClient : WebsocketSignalingClient
 
 	private void OnDisconnected()
 	{
-		GD.Print($"Disconnected WSCCODE_{code}: \"{reason}\"");
+		Logger.Log($"Disconnected with code: {code}: \"{reason}\"");
 
 		if (!rtcSealed)
 		{
-			GD.Print("A non-gracefull disconnect occured, Cleaning up.");
+			Logger.Log("A non-gracefull disconnect occured, Cleaning up.");
 			Stop();
 		}
 	}
 
 	private void OnPeerConnected(int id)
 	{
-		GD.Print($"Peer connected: {id}");
+		Logger.Log($"Peer connected: {id}");
 
 		CreatePeer(id);
 	}
 
 	private void OnPeerDisconnected(int id)
 	{
-		GD.Print($"Peer disconnected: {id}");
+		Logger.Log($"Peer disconnected: {id}");
 
 		if (rtcPeer.HasPeer(id))
 		{
@@ -158,7 +157,7 @@ public partial class WebRtcMultiplayerClient : WebsocketSignalingClient
 
 	private void OnOfferReceived(int id, string offer)
 	{
-		GD.Print($"New offer: {id}");
+		Logger.Log($"Got offer: {id}");
 		if (rtcPeer.HasPeer(id))
 		{
 			rtcPeer.GetPeer(id)["connection"].As<WebRtcPeerConnection>().SetRemoteDescription("offer", offer);
@@ -167,7 +166,7 @@ public partial class WebRtcMultiplayerClient : WebsocketSignalingClient
 
 	private void OnAnswerRecived(int id, string answer)
 	{
-		GD.Print($"Recived answer: {id}");
+		Logger.Log($"Got answer: {id}");
 		if (rtcPeer.HasPeer(id))
 		{
 			rtcPeer.GetPeer(id)["connection"].As<WebRtcPeerConnection>().SetRemoteDescription("answer", answer);
@@ -178,7 +177,7 @@ public partial class WebRtcMultiplayerClient : WebsocketSignalingClient
 	{
 		if (rtcPeer.HasPeer(id))
 		{
-			GD.Print($"mid: {mid}, index: {index}, sdp: {sdp}");
+			Logger.Log($"Got candidate: mid: {mid}, index: {index}, sdp: {sdp}");
 			rtcPeer.GetPeer(id)["connection"].As<WebRtcPeerConnection>().AddIceCandidate(mid, index, sdp);
 		}
 	}

@@ -49,7 +49,7 @@ namespace Aquamarine.Source.Management
             get
             {
                 if (_serverType.HasValue) return _serverType.Value;
-                
+
                 var args = OS.GetCmdlineArgs();
                 var isLocalHomeServer = args.Any(i => i.Equals("--run-home-server", StringComparison.CurrentCultureIgnoreCase));
                 if (isLocalHomeServer)
@@ -57,7 +57,7 @@ namespace Aquamarine.Source.Management
                     _serverType = ServerType.Local;
                     return ServerType.Local;
                 }
-                
+
                 var isServer = args.Any(i => i.Equals("--run-server", System.StringComparison.CurrentCultureIgnoreCase));
                 if (isServer)
                 {
@@ -82,7 +82,7 @@ namespace Aquamarine.Source.Management
             try
             {
                 var serverType = CurrentServerType;
-                
+
                 MultiplayerPeer = new LiteNetLibMultiplayerPeer();
 
                 if (serverType is ServerType.Local)
@@ -95,20 +95,20 @@ namespace Aquamarine.Source.Management
                     
                     Logger.Log(port.ToString());
                     */
-                    MultiplayerPeer.CreateServer(6000, 1);
+                    //! MultiplayerPeer.CreateServer(6000, 1);
                     Logger.Log($"Local server started on port {6000}.");
                 }
                 else
                 {
-                    MultiplayerPeer.CreateServerNat(Port, MaxConnections);
+                    //! MultiplayerPeer.CreateServerNat(Port, MaxConnections);
                     Logger.Log($"Server started on port {Port} with a maximum of {MaxConnections} connections.");
                 }
-                
+
                 Multiplayer.MultiplayerPeer = MultiplayerPeer;
 
                 MultiplayerPeer.PeerConnected += OnPeerConnected;
                 MultiplayerPeer.PeerDisconnected += OnPeerDisconnected;
-                
+
 
                 if (serverType is ServerType.Standard)
                 {
@@ -175,11 +175,11 @@ namespace Aquamarine.Source.Management
 
                 case 0x02:
                     GD.Print("Sending NAT punchthrough message");
-                    MultiplayerPeer.ServerSendNatPunchthrough(
-                        SessionInfo.SessionServer.Address.ToString(),
-                        SessionInfo.SessionServer.Port,
-                        $"server:{_sessionSecret}"
-                    );
+                    //! MultiplayerPeer.ServerSendNatPunchthrough(
+                    //!     SessionInfo.SessionServer.Address.ToString(),
+                    //!     SessionInfo.SessionServer.Port,
+                    //!     $"server:{_sessionSecret}"
+                    //! );
                     break;
             }
         }
@@ -232,22 +232,22 @@ namespace Aquamarine.Source.Management
                 GetTree().Quit();
             }
         }
-/*
-        private async Task<string> GetPublicIP()
-        {
-            try
-            {
-                using var client = new System.Net.Http.HttpClient();
-                var publicIp = await client.GetStringAsync("https://api.ipify.org");
-                Logger.Log($"Retrieved public IP: {publicIp}");
-                return publicIp.Trim();
-            }
-            catch (Exception ex)
-            {
-                Logger.Error($"Error fetching public IP: {ex.Message}");
-                return null;
-            }
-        }
-*/
+        /*
+                private async Task<string> GetPublicIP()
+                {
+                    try
+                    {
+                        using var client = new System.Net.Http.HttpClient();
+                        var publicIp = await client.GetStringAsync("https://api.ipify.org");
+                        Logger.Log($"Retrieved public IP: {publicIp}");
+                        return publicIp.Trim();
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.Error($"Error fetching public IP: {ex.Message}");
+                        return null;
+                    }
+                }
+        */
     }
 }
