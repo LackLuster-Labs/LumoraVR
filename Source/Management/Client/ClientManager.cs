@@ -44,16 +44,21 @@ namespace Aquamarine.Source.Management
         private VoiceManager _voiceManager;
         private bool _voiceChatEnabled = false;
 
+
         private void InitializeVoiceChat()
         {
             // Create VoiceManager node if it doesn't exist
             _voiceManager = new VoiceManager();
-            _multiplayerScene.AddChild(_voiceManager);
+            AddChild(_voiceManager);
+
+            // Pass required dependencies
+            _voiceManager.Initialize(_peer, _multiplayerScene);
 
             // Initialize voice settings
             _voiceChatEnabled = false;
             Logger.Log("Voice chat system initialized.");
         }
+
 
         public override void _Input(InputEvent @event)
         {

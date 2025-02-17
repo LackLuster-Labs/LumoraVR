@@ -94,19 +94,30 @@ namespace Aquamarine.Source.Management
             _peer.ClientConnectionSuccess += PeerOnClientConnectionSuccess;
             _peer.ClientConnectionFail += PeerOnClientConnectionFail;
 
-            // Start voice chat when connected
+            // If voice chat is enabled, handle connection events
             _peer.ClientConnectionSuccess += () =>
             {
                 if (_voiceChatEnabled && _voiceManager != null)
                 {
                     _voiceManager.StartVoiceCapture();
-                    Logger.Log("Voice chat started.");
+                }
+            };
+
+            _peer.PeerDisconnected += (id) =>
+            {
+                if (_voiceManager != null)
+                {
+                    _voiceManager.StopVoiceCapture();
                 }
             };
         }
         public void ToggleVoiceChat(bool enabled)
         {
-            if (_voiceManager == null) return;
+            if (_voiceManager == null)
+            {
+                Logger.Error("Voice manager not initialized");
+                return;
+            }
 
             _voiceChatEnabled = enabled;
 

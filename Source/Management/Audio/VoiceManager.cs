@@ -5,6 +5,7 @@ using LiteNetLib;
 using LiteNetLib.Utils;
 using NAudio.Wave;
 using System.Collections.Generic;
+using Aquamarine.Source.Logging;
 using Aquamarine.Source.Management;
 
 namespace Aquamarine.Source.Networking
@@ -23,46 +24,35 @@ namespace Aquamarine.Source.Networking
         private readonly byte[] _recordBuffer = new byte[4096];
         private LiteNetLibMultiplayerPeer _peer;
         private MultiplayerScene _multiplayerScene;
-
         private float _currentInputLevel = 0f;
         private const float INPUT_LEVEL_DECAY = 0.1f;
 
-        public int GetActiveSpeakerCount()
+        public void Initialize(LiteNetLibMultiplayerPeer peer, MultiplayerScene multiplayerScene)
         {
-            return _voicePlayers.Count;
-        }
+            _peer = peer;
+            _multiplayerScene = multiplayerScene;
 
-        public float GetInputLevel()
-        {
-            return _currentInputLevel;
-        }
-
-        public float GetVoiceRange()
-        {
-            return MAX_VOICE_DISTANCE;
-        }
-
-        private void UpdateInputLevel(byte[] buffer)
-        {
-            if (buffer == null || buffer.Length == 0)
+            // Setup voice capture
+            _waveIn = new WaveInEvent
             {
-                _currentInputLevel = Mathf.MoveToward(_currentInputLevel, 0f, INPUT_LEVEL_DECAY);
-                return;
+                WaveFormat = new WaveFormat(SAMPLE_RATE, BITS_PER_SAMPLE, CHANNELS),
+                BufferMilliseconds = 50
+            };
+
+            _waveIn.DataAvailable += WaveInOnDataAvailable;
+
+            // Register network events
+            if (_peer != null)
+            {
+                _peer.Listener.NetworkReceiveEvent += OnVoiceDataReceived;
+                _peer.PeerConnected += OnPeerConnected;
+                _peer.PeerDisconnected += OnPeerDisconnected;
             }
 
-            float sum = 0;
-            for (int i = 0; i < buffer.Length; i += 2)
-            {
-                if (i + 1 >= buffer.Length) break;
-                short sample = (short)((buffer[i + 1] << 8) | buffer[i]);
-                sum += Mathf.Abs(sample / 32768f); // Normalize to 0-1
-            }
-
-            float average = sum / (buffer.Length / 2);
-            _currentInputLevel = Mathf.Max(_currentInputLevel, average);
-            _currentInputLevel = Mathf.MoveToward(_currentInputLevel, 0f, INPUT_LEVEL_DECAY);
+            Logger.Log("Voice Manager initialized");
         }
 
+        // Custom serialization for Vector3
         private void WriteVector3(NetDataWriter writer, Vector3 vector)
         {
             writer.Put(vector.X);
@@ -79,31 +69,12 @@ namespace Aquamarine.Source.Networking
             );
         }
 
-        public override void _Ready()
-        {
-            _peer = GetNode<MultiplayerScene>("/root/MultiplayerScene").GetNode<LiteNetLibMultiplayerPeer>("MultiplayerPeer");
-            _multiplayerScene = GetNode<MultiplayerScene>("/root/MultiplayerScene");
-
-            // Setup voice capture
-            _waveIn = new WaveInEvent
-            {
-                WaveFormat = new WaveFormat(SAMPLE_RATE, BITS_PER_SAMPLE, CHANNELS),
-                BufferMilliseconds = 50
-            };
-
-            _waveIn.DataAvailable += WaveInOnDataAvailable;
-
-            // Register network events
-            _peer.Listener.NetworkReceiveEvent += OnVoiceDataReceived;
-            _peer.PeerConnected += OnPeerConnected;
-            _peer.PeerDisconnected += OnPeerDisconnected;
-        }
-
         public void StartVoiceCapture()
         {
             try
             {
                 _waveIn.StartRecording();
+                Logger.Log("Started voice capture");
             }
             catch (Exception ex)
             {
@@ -116,6 +87,7 @@ namespace Aquamarine.Source.Networking
             try
             {
                 _waveIn.StopRecording();
+                Logger.Log("Stopped voice capture");
             }
             catch (Exception ex)
             {
@@ -125,12 +97,13 @@ namespace Aquamarine.Source.Networking
 
         private void WaveInOnDataAvailable(object sender, WaveInEventArgs e)
         {
-            UpdateInputLevel(e.Buffer);  
+            UpdateInputLevel(e.Buffer);
 
-            if (!_peer._IsServer() && _peer._GetConnectionStatus() == MultiplayerPeer.ConnectionStatus.Connected)
+            if (_peer == null || !IsInstanceValid(_peer)) return;
+            if (!_peer._IsServer() && _peer.GetConnectionStatus() == MultiplayerPeer.ConnectionStatus.Connected)
             {
                 // Get local player position for 3D audio
-                var localPlayer = _multiplayerScene.GetLocalPlayer();
+                var localPlayer = _multiplayerScene?.GetLocalPlayer();
                 if (localPlayer == null) return;
 
                 var writer = new NetDataWriter();
@@ -187,6 +160,9 @@ namespace Aquamarine.Source.Networking
             {
                 ProcessVoiceData(voiceData.senderId, voiceData.audioData, voiceData.position);
             }
+
+            // Decay input level over time
+            _currentInputLevel = Mathf.MoveToward(_currentInputLevel, 0f, (float)delta * INPUT_LEVEL_DECAY);
         }
 
         private void ProcessVoiceData(int senderId, byte[] audioData, Vector3 speakerPosition)
@@ -201,7 +177,7 @@ namespace Aquamarine.Source.Networking
             player.GlobalPosition = speakerPosition;
 
             // Calculate attenuation based on distance to local player
-            var localPlayer = _multiplayerScene.GetLocalPlayer();
+            var localPlayer = _multiplayerScene?.GetLocalPlayer();
             if (localPlayer != null)
             {
                 var distance = localPlayer.GlobalPosition.DistanceTo(speakerPosition);
@@ -246,6 +222,41 @@ namespace Aquamarine.Source.Networking
             {
                 player.QueueFree();
             }
+        }
+
+        private void UpdateInputLevel(byte[] buffer)
+        {
+            if (buffer == null || buffer.Length == 0)
+            {
+                _currentInputLevel = Mathf.MoveToward(_currentInputLevel, 0f, INPUT_LEVEL_DECAY);
+                return;
+            }
+
+            float sum = 0;
+            for (int i = 0; i < buffer.Length; i += 2)
+            {
+                if (i + 1 >= buffer.Length) break;
+                short sample = (short)((buffer[i + 1] << 8) | buffer[i]);
+                sum += Mathf.Abs(sample / 32768f); // Normalize to 0-1
+            }
+
+            float average = sum / (buffer.Length / 2);
+            _currentInputLevel = Mathf.Max(_currentInputLevel, average);
+        }
+
+        public int GetActiveSpeakerCount()
+        {
+            return _voicePlayers.Count;
+        }
+
+        public float GetInputLevel()
+        {
+            return _currentInputLevel;
+        }
+
+        public float GetVoiceRange()
+        {
+            return MAX_VOICE_DISTANCE;
         }
 
         public override void _ExitTree()
