@@ -141,6 +141,23 @@ public partial class DebugOverlay : Control
                 case "exit":
                     GetTree().Quit();
                     break;
+                case "voice":
+                    if (strings.Length < 2)
+                    {
+                        Logger.Warn("Usage: voice <on/off>");
+                        return;
+                    }
+                    if (strings[1].ToLower() == "on")
+                    {
+                        ClientManager.Instance.ToggleVoiceChat(true);
+                        Logger.Log("Voice chat enabled");
+                    }
+                    else if (strings[1].ToLower() == "off")
+                    {
+                        ClientManager.Instance.ToggleVoiceChat(false);
+                        Logger.Log("Voice chat disabled");
+                    }
+                    break;
                 default:
                     Logger.Warn($"Unknown command: {strings[0]}");
                     return;
@@ -201,6 +218,20 @@ public partial class DebugOverlay : Control
                 _statsTextStringBuilder.AppendLine($"{StringLabel} Username: {string.Format(StringValue, LoginManager.Instance.GetCurrentUsername())}");
             }
         }
+        _statsTextStringBuilder.AppendLine("Audio");
+        _statsTextStringBuilder.AppendLine($"{BoolLabel} Voice Enabled: {DoBoolLabel(ClientManager.Instance.IsVoiceChatEnabled)}");
+        if (ClientManager.Instance.IsVoiceChatEnabled)
+        {
+            var voiceManager = ClientManager.Instance.GetVoiceManager();
+            if (voiceManager != null)
+            {
+                _statsTextStringBuilder.AppendLine($"{IntLabel} Active Speakers: {string.Format(IntValue, voiceManager.GetActiveSpeakerCount())}");
+                _statsTextStringBuilder.AppendLine($"{FloatLabel} Input Level: {string.Format(FloatValue, voiceManager.GetInputLevel().ToString("F2"))}");
+                _statsTextStringBuilder.AppendLine($"{FloatLabel} Voice Range: {string.Format(FloatValue, voiceManager.GetVoiceRange().ToString("F2"))}");
+            }
+        }
+        _statsTextStringBuilder.AppendLine();
+
         _statsTextStringBuilder.AppendLine();
 
         _statsTextStringBuilder.AppendLine("Networking");

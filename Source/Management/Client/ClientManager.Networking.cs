@@ -13,8 +13,15 @@ namespace Aquamarine.Source.Management
 {
     public partial class ClientManager
     {
+        public bool IsVoiceChatEnabled => _voiceChatEnabled;
+
         private void DisconnectFromCurrentServer()
         {
+            if (_voiceManager != null)
+            {
+                _voiceManager.StopVoiceCapture();
+            }
+
             if (_peer?.GetConnectionStatus() == MultiplayerPeer.ConnectionStatus.Connected)
                 _multiplayerScene.Rpc(MultiplayerScene.MethodName.DisconnectPlayer);
             _peer?.Close();
@@ -86,7 +93,39 @@ namespace Aquamarine.Source.Management
             _peer.PeerDisconnected += PeerOnPeerDisconnected;
             _peer.ClientConnectionSuccess += PeerOnClientConnectionSuccess;
             _peer.ClientConnectionFail += PeerOnClientConnectionFail;
+
+            // Start voice chat when connected
+            _peer.ClientConnectionSuccess += () =>
+            {
+                if (_voiceChatEnabled && _voiceManager != null)
+                {
+                    _voiceManager.StartVoiceCapture();
+                    Logger.Log("Voice chat started.");
+                }
+            };
         }
+        public void ToggleVoiceChat(bool enabled)
+        {
+            if (_voiceManager == null) return;
+
+            _voiceChatEnabled = enabled;
+
+            if (_voiceChatEnabled)
+            {
+                if (_peer?.GetConnectionStatus() == MultiplayerPeer.ConnectionStatus.Connected)
+                {
+                    _voiceManager.StartVoiceCapture();
+                    Logger.Log("Voice chat enabled.");
+                }
+            }
+            else
+            {
+                _voiceManager.StopVoiceCapture();
+                Logger.Log("Voice chat disabled.");
+            }
+        }
+
+        public VoiceManager GetVoiceManager() => _voiceManager;
 
         private void PeerOnClientConnectionFail()
         {

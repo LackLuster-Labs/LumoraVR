@@ -31,6 +31,7 @@ namespace Aquamarine.Source.Management
                 InitializeLoginManager();
                 InitializeInput();
                 InitializeDiscordManager();
+                
 
                 SpawnLocalHome();
             }
@@ -38,6 +39,20 @@ namespace Aquamarine.Source.Management
             {
                 Logger.Error($"Error initializing ClientManager: {ex.Message}");
             }
+        }
+
+        private VoiceManager _voiceManager;
+        private bool _voiceChatEnabled = false;
+
+        private void InitializeVoiceChat()
+        {
+            // Create VoiceManager node if it doesn't exist
+            _voiceManager = new VoiceManager();
+            _multiplayerScene.AddChild(_voiceManager);
+
+            // Initialize voice settings
+            _voiceChatEnabled = false;
+            Logger.Log("Voice chat system initialized.");
         }
 
         public override void _Input(InputEvent @event)

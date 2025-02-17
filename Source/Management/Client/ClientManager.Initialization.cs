@@ -74,6 +74,9 @@ namespace Aquamarine.Source.Management
                 _inputRoot.AddChild(desktopInput);
                 Logger.Log("Desktop interface initialized successfully.");
             }
+
+            // Initialize voice chat after input is set up
+            InitializeVoiceChat();
         }
     }
 }
