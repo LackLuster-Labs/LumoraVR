@@ -50,7 +50,6 @@ namespace Aquamarine.Source.Management
             // Create VoiceManager node if it doesn't exist
             _voiceManager = new VoiceManager();
             AddChild(_voiceManager);
-
             // Pass required dependencies
             _voiceManager.Initialize(_peer, _multiplayerScene);
 

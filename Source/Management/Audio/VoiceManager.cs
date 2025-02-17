@@ -111,6 +111,7 @@ namespace Aquamarine.Source.Networking
                 writer.Put(e.Buffer);
 
                 // Send voice data using the network manager
+                Logger.Debug($"Sending voice data to server");
                 if (_peer.NetManager.ConnectedPeerList.Count > 0)
                 {
                     _peer.NetManager.FirstPeer?.Send(writer, VOICE_CHANNEL, DeliveryMethod.Unreliable);
@@ -170,6 +171,7 @@ namespace Aquamarine.Source.Networking
             if (!_voicePlayers.TryGetValue(senderId, out var player))
             {
                 player = CreateVoicePlayer();
+                Logger.Log($"Creating voice player for {senderId} with id {player.Name}");
                 _voicePlayers[senderId] = player;
             }
 

@@ -14,7 +14,14 @@ namespace Aquamarine.Source.Management
     public partial class ClientManager
     {
         public bool IsVoiceChatEnabled => _voiceChatEnabled;
-
+        private void PreJoin()
+        {
+            _voiceManager?.Dispose();
+        }
+        private void PostJoin()
+        {
+            InitializeVoiceChat();
+        }
         private void DisconnectFromCurrentServer()
         {
             if (_voiceManager != null)
@@ -30,6 +37,7 @@ namespace Aquamarine.Source.Management
 
         public void JoinNatServer(string identifier)
         {
+            PreJoin();
             if (string.IsNullOrEmpty(identifier))
             {
                 Logger.Error("Session identifier is null or empty. Cannot join NAT server.");
@@ -48,22 +56,25 @@ namespace Aquamarine.Source.Management
             _isDirectConnection = true;
 
             RegisterPeerEvents();
+            PostJoin();
         }
 
         public void JoinServer(string address, int port)
         {
+            PreJoin();
             DisconnectFromCurrentServer();
-
             _peer = new LiteNetLibMultiplayerPeer();
             _peer.CreateClient(address, port);
             Multiplayer.MultiplayerPeer = _peer;
             _isDirectConnection = true;
 
             RegisterPeerEvents();
+            PostJoin();
         }
 
         public void JoinNatServerRelay(string identifier)
         {
+            PreJoin();  
             DisconnectFromCurrentServer();
 
             _peer = new LiteNetLibMultiplayerPeer();
@@ -86,6 +97,7 @@ namespace Aquamarine.Source.Management
             _peer.Listener.PeerConnectedEvent += PeerConnected;
 
             RegisterPeerEvents();
+            PostJoin(); 
         }
 
         private void RegisterPeerEvents()
