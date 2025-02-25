@@ -36,12 +36,26 @@ namespace Aquamarine.Source.Management
                 InitializeDiscordManager();
 
                 // Find the MultiplayerScene component in the world session
-                _multiplayerScene = _worldSession.GetNode<MultiplayerScene>(".");
+                if (_worldSession != null)
+                {
+                    _multiplayerScene = _worldSession.GetNode<MultiplayerScene>(".");
+                    if (_multiplayerScene == null)
+                    {
+                        Logger.Error("Could not find MultiplayerScene component in _worldSession");
+                        return; // Exit early to prevent further errors
+                    }
 
-                FetchServerInfo();
+                    // Only proceed with server operations if we have a valid MultiplayerScene
+                    FetchServerInfo();
 
-                // Connect to local server
-                ConnectToLocalServer();
+                    // Connect to local server
+                    ConnectToLocalServer();
+                }
+                else
+                {
+                    Logger.Error("_worldSession is null. Make sure it's properly assigned in the scene editor.");
+                    return; // Exit early to prevent further errors
+                }
             }
             catch (Exception ex)
             {

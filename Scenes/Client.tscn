@@ -12,9 +12,10 @@
 render_priority = 0
 shader = ExtResource("7_daa5c")
 
-[node name="Root" type="Node" node_paths=PackedStringArray("_inputRoot")]
+[node name="Root" type="Node" node_paths=PackedStringArray("_inputRoot", "_worldSession")]
 script = ExtResource("1_enrkg")
 _inputRoot = NodePath("InputRoot")
+_worldSession = NodePath("WorldSession")
 
 [node name="WorldSession" parent="." instance=ExtResource("2_40xba")]
 
