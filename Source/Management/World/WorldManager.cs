@@ -47,14 +47,14 @@ namespace Aquamarine.Source.Management.World
             Instance = this;
 
             var parent = GetParent();
-            _worldContainer = parent.GetNodeOrNull<Node>("WorldContainer");
-            _playerRoot = _worldContainer?.GetNodeOrNull<Node>("PlayerRoot");
 
-            if (_worldContainer == null || _playerRoot == null)
-            {
-                Logger.Error("Could not find WorldContainer or PlayerRoot nodes");
-                return; // Early return to prevent null reference exception
-            }
+            _worldContainer = parent.GetNodeOrNull<Node>(WorldContainerPath)
+                ?? parent.FindChild("WorldContainer")
+                ?? throw new InvalidOperationException("Could not find WorldContainer");
+
+            _playerRoot = _worldContainer?.GetNodeOrNull<Node>(PlayerRootPath)
+                ?? _worldContainer?.FindChild("PlayerRoot")
+                ?? throw new InvalidOperationException("Could not find PlayerRoot");
 
             foreach (Node child in _worldContainer.GetChildren())
             {

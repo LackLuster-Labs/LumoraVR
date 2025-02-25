@@ -5,7 +5,7 @@
 [ext_resource type="PackedScene" uid="uid://dkagai8lawv51" path="res://Scenes/World/LocalHome.tscn" id="3_yrx02"]
 [ext_resource type="PackedScene" uid="uid://br21iqn2gko1l" path="res://Scenes/World/LoadingWorld.tscn" id="4_28qvs"]
 
-[node name="WorldSession" type="Node" node_paths=PackedStringArray("Spawner", "PlayerRoot")]
+[node name="Scene" type="Node" node_paths=PackedStringArray("Spawner", "PlayerRoot")]
 script = ExtResource("1_yl1ag")
 Spawner = NodePath("MultiplayerSpawner")
 PlayerRoot = NodePath("WorldContainer/PlayerRoot")

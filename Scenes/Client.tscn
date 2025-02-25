@@ -15,9 +15,9 @@ shader = ExtResource("7_daa5c")
 [node name="Root" type="Node" node_paths=PackedStringArray("_inputRoot", "_worldSession")]
 script = ExtResource("1_enrkg")
 _inputRoot = NodePath("InputRoot")
-_worldSession = NodePath("WorldSession")
+_worldSession = NodePath("Scene")
 
-[node name="WorldSession" parent="." instance=ExtResource("2_40xba")]
+[node name="Scene" parent="." instance=ExtResource("2_40xba")]
 
 [node name="InputRoot" type="Node3D" parent="."]
 
