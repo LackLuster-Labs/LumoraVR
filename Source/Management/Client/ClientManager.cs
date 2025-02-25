@@ -4,6 +4,7 @@ using System.Threading.Tasks;
 using Aquamarine.Source.Input;
 using Aquamarine.Source.Logging;
 using Aquamarine.Source.Networking;
+using Aquamarine.Source.Management.World;
 using Bones.Core;
 
 namespace Aquamarine.Source.Management
@@ -15,10 +16,12 @@ namespace Aquamarine.Source.Management
 
         private XRInterface _xrInterface;
         private IInputProvider _input;
-        private LiteNetLibMultiplayerPeer  _peer;
-        [Export] private Node3D _inputRoot;
-        [Export] private MultiplayerScene _multiplayerScene;
+        private LiteNetLibMultiplayerPeer _peer;
 
+        [Export] private Node3D _inputRoot;
+        [Export] private Node _worldSession;
+
+        private MultiplayerScene _multiplayerScene;
         private bool _isDirectConnection = false;
 
         public override void _Ready()
@@ -31,8 +34,14 @@ namespace Aquamarine.Source.Management
                 InitializeLoginManager();
                 InitializeInput();
                 InitializeDiscordManager();
+
+                // Find the MultiplayerScene component in the world session
+                _multiplayerScene = _worldSession.GetNode<MultiplayerScene>(".");
+
                 FetchServerInfo();
-                SpawnLocalHome();
+
+                // Connect to local server
+                ConnectToLocalServer();
             }
             catch (Exception ex)
             {
@@ -48,9 +57,19 @@ namespace Aquamarine.Source.Management
             {
                 ShowDebug = !ShowDebug;
             }
+
+            // Test world loading - for development purposes
+            if (@event.IsActionPressed("ui_home"))
+            {
+                LoadWorld("local_home");
+            }
+            else if (@event.IsActionPressed("ui_end"))
+            {
+                LoadWorld("multiplayer_base");
+            }
         }
 
-        private void SpawnLocalHome()
+        private void ConnectToLocalServer()
         {
             OS.CreateProcess(OS.GetExecutablePath(), ["--run-home-server", "--xr-mode", "off", "--headless"]);
 
@@ -58,6 +77,19 @@ namespace Aquamarine.Source.Management
             {
                 JoinServer("localhost", 6000);
             });
+        }
+
+        public void LoadWorld(string worldId)
+        {
+            var worldManager = GetNode<WorldManager>($"{_worldSession.GetPath()}/WorldManager");
+            if (worldManager != null)
+            {
+                worldManager.LoadWorld(worldId);
+            }
+            else
+            {
+                Logger.Error("Could not find WorldManager to load world");
+            }
         }
     }
 }

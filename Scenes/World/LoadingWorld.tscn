@@ -1,0 +1,134 @@
+[gd_scene load_steps=8 format=3 uid="uid://br21iqn2gko1l"]
+
+[ext_resource type="Script" path="res://Source/Management/World/LoadingWorldUI.cs" id="1_5wmpq"]
+[ext_resource type="Texture2D" uid="uid://jdjeattbqj2g" path="res://Assets/Textures/Dot.png" id="2_af4yu"]
+
+[sub_resource type="StandardMaterial3D" id="StandardMaterial3D_ehtwt"]
+transparency = 2
+alpha_scissor_threshold = 0.5
+alpha_antialiasing_mode = 0
+shading_mode = 0
+disable_ambient_light = true
+albedo_texture = ExtResource("2_af4yu")
+billboard_mode = 1
+billboard_keep_scale = true
+
+[sub_resource type="ParticleProcessMaterial" id="ParticleProcessMaterial_f7xva"]
+emission_shape_offset = Vector3(0, 32, 0)
+emission_shape_scale = Vector3(128, 1, 128)
+emission_shape = 3
+emission_box_extents = Vector3(1, 1, 1)
+spread = 0.0
+linear_accel_min = 25.0
+linear_accel_max = 100.0
+attractor_interaction_enabled = false
+scale_min = 0.13
+scale_max = 0.25
+turbulence_enabled = true
+turbulence_noise_scale = 2.5
+
+[sub_resource type="QuadMesh" id="QuadMesh_bv3ep"]
+
+[sub_resource type="Environment" id="Environment_fnw8t"]
+fog_enabled = true
+fog_light_color = Color(0, 0, 0, 1)
+fog_light_energy = 0.0
+fog_density = 0.1
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.1
+volumetric_fog_albedo = Color(0, 0, 0, 1)
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_dkpr6"]
+bg_color = Color(0.14902, 0.14902, 0.14902, 0.490196)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+
+[node name="LoadingWorld" type="Node"]
+
+[node name="Level" type="Node" parent="."]
+
+[node name="GPUParticles3D" type="GPUParticles3D" parent="Level"]
+material_override = SubResource("StandardMaterial3D_ehtwt")
+amount = 2500
+lifetime = 2.5
+visibility_aabb = AABB(-128, 0, -128, 256, 32, 256)
+trail_lifetime = 10.0
+process_material = SubResource("ParticleProcessMaterial_f7xva")
+draw_pass_1 = SubResource("QuadMesh_bv3ep")
+
+[node name="SpotLight3D" type="SpotLight3D" parent="Level"]
+transform = Transform3D(1, 0, 0, 0, -4.37114e-08, 1, 0, -1, -4.37114e-08, 0, 4, 0)
+light_energy = 16.0
+spot_range = 8.0
+spot_angle = 66.5
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_fnw8t")
+
+[node name="LoadingUI" type="Control" parent="." node_paths=PackedStringArray("_worldNameLabel", "_progressBar", "_statusLabel")]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_5wmpq")
+_worldNameLabel = NodePath("LoadingPanel/VBoxContainer/WorldName")
+_progressBar = NodePath("LoadingPanel/VBoxContainer/MarginContainer/ProgressBar")
+_statusLabel = NodePath("LoadingPanel/VBoxContainer/StatusLabel")
+
+[node name="LoadingPanel" type="Panel" parent="LoadingUI"]
+layout_mode = 1
+anchors_preset = 8
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -100.0
+offset_right = 200.0
+offset_bottom = 100.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_dkpr6")
+
+[node name="VBoxContainer" type="VBoxContainer" parent="LoadingUI/LoadingPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+
+[node name="Label" type="Label" parent="LoadingUI/LoadingPanel/VBoxContainer"]
+layout_mode = 2
+text = "Loading World..."
+horizontal_alignment = 1
+
+[node name="WorldName" type="Label" parent="LoadingUI/LoadingPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "World Name"
+horizontal_alignment = 1
+
+[node name="MarginContainer" type="MarginContainer" parent="LoadingUI/LoadingPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_right = 20
+
+[node name="ProgressBar" type="ProgressBar" parent="LoadingUI/LoadingPanel/VBoxContainer/MarginContainer"]
+layout_mode = 2
+value = 50.0
+
+[node name="StatusLabel" type="Label" parent="LoadingUI/LoadingPanel/VBoxContainer"]
+layout_mode = 2
+text = "Downloading assets..."
+horizontal_alignment = 1
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.8, 5)
+current = true
+fov = 80.0

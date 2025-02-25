@@ -1,7 +1,7 @@
-[gd_scene load_steps=11 format=3 uid="uid://d37lm476vrp1e"]
+[gd_scene load_steps=9 format=3 uid="uid://d37lm476vrp1e"]
 
 [ext_resource type="Script" path="res://Source/Management/Client/ClientManager.cs" id="1_enrkg"]
-[ext_resource type="PackedScene" uid="uid://dtempfuf1571n" path="res://Scenes/World/MultiplayerScene.tscn" id="2_40xba"]
+[ext_resource type="PackedScene" uid="uid://cudrv56uf1eqt" path="res://Scenes/World/WorldSessionSkeleton.tscn" id="2_40xba"]
 [ext_resource type="Texture2D" uid="uid://jdjeattbqj2g" path="res://Assets/Textures/Dot.png" id="3_1i8qj"]
 [ext_resource type="Script" path="res://Source/Management/HUD/HUDManager.cs" id="3_16xj1"]
 [ext_resource type="PackedScene" uid="uid://cglyi2p1kqyfy" path="res://Scenes/UI/main_menu.tscn" id="5_saa3o"]
@@ -12,18 +12,11 @@
 render_priority = 0
 shader = ExtResource("7_daa5c")
 
-[sub_resource type="BoxMesh" id="BoxMesh_kwn4u"]
-size = Vector3(2.1, 0.25, 2.1)
-
-[sub_resource type="BoxShape3D" id="BoxShape3D_ifne4"]
-size = Vector3(2, 0.25, 2)
-
-[node name="Root" type="Node" node_paths=PackedStringArray("_inputRoot", "_multiplayerScene")]
+[node name="Root" type="Node" node_paths=PackedStringArray("_inputRoot")]
 script = ExtResource("1_enrkg")
 _inputRoot = NodePath("InputRoot")
-_multiplayerScene = NodePath("Scene")
 
-[node name="Scene" parent="." instance=ExtResource("2_40xba")]
+[node name="WorldSession" parent="." instance=ExtResource("2_40xba")]
 
 [node name="InputRoot" type="Node3D" parent="."]
 
@@ -70,13 +63,3 @@ layout_mode = 1
 [node name="MeshInstance3D2" type="MeshInstance3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1, -15)
 material_override = SubResource("ShaderMaterial_5e4va")
-instance_shader_parameters/gridLineColour = Color(0.176419, 0.176419, 0.176419, 1)
-instance_shader_parameters/gridPrimaryColour = Color(0.501961, 1, 0.501961, 1)
-instance_shader_parameters/lineOffset = Vector2(1, 0)
-instance_shader_parameters/lineWidth = 0.02
-mesh = SubResource("BoxMesh_kwn4u")
-
-[node name="StaticBody3D" type="StaticBody3D" parent="MeshInstance3D2"]
-
-[node name="CollisionShape3D" type="CollisionShape3D" parent="MeshInstance3D2/StaticBody3D"]
-shape = SubResource("BoxShape3D_ifne4")

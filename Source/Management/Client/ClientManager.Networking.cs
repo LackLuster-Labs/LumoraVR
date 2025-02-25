@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using Godot;
 using Aquamarine.Source.Logging;
 using Aquamarine.Source.Networking;
+using Aquamarine.Source.Management.World;
 using LiteNetLib.Utils;
 using LiteNetLib;
 
@@ -67,7 +68,7 @@ namespace Aquamarine.Source.Management
 
             Multiplayer.MultiplayerPeer = _peer;
             _isDirectConnection = false;
-            
+
             void PeerConnected(NetPeer peer)
             {
                 NetDataWriter writer = new NetDataWriter();
@@ -75,7 +76,7 @@ namespace Aquamarine.Source.Management
                 peer.Send(writer, DeliveryMethod.ReliableOrdered);
                 _peer.Listener.PeerConnectedEvent -= PeerConnected;
             }
-            
+
             _peer.Listener.PeerConnectedEvent += PeerConnected;
 
             RegisterPeerEvents();
@@ -91,12 +92,12 @@ namespace Aquamarine.Source.Management
         private void PeerOnClientConnectionFail()
         {
             UnregisterPeerEvents();
-            SpawnLocalHome();
+            LoadWorld("local_home");
         }
 
         private void PeerOnClientConnectionSuccess()
         {
-            MultiplayerScene.Instance.Rpc(MultiplayerScene.MethodName.SetPlayerName,
+            _multiplayerScene.Rpc(MultiplayerScene.MethodName.SetPlayerName,
                                         System.Environment.MachineName);
             UnregisterPeerEvents();
         }
@@ -104,7 +105,7 @@ namespace Aquamarine.Source.Management
         private void PeerOnPeerDisconnected(long id)
         {
             GD.Print($"{id} disconnected");
-            if (id == 1) SpawnLocalHome();
+            if (id == 1) LoadWorld("local_home");
         }
 
         private void UnregisterPeerEvents()

@@ -1,0 +1,32 @@
+[gd_scene load_steps=5 format=3 uid="uid://cudrv56uf1eqt"]
+
+[ext_resource type="Script" path="res://Source/Management/MultiplayerScene.cs" id="1_yl1ag"]
+[ext_resource type="Script" path="res://Source/Management/World/WorldManager.cs" id="2_jgklm"]
+[ext_resource type="PackedScene" uid="uid://dkagai8lawv51" path="res://Scenes/World/LocalHome.tscn" id="3_yrx02"]
+[ext_resource type="PackedScene" uid="uid://br21iqn2gko1l" path="res://Scenes/World/LoadingWorld.tscn" id="4_28qvs"]
+
+[node name="WorldSession" type="Node" node_paths=PackedStringArray("Spawner", "PlayerRoot")]
+script = ExtResource("1_yl1ag")
+Spawner = NodePath("MultiplayerSpawner")
+PlayerRoot = NodePath("WorldContainer/PlayerRoot")
+
+[node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="."]
+_spawnable_scenes = PackedStringArray("res://Scenes/Objects/RootObjects/PlayerCharacterController.tscn")
+spawn_path = NodePath("../WorldContainer")
+
+[node name="PlayerSync" type="MultiplayerSpawner" parent="."]
+_spawnable_scenes = PackedStringArray("res://Scenes/Objects/RootObjects/PlayerCharacterController.tscn")
+spawn_path = NodePath("../WorldContainer/PlayerRoot")
+
+[node name="WorldContainer" type="Node" parent="."]
+
+[node name="PlayerRoot" type="Node3D" parent="WorldContainer"]
+
+[node name="WorldManager" type="Node" parent="."]
+script = ExtResource("2_jgklm")
+LoadingWorldScene = ExtResource("4_28qvs")
+LocalHomeScene = ExtResource("3_yrx02")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(-0.707107, -0.582445, -0.400947, 0, -0.567024, 0.823701, -0.707107, 0.582445, 0.400947, 0, 0, 0)
+shadow_enabled = true
