@@ -117,8 +117,93 @@ public partial class PlayerCharacterController : CharacterBody3D, ICharacterCont
         }
 
         UpdateAvatar();
+        ValidateMultiplayerNodes();
+
 
         Logger.Log("PlayerCharacterController initialized.");
+    }
+
+    private void ValidateMultiplayerNodes()
+    {
+        // Log node details for diagnostics
+        LogNodeDetails("Self", this);
+        LogNodeDetails("ClientSync", ClientSync);
+        LogNodeDetails("ServerSync", ServerSync);
+        LogNodeDetails("Nametag", Nametag);
+        LogNodeDetails("Parent", GetParent());
+
+        // Verify node paths
+        try
+        {
+            if (ClientSync != null)
+            {
+                Logger.Log($"ClientSync Authority: {ClientSync.GetMultiplayerAuthority()}");
+                Logger.Log($"ClientSync Path: {ClientSync.GetPath()}");
+            }
+
+            if (ServerSync != null)
+            {
+                Logger.Log($"ServerSync Authority: {ServerSync.GetMultiplayerAuthority()}");
+                Logger.Log($"ServerSync Path: {ServerSync.GetPath()}");
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"Error validating multiplayer nodes: {ex.Message}");
+        }
+
+        // Additional diagnostic information
+        DiagnoseMultiplayerSetup();
+    }
+
+    private void LogNodeDetails(string nodeName, Node node)
+    {
+        if (node == null)
+        {
+            Logger.Warn($"{nodeName} node is null");
+            return;
+        }
+
+        Logger.Log($"{nodeName} Node Details:");
+        Logger.Log($"  - Name: {node.Name}");
+        Logger.Log($"  - Path: {node.GetPath()}");
+        Logger.Log($"  - Is Inside Tree: {node.IsInsideTree()}");
+    }
+
+    private void DiagnoseMultiplayerSetup()
+    {
+        // Check multiplayer context
+        Logger.Log($"Multiplayer Unique ID: {Multiplayer.GetUniqueId()}");
+        Logger.Log($"Is Multiplayer Authority: {IsMultiplayerAuthority()}");
+
+        // Attempt to diagnose synchronizer issues
+        try
+        {
+            // Try to find synchronizers manually if they're null
+            if (ClientSync == null)
+            {
+                var manualSync = FindChild("ClientSynchronizer") as MultiplayerSynchronizer;
+                if (manualSync != null)
+                {
+                    Logger.Log("Found ClientSynchronizer manually");
+                    ClientSync = manualSync;
+                }
+            }
+
+            if (ServerSync == null)
+            {
+                var manualSync = FindChild("ServerSynchronizer") as MultiplayerSynchronizer;
+                if (manualSync != null)
+                {
+                    Logger.Log("Found ServerSynchronizer manually");
+                    ServerSync = manualSync;
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.Error($"Error in manual synchronizer search: {ex.Message}");
+        }
     }
 
     public override void _Process(double delta)

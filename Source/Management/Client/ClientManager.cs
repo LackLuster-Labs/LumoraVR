@@ -93,17 +93,5 @@ namespace Aquamarine.Source.Management
             });
         }
 
-        public void LoadWorld(string worldId)
-        {
-            var worldManager = GetNode<WorldManager>($"{_worldSession.GetPath()}/WorldManager");
-            if (worldManager != null)
-            {
-                worldManager.LoadWorld(worldId);
-            }
-            else
-            {
-                Logger.Error("Could not find WorldManager to load world");
-            }
-        }
     }
 }
