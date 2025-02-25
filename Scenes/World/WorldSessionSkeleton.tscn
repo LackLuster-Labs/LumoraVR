@@ -24,6 +24,8 @@ spawn_path = NodePath("../WorldContainer/PlayerRoot")
 
 [node name="WorldManager" type="Node" parent="."]
 script = ExtResource("2_jgklm")
+WorldContainerPath = NodePath("../WorldContainer")
+PlayerRootPath = NodePath("../WorldContainer/PlayerRoot")
 LoadingWorldScene = ExtResource("4_28qvs")
 LocalHomeScene = ExtResource("3_yrx02")
 
