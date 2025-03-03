@@ -1,6 +1,6 @@
 [gd_scene load_steps=11 format=3 uid="uid://fnsfbtgsl6df"]
 
-[ext_resource type="Script" path="res://Source/Scene/RootObjects/PlayerCharacterController.cs" id="1_0nv1q"]
+[ext_resource type="Script" uid="uid://cce7fps2tjg0y" path="res://Source/Scene/RootObjects/PlayerCharacterController.cs" id="1_0nv1q"]
 [ext_resource type="PackedScene" uid="uid://cnipfulvhw6yr" path="res://Assets/Models/headset.gltf" id="2_63sjc"]
 [ext_resource type="PackedScene" uid="uid://ddkrrw6g4phsx" path="res://Scenes/UI/Nameplate.tscn" id="2_x6dpg"]
 [ext_resource type="PackedScene" uid="uid://bbyi2f0brc7tu" path="res://Assets/Models/LeftHand.gltf" id="3_xm4n5"]

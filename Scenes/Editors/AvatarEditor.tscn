@@ -1,7 +1,7 @@
 [gd_scene load_steps=9 format=3 uid="uid://clq7k2b44i7so"]
 
 [ext_resource type="PackedScene" uid="uid://co1rx4gycn78a" path="res://Scenes/Editors/PrefabEditor.tscn" id="2_ohtv5"]
-[ext_resource type="Script" path="res://Source/Scene/Editors/AvatarEditor.cs" id="2_xic7d"]
+[ext_resource type="Script" uid="uid://ri6y1tvray1f" path="res://Source/Scene/Editors/AvatarEditor.cs" id="2_xic7d"]
 [ext_resource type="PackedScene" uid="uid://hx43joc40usp" path="res://Assets/Models/johnaquamarine.glb" id="6_wfs8j"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_46ft5"]

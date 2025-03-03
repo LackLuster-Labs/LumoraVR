@@ -1,6 +1,6 @@
 [gd_scene load_steps=4 format=3 uid="uid://co1rx4gycn78a"]
 
-[ext_resource type="Script" path="res://Source/Scene/Editors/PrefabEditor.cs" id="2_fkqd0"]
+[ext_resource type="Script" uid="uid://b7gxsojqvwurx" path="res://Source/Scene/Editors/PrefabEditor.cs" id="2_fkqd0"]
 [ext_resource type="PackedScene" uid="uid://bbq15pny4kh5o" path="res://Scenes/Editors/HierarchyEditor.tscn" id="3_ds1o5"]
 [ext_resource type="PackedScene" uid="uid://dm83la0w1wbx7" path="res://Scenes/Editors/AssetEditor.tscn" id="4_6ssst"]
 

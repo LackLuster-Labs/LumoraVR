@@ -1,7 +1,7 @@
 [gd_scene load_steps=14 format=3 uid="uid://dtempfuf1571n"]
 
-[ext_resource type="Script" path="res://Source/Management/MultiplayerScene.cs" id="1_yl1ag"]
-[ext_resource type="Shader" path="res://Assets/Shaders/DebugGrid.gdshader" id="2_q775b"]
+[ext_resource type="Script" uid="uid://cev0tf3rr068k" path="res://Source/Management/MultiplayerScene.cs" id="1_yl1ag"]
+[ext_resource type="Shader" uid="uid://dtwpfle1ef47k" path="res://Assets/Shaders/DebugGrid.gdshader" id="2_q775b"]
 [ext_resource type="Shader" uid="uid://drcbjbss62tm5" path="res://Assets/Shaders/TestGrid.tres" id="3_dp4rw"]
 
 [sub_resource type="ShaderMaterial" id="ShaderMaterial_mla0q"]

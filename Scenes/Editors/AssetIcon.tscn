@@ -1,6 +1,6 @@
 [gd_scene load_steps=4 format=3 uid="uid://dmso320dseln5"]
 
-[ext_resource type="Script" path="res://Source/Scene/Editors/AssetIcon.cs" id="1_qhlw5"]
+[ext_resource type="Script" uid="uid://d1ir21u7iehkb" path="res://Source/Scene/Editors/AssetIcon.cs" id="1_qhlw5"]
 
 [sub_resource type="Gradient" id="Gradient_3d32t"]
 

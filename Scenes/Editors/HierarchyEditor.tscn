@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://bbq15pny4kh5o"]
 
-[ext_resource type="Script" path="res://Source/Scene/Editors/HierarchyEditor.cs" id="1_jbb0q"]
+[ext_resource type="Script" uid="uid://back7aphhh0a2" path="res://Source/Scene/Editors/HierarchyEditor.cs" id="1_jbb0q"]
 
 [node name="HierarchyEditor" type="PanelContainer" node_paths=PackedStringArray("Tree", "AddOption", "AddButton")]
 anchors_preset = 15

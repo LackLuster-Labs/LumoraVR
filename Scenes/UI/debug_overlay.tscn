@@ -1,10 +1,10 @@
 [gd_scene load_steps=6 format=3 uid="uid://bkr4n38tjwye3"]
 
-[ext_resource type="Script" path="res://Source/Management/HUD/DebugOverlay.cs" id="1_jnyeq"]
+[ext_resource type="Script" uid="uid://dx6h30lt6ogx1" path="res://Source/Management/HUD/DebugOverlay.cs" id="1_jnyeq"]
 [ext_resource type="Theme" uid="uid://bk8eop2660llo" path="res://Assets/Themes/lackluster_theme/main_ui_theme.tres" id="1_sbq1b"]
 [ext_resource type="StyleBox" uid="uid://pmvuj543xol" path="res://Assets/Themes/lackluster_theme/main_style_buttons_normal.tres" id="3_js1hg"]
-[ext_resource type="Script" path="res://Source/Management/HUD/RichTextLabelAutoSizeNode.cs" id="4_wk7ua"]
-[ext_resource type="Script" path="res://Source/Management/HUD/RichTextLabelAutoSize.cs" id="5_43rqh"]
+[ext_resource type="Script" uid="uid://jqymw8wbk48n" path="res://Source/Management/HUD/RichTextLabelAutoSizeNode.cs" id="4_wk7ua"]
+[ext_resource type="Script" uid="uid://bad0bhph1thoc" path="res://Source/Management/HUD/RichTextLabelAutoSize.cs" id="5_43rqh"]
 
 [node name="Debug Overlay" type="Control" node_paths=PackedStringArray("StatsText", "ConsoleText", "ConsoleInput")]
 layout_mode = 3

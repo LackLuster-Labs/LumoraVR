@@ -1,6 +1,6 @@
 [gd_scene load_steps=10 format=3 uid="uid://f4us2q07n48a"]
 
-[ext_resource type="Script" path="res://Source/Test/MeshDataTest.cs" id="1_g61kh"]
+[ext_resource type="Script" uid="uid://cy6xt2sqt3sai" path="res://Source/Test/MeshDataTest.cs" id="1_g61kh"]
 [ext_resource type="PackedScene" uid="uid://wbed8gbcymlv" path="res://Assets/Test/socialvrtestmodel.glb" id="2_3oupd"]
 [ext_resource type="PackedScene" uid="uid://hx43joc40usp" path="res://Assets/Models/johnaquamarine.glb" id="3_uwnsn"]
 [ext_resource type="PackedScene" uid="uid://gedandkq0k1h" path="res://Assets/Models/johnaquamarinehumanoid.glb" id="4_p8bh2"]

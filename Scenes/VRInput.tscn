@@ -1,6 +1,6 @@
 [gd_scene load_steps=2 format=3 uid="uid://d1b2xr42bthfg"]
 
-[ext_resource type="Script" path="res://Source/Input/VRInput.cs" id="1_b7nsa"]
+[ext_resource type="Script" uid="uid://cw4wv5mcx23q4" path="res://Source/Input/VRInput.cs" id="1_b7nsa"]
 
 [node name="VRInput" type="Node3D" node_paths=PackedStringArray("_origin", "_leftHand", "_rightHand", "_hip", "_leftFoot", "_rightFoot", "_head")]
 script = ExtResource("1_b7nsa")

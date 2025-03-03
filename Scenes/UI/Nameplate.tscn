@@ -1,6 +1,6 @@
 [gd_scene load_steps=5 format=3 uid="uid://ddkrrw6g4phsx"]
 
-[ext_resource type="Script" path="res://Source/Scene/RootObjects/Nameplate.cs" id="1_script"]
+[ext_resource type="Script" uid="uid://gre7xjgtbpox" path="res://Source/Scene/RootObjects/Nameplate.cs" id="1_script"]
 [ext_resource type="Theme" uid="uid://brpxf2y12vme8" path="res://Assets/Themes/lackluster_theme/nameplate_theme.tres" id="2_theme"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_n8m3p"]

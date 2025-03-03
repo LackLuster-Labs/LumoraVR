@@ -12,7 +12,7 @@ config_version=5
 
 config/name="Aquamarine"
 run/main_scene="res://Scenes/Start.tscn"
-config/features=PackedStringArray("4.3", "C#", "Forward Plus")
+config/features=PackedStringArray("4.4", "C#", "Forward Plus")
 config/icon="res://Assets/Textures/lumoravricon.svg"
 
 [autoload]

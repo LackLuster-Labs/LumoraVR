@@ -1,6 +1,6 @@
 [gd_scene load_steps=3 format=3 uid="uid://bqoqe72r7ln6v"]
 
-[ext_resource type="Script" path="res://Source/Management/Server/ServerManager.cs" id="1_or8wb"]
+[ext_resource type="Script" uid="uid://btwis85m8rytv" path="res://Source/Management/Server/ServerManager.cs" id="1_or8wb"]
 [ext_resource type="PackedScene" uid="uid://dtempfuf1571n" path="res://Scenes/World/MultiplayerScene.tscn" id="2_d7401"]
 
 [node name="Root" type="Node" node_paths=PackedStringArray("_multiplayerScene")]

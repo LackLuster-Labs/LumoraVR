@@ -1,6 +1,6 @@
 [gd_scene load_steps=5 format=3 uid="uid://dm83la0w1wbx7"]
 
-[ext_resource type="Script" path="res://Source/Scene/Editors/AssetEditor.cs" id="1_27bb3"]
+[ext_resource type="Script" uid="uid://c7diaccoqmbsy" path="res://Source/Scene/Editors/AssetEditor.cs" id="1_27bb3"]
 
 [sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_jeu7w"]
 

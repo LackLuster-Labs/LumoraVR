@@ -1,4 +1,4 @@
-﻿<Project Sdk="Godot.NET.Sdk/4.3.0">
+﻿<Project Sdk="Godot.NET.Sdk/4.4.0-rc.3">
   <PropertyGroup>
     <TargetFramework>net9.0</TargetFramework>
     <EnableDynamicLoading>true</EnableDynamicLoading>
@@ -10,3 +10,4 @@
     <PackageReference Include="Wasmtime" Version="22.0.0" />
   </ItemGroup>
 </Project>
+
