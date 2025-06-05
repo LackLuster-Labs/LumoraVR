@@ -1,9 +1,9 @@
 using System;
-using Aquamarine.Source.Helpers;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Helpers;
+using LumoraVR.Source.Logging;
 using Godot;
 
-namespace Aquamarine.Source.Management.Client
+namespace LumoraVR.Source.Management.Client
 {
     [GlobalClass]
     public partial class ClientConnectionHandler : Node

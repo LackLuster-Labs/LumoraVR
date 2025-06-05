@@ -1,6 +1,6 @@
 ﻿using System.Text.RegularExpressions;
 
-namespace Aquamarine.Source.Helpers;
+namespace LumoraVR.Source.Helpers;
 
 public static partial class GeneralHelpers
 {

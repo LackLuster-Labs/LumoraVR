@@ -1,15 +1,15 @@
 using System.Collections.Generic;
 using System.Linq;
-using Aquamarine.Source.Helpers;
-using Aquamarine.Source.Input;
-using Aquamarine.Source.Scene.RootObjects;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Helpers;
+using LumoraVR.Source.Input;
+using LumoraVR.Source.Scene.RootObjects;
+using LumoraVR.Source.Logging;
 using Bones.Core;
 using Bones.InverseKinematics;
 using Godot;
-using Aquamarine.Source.Management;
+using LumoraVR.Source.Management;
 
-namespace Aquamarine.Source.Scene.ChildObjects;
+namespace LumoraVR.Source.Scene.ChildObjects;
 
 public partial class HumanoidAnimator : Node3D, IChildObject
 {

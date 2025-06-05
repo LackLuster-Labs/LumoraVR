@@ -2,7 +2,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace Aquamarine.Source.Management.HUD;
+namespace LumoraVR.Source.Management.HUD;
 
 /// <summary>
 /// Implements the touch and drag feature for a ScrollContainer.

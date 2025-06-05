@@ -5,10 +5,10 @@ using System.Diagnostics;
 #endif
 using System.Linq;
 using System.Text;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 using Godot;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class ArgumentCache : Node
     {

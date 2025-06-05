@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Scene.RootObjects;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Scene.RootObjects;
 using Godot;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     [GlobalClass]
     public partial class CustomPlayerSync : Node

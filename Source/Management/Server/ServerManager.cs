@@ -1,10 +1,10 @@
 using System;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 using Godot;
 using LiteNetLib;
-using Aquamarine.Source.Networking;
+using LumoraVR.Source.Networking;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class ServerManager : Node
     {

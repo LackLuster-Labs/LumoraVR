@@ -4,7 +4,7 @@ using System.Diagnostics;
 using Godot;
 using LiteNetLib;
 
-namespace Aquamarine.Source.Networking
+namespace LumoraVR.Source.Networking
 {
     public partial class LiteNetLibMultiplayerPeer : MultiplayerPeerExtension
     {

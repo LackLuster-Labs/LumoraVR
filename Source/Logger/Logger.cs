@@ -6,7 +6,7 @@ using System.Threading.Tasks;
 using Godot;
 using Environment = System.Environment;
 
-namespace Aquamarine.Source.Logging
+namespace LumoraVR.Source.Logging
 {
     public static class Logger
     {
@@ -19,7 +19,7 @@ namespace Aquamarine.Source.Logging
         static Logger()
         {
             string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            string gameName = "Aquamarine"; // temp solution
+            string gameName = "LumoraVR"; // temp solution
             LogDirectory = Path.Combine(appData, gameName, "logs");
 
             // Ensure the directory exists

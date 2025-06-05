@@ -1,6 +1,6 @@
 ﻿using System;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public class UserAuthData
     {

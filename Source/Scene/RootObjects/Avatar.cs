@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
-using Aquamarine.Source.Helpers;
-using Aquamarine.Source.Scene.Assets;
+using LumoraVR.Source.Helpers;
+using LumoraVR.Source.Scene.Assets;
 using Godot;
 
-namespace Aquamarine.Source.Scene.RootObjects;
+namespace LumoraVR.Source.Scene.RootObjects;
 
 public partial class Avatar : Node3D, IRootObject
 {

@@ -433,7 +433,7 @@ theme_override_font_sizes/mono_font_size = 24
 theme_override_font_sizes/normal_font_size = 24
 theme_override_font_sizes/bold_font_size = 24
 bbcode_enabled = true
-text = "Author: [color=cyan][u]John Aquamarine[/u][/color]"
+text = "Author: [color=cyan][u]John LumoraVR[/u][/color]"
 script = ExtResource("3_b7g3j")
 MinMaxSize = Vector2(24, 64)
 
@@ -529,7 +529,7 @@ theme_override_font_sizes/mono_font_size = 24
 theme_override_font_sizes/normal_font_size = 24
 theme_override_font_sizes/bold_font_size = 24
 bbcode_enabled = true
-text = "Description: [color=silver]This is one of the worlds of all time created by none other than John Aquamarine.[/color]"
+text = "Description: [color=silver]This is one of the worlds of all time created by none other than John LumoraVR.[/color]"
 script = ExtResource("3_b7g3j")
 MinMaxSize = Vector2(24, 64)
 

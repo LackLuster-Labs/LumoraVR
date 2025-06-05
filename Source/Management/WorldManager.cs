@@ -1,4 +1,4 @@
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 using Bones.Core;
 using Godot;
 using System;
@@ -8,7 +8,7 @@ using System.Resources;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class WorldManager : Node
     {

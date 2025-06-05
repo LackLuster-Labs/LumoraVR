@@ -1,13 +1,13 @@
 using System.Linq;
-using Aquamarine.Source.Helpers;
-using Aquamarine.Source.Input;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Management;
-using Aquamarine.Source.Scene.RootObjects;
+using LumoraVR.Source.Helpers;
+using LumoraVR.Source.Input;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Management;
+using LumoraVR.Source.Scene.RootObjects;
 using Godot;
 using Godot.Collections;
 
-namespace Aquamarine.Source.Scene.ChildObjects;
+namespace LumoraVR.Source.Scene.ChildObjects;
 
 public partial class HeadAndHandsAnimator : Node, IChildObject
 {

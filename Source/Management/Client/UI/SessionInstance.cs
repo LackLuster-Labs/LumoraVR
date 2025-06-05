@@ -1,8 +1,8 @@
-using Aquamarine.Source.Management;
+using LumoraVR.Source.Management;
 using Godot;
 using System;
 using System.Data;
-namespace Aquamarine.Source.Management.Client.UI;
+namespace LumoraVR.Source.Management.Client.UI;
 public partial class SessionInstance : HBoxContainer
 {
     private RichTextLabel _detailsText;

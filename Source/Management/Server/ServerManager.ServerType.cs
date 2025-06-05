@@ -1,7 +1,7 @@
 ﻿using System.Linq;
 using Godot;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class ServerManager
     {

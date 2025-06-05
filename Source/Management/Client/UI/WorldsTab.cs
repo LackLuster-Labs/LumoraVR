@@ -1,6 +1,6 @@
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Management;
-using Aquamarine.Source.Management.Data;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Management;
+using LumoraVR.Source.Management.Data;
 using Godot;
 using Godot.NativeInterop;
 using System;
@@ -13,7 +13,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Threading.Tasks.Dataflow;
-namespace Aquamarine.Source.Management.Client.UI;
+namespace LumoraVR.Source.Management.Client.UI;
 public partial class WorldsTab : Control
 {
     /* this api is stupid and we need to do a "big rewrite".. Mabye

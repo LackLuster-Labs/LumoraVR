@@ -1,7 +1,7 @@
-using Aquamarine.Source.Input;
+using LumoraVR.Source.Input;
 using Godot;
 
-namespace Aquamarine.Source.Scene.RootObjects;
+namespace LumoraVR.Source.Scene.RootObjects;
 
 public interface ICharacterController : IRootObject
 {

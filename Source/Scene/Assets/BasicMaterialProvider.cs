@@ -1,9 +1,9 @@
 using System;
-using Aquamarine.Source.Helpers;
+using LumoraVR.Source.Helpers;
 using Godot;
 using Godot.Collections;
 
-namespace Aquamarine.Source.Scene.Assets;
+namespace LumoraVR.Source.Scene.Assets;
 
 public class BasicMaterialProvider : IMaterialProvider
 {

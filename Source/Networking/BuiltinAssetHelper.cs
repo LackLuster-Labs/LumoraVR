@@ -4,7 +4,7 @@ using System.Linq;
 using Godot;
 using FileAccess = Godot.FileAccess;
 
-namespace Aquamarine.Source.Networking;
+namespace LumoraVR.Source.Networking;
 
 public static class BuiltinAssetHelper
 {
@@ -14,13 +14,13 @@ public static class BuiltinAssetHelper
         "Textures/Dot.png",
         "Assets/Models/headset.gltf",
         
-        //John Aquamarine John Aquamarine
-        "Assets/Prefabs/johnaquamarine.prefab",
-        "Assets/Prefabs/johnaquamarinehumanoid.prefab",
-        "Assets/Models/johnaquamarine.glb",
-        "Assets/Models/johnaquamarinehumanoid.glb",
-        "Assets/Models/johnaquamarine.meshfile",
-        "Assets/Models/johnaquamarinehumanoid.meshfile",
+        //John LumoraVR John LumoraVR
+        "Assets/Prefabs/johnlumoravr.prefab",
+        "Assets/Prefabs/johnlumoravrhumanoid.prefab",
+        "Assets/Models/johnlumoravr.glb",
+        "Assets/Models/johnlumoravrhumanoid.glb",
+        "Assets/Models/johnlumoravr.meshfile",
+        "Assets/Models/johnlumoravrhumanoid.meshfile",
     }.Select(i => $"builtin://{i}").ToList();
     public static bool ValidPath(string path)
     {

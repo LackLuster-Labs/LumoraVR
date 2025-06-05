@@ -1,4 +1,4 @@
-namespace Aquamarine.Source.Scene;
+namespace LumoraVR.Source.Scene;
 
 public enum ChildObjectType
 {

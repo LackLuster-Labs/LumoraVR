@@ -2,7 +2,7 @@ using System;
 using Godot;
 using Godot.Collections;
 
-namespace Aquamarine.Source.Scene.Assets;
+namespace LumoraVR.Source.Scene.Assets;
 
 public class NoiseTextureProvider : ITextureProvider
 {

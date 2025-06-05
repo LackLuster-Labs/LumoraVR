@@ -1,9 +1,9 @@
 using System.Collections.Generic;
-using Aquamarine.Source.Helpers;
-using Aquamarine.Source.Scene.Assets;
+using LumoraVR.Source.Helpers;
+using LumoraVR.Source.Scene.Assets;
 using Godot;
 
-namespace Aquamarine.Source.Scene.ChildObjects;
+namespace LumoraVR.Source.Scene.ChildObjects;
 
 public partial class MeshRenderer : MeshInstance3D, IChildObject
 {

@@ -1,7 +1,7 @@
 using LiteNetLib;
 using LiteNetLib.Utils;
 
-namespace Aquamarine.Source.Networking
+namespace LumoraVR.Source.Networking
 {
     public partial class LiteNetLibMultiplayerPeer
     {

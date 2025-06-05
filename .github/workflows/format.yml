@@ -24,7 +24,7 @@ jobs:
     - name: Run dotnet format check
       run: |
         # Check formatting across the entire solution
-        dotnet format --verify-no-changes Aquamarine.csproj
+        dotnet format --verify-no-changes LumoraVR.csproj
       
     - name: Add format-issues label if formatting issues found
       if: failure()

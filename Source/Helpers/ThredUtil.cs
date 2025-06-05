@@ -5,9 +5,9 @@ using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 using Godot;
-namespace Aquamarine.Source.Helpers
+namespace LumoraVR.Source.Helpers
 {
     internal static class ThredUtil
     {

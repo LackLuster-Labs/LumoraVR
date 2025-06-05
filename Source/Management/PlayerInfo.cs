@@ -1,6 +1,6 @@
-using Aquamarine.Source.Scene.RootObjects;
+using LumoraVR.Source.Scene.RootObjects;
 
-namespace Aquamarine.Source.Management;
+namespace LumoraVR.Source.Management;
 
 public class PlayerInfo
 {

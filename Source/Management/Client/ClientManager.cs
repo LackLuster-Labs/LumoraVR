@@ -1,17 +1,17 @@
 using System;
 using Godot;
 using System.Threading.Tasks;
-using Aquamarine.Source.Input;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Networking;
+using LumoraVR.Source.Input;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Networking;
 using Bones.Core;
 using System.Net.NetworkInformation;
 using System.Linq;
 using System.Threading;
-using Aquamarine.Source.Helpers;
+using LumoraVR.Source.Helpers;
 using System.Collections.Generic;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class ClientManager : Node
     {

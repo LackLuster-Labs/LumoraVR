@@ -1,6 +1,6 @@
 ﻿Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio 2012
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Aquamarine", "Aquamarine.csproj", "{74D18597-3309-4BEF-B499-D8A877829A58}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "LumoraVR", "LumoraVR.csproj", "{74D18597-3309-4BEF-B499-D8A877829A58}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution

@@ -2,9 +2,9 @@
 using System.IO;
 using System.Collections.Generic;
 using Godot;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class LocalDatabase : Node
     {

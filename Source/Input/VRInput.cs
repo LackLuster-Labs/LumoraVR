@@ -1,8 +1,8 @@
 using System;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 using Godot;
 
-namespace Aquamarine.Source.Input;
+namespace LumoraVR.Source.Input;
 
 public partial class VRInput : Node3D, IInputProvider
 {

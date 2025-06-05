@@ -1,7 +1,7 @@
 using Godot;
 using System;
 
-namespace Aquamarine.Source.Management.HUD;
+namespace LumoraVR.Source.Management.HUD;
 
 /// <summary>
 /// Manages the loading screen UI and animations.

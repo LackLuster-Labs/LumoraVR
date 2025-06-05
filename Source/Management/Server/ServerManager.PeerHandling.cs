@@ -1,9 +1,9 @@
 using System;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Scene.RootObjects;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Scene.RootObjects;
 using Godot;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class ServerManager
     {

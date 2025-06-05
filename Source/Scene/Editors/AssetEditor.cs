@@ -1,12 +1,12 @@
 using System;
 using System.IO;
 using System.Linq;
-using Aquamarine.Source.Assets;
-using Aquamarine.Source.Scene.Assets;
+using LumoraVR.Source.Assets;
+using LumoraVR.Source.Scene.Assets;
 using Godot;
 using FileAccess = Godot.FileAccess;
 
-namespace Aquamarine.Source.Scene.Editors;
+namespace LumoraVR.Source.Scene.Editors;
 
 public partial class AssetEditor : PanelContainer
 {

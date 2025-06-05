@@ -1,6 +1,6 @@
 using Godot;
 
-namespace Aquamarine.Source.Networking;
+namespace LumoraVR.Source.Networking;
 
 public static class LocalTestAssetHelper
 {

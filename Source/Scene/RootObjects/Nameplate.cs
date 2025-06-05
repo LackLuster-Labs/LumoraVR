@@ -1,7 +1,7 @@
 using Godot;
 using System;
 
-namespace Aquamarine.Source.Scene.UI
+namespace LumoraVR.Source.Scene.UI
 {
     public partial class Nameplate : Node3D
     {

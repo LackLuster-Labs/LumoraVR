@@ -1,11 +1,11 @@
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using Aquamarine.Source.Helpers;
+using LumoraVR.Source.Helpers;
 using Godot;
 using Godot.Collections;
 
-namespace Aquamarine.Source.Assets;
+namespace LumoraVR.Source.Assets;
 
 public class MeshFile
 {

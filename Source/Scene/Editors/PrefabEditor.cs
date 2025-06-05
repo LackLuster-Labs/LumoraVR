@@ -1,6 +1,6 @@
 using Godot;
 
-namespace Aquamarine.Source.Scene.Editors;
+namespace LumoraVR.Source.Scene.Editors;
 
 public partial class PrefabEditor : PanelContainer
 {
@@ -20,7 +20,7 @@ public partial class PrefabEditor : PanelContainer
         base._Ready();
 
         //TEMP
-        var prefabRead = FileAccess.Open("res://Assets/Prefabs/johnaquamarine.prefab", FileAccess.ModeFlags.Read);
+        var prefabRead = FileAccess.Open("res://Assets/Prefabs/johnlumoravr.prefab", FileAccess.ModeFlags.Read);
         var serialized = prefabRead.GetBuffer((long)prefabRead.GetLength()).GetStringFromUtf8();
         EditingPrefab = Prefab.Deserialize(serialized);
 

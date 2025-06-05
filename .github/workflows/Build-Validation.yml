@@ -27,12 +27,12 @@ jobs:
         dotnet-version: '9.0.x'
     
     - name: Restore dependencies
-      run: dotnet restore Aquamarine.csproj
+      run: dotnet restore LumoraVR.csproj
       continue-on-error: true
     
     - name: Build project
       id: build
-      run: dotnet build Aquamarine.csproj --no-restore --configuration ExportRelease
+      run: dotnet build LumoraVR.csproj --no-restore --configuration ExportRelease
       continue-on-error: true
     
     - name: Add build-error label if build fails
@@ -64,5 +64,5 @@ jobs:
     - name: Fail if build errors found
       if: steps.build.outcome == 'failure'
       run: |
-        echo "::error::Build failed for Aquamarine.csproj. Please fix the build errors before merging."
+        echo "::error::Build failed for LumoraVR.csproj. Please fix the build errors before merging."
         exit 1

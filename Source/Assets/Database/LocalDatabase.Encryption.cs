@@ -3,7 +3,7 @@ using System.Text;
 using System.Security.Cryptography;
 using Godot;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class LocalDatabase
     {

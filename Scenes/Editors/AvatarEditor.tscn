@@ -2,7 +2,7 @@
 
 [ext_resource type="PackedScene" uid="uid://co1rx4gycn78a" path="res://Scenes/Editors/PrefabEditor.tscn" id="2_ohtv5"]
 [ext_resource type="Script" uid="uid://ri6y1tvray1f" path="res://Source/Scene/Editors/AvatarEditor.cs" id="2_xic7d"]
-[ext_resource type="PackedScene" uid="uid://hx43joc40usp" path="res://Assets/Models/johnaquamarine.glb" id="6_wfs8j"]
+[ext_resource type="PackedScene" uid="uid://hx43joc40usp" path="res://Assets/Models/johnlumoravr.glb" id="6_wfs8j"]
 
 [sub_resource type="CylinderMesh" id="CylinderMesh_46ft5"]
 height = 0.05
@@ -58,4 +58,4 @@ surface_material_override/0 = SubResource("StandardMaterial3D_f5svc")
 [node name="AvatarPreview" type="Node3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.05, 0)
 
-[node name="johnaquamarine" parent="AvatarPreview" instance=ExtResource("6_wfs8j")]
+[node name="johnlumoravr" parent="AvatarPreview" instance=ExtResource("6_wfs8j")]

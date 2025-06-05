@@ -1,8 +1,8 @@
-using Aquamarine.Source.Management.Client.UI;
+using LumoraVR.Source.Management.Client.UI;
 using Godot;
 using System;
-using Aquamarine.Source.Management.Data;
-namespace Aquamarine.Source.Management.Client.UI;
+using LumoraVR.Source.Management.Data;
+namespace LumoraVR.Source.Management.Client.UI;
 public partial class WorldEntry : PanelContainer
 {
     private WorldsTab _tab;

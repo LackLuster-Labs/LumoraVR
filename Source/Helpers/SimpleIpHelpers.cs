@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Aquamarine.Source.Helpers
+namespace LumoraVR.Source.Helpers
 {
     internal class SimpleIpHelpers
     {

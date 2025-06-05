@@ -1,5 +1,5 @@
-﻿using Aquamarine.Source.Logging;
-using Aquamarine.Source.Scene.RootObjects;
+﻿using LumoraVR.Source.Logging;
+using LumoraVR.Source.Scene.RootObjects;
 using Godot;
 using System;
 using System.Collections.Generic;
@@ -7,7 +7,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class LocalSceneManager : Node
     {

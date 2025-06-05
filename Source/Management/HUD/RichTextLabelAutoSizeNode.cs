@@ -1,6 +1,6 @@
 using Godot;
 
-namespace Aquamarine.Source.Management.HUD;
+namespace LumoraVR.Source.Management.HUD;
 
 /// <summary>
 /// Automatically sets up a RichTextLabelAutoSize upon being attached.

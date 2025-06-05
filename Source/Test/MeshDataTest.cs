@@ -1,13 +1,13 @@
 using System.Linq;
-using Aquamarine.Source.Assets;
-using Aquamarine.Source.Helpers;
-using Aquamarine.Source.Scene;
-using Aquamarine.Source.Scene.Assets;
-using Aquamarine.Source.Scene.ChildObjects;
+using LumoraVR.Source.Assets;
+using LumoraVR.Source.Helpers;
+using LumoraVR.Source.Scene;
+using LumoraVR.Source.Scene.Assets;
+using LumoraVR.Source.Scene.ChildObjects;
 using Godot;
 using Godot.Collections;
 
-namespace Aquamarine.Source.Test;
+namespace LumoraVR.Source.Test;
 
 public partial class MeshDataTest : Node3D
 {
@@ -63,9 +63,9 @@ public partial class MeshDataTest : Node3D
             //GD.Print(instance.GetBlendShapeCount());
         }
     }
-    public void TurnJohnAquamarineHumanoidIntoAPrefab()
+    public void TurnJohnLumoraVRHumanoidIntoAPrefab()
     {
-        var getJohnsModel = ResourceLoader.Load<PackedScene>("res://Assets/Models/johnaquamarinehumanoid.glb");
+        var getJohnsModel = ResourceLoader.Load<PackedScene>("res://Assets/Models/johnlumoravrhumanoid.glb");
 
         var johnsModel = getJohnsModel.Instantiate<Node3D>();
 
@@ -85,7 +85,7 @@ public partial class MeshDataTest : Node3D
 
         var meshFile = MeshFile.FromArrayMesh(meshInstance.Mesh as ArrayMesh, meshInstance.Skin);
 
-        var meshFileAccess = FileAccess.Open("res://Assets/Models/johnaquamarinehumanoid.meshfile", FileAccess.ModeFlags.Write);
+        var meshFileAccess = FileAccess.Open("res://Assets/Models/johnlumoravrhumanoid.meshfile", FileAccess.ModeFlags.Write);
         meshFileAccess.StoreBuffer(meshFile.Serialize());
         meshFileAccess.Close();
 
@@ -136,7 +136,7 @@ public partial class MeshDataTest : Node3D
         meshProvider.Type = AssetProviderType.MeshFileProvider;
         meshProvider.Data = new Dictionary<string, Variant>
         {
-            {"path", "builtin://Assets/Models/johnaquamarinehumanoid.meshfile"},
+            {"path", "builtin://Assets/Models/johnlumoravrhumanoid.meshfile"},
         };
 
         var material = new PrefabAsset();
@@ -163,11 +163,11 @@ public partial class MeshDataTest : Node3D
             {"albedoColor", Colors.Black.ToFloatArray()},
         };
 
-        var prefabFileAccess = FileAccess.Open("res://Assets/Prefabs/johnaquamarinehumanoid.prefab", FileAccess.ModeFlags.Write);
+        var prefabFileAccess = FileAccess.Open("res://Assets/Prefabs/johnlumoravrhumanoid.prefab", FileAccess.ModeFlags.Write);
         prefabFileAccess.StoreBuffer(prefab.Serialize().ToUtf8Buffer());
         prefabFileAccess.Close();
 
-        var prefabRead = FileAccess.Open("res://Assets/Prefabs/johnaquamarinehumanoid.prefab", FileAccess.ModeFlags.Read);
+        var prefabRead = FileAccess.Open("res://Assets/Prefabs/johnlumoravrhumanoid.prefab", FileAccess.ModeFlags.Read);
         var serialized = prefabRead.GetBuffer((long)prefabRead.GetLength()).GetStringFromUtf8();
         var pre = Prefab.Deserialize(serialized);
 
@@ -177,9 +177,9 @@ public partial class MeshDataTest : Node3D
 
         GD.Print(serialized);
     }
-    public void TurnJohnAquamarineIntoAPrefab()
+    public void TurnJohnLumoraVRIntoAPrefab()
     {
-        var getJohnsModel = ResourceLoader.Load<PackedScene>("res://Assets/Models/johnaquamarine.glb");
+        var getJohnsModel = ResourceLoader.Load<PackedScene>("res://Assets/Models/johnlumoravr.glb");
 
         var johnsModel = getJohnsModel.Instantiate<Node3D>();
 
@@ -199,7 +199,7 @@ public partial class MeshDataTest : Node3D
 
         var meshFile = MeshFile.FromArrayMesh(meshInstance.Mesh as ArrayMesh, meshInstance.Skin);
 
-        var meshFileAccess = FileAccess.Open("res://Assets/Models/johnaquamarine.meshfile", FileAccess.ModeFlags.Write);
+        var meshFileAccess = FileAccess.Open("res://Assets/Models/johnlumoravr.meshfile", FileAccess.ModeFlags.Write);
         meshFileAccess.StoreBuffer(meshFile.Serialize());
         meshFileAccess.Close();
 
@@ -246,7 +246,7 @@ public partial class MeshDataTest : Node3D
         meshProvider.Type = AssetProviderType.MeshFileProvider;
         meshProvider.Data = new Dictionary<string, Variant>
         {
-            {"path", "builtin://Assets/Models/johnaquamarine.meshfile"},
+            {"path", "builtin://Assets/Models/johnlumoravr.meshfile"},
         };
 
         var material = new PrefabAsset();
@@ -273,11 +273,11 @@ public partial class MeshDataTest : Node3D
             {"albedoColor", Colors.Black.ToFloatArray()},
         };
 
-        var prefabFileAccess = FileAccess.Open("res://Assets/Prefabs/johnaquamarine.prefab", FileAccess.ModeFlags.Write);
+        var prefabFileAccess = FileAccess.Open("res://Assets/Prefabs/johnlumoravr.prefab", FileAccess.ModeFlags.Write);
         prefabFileAccess.StoreBuffer(prefab.Serialize().ToUtf8Buffer());
         prefabFileAccess.Close();
 
-        var prefabRead = FileAccess.Open("res://Assets/Prefabs/johnaquamarine.prefab", FileAccess.ModeFlags.Read);
+        var prefabRead = FileAccess.Open("res://Assets/Prefabs/johnlumoravr.prefab", FileAccess.ModeFlags.Read);
         var serialized = prefabRead.GetBuffer((long)prefabRead.GetLength()).GetStringFromUtf8();
         var pre = Prefab.Deserialize(serialized);
 
@@ -290,6 +290,6 @@ public partial class MeshDataTest : Node3D
     public override void _Ready()
     {
         base._Ready();
-        TurnJohnAquamarineHumanoidIntoAPrefab();
+        TurnJohnLumoraVRHumanoidIntoAPrefab();
     }
 }

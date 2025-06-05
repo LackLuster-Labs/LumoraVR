@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Aquamarine.Source.Management;
+using LumoraVR.Source.Management;
 using Godot;
 
-namespace Aquamarine.Source.Input;
+namespace LumoraVR.Source.Input;
 
 public enum InputButton
 {

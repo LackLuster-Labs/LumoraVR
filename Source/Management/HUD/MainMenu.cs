@@ -1,13 +1,13 @@
-using Aquamarine.Source.Input;
-using Aquamarine.Source.Management;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Input;
+using LumoraVR.Source.Management;
+using LumoraVR.Source.Logging;
 using System.Collections.Generic;
 using Godot;
 using System;
 using System.Diagnostics;
 using System.Threading.Tasks;
-using Aquamarine.Source.Helpers;
-namespace Aquamarine.Source.Management.HUD;
+using LumoraVR.Source.Helpers;
+namespace LumoraVR.Source.Management.HUD;
 /// <summary>
 /// Enhanced main menu with account login functionality
 /// </summary>

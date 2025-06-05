@@ -1,10 +1,10 @@
 using System;
 using Godot;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 using System.Diagnostics;
 using DiscordRPC;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class DiscordManager : Node
     {

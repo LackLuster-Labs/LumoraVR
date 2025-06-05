@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Aquamarine.Source.Management.Data
+namespace LumoraVR.Source.Management.Data
 {
     public readonly struct WorldEntry
     {

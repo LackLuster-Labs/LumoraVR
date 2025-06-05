@@ -1,6 +1,6 @@
 using Godot;
 
-namespace Aquamarine.Source.Assets;
+namespace LumoraVR.Source.Assets;
 
 public class MeshAsset
 {

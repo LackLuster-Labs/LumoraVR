@@ -1,7 +1,7 @@
-using Aquamarine.Source.Assets;
+using LumoraVR.Source.Assets;
 using Godot;
 
-namespace Aquamarine.Source.Scene.Assets;
+namespace LumoraVR.Source.Scene.Assets;
 
 public interface IMeshProvider : IAssetProvider<MeshAsset>
 {

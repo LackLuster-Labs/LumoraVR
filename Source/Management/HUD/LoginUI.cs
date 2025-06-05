@@ -1,10 +1,10 @@
 using System;
 using System.Threading.Tasks;
-using Aquamarine.Source.Management;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Management;
+using LumoraVR.Source.Logging;
 using Godot;
 
-namespace Aquamarine.Source.Management.HUD;
+namespace LumoraVR.Source.Management.HUD;
 
 /// <summary>
 /// Manages the login UI panel for user authentication

@@ -1,6 +1,6 @@
 using Godot;
 
-namespace Aquamarine.Source.Input;
+namespace LumoraVR.Source.Input;
 
 public interface IInputProvider
 {

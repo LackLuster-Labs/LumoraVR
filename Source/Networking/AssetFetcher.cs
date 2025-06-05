@@ -4,7 +4,7 @@ using System.IO;
 using System.Threading.Tasks;
 using Godot;
 
-namespace Aquamarine.Source.Networking;
+namespace LumoraVR.Source.Networking;
 
 [GlobalClass]
 public partial class AssetFetcher : Node

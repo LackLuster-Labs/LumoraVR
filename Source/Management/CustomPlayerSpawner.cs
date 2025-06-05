@@ -1,12 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Scene.RootObjects;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Scene.RootObjects;
 using Bones.Core;
 using Godot;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     [GlobalClass]
     public partial class CustomPlayerSpawner : Node

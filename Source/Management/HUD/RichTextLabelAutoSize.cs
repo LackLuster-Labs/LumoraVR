@@ -1,8 +1,8 @@
-using Aquamarine.Source.Helpers;
+using LumoraVR.Source.Helpers;
 using Godot;
 using System;
 
-namespace Aquamarine.Source.Management.HUD;
+namespace LumoraVR.Source.Management.HUD;
 
 /// <summary>
 /// Implements the Auto Size text feature.

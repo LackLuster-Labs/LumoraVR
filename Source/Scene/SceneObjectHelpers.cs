@@ -1,9 +1,9 @@
 using System;
 using System.Collections.Generic;
-using Aquamarine.Source.Scene.Assets;
-using Aquamarine.Source.Scene.RootObjects;
+using LumoraVR.Source.Scene.Assets;
+using LumoraVR.Source.Scene.RootObjects;
 
-namespace Aquamarine.Source.Scene;
+namespace LumoraVR.Source.Scene;
 
 public static class SceneObjectHelpers
 {

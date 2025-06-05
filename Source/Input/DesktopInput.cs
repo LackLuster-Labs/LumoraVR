@@ -1,9 +1,9 @@
 using System;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 using Bones.Core;
 using Godot;
 
-namespace Aquamarine.Source.Input;
+namespace LumoraVR.Source.Input;
 
 public partial class DesktopInput : Node3D, IInputProvider
 {

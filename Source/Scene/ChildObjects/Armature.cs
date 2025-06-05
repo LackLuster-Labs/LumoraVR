@@ -1,10 +1,10 @@
 using System.Collections.Generic;
 using System.Linq;
-using Aquamarine.Source.Helpers;
+using LumoraVR.Source.Helpers;
 using Godot;
 using Godot.Collections;
 
-namespace Aquamarine.Source.Scene.ChildObjects;
+namespace LumoraVR.Source.Scene.ChildObjects;
 
 public partial class Armature : Skeleton3D, IChildObject
 {

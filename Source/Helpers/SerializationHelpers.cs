@@ -2,13 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Numerics;
-using Aquamarine.Source.Scene;
+using LumoraVR.Source.Scene;
 using Godot;
 using Vector2 = Godot.Vector2;
 using Vector3 = Godot.Vector3;
 using Vector4 = Godot.Vector4;
 
-namespace Aquamarine.Source.Helpers;
+namespace LumoraVR.Source.Helpers;
 
 public static class SerializationHelpers
 {

@@ -4,12 +4,12 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://hx43joc40usp"
-path="res://.godot/imported/johnaquamarine.glb-0b28e26f70ec3c76ccf012b04572c631.scn"
+path="res://.godot/imported/johnlumoravr.glb-0b28e26f70ec3c76ccf012b04572c631.scn"
 
 [deps]
 
-source_file="res://Assets/Models/johnaquamarine.glb"
-dest_files=["res://.godot/imported/johnaquamarine.glb-0b28e26f70ec3c76ccf012b04572c631.scn"]
+source_file="res://Assets/Models/johnlumoravr.glb"
+dest_files=["res://.godot/imported/johnlumoravr.glb-0b28e26f70ec3c76ccf012b04572c631.scn"]
 
 [params]
 
@@ -34,7 +34,7 @@ animation/import_rest_as_RESET=false
 import_script/path=""
 _subresources={
 "meshes": {
-"johnaquamarine_Plane_003": {
+"johnlumoravr_Plane_003": {
 "generate/lightmap_uv": 0,
 "generate/lods": 2,
 "generate/shadow_meshes": 0,

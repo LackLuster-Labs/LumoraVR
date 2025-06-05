@@ -1,6 +1,6 @@
 using Wasmtime;
 
-namespace Aquamarine.Source.Test;
+namespace LumoraVR.Source.Test;
 
 public class WasmTest
 {

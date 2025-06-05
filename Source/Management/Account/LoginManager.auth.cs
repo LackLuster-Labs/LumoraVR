@@ -3,9 +3,9 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using System.Net.Http;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class LoginManager
     {

@@ -4,13 +4,13 @@ using System.Text.Json;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Godot;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Networking;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Networking;
 using LiteNetLib.Utils;
 using LiteNetLib;
 using Bones.Core;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class ClientManager
     {

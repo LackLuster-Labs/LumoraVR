@@ -1,13 +1,13 @@
 using System;
 using System.Collections.Generic;
-using Aquamarine.Source.Input;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Management;
-using Aquamarine.Source.Scene.Assets;
-using Aquamarine.Source.Scene.UI;
+using LumoraVR.Source.Input;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Management;
+using LumoraVR.Source.Scene.Assets;
+using LumoraVR.Source.Scene.UI;
 using Godot;
 
-namespace Aquamarine.Source.Scene.RootObjects;
+namespace LumoraVR.Source.Scene.RootObjects;
 
 public partial class PlayerCharacterController : CharacterBody3D, ICharacterController
 {
@@ -30,7 +30,7 @@ public partial class PlayerCharacterController : CharacterBody3D, ICharacterCont
             field = value;
             UpdateAvatar();
         }
-    } = "builtin://Assets/Prefabs/johnaquamarinehumanoid.prefab";
+    } = "builtin://Assets/Prefabs/johnlumoravrhumanoid.prefab";
 
     // We'll use CustomPlayerSync instead of these
     // [Export] public MultiplayerSynchronizer ClientSync;
@@ -91,7 +91,7 @@ public partial class PlayerCharacterController : CharacterBody3D, ICharacterCont
     [Export] private Node3D _hip;
     [Export] private Node3D _leftFoot;
     [Export] private Node3D _rightFoot;
-    [Export] public string PlayerName { get; set; } = "John Aquamarine";
+    [Export] public string PlayerName { get; set; } = "John LumoraVR";
 
     private void UpdateAvatar()
     {
@@ -216,12 +216,12 @@ public partial class PlayerCharacterController : CharacterBody3D, ICharacterCont
         }
 
         // Debug limb position code
-        // TODO: Don't remove this is John Aquamarines debug visuals, if you must remove it, please replace the top section with the code below
+        // TODO: Don't remove this is John LumoraVRs debug visuals, if you must remove it, please replace the top section with the code below
         // DebugDraw3D.DrawSphere(GlobalTransform * new Transform3D(new Basis(HeadRotation), HeadPosition).Origin, 0.025f, Colors.White);
         // we want to keep debug code just incase something happens or as a fallback if we end up keeping the library in the release build.
         if (ClientManager.ShowDebug)
         {
-            // John Aquamarines head and eyes
+            // John LumoraVRs head and eyes
             var headPos = GlobalTransform * new Transform3D(new Basis(HeadRotation), HeadPosition);
             if (!authority)
             {

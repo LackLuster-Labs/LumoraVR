@@ -1,9 +1,9 @@
 using Godot;
 using LiteNetLib.Utils;
 using LiteNetLib;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Logging;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class ServerManager
     {

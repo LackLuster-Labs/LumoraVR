@@ -4,11 +4,11 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace Aquamarine.Source.Networking
+namespace LumoraVR.Source.Networking
 {
     public partial class LiteNetLibMultiplayerPeer
     {
-        public const string RoomKey = "Aquamarine"; //TODO
+        public const string RoomKey = "LumoraVR"; //TODO
         public const byte ControlChannel = 0b00111111;
         public const byte ControlSetLocalID = 0x01;
     }

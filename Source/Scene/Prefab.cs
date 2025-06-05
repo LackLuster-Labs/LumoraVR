@@ -1,14 +1,14 @@
 using System;
 using System.Linq;
-using Aquamarine.Source.Networking;
-using Aquamarine.Source.Scene.Assets;
-using Aquamarine.Source.Scene.ChildObjects;
+using LumoraVR.Source.Networking;
+using LumoraVR.Source.Scene.Assets;
+using LumoraVR.Source.Scene.ChildObjects;
 using Bones.Core;
 using Godot;
 using Godot.Collections;
-using Avatar = Aquamarine.Source.Scene.RootObjects.Avatar;
+using Avatar = LumoraVR.Source.Scene.RootObjects.Avatar;
 
-namespace Aquamarine.Source.Scene;
+namespace LumoraVR.Source.Scene;
 
 public class Prefab
 {

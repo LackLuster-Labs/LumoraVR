@@ -1,4 +1,4 @@
-namespace Aquamarine.Source.Scripting.Interop;
+namespace LumoraVR.Source.Scripting.Interop;
 
 public static class AvatarInterop
 {

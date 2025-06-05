@@ -1,7 +1,7 @@
 using System.Net;
 using LiteNetLib;
 
-namespace Aquamarine.Source.Management;
+namespace LumoraVR.Source.Management;
 
 public class SessionInfo
 {

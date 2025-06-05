@@ -1,6 +1,6 @@
 using Godot;
 
-namespace Aquamarine.Source.Scene;
+namespace LumoraVR.Source.Scene;
 
 public interface ISceneObject
 {

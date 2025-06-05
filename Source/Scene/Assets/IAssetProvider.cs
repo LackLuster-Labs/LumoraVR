@@ -1,10 +1,10 @@
 using System;
 using System.Collections.Generic;
-using Aquamarine.Source.Assets;
-using Aquamarine.Source.Networking;
+using LumoraVR.Source.Assets;
+using LumoraVR.Source.Networking;
 using Godot;
 
-namespace Aquamarine.Source.Scene.Assets;
+namespace LumoraVR.Source.Scene.Assets;
 
 public enum AssetProviderType
 {

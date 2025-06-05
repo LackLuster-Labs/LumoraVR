@@ -4,12 +4,12 @@ importer="scene"
 importer_version=1
 type="PackedScene"
 uid="uid://gedandkq0k1h"
-path="res://.godot/imported/johnaquamarinehumanoid.glb-3fbc19ea1744f58f0b18ac66375ea427.scn"
+path="res://.godot/imported/johnlumoravrhumanoid.glb-3fbc19ea1744f58f0b18ac66375ea427.scn"
 
 [deps]
 
-source_file="res://Assets/Models/johnaquamarinehumanoid.glb"
-dest_files=["res://.godot/imported/johnaquamarinehumanoid.glb-3fbc19ea1744f58f0b18ac66375ea427.scn"]
+source_file="res://Assets/Models/johnlumoravrhumanoid.glb"
+dest_files=["res://.godot/imported/johnlumoravrhumanoid.glb-3fbc19ea1744f58f0b18ac66375ea427.scn"]
 
 [params]
 

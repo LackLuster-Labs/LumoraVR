@@ -1,15 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using Aquamarine.Source.Helpers;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Scene;
-using Aquamarine.Source.Scene.RootObjects;
-using Aquamarine.Source.Scene.UI;
+using LumoraVR.Source.Helpers;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Scene;
+using LumoraVR.Source.Scene.RootObjects;
+using LumoraVR.Source.Scene.UI;
 using Godot;
 using Godot.Collections;
 
-namespace Aquamarine.Source.Management
+namespace LumoraVR.Source.Management
 {
     public partial class MultiplayerScene : Node
     {

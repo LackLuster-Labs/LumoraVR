@@ -1,8 +1,8 @@
-using Aquamarine.Source.Input;
-using Aquamarine.Source.Logging;
+using LumoraVR.Source.Input;
+using LumoraVR.Source.Logging;
 using Godot;
 
-namespace Aquamarine.Source.Management.HUD;
+namespace LumoraVR.Source.Management.HUD;
 
 public partial class HUDManager : Control
 {

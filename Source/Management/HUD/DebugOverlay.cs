@@ -1,15 +1,15 @@
-using Aquamarine.Source.Helpers;
-using Aquamarine.Source.Input;
-using Aquamarine.Source.Logging;
-using Aquamarine.Source.Networking;
-using Aquamarine.Source.Scene.RootObjects;
+using LumoraVR.Source.Helpers;
+using LumoraVR.Source.Input;
+using LumoraVR.Source.Logging;
+using LumoraVR.Source.Networking;
+using LumoraVR.Source.Scene.RootObjects;
 using Godot;
 using System;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 
-namespace Aquamarine.Source.Management.HUD;
+namespace LumoraVR.Source.Management.HUD;
 
 public partial class DebugOverlay : Control
 {

@@ -1,9 +1,9 @@
 using System;
-using Aquamarine.Source.Assets;
+using LumoraVR.Source.Assets;
 using Godot;
 using Godot.Collections;
 
-namespace Aquamarine.Source.Scene.Assets;
+namespace LumoraVR.Source.Scene.Assets;
 
 /*
 public class ImageTextureProvider : ITextureProvider
