@@ -8,7 +8,7 @@ namespace Lumora.Core;
 /// <typeparam name="T">The type of value being set</typeparam>
 /// <param name="field">The field being set</param>
 /// <param name="value">The value being set</param>
-public delegate void HookFieldSetter<T>(Sync<T> field, T value);
+public delegate void HookFieldSetter<T>(SyncField<T> field, T value);
 
 /// <summary>
 /// Base class for field hooks that intercept value changes on Sync fields.
@@ -17,7 +17,7 @@ public delegate void HookFieldSetter<T>(Sync<T> field, T value);
 /// <typeparam name="T">The type of value being hooked</typeparam>
 public class FieldHook<T> : ILinkRef
 {
-	private Sync<T> _target;
+	private SyncField<T> _target;
 	private HookFieldSetter<T> _fieldHook;
 	private bool _isActive;
 	private World _world;
@@ -70,9 +70,12 @@ public class FieldHook<T> : ILinkRef
 
 	// IWorldElement implementation
 	public World World => _world;
-	public ulong RefID { get; private set; }
+	public RefID ReferenceID => RefID.Null;
+	public bool IsLocalElement => true;
+	public bool IsPersistent => false;
 	public bool IsDestroyed { get; private set; }
 	public bool IsInitialized { get; private set; }
+	public string ParentHierarchyToString() => $"FieldHook<{typeof(T).Name}>";
 
 	public FieldHook(World world)
 	{
@@ -99,7 +102,7 @@ public class FieldHook<T> : ILinkRef
 	/// Set the target field to hook.
 	/// </summary>
 	/// <param name="target">The Sync field to hook</param>
-	public void HookTarget(Sync<T> target)
+	public void HookTarget(SyncField<T> target)
 	{
 		// Release previous target if any
 		if (_target != null && _isActive)

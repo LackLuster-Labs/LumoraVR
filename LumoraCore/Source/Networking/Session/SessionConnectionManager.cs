@@ -146,13 +146,14 @@ public class SessionConnectionManager : IDisposable
         var (allocStart, allocEnd) = World.RefIDAllocator.AllocateUserIDRange();
 
         // Use the start of the range as the user's RefID
-        ulong userID = allocStart;
+        RefID userRefID = allocStart;
+        ulong userID = (ulong)userRefID;
 
         var grantData = new LegacyJoinGrantData
         {
             AssignedUserID = userID,
-            AllocationIDStart = allocStart,
-            AllocationIDEnd = allocEnd,
+            AllocationIDStart = (ulong)allocStart,
+            AllocationIDEnd = (ulong)allocEnd,
             MaxUsers = World.RefIDAllocator.GetMaxUserCount(),
             WorldTime = World.TotalTime,
             StateVersion = World.StateVersion
@@ -169,10 +170,10 @@ public class SessionConnectionManager : IDisposable
         AquaLogger.Log($"Sent JoinGrant to {connection.Identifier} - UserID: {userID}");
 
         // Create user
-        var user = new User(World, userID);
+        var user = new User(World, userRefID);
         user.UserID.Value = userID.ToString();
-        user.AllocationIDStart.Value = allocStart;
-        user.AllocationIDEnd.Value = allocEnd;
+        user.AllocationIDStart.Value = (ulong)allocStart;
+        user.AllocationIDEnd.Value = (ulong)allocEnd;
 
         lock (_lock)
         {

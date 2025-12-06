@@ -43,7 +43,7 @@ public abstract class BinaryMessageBatch : SyncMessage
 	/// <summary>
 	/// Begin writing a new data record for a sync element.
 	/// </summary>
-	public BinaryWriter BeginNewDataRecord(ulong targetID)
+	public BinaryWriter BeginNewDataRecord(RefID targetID)
 	{
 		if (_currentRecordIndex >= 0)
 			throw new InvalidOperationException("Previous data record not finished!");
@@ -59,7 +59,7 @@ public abstract class BinaryMessageBatch : SyncMessage
 		_currentRecordIndex = _dataRecords.Count - 1;
 
 		// Write the target ID as header
-		_writer.Write7BitEncoded(targetID);
+		_writer.WriteRefID(targetID);
 
 		return _writer;
 	}
@@ -67,7 +67,7 @@ public abstract class BinaryMessageBatch : SyncMessage
 	/// <summary>
 	/// Finish writing the current data record.
 	/// </summary>
-	public void FinishDataRecord(ulong targetID)
+	public void FinishDataRecord(RefID targetID)
 	{
 		if (_currentRecordIndex < 0)
 			throw new InvalidOperationException("No data record in progress!");
@@ -93,7 +93,7 @@ public abstract class BinaryMessageBatch : SyncMessage
 	/// <summary>
 	/// Find data record index by target ID.
 	/// </summary>
-	public int FindDataRecordIndex(ulong targetID)
+	public int FindDataRecordIndex(RefID targetID)
 	{
 		for (int i = 0; i < _dataRecords.Count; i++)
 		{
@@ -118,7 +118,7 @@ public abstract class BinaryMessageBatch : SyncMessage
 		_stream.Position = record.StartOffset;
 
 		// Skip the target ID header
-		_reader.Read7BitEncodedUInt64();
+		_reader.ReadRefID();
 
 		return _reader;
 	}
@@ -162,7 +162,7 @@ public abstract class BinaryMessageBatch : SyncMessage
 	/// <summary>
 	/// Get all conflicting record IDs.
 	/// </summary>
-	public void GetConflictingDataRecords(List<ulong> output)
+	public void GetConflictingDataRecords(List<RefID> output)
 	{
 		foreach (var record in _dataRecords)
 		{
@@ -207,11 +207,11 @@ public abstract class BinaryMessageBatch : SyncMessage
 		using var reader = new BinaryReader(input);
 
 		var messageType = (MessageType)reader.ReadByte();
-		var stateVersion = reader.Read7BitEncodedUInt64();
-		var syncTick = reader.Read7BitEncodedUInt64();
+		var stateVersion = reader.Read7BitEncoded();
+		var syncTick = reader.Read7BitEncoded();
 		var senderTime = reader.ReadDouble();
-		var recordCount = (int)reader.Read7BitEncodedUInt64();
-		var dataLength = (int)reader.Read7BitEncodedUInt64();
+		var recordCount = (int)reader.Read7BitEncoded();
+		var dataLength = (int)reader.Read7BitEncoded();
 
 		BinaryMessageBatch batch = messageType switch
 		{
@@ -245,7 +245,7 @@ public abstract class BinaryMessageBatch : SyncMessage
 		while (_stream.Position < _stream.Length && _dataRecords.Count < expectedCount)
 		{
 			var startPos = (int)_stream.Position;
-			var targetID = _reader.Read7BitEncodedUInt64();
+			var targetID = _reader.ReadRefID();
 
 			var record = new DataRecord
 			{
@@ -273,7 +273,7 @@ public abstract class BinaryMessageBatch : SyncMessage
 /// </summary>
 public struct DataRecord
 {
-	public ulong TargetID;
+	public RefID TargetID;
 	public int StartOffset;
 	public int EndOffset;
 	public MessageValidity Validity;

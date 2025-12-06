@@ -94,7 +94,7 @@ public class HelioModalOverlay : Component, IHelioInteractable
 		// React to state changes
 		IsOpen.OnChanged += OnIsOpenChanged;
 		OverlayColor.OnChanged += OnOverlayColorChanged;
-		ContentSlot.OnChanged += OnContentSlotChanged;
+		ContentSlot.Changed += OnContentSlotChanged;
 	}
 
 	public override void OnStart()

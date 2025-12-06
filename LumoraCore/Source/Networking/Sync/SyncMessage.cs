@@ -48,8 +48,8 @@ public abstract class SyncMessage : IDisposable
 		using var reader = new BinaryReader(ms);
 
 		var messageType = (MessageType)reader.ReadByte();
-		var stateVersion = reader.Read7BitEncodedUInt64();
-		var syncTick = reader.Read7BitEncodedUInt64();
+		var stateVersion = reader.Read7BitEncoded();
+		var syncTick = reader.Read7BitEncoded();
 
 		SyncMessage message = messageType switch
 		{

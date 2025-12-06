@@ -59,12 +59,12 @@ public class StreamMessage : SyncMessage
 	public static StreamMessage Decode(BinaryReader reader)
 	{
 		var msg = new StreamMessage(0, 0);
-		msg.UserID = reader.Read7BitEncodedUInt64();
-		msg.StreamStateVersion = (uint)reader.Read7BitEncodedUInt64();
+		msg.UserID = reader.Read7BitEncoded();
+		msg.StreamStateVersion = (uint)reader.Read7BitEncoded();
 		msg.StreamTime = reader.ReadDouble();
 		msg.StreamGroup = reader.ReadUInt16();
 
-		var length = (int)reader.Read7BitEncodedUInt64();
+		var length = (int)reader.Read7BitEncoded();
 		var data = reader.ReadBytes(length);
 		msg._memoryStream = new MemoryStream(data);
 

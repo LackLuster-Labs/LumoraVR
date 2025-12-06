@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using AquaLogger = Lumora.Core.Logging.Logger;
+using Lumora.Core;
 
 namespace Lumora.Core.Networking.Sync;
 
@@ -10,258 +11,297 @@ namespace Lumora.Core.Networking.Sync;
 /// </summary>
 public abstract class SyncElement : IWorldElement, IDisposable
 {
-	// Flags packed into single byte for efficiency
-	protected byte _flags;
+    /// <summary>
+    /// Flags stored as bits for fast checks.
+    /// </summary>
+    protected int _flags;
 
-	// Flag bit positions
-	private const byte FLAG_SYNC_DIRTY = 0x01;
-	private const byte FLAG_DISPOSED = 0x02;
-	private const byte FLAG_LOCAL_ELEMENT = 0x04;
-	private const byte FLAG_LOADING = 0x08;
-	private const byte FLAG_NON_PERSISTENT = 0x10;
+    /// <summary>
+    /// Modification nesting guard.
+    /// </summary>
+    private int _modificationLevel;
 
-	/// <summary>
-	/// The World this element belongs to.
-	/// </summary>
-	public World World { get; protected set; }
+    protected World _world;
+    protected RefID _referenceID;
 
-	/// <summary>
-	/// Unique reference ID for network synchronization.
-	/// </summary>
-	public ulong RefID { get; protected set; }
+    protected enum InternalFlags
+    {
+        IsInitialized = 0,
+        IsDisposed,
+        IsLocalElement,
+        IsSyncDirty,
+        WasChanged,
+        IsInInitPhase,
+        HasInitializableChildren,
+        NonPersistent,
+        IsDrivable,
+        IsLoading,
+        IsWithinHookCallback,
+        ModificationBlocked,
+        DriveErrorLogged,
+        // 13-15 reserved for future use
+        // 16+ available for derived classes
+    }
 
-	/// <summary>
-	/// Alias for RefID.
-	/// </summary>
-	public ulong ReferenceID => RefID;
+    /// <summary>
+    /// Current world context.
+    /// </summary>
+    public World World
+    {
+        get => _world;
+        protected set
+        {
+            _world = value;
+            SetFlag((int)InternalFlags.IsInitialized, value != null);
+        }
+    }
 
-	/// <summary>
-	/// Whether this element needs to be synchronized.
-	/// </summary>
-	public bool IsSyncDirty
-	{
-		get => (_flags & FLAG_SYNC_DIRTY) != 0;
-		protected set
-		{
-			if (value)
-				_flags |= FLAG_SYNC_DIRTY;
-			else
-				_flags &= unchecked((byte)~FLAG_SYNC_DIRTY);
-		}
-	}
+    /// <summary>
+    /// Strongly-typed RefID for this element.
+    /// </summary>
+    public RefID ReferenceID
+    {
+        get => _referenceID;
+        protected set => _referenceID = value;
+    }
 
-	/// <summary>
-	/// Whether this element has been disposed.
-	/// </summary>
-	public bool IsDisposed
-	{
-		get => (_flags & FLAG_DISPOSED) != 0;
-		protected set
-		{
-			if (value)
-				_flags |= FLAG_DISPOSED;
-			else
-				_flags &= unchecked((byte)~FLAG_DISPOSED);
-		}
-	}
+    /// <summary>
+    /// Numeric alias for compatibility.
+    /// </summary>
+    public ulong RefIdNumeric => (ulong)ReferenceID;
 
-	/// <summary>
-	/// Whether this is a local-only element (not synchronized).
-	/// </summary>
-	public bool IsLocalElement
-	{
-		get => (_flags & FLAG_LOCAL_ELEMENT) != 0;
-		protected set
-		{
-			if (value)
-				_flags |= FLAG_LOCAL_ELEMENT;
-			else
-				_flags &= unchecked((byte)~FLAG_LOCAL_ELEMENT);
-		}
-	}
+    protected bool GetFlag(int flag) => (_flags & (1 << flag)) != 0;
 
-	/// <summary>
-	/// Whether this element is currently being loaded from network/save.
-	/// </summary>
-	public bool IsLoading
-	{
-		get => (_flags & FLAG_LOADING) != 0;
-		protected set
-		{
-			if (value)
-				_flags |= FLAG_LOADING;
-			else
-				_flags &= unchecked((byte)~FLAG_LOADING);
-		}
-	}
+    protected void SetFlag(int flag, bool value)
+    {
+        if (value)
+            _flags |= (1 << flag);
+        else
+            _flags &= ~(1 << flag);
+    }
 
-	/// <summary>
-	/// Whether this element should not be persisted to save files.
-	/// </summary>
-	public bool NonPersistent
-	{
-		get => (_flags & FLAG_NON_PERSISTENT) != 0;
-		protected set
-		{
-			if (value)
-				_flags |= FLAG_NON_PERSISTENT;
-			else
-				_flags &= unchecked((byte)~FLAG_NON_PERSISTENT);
-		}
-	}
+    public bool IsInitialized => GetFlag((int)InternalFlags.IsInitialized);
+    public bool IsDisposed { get => GetFlag((int)InternalFlags.IsDisposed); protected set => SetFlag((int)InternalFlags.IsDisposed, value); }
+    public bool IsLocalElement { get => GetFlag((int)InternalFlags.IsLocalElement); protected set => SetFlag((int)InternalFlags.IsLocalElement, value); }
+    public bool IsSyncDirty { get => GetFlag((int)InternalFlags.IsSyncDirty); protected set => SetFlag((int)InternalFlags.IsSyncDirty, value); }
+    public bool WasChanged { get => GetFlag((int)InternalFlags.WasChanged); protected set => SetFlag((int)InternalFlags.WasChanged, value); }
+    public bool IsInInitPhase { get => GetFlag((int)InternalFlags.IsInInitPhase); protected set => SetFlag((int)InternalFlags.IsInInitPhase, value); }
+    public bool HasInitializableChildren { get => GetFlag((int)InternalFlags.HasInitializableChildren); protected set => SetFlag((int)InternalFlags.HasInitializableChildren, value); }
+    public bool NonPersistent { get => GetFlag((int)InternalFlags.NonPersistent); protected set => SetFlag((int)InternalFlags.NonPersistent, value); }
+    public bool IsDrivable { get => GetFlag((int)InternalFlags.IsDrivable); protected set => SetFlag((int)InternalFlags.IsDrivable, value); }
+    public bool IsLoading { get => GetFlag((int)InternalFlags.IsLoading); protected set => SetFlag((int)InternalFlags.IsLoading, value); }
+    public bool IsWithinHookCallback { get => GetFlag((int)InternalFlags.IsWithinHookCallback); protected set => SetFlag((int)InternalFlags.IsWithinHookCallback, value); }
+    public bool ModificationBlocked { get => GetFlag((int)InternalFlags.ModificationBlocked); protected set => SetFlag((int)InternalFlags.ModificationBlocked, value); }
+    public bool DriveErrorLogged { get => GetFlag((int)InternalFlags.DriveErrorLogged); protected set => SetFlag((int)InternalFlags.DriveErrorLogged, value); }
+    public bool IsPersistent => !NonPersistent;
+    public bool IsDestroyed => IsDisposed;
+    public bool GenerateSyncData => !IsLocalElement && World?.State == World.WorldState.Running;
 
-	public bool IsDestroyed => IsDisposed;
-	public bool IsInitialized => World != null;
+    /// <summary>
+    /// Whether this element is currently driven via link.
+    /// Override in derived classes that expose ActiveLink.
+    /// </summary>
+    protected virtual bool IsDriven => ActiveLink != null && ActiveLink.IsDriving;
 
-	/// <summary>
-	/// Mark this element as needing synchronization.
-	/// Called when the element's value changes.
-	/// </summary>
-	public void InvalidateSyncElement()
-	{
-		if (IsLocalElement || IsDisposed || IsSyncDirty)
-			return;
+    protected virtual ILinkRef ActiveLink => null;
 
-		if (World?.SyncController == null)
-			return;
+    protected virtual string Name => GetType().Name;
 
-		IsSyncDirty = true;
-		World.SyncController.AddDirtySyncElement(this);
-		AquaLogger.Debug($"SyncElement: Invalidated {RefID}");
-	}
+    /// <summary>
+    /// Default hierarchy info used in messages.
+    /// </summary>
+    public virtual string ParentHierarchyToString() => Name;
 
-	/// <summary>
-	/// Mark this element as non-persistent (won't be saved).
-	/// </summary>
-	public void MarkNonPersistent()
-	{
-		NonPersistent = true;
-	}
+    protected void BeginHook()
+    {
+        if (IsWithinHookCallback)
+            throw new InvalidOperationException("Already within a hook callback!");
+        IsWithinHookCallback = true;
+    }
 
-	/// <summary>
-	/// Mark this element as local-only (won't be synchronized).
-	/// </summary>
-	public void MarkLocalElement()
-	{
-		IsLocalElement = true;
-	}
+    protected void EndHook()
+    {
+        if (!IsWithinHookCallback)
+            throw new InvalidOperationException("Not within a hook callback!");
+        IsWithinHookCallback = false;
+    }
 
-	// ===== ENCODING/DECODING =====
+    protected void BlockModification()
+    {
+        if (ModificationBlocked)
+            throw new InvalidOperationException("Modification already blocked!");
+        ModificationBlocked = true;
+    }
 
-	/// <summary>
-	/// Encode full state for new users or corrections.
-	/// </summary>
-	public virtual void EncodeFull(BinaryWriter writer, BinaryMessageBatch outboundMessage)
-	{
-		if (!World.IsAuthority)
-			throw new InvalidOperationException("Non-authority shouldn't do a full encode!");
-		if (IsSyncDirty)
-			throw new InvalidOperationException("Cannot do a full encode on a dirty element!");
+    protected void UnblockModification()
+    {
+        if (!ModificationBlocked)
+            throw new InvalidOperationException("Modification not blocked!");
+        ModificationBlocked = false;
+    }
 
-		InternalEncodeFull(writer, outboundMessage);
-	}
+    protected bool BeginModification(bool throwOnError = true)
+    {
+        if (ModificationBlocked)
+        {
+            throw new InvalidOperationException("Modification blocked during callback");
+        }
 
-	/// <summary>
-	/// Decode full state from authority.
-	/// </summary>
-	public virtual void DecodeFull(BinaryReader reader, BinaryMessageBatch inboundMessage)
-	{
-		if (World.IsAuthority)
-			throw new InvalidOperationException("Authority shouldn't do a full decode!");
+        if (_modificationLevel == 0)
+        {
+            if (IsDisposed)
+            {
+                var msg = $"Cannot modify disposed element: {this.ParentHierarchyToString()}";
+                if (throwOnError) throw new InvalidOperationException(msg);
+                AquaLogger.Error(msg);
+                return false;
+            }
 
-		IsLoading = true;
-		InternalDecodeFull(reader, inboundMessage);
-		InternalClearDirty();
-		IsLoading = false;
-	}
+            World?.HookManager?.ThreadCheck();
 
-	/// <summary>
-	/// Encode delta (changes only) for regular sync.
-	/// </summary>
-	public virtual void EncodeDelta(BinaryWriter writer, BinaryMessageBatch outboundMessage)
-	{
-		InternalEncodeDelta(writer, outboundMessage);
-		IsSyncDirty = false;
-		InternalClearDirty();
-	}
+            if (ActiveLink != null && ActiveLink.WasLinkGranted && !IsLoading && !IsWithinHookCallback &&
+                !IsInInitPhase && !ActiveLink.IsModificationAllowed)
+            {
+                var msg = $"Element {Name} is driven and cannot be modified directly";
+                if (throwOnError) throw new InvalidOperationException(msg);
+                if (!DriveErrorLogged)
+                {
+                    DriveErrorLogged = true;
+                    AquaLogger.Warn(msg);
+                }
+                return false;
+            }
+        }
 
-	/// <summary>
-	/// Decode delta from network.
-	/// </summary>
-	public virtual void DecodeDelta(BinaryReader reader, BinaryMessageBatch inboundMessage)
-	{
-		if (IsSyncDirty)
-			throw new InvalidOperationException("Cannot apply delta to a dirty element!");
+        _modificationLevel++;
+        return true;
+    }
 
-		IsLoading = true;
-		InternalDecodeDelta(reader, inboundMessage);
-		IsLoading = false;
-	}
+    protected void EndModification()
+    {
+        if (_modificationLevel == 0)
+            throw new InvalidOperationException("Not in modification state");
+        _modificationLevel--;
+    }
 
-	// ===== ABSTRACT METHODS - Implement in derived classes =====
+    /// <summary>
+    /// Mark this element as needing synchronization.
+    /// </summary>
+    public void InvalidateSyncElement()
+    {
+        if (IsLocalElement || IsDisposed || IsSyncDirty)
+            return;
 
-	protected abstract void InternalEncodeFull(BinaryWriter writer, BinaryMessageBatch outboundMessage);
-	protected abstract void InternalDecodeFull(BinaryReader reader, BinaryMessageBatch inboundMessage);
-	protected abstract void InternalEncodeDelta(BinaryWriter writer, BinaryMessageBatch outboundMessage);
-	protected abstract void InternalDecodeDelta(BinaryReader reader, BinaryMessageBatch inboundMessage);
-	protected abstract void InternalClearDirty();
+        if (World?.SyncController == null)
+            return;
 
-	// ===== VALIDATION (for authority conflict resolution) =====
+        IsSyncDirty = true;
+        World.SyncController.AddDirtySyncElement(this);
+        AquaLogger.Debug($"SyncElement: Invalidated {ReferenceID}");
+    }
 
-	/// <summary>
-	/// Validate incoming delta message.
-	/// </summary>
-	public virtual MessageValidity Validate(BinaryMessageBatch syncMessage, BinaryReader reader, List<ValidationRule> rules)
-	{
-		// Default: accept all messages
-		return MessageValidity.Valid;
-	}
+    public void MarkNonPersistent()
+    {
+        NonPersistent = true;
+    }
 
-	/// <summary>
-	/// Called when this element's change was rejected/conflicted.
-	/// </summary>
-	public virtual void Invalidate()
-	{
-		// Mark for re-sync
-		InvalidateSyncElement();
-	}
+    public void MarkLocalElement()
+    {
+        IsLocalElement = true;
+    }
 
-	/// <summary>
-	/// Called when authority confirms our change.
-	/// </summary>
-	public virtual void Confirm(ulong confirmSyncTime)
-	{
-		// Override if needed
-	}
+    #region Encoding/Decoding
 
-	public virtual void Dispose()
-	{
-		IsDisposed = true;
-		World = null;
-	}
+    public virtual void EncodeFull(BinaryWriter writer, BinaryMessageBatch outboundMessage)
+    {
+        if (World == null || !World.IsAuthority)
+            throw new InvalidOperationException("Non-authority shouldn't do a full encode!");
+        if (IsSyncDirty)
+            throw new InvalidOperationException("Cannot do a full encode on a dirty element!");
 
-	public void Destroy()
-	{
-		Dispose();
-	}
+        InternalEncodeFull(writer, outboundMessage);
+    }
+
+    public virtual void DecodeFull(BinaryReader reader, BinaryMessageBatch inboundMessage)
+    {
+        if (World == null || World.IsAuthority)
+            throw new InvalidOperationException("Authority shouldn't do a full decode!");
+
+        IsLoading = true;
+        InternalDecodeFull(reader, inboundMessage);
+        InternalClearDirty();
+        IsLoading = false;
+    }
+
+    public virtual void EncodeDelta(BinaryWriter writer, BinaryMessageBatch outboundMessage)
+    {
+        InternalEncodeDelta(writer, outboundMessage);
+        IsSyncDirty = false;
+        InternalClearDirty();
+    }
+
+    public virtual void DecodeDelta(BinaryReader reader, BinaryMessageBatch inboundMessage)
+    {
+        if (IsSyncDirty)
+            throw new InvalidOperationException("Cannot apply delta to a dirty element!");
+
+        IsLoading = true;
+        InternalDecodeDelta(reader, inboundMessage);
+        IsLoading = false;
+    }
+
+    protected abstract void InternalEncodeFull(BinaryWriter writer, BinaryMessageBatch outboundMessage);
+    protected abstract void InternalDecodeFull(BinaryReader reader, BinaryMessageBatch inboundMessage);
+    protected abstract void InternalEncodeDelta(BinaryWriter writer, BinaryMessageBatch outboundMessage);
+    protected abstract void InternalDecodeDelta(BinaryReader reader, BinaryMessageBatch inboundMessage);
+    protected abstract void InternalClearDirty();
+
+    #endregion
+
+    #region Validation
+
+    public virtual MessageValidity Validate(BinaryMessageBatch syncMessage, BinaryReader reader, List<ValidationRule> rules)
+    {
+        return MessageValidity.Valid;
+    }
+
+    public virtual void Invalidate()
+    {
+        InvalidateSyncElement();
+    }
+
+    public virtual void Confirm(ulong confirmSyncTime)
+    {
+    }
+
+    #endregion
+
+    #region Disposal
+
+    public virtual void Dispose()
+    {
+        IsDisposed = true;
+        World = null;
+    }
+
+    public void Destroy()
+    {
+        Dispose();
+    }
+
+    #endregion
 }
 
-/// <summary>
-/// Message validity result from validation.
-/// </summary>
 public enum MessageValidity
 {
-	Valid,
-	Invalid,
-	Conflict
+    Valid,
+    Invalid,
+    Conflict
 }
 
-/// <summary>
-/// Validation rule for conflict detection.
-/// </summary>
 public class ValidationRule
 {
-	public ulong OtherMessage { get; set; }
-	public bool MustExist { get; set; }
-	public Func<BinaryReader, bool> CustomValidation { get; set; }
+    public ulong OtherMessage { get; set; }
+    public bool MustExist { get; set; }
+    public Func<BinaryReader, bool> CustomValidation { get; set; }
 }

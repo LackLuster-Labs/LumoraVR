@@ -577,7 +577,8 @@ public class SessionSyncManager : IDisposable
 				var grantData = LegacyJoinGrantData.Decode(message.Payload);
 				AquaLogger.Log($"ProcessControlMessage: JoinGrant UserID={grantData.AssignedUserID}");
 
-				var localUser = new User(World, grantData.AssignedUserID);
+				var assignedRefID = new RefID(grantData.AssignedUserID);
+				var localUser = new User(World, assignedRefID);
 				localUser.UserID.Value = grantData.AssignedUserID.ToString();
 				localUser.AllocationIDStart.Value = grantData.AllocationIDStart;
 				localUser.AllocationIDEnd.Value = grantData.AllocationIDEnd;

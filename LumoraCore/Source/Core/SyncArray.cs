@@ -9,7 +9,7 @@ namespace Lumora.Core;
 /// Implements IChangeable for change tracking and network synchronization.
 /// </summary>
 /// <typeparam name="T">The type of elements in the array.</typeparam>
-public class SyncArray<T> : IChangeable, IEnumerable<T>
+public class SyncArray<T> : IChangeable, IEnumerable<T>, IWorldElement
 {
 	private Component _owner;
 	private T[] _values;
@@ -220,7 +220,7 @@ public class SyncArray<T> : IChangeable, IEnumerable<T>
 	/// <summary>
 	/// Unique reference ID for this array within the world.
 	/// </summary>
-	public ulong RefID => _owner?.RefID ?? 0;
+	public RefID ReferenceID => _owner?.ReferenceID ?? RefID.Null;
 
 	/// <summary>
 	/// Whether this array has been destroyed.
@@ -240,6 +240,17 @@ public class SyncArray<T> : IChangeable, IEnumerable<T>
 		// SyncArray cannot be destroyed directly
 		// It is destroyed when its owner is destroyed
 	}
+
+	/// <summary>
+	/// Numeric alias for historic RefID getter.
+	/// </summary>
+	public ulong RefIdNumeric => (ulong)ReferenceID;
+
+	public bool IsLocalElement => _owner?.IsLocalElement ?? false;
+
+	public bool IsPersistent => _owner?.IsPersistent ?? true;
+
+	public string ParentHierarchyToString() => _owner?.ParentHierarchyToString() ?? $"{GetType().Name}";
 
 	public override string ToString()
 	{

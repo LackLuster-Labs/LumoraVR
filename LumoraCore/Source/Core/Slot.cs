@@ -9,7 +9,7 @@ namespace Lumora.Core;
 /// A Slot is a container for Components and other Slots.
 /// Forms a hierarchical structure for managing transforms.
 /// </summary>
-public class Slot : IImplementable<IHook<Slot>>
+public class Slot : IImplementable<IHook<Slot>>, IWorldElement
 {
 	private readonly List<Slot> _children = new();
 	private readonly List<Component> _components = new();
@@ -36,7 +36,13 @@ public class Slot : IImplementable<IHook<Slot>>
 	/// <summary>
 	/// Unique reference ID for network synchronization.
 	/// </summary>
-	public ulong RefID { get; private set; }
+	public RefID ReferenceID { get; private set; }
+
+	public ulong RefIdNumeric => (ulong)ReferenceID;
+
+	public bool IsLocalElement => ReferenceID.IsLocalID;
+
+	public bool IsPersistent => Persistent.Value;
 
 	/// <summary>
 	/// The World this Slot belongs to.
@@ -525,7 +531,7 @@ public class Slot : IImplementable<IHook<Slot>>
 
 	public Slot()
 	{
-		RefID = 0; // Will be assigned by World.RefIDAllocator during Initialize
+		ReferenceID = RefID.Null; // Will be assigned by ReferenceController during Initialize
 		InitializeSyncFields();
 	}
 
@@ -576,9 +582,8 @@ public class Slot : IImplementable<IHook<Slot>>
 	{
 		World = world;
 
-		// Allocate RefID from current allocation context
-		// (may be local or user context depending on caller)
-		RefID = World?.RefIDAllocator?.AllocateID() ?? 0;
+		// Allocate RefID from current allocation context (ReferenceController handles blocks)
+		ReferenceID = World?.ReferenceController?.AllocateID() ?? RefID.Null;
 		IsInitialized = true;
 
 		// Root slots have all transforms valid initially
@@ -632,41 +637,32 @@ public class Slot : IImplementable<IHook<Slot>>
 			return uninitializedComponent;
 		}
 
-		// Peek/Block pattern for deterministic ID allocation:
-		// 1. Check if parent slot is local and start local block if needed
-		bool isLocal = RefIDAllocator.IsLocalID(RefID);
-		if (isLocal)
+		var refController = World.ReferenceController;
+		if (refController == null)
 		{
-			World.RefIDAllocator.LocalAllocationBlockBegin();
+			throw new InvalidOperationException("ReferenceController is required for component allocation");
 		}
 
-		// 2. Peek at next ID
-		ulong nextID = World.RefIDAllocator.PeekID();
+		// Handle local allocation if parent slot is local
+		bool startedLocalBlock = false;
+		if (ReferenceID.IsLocalID && !refController.IsInLocalAllocation)
+		{
+			refController.LocalAllocationBlockBegin();
+			startedLocalBlock = true;
+		}
 
-		// 3. Create component
+		// Create and initialize the component - RefID is allocated sequentially
 		var component = new T();
-
-		// 4. Begin allocation block at peeked position
-		byte userByte = RefIDAllocator.GetUserByteFromRefID(nextID);
-		ulong position = RefIDAllocator.GetPositionFromRefID(nextID);
-		World.RefIDAllocator.AllocationBlockBegin(userByte, position);
-
-		// 5. Initialize (allocates the peeked ID)
 		component.Initialize(this);
 		_components.Add(component);
 
-		// 6. Call lifecycle methods
 		component.OnAwake();
 		component.OnInit();
 		component.OnStart();
 
-		// 7. End allocation block
-		World.RefIDAllocator.AllocationBlockEnd();
-
-		// 8. End local block if we started one
-		if (isLocal)
+		if (startedLocalBlock)
 		{
-			World.RefIDAllocator.LocalAllocationBlockEnd();
+			refController.LocalAllocationBlockEnd();
 		}
 
 		return component;
@@ -714,40 +710,34 @@ public class Slot : IImplementable<IHook<Slot>>
 			return uninitializedSlot;
 		}
 
-		// Peek/Block pattern for deterministic ID allocation:
-		// 1. Check if parent is local and start local block if needed
-		bool isLocal = RefIDAllocator.IsLocalID(RefID);
-		if (isLocal)
+		var refController = World.ReferenceController;
+		if (refController == null)
 		{
-			World.RefIDAllocator.LocalAllocationBlockBegin();
+			throw new InvalidOperationException("ReferenceController is required for slot allocation");
 		}
 
-		// 2. Peek at next ID
-		ulong nextID = World.RefIDAllocator.PeekID();
+		// Handle local allocation if parent is local
+		bool startedLocalBlock = false;
+		if (ReferenceID.IsLocalID && !refController.IsInLocalAllocation)
+		{
+			refController.LocalAllocationBlockBegin();
+			startedLocalBlock = true;
+		}
 
-		// 3. Create slot
+		// Create and initialize the slot - it will allocate its own RefID
 		var slot = new Slot();
 		slot.SlotName.Value = name;
 		slot._name = name;
 
-		// 4. Begin allocation block at peeked position
-		byte userByte = RefIDAllocator.GetUserByteFromRefID(nextID);
-		ulong position = RefIDAllocator.GetPositionFromRefID(nextID);
-		World.RefIDAllocator.AllocationBlockBegin(userByte, position);
-
-		// 5. Set parent BEFORE initialization (so IsRootSlot returns correct value)
 		slot.Parent = this;
-
-		// 6. Initialize (allocates the peeked ID)
 		slot.Initialize(World);
 
-		// 7. End allocation block
-		World.RefIDAllocator.AllocationBlockEnd();
+		// Register with the world
+		World.RegisterSlot(slot);
 
-		// 8. End local block if we started one
-		if (isLocal)
+		if (startedLocalBlock)
 		{
-			World.RefIDAllocator.LocalAllocationBlockEnd();
+			refController.LocalAllocationBlockEnd();
 		}
 
 		return slot;
@@ -817,6 +807,14 @@ public class Slot : IImplementable<IHook<Slot>>
 			return SlotName.Value;
 
 		return _parent.GetPath() + "/" + SlotName.Value;
+	}
+
+	/// <summary>
+	/// Get a string representation of this slot for hierarchy tracing.
+	/// </summary>
+	public string ParentHierarchyToString()
+	{
+		return GetPath();
 	}
 
 	/// <summary>

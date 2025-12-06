@@ -74,10 +74,10 @@ public class Sync<T> : SyncElement, ISyncMember, IChangeable
 	{
 		_owner = owner;
 		World = owner?.World;
-		RefID = owner?.RefID ?? 0; // Sync members share owner's RefID
+		ReferenceID = owner?.ReferenceID ?? RefID.Null; // Sync members share owner's RefID
 
 		// Check if local element
-		if (RefID != 0 && RefIDAllocator.IsLocalID(RefID))
+		if (!ReferenceID.IsNull && ReferenceID.IsLocalID)
 		{
 			MarkLocalElement();
 		}

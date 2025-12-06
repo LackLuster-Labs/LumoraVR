@@ -39,7 +39,7 @@ public class FieldDrive<T> : FieldHook<T>
 	/// Set the target field to drive.
 	/// </summary>
 	/// <param name="target">The Sync field to drive</param>
-	public void DriveTarget(Sync<T> target)
+	public void DriveTarget(SyncField<T> target)
 	{
 		// Use the base class HookTarget method
 		HookTarget(target);
@@ -57,8 +57,8 @@ public class FieldDrive<T> : FieldHook<T>
 		try
 		{
 			T value = _valueSource();
-			// Get the target as Sync<T> and call SetDrivenValue
-			if (Target is Sync<T> syncTarget)
+			// Get the target as SyncField<T> and call SetDrivenValue
+			if (Target is SyncField<T> syncTarget)
 			{
 				syncTarget.SetDrivenValue(value);
 			}
@@ -78,7 +78,7 @@ public class FieldDrive<T> : FieldHook<T>
 		if (!IsActive || Target == null)
 			return;
 
-		if (Target is Sync<T> syncTarget)
+		if (Target is SyncField<T> syncTarget)
 		{
 			syncTarget.SetDrivenValue(value);
 		}
@@ -93,7 +93,7 @@ public static class FieldDriveExtensions
 	/// <summary>
 	/// Create a field drive that drives this Sync field from a source function.
 	/// </summary>
-	public static FieldDrive<T> CreateDrive<T>(this Sync<T> target, Func<T> source)
+	public static FieldDrive<T> CreateDrive<T>(this SyncField<T> target, Func<T> source)
 	{
 		var drive = new FieldDrive<T>(target.World);
 		drive.DriveFrom(source);

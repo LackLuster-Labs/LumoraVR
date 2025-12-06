@@ -18,7 +18,19 @@ public abstract class Component : IWorldElement, IUpdatable, IChangeable
 	/// <summary>
 	/// Unique reference ID for network synchronization.
 	/// </summary>
-	public ulong RefID { get; private set; }
+	public RefID ReferenceID { get; private set; }
+
+	public ulong RefIdNumeric => (ulong)ReferenceID;
+
+	/// <summary>
+	/// Whether this component belongs to the local-only allocation space.
+	/// </summary>
+	public bool IsLocalElement => ReferenceID.IsLocalID;
+
+	/// <summary>
+	/// Whether this component should persist when the world is saved.
+	/// </summary>
+	public bool IsPersistent => Slot?.Persistent.Value ?? true;
 
 	/// <summary>
 	/// The Slot this Component is attached to.
@@ -34,6 +46,14 @@ public abstract class Component : IWorldElement, IUpdatable, IChangeable
 	/// Whether this Component has been destroyed.
 	/// </summary>
 	public bool IsDestroyed => _isDestroyed;
+
+	/// <summary>
+	/// Get a human-readable path describing this component's hierarchy.
+	/// </summary>
+	public string ParentHierarchyToString()
+	{
+		return Slot?.ParentHierarchyToString() ?? $"{ComponentName}(Unattached)";
+	}
 
 	/// <summary>
 	/// Whether this Component has been initialized.
@@ -92,7 +112,7 @@ public abstract class Component : IWorldElement, IUpdatable, IChangeable
 
 	protected Component()
 	{
-		RefID = 0; // Will be assigned by World.RefIDAllocator during Initialize
+		ReferenceID = RefID.Null; // Will be assigned by ReferenceController during Initialize
 		Enabled = new Sync<bool>(null, true); // Will be assigned proper owner on Initialize
 
 		// Get default update order from attribute
@@ -108,9 +128,8 @@ public abstract class Component : IWorldElement, IUpdatable, IChangeable
 	{
 		Slot = slot;
 
-		// Allocate RefID from World.RefIDAllocator (NOT LocalUser)
-		// This respects the current allocation context (local vs networked)
-		RefID = Slot?.World?.RefIDAllocator?.AllocateID() ?? 0;
+		// Allocate RefID from World.ReferenceController
+		ReferenceID = Slot?.World?.ReferenceController?.AllocateID() ?? RefID.Null;
 
 		Enabled = new Sync<bool>(this, true);
 

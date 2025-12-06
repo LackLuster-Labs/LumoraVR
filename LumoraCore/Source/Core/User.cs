@@ -11,7 +11,7 @@ namespace Lumora.Core;
 /// </summary>
 public class User : ISyncObject, IWorldElement, IDisposable
 {
-    private ulong _referenceID;
+    private RefID _referenceID;
     private List<ISyncMember> _syncMembers;
 
     // Sync members - auto-discovered
@@ -33,14 +33,21 @@ public class User : ISyncObject, IWorldElement, IDisposable
 
     // ISyncObject implementation
     public List<ISyncMember> SyncMembers => _syncMembers;
-    public ulong ReferenceID => _referenceID;
+    public RefID ReferenceID => _referenceID;
+    public ulong RefIdNumeric => (ulong)_referenceID;
     public bool IsAuthority => World?.IsAuthority ?? false;
 
     // IWorldElement implementation
-    public ulong RefID => _referenceID;
     public World World { get; private set; }
     public bool IsDestroyed { get; private set; }
     public bool IsInitialized { get; private set; } = true;
+    public bool IsLocalElement => ReferenceID.IsLocalID;
+    public bool IsPersistent => true;
+
+    /// <summary>
+    /// Hierarchy path for debugging.
+    /// </summary>
+    public string ParentHierarchyToString() => $"User:{UserName.Value ?? UserID.Value}";
 
     public bool IsHost => World?.IsAuthority == true && World.LocalUser == this;
     public bool IsDisposed { get; private set; }
@@ -57,7 +64,7 @@ public class User : ISyncObject, IWorldElement, IDisposable
     // UserRoot reference
     public Slot UserRootSlot { get; set; }
 
-    public User(World world, ulong refID)
+    public User(World world, RefID refID)
     {
         World = world;
         _referenceID = refID;
@@ -81,23 +88,6 @@ public class User : ISyncObject, IWorldElement, IDisposable
         {
             AquaLogger.Warn("Non-authority user cannot change username");
         }
-    }
-
-    /// <summary>
-    /// Allocate a new Reference ID for this user.
-    /// Each user has a unique range of IDs they can allocate.
-    /// </summary>
-    public ulong AllocateReferenceID()
-    {
-        ulong id = AllocationIDStart.Value;
-        AllocationIDStart.Value++;
-
-        if (AllocationIDStart.Value >= AllocationIDEnd.Value)
-        {
-            AquaLogger.Error($"User {UserName.Value} ran out of allocation IDs!");
-        }
-
-        return id;
     }
 
     /// <summary>
@@ -126,6 +116,6 @@ public class User : ISyncObject, IWorldElement, IDisposable
 
     public override string ToString()
     {
-        return $"User({UserName.Value ?? UserID.Value})";
+        return $"User({UserName.Value ?? UserID.Value}, ID={ReferenceID})";
     }
 }

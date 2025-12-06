@@ -8,7 +8,7 @@ namespace Lumora.Core;
 /// A synchronized dictionary that can be networked.
 /// Provides key-value synchronized collections with change tracking.
 /// </summary>
-public class SyncDictionary<TKey, TValue> : IChangeable, IEnumerable<KeyValuePair<TKey, TValue>>
+public class SyncDictionary<TKey, TValue> : IChangeable, IEnumerable<KeyValuePair<TKey, TValue>>, IWorldElement
 {
 	private Component _owner;
 	private Dictionary<TKey, TValue> _dictionary = new Dictionary<TKey, TValue>();
@@ -48,26 +48,6 @@ public class SyncDictionary<TKey, TValue> : IChangeable, IEnumerable<KeyValuePai
 	/// Gets the collection of values in the dictionary.
 	/// </summary>
 	public ICollection<TValue> Values => _dictionary.Values;
-
-	/// <summary>
-	/// The World this element belongs to.
-	/// </summary>
-	public World World => _owner?.World;
-
-	/// <summary>
-	/// Unique reference ID for this element within the world.
-	/// </summary>
-	public ulong RefID => _owner?.RefID ?? 0;
-
-	/// <summary>
-	/// Whether this element has been destroyed.
-	/// </summary>
-	public bool IsDestroyed => _owner?.IsDestroyed ?? true;
-
-	/// <summary>
-	/// Whether this element has been initialized.
-	/// </summary>
-	public bool IsInitialized => _owner?.IsInitialized ?? false;
 
 	/// <summary>
 	/// Gets or sets the value associated with the specified key.
@@ -215,6 +195,22 @@ public class SyncDictionary<TKey, TValue> : IChangeable, IEnumerable<KeyValuePai
 		Clear();
 		_owner = null;
 	}
+
+	public World World => _owner?.World;
+
+	public RefID ReferenceID => _owner?.ReferenceID ?? RefID.Null;
+
+	public ulong RefIdNumeric => (ulong)ReferenceID;
+
+	public bool IsDestroyed => _owner?.IsDestroyed ?? true;
+
+	public bool IsInitialized => _owner?.IsInitialized ?? false;
+
+	public bool IsLocalElement => _owner?.IsLocalElement ?? false;
+
+	public bool IsPersistent => _owner?.IsPersistent ?? true;
+
+	public string ParentHierarchyToString() => _owner?.ParentHierarchyToString() ?? $"{GetType().Name}";
 
 	/// <summary>
 	/// Notify that the dictionary has changed.

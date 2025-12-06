@@ -66,7 +66,6 @@ public class World
 		OnWorldDestroy
 	}
 
-	private readonly Dictionary<ulong, IWorldElement> _elements = new();
 	private readonly HashSet<IWorldElement> _dirtyElements = new();
 	private readonly Dictionary<string, List<Slot>> _slotsByTag = new();
 	private readonly List<Slot> _rootSlots = new();
@@ -150,6 +149,11 @@ public class World
 	/// Synchronization controller for this world.
 	/// </summary>
 	public SyncController SyncController { get; private set; }
+
+	/// <summary>
+	/// Reference controller for object lookup and async resolution.
+	/// </summary>
+	public ReferenceController ReferenceController { get; private set; }
 
 	/// <summary>
 	/// Thread-safe hook manager for world modifications.
@@ -387,7 +391,10 @@ public class World
 		_state = WorldState.InitializingDataModel;
 		AquaLogger.Log("World entering InitializingDataModel stage");
 
-		// Create root Slot
+		// Create reference controller BEFORE anything else
+		ReferenceController = new ReferenceController(this);
+
+		// Create root Slot (uses ReferenceController)
 		RootSlot = new Slot();
 		RootSlot.SlotName.Value = "Root";
 		RootSlot.Initialize(this);
@@ -438,7 +445,7 @@ public class World
 	{
 		if (slot == null) return;
 
-		_elements[slot.RefID] = slot;
+		ReferenceController?.RegisterObject(slot);
 
 		if (!string.IsNullOrEmpty(slot.Tag.Value))
 		{
@@ -465,7 +472,7 @@ public class World
 	{
 		if (slot == null) return;
 
-		_elements.Remove(slot.RefID);
+		ReferenceController?.UnregisterObject(slot.ReferenceID);
 
 		if (!string.IsNullOrEmpty(slot.Tag.Value))
 		{
@@ -485,7 +492,7 @@ public class World
 	internal void RegisterComponent(Component component)
 	{
 		if (component == null) return;
-		_elements[component.RefID] = component;
+		ReferenceController?.RegisterObject(component);
 	}
 
 	/// <summary>
@@ -494,7 +501,7 @@ public class World
 	internal void UnregisterComponent(Component component)
 	{
 		if (component == null) return;
-		_elements.Remove(component.RefID);
+		ReferenceController?.UnregisterObject(component.ReferenceID);
 	}
 
 	/// <summary>
@@ -527,18 +534,25 @@ public class World
 	/// <summary>
 	/// Get all elements in the world.
 	/// </summary>
-	public IEnumerable<KeyValuePair<ulong, IWorldElement>> GetAllElements()
+	public IEnumerable<KeyValuePair<RefID, IWorldElement>> GetAllElements()
 	{
-		return _elements;
+		return ReferenceController?.AllObjects ?? Array.Empty<KeyValuePair<RefID, IWorldElement>>();
 	}
 
 	/// <summary>
 	/// Find a world element by its RefID.
 	/// </summary>
+	public IWorldElement FindElement(RefID refID)
+	{
+		return ReferenceController?.GetObjectOrNull(refID);
+	}
+
+	/// <summary>
+	/// Find a world element by its RefID (legacy ulong overload).
+	/// </summary>
 	public IWorldElement FindElement(ulong refID)
 	{
-		_elements.TryGetValue(refID, out var element);
-		return element;
+		return FindElement(new RefID(refID));
 	}
 
 	/// <summary>
@@ -592,13 +606,14 @@ public class World
 			slot.Destroy();
 		}
 
-		_elements.Clear();
 		_dirtyElements.Clear();
 		_slotsByTag.Clear();
 		_rootSlots.Clear();
 		_users.Clear();
 
 		_hookManager?.Dispose();
+
+		ReferenceController?.Reset();
 
 		// Note: Godot scene cleanup handled by WorldDriver wrapper
 	}
@@ -615,7 +630,7 @@ public class World
 			if (!_users.Contains(user))
 			{
 				_users.Add(user);
-				_elements[user.ReferenceID] = user;
+				ReferenceController?.RegisterObject(user);
 				AquaLogger.Log($"User added to world: {user.UserName.Value}");
 				
 				// Trigger user joined event
@@ -634,7 +649,7 @@ public class World
 		lock (_users)
 		{
 			_users.Remove(user);
-			_elements.Remove(user.ReferenceID);
+			ReferenceController?.UnregisterObject(user.ReferenceID);
 			AquaLogger.Log($"User removed from world: {user.UserName.Value}");
 			
 			// Trigger user left event
@@ -716,11 +731,13 @@ public class World
 	{
 		var (rangeStart, rangeEnd) = _refIDAllocator.GetAuthorityIDRange();
 
-		var hostUser = new User(this, rangeStart);
+		// Allocate a unique RefID for the User via ReferenceController to avoid collisions
+		var userRefId = ReferenceController.AllocateID();
+		var hostUser = new User(this, userRefId);
 		var resolvedName = string.IsNullOrWhiteSpace(userName) ? System.Environment.MachineName : userName;
 
 		hostUser.UserName.Value = resolvedName;
-		hostUser.UserID.Value = rangeStart.ToString();
+		hostUser.UserID.Value = userRefId.ToString();
 		hostUser.AllocationIDStart.Value = rangeStart;
 		hostUser.AllocationIDEnd.Value = rangeEnd;
 		hostUser.IsPresent.Value = true;
@@ -728,7 +745,7 @@ public class World
 
 		SetLocalUser(hostUser);
 		AddUser(hostUser); // Add user to world and trigger OnUserJoined
-		AquaLogger.Log($"Created host user '{resolvedName}' with RefID {rangeStart:X16}");
+		AquaLogger.Log($"Created host user '{resolvedName}' with RefID {userRefId}");
 		return hostUser;
 	}
 
@@ -1262,24 +1279,6 @@ public class World
 		}
 
 		// 8. Dispose all components in all slots
-		if (_elements != null)
-		{
-			foreach (var kvp in _elements.ToList())
-			{
-				try
-				{
-					if (kvp.Value is Component component)
-					{
-						component.Destroy();
-					}
-				}
-				catch (Exception ex)
-				{
-					AquaLogger.Error($"World: Error disposing component: {ex.Message}");
-				}
-			}
-		}
-
 		// 9. Dispose all slots
 		try
 		{
@@ -1291,27 +1290,8 @@ public class World
 			AquaLogger.Error($"World: Error disposing root slot: {ex.Message}");
 		}
 
-		if (_elements != null)
-		{
-			foreach (var kvp in _elements.ToList())
-			{
-				try
-				{
-					if (kvp.Value is Slot slot && slot != RootSlot)
-					{
-						slot.Destroy();
-					}
-				}
-				catch (Exception ex)
-				{
-					AquaLogger.Error($"World: Error disposing slot: {ex.Message}");
-				}
-			}
-		}
-
 		// 10. Clear all collections
 		_users?.Clear();
-		_elements?.Clear();
 		_dirtyElements?.Clear();
 		_slotsByTag?.Clear();
 		_rootSlots?.Clear();
@@ -1366,6 +1346,16 @@ public class World
 		catch (Exception ex)
 		{
 			AquaLogger.Error($"World: Error clearing managers: {ex.Message}");
+		}
+
+		try
+		{
+			ReferenceController?.Dispose();
+			ReferenceController = null;
+		}
+		catch (Exception ex)
+		{
+			AquaLogger.Error($"World: Error disposing reference controller: {ex.Message}");
 		}
 
 		AquaLogger.Log($"World: Disposed world '{WorldName.Value}'");

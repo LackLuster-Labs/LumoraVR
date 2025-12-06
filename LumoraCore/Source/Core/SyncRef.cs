@@ -1,137 +1,320 @@
 using System;
+using System.Runtime.CompilerServices;
 
 namespace Lumora.Core;
 
 /// <summary>
-/// Synchronized reference to another world element.
-/// Handles network synchronization and change tracking.
-/// Implements IChangeable for reactive change tracking.
+/// Event delegate for reference changes.
 /// </summary>
-public class SyncRef<T> : IChangeable where T : class, IWorldElement
+/// <typeparam name="T"></typeparam>
+public delegate void ReferenceEvent<T>(SyncRef<T> reference) where T : class, IWorldElement;
+
+/// <summary>
+/// Non-generic SyncRef for untyped references.
+/// </summary>
+public sealed class SyncRef : SyncRef<IWorldElement>
 {
-	private T? _target;
-	private IWorldElement _owner;
-	private bool _isSyncing;
+    public override IWorldElement Target
+    {
+        get => base.Target;
+        set => base.Target = value;
+    }
+}
 
-	/// <summary>
-	/// Event triggered when the reference changes.
-	/// </summary>
-	public event Action<SyncRef<T>>? OnChanged;
+/// <summary>
+/// Synchronized reference to another world element.
+/// Handles async resolution, network synchronization, and proper state tracking.
+/// </summary>
+/// <typeparam name="T"></typeparam>
+public class SyncRef<T> : SyncField<RefID>, ISyncRef, IWorldElementReceiver
+    where T : class, IWorldElement
+{
+    public SyncRef()
+    {
+        State = ReferenceState.Null;
+    }
 
-	/// <summary>
-	/// Event fired when this sync reference changes (IChangeable implementation).
-	/// </summary>
-	public event Action<IChangeable> Changed;
+    public SyncRef(IWorldElement owner)
+        : base(owner)
+    {
+        State = ReferenceState.Null;
+    }
 
-	/// <summary>
-	/// The referenced target element.
-	/// Setting this will trigger network synchronization.
-	/// </summary>
-	public T? Target
-	{
-		get => _target;
-		set
-		{
-			if (_target == value) return;
+    public SyncRef(IWorldElement owner, T defaultTarget)
+        : base(owner)
+    {
+        State = ReferenceState.Null;
+        if (defaultTarget != null)
+        {
+            Target = defaultTarget;
+        }
+    }
 
-			_target = value;
-			IsDirty = true;
+    private const int PreassignedFlag = 16;
 
-			// Trigger change event
-			OnChanged?.Invoke(this);
+    private T _target;
+    private ReferenceState _state;
 
-			// Mark owner as dirty for network sync
-			if (!_isSyncing && _owner != null)
-			{
-				_owner.World?.MarkElementDirty(_owner);
+    private bool IsPreassigned
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => GetFlag(PreassignedFlag);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        set => SetFlag(PreassignedFlag, value);
+    }
 
-				// Notify the parent component that this sync reference changed
-				if (_owner is Component component)
-				{
-					component.NotifyChanged();
-				}
+    public ReferenceState State
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            if (_state == ReferenceState.Available && _target != null && _target.IsDestroyed)
+            {
+                return ReferenceState.Removed;
+            }
+            return _state;
+        }
+        private set => _state = value;
+    }
 
-				// Fire the IChangeable Changed event
-				Changed?.Invoke(this);
-			}
-		}
-	}
+    public T RawTarget => _target;
 
-	/// <summary>
-	/// The world element that owns this SyncRef.
-	/// </summary>
-	public IWorldElement Owner => _owner;
+    public virtual T Target
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            if (_target == null || _target.IsDestroyed)
+            {
+                return null;
+            }
+            return _target;
+        }
+        set
+        {
+            if (IsHooked && !IsWithinHookCallback && ActiveLink is RefHook<T> refHook &&
+                !ActiveLink.IsModificationAllowed && !IsInInitPhase && !IsLoading && refHook.RefSetHook != null)
+            {
+                try
+                {
+                    BeginHook();
+                    refHook.RefSetHook(this, value);
+                    return;
+                }
+                finally
+                {
+                    EndHook();
+                }
+            }
 
-	/// <summary>
-	/// Whether this reference has been modified since last sync.
-	/// </summary>
-	public bool IsDirty { get; internal set; }
+            if (value == _target)
+            {
+                return;
+            }
 
-	public SyncRef(IWorldElement owner, T? defaultTarget = null)
-	{
-		_owner = owner;
-		_target = defaultTarget;
-		IsDirty = false;
-	}
+            if (value == null)
+            {
+                Value = RefID.Null;
+                return;
+            }
 
-	/// <summary>
-	/// Set the target without triggering change events or network sync.
-	/// Used when receiving values from the network.
-	/// </summary>
-	internal void SetTargetFromNetwork(T? target)
-	{
-		_isSyncing = true;
-		_target = target;
-		OnChanged?.Invoke(this);
-		_isSyncing = false;
-		IsDirty = false;
-	}
+            if (value.World != World)
+            {
+                if (value.IsDestroyed)
+                {
+                    throw new ArgumentException(
+                        $"Target is destroyed!\nReference:\n{this.ParentHierarchyToString()}\n" +
+                        $"Target:\n{value.ParentHierarchyToString()}");
+                }
+                throw new ArgumentException(
+                    $"Target belongs to a different world.\nTarget World: {value.World}\n" +
+                    $"Reference World: {World}\nTarget:\n{value.ParentHierarchyToString()}");
+            }
 
-	/// <summary>
-	/// Check if reference was changed and clear the dirty flag.
-	/// </summary>
-	public bool GetWasChangedAndClear()
-	{
-		bool wasChanged = IsDirty;
-		IsDirty = false;
-		return wasChanged;
-	}
+            if (value.IsLocalElement && !IsLocalElement)
+            {
+                throw new ArgumentException(
+                    $"Cannot reference local targets from non-local reference.\n" +
+                    $"Target: {value.ParentHierarchyToString()}\nReference: {this.ParentHierarchyToString()}");
+            }
 
-	/// <summary>
-	/// Implicit conversion to target for convenience.
-	/// </summary>
-	public static implicit operator T?(SyncRef<T> syncRef) => syncRef?._target;
+            T prevTarget = _target;
+            _target = value;
+            IsPreassigned = true;
 
-	public override string ToString() => $"SyncRef<{typeof(T).Name}>({_target?.ToString() ?? "null"})";
+            RefID id = value.ReferenceID;
+            if (!InternalSetRefID(in id, prevTarget))
+            {
+                _target = prevTarget;
+            }
 
-	// IWorldElement implementation (forwarded to owner)
+            IsPreassigned = false;
+        }
+    }
 
-	/// <summary>
-	/// The World this reference belongs to.
-	/// </summary>
-	public World World => _owner?.World;
+    public bool IsTargetRemoved => _target != null && _target.IsDestroyed;
 
-	/// <summary>
-	/// Unique reference ID for this reference within the world.
-	/// </summary>
-	public ulong RefID => _owner?.RefID ?? 0;
+    public Type TargetType => typeof(T);
 
-	/// <summary>
-	/// Whether this reference has been destroyed.
-	/// </summary>
-	public bool IsDestroyed => _owner?.IsDestroyed ?? false;
+    IWorldElement ISyncRef.Target
+    {
+        get => Target;
+        set
+        {
+            if (value == null)
+            {
+                Target = null;
+                return;
+            }
 
-	/// <summary>
-	/// Whether this reference has been initialized.
-	/// </summary>
-	public bool IsInitialized => _owner?.IsInitialized ?? false;
+            if (value is T typed)
+            {
+                Target = typed;
+                return;
+            }
 
-	/// <summary>
-	/// Destroy this reference (cannot be destroyed directly, owner must be destroyed).
-	/// </summary>
-	public void Destroy()
-	{
-		// SyncRef fields cannot be destroyed directly
-		// They are destroyed when their owner is destroyed
-	}
+            throw new InvalidOperationException(
+                $"Target is of type {value.GetType()}, expected: {typeof(T)}");
+        }
+    }
+
+    public event ReferenceEvent<T> OnReferenceChange;
+    public event ReferenceEvent<T> OnObjectAvailable;
+    public event ReferenceEvent<T> OnTargetChange;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static implicit operator T(SyncRef<T> reference) => reference?.Target;
+
+    public bool TrySet(IWorldElement target)
+    {
+        if (target == null)
+        {
+            Target = null;
+            return true;
+        }
+
+        if (target is T typed)
+        {
+            Target = typed;
+            return true;
+        }
+
+        return false;
+    }
+
+    protected virtual bool InternalSetRefID(in RefID id, T prevTarget)
+    {
+        return InternalSetValue(id);
+    }
+
+    protected override void ValueChanged()
+    {
+        T prevTarget = _target;
+        _target = null;
+
+        RunReferenceChanged();
+
+        if (Value.IsNull)
+        {
+            State = ReferenceState.Null;
+            RunTargetChanged();
+        }
+        else
+        {
+            State = ReferenceState.Waiting;
+
+            if (IsPreassigned && prevTarget != null)
+            {
+                SetTarget(prevTarget);
+            }
+            else
+            {
+                var refId = Value;
+                World?.ReferenceController?.RequestObject(in refId, this);
+            }
+        }
+    }
+
+    void IWorldElementReceiver.OnWorldElementAvailable(IWorldElement element)
+    {
+        if (Value.IsNull || element == null)
+            return;
+
+        if (element.ReferenceID == Value && Target == null)
+        {
+            SetTarget(element);
+        }
+    }
+
+    private void SetTarget(IWorldElement element)
+    {
+        _target = element as T;
+
+        if (_target == null)
+        {
+            State = ReferenceState.Invalid;
+            RunTargetInvalid();
+        }
+        else if (!_target.IsDestroyed)
+        {
+            State = ReferenceState.Available;
+            RunObjectAvailable();
+        }
+        else
+        {
+            State = ReferenceState.Removed;
+            RunTargetChanged();
+        }
+    }
+
+    protected void InvalidateTarget()
+    {
+        _target = null;
+        State = ReferenceState.Invalid;
+    }
+
+    protected virtual void RunReferenceChanged()
+    {
+        OnReferenceChange?.Invoke(this);
+    }
+
+    protected virtual void RunObjectAvailable()
+    {
+        OnObjectAvailable?.Invoke(this);
+        RunTargetChanged();
+    }
+
+    protected virtual void RunTargetInvalid()
+    {
+    }
+
+    private void RunTargetChanged()
+    {
+        OnTargetChange?.Invoke(this);
+    }
+
+    public void Dispose()
+    {
+        _target = null;
+        OnReferenceChange = null;
+        OnObjectAvailable = null;
+        OnTargetChange = null;
+    }
+
+    public override string ToString()
+    {
+        return $"SyncRef<{typeof(T).Name}>({Value}, State={State}, Target={_target?.ToString() ?? "null"})";
+    }
+}
+
+/// <summary>
+/// Interface for SyncRef without generic parameter.
+/// </summary>
+public interface ISyncRef
+{
+    RefID Value { get; set; }
+    IWorldElement Target { get; set; }
+    Type TargetType { get; }
+    ReferenceState State { get; }
+    bool TrySet(IWorldElement target);
 }

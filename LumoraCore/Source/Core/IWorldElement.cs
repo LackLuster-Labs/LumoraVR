@@ -3,7 +3,6 @@ namespace Lumora.Core;
 
 /// <summary>
 /// Base interface for all elements that exist within a World.
-/// 
 /// </summary>
 public interface IWorldElement
 {
@@ -13,14 +12,9 @@ public interface IWorldElement
 	World World { get; }
 
 	/// <summary>
-	/// Unique reference ID for this element within the world.
+	/// Strongly-typed reference identifier for this element.
 	/// </summary>
-	ulong RefID { get; }
-
-	/// <summary>
-	/// Whether this element has been destroyed.
-	/// </summary>
-	bool IsDestroyed { get; }
+	RefID ReferenceID { get; }
 
 	/// <summary>
 	/// Whether this element has been initialized.
@@ -28,7 +22,22 @@ public interface IWorldElement
 	bool IsInitialized { get; }
 
 	/// <summary>
-	/// Destroy this element and remove it from the world.
+	/// Whether this element has been destroyed.
 	/// </summary>
-	void Destroy();
+	bool IsDestroyed { get; }
+
+	/// <summary>
+	/// Whether this element belongs to the local-only allocation space.
+	/// </summary>
+	bool IsLocalElement { get; }
+
+	/// <summary>
+	/// Whether this element should persist in saves.
+	/// </summary>
+	bool IsPersistent { get; }
+
+	/// <summary>
+	/// Get a human-readable path describing this element's hierarchy.
+	/// </summary>
+	string ParentHierarchyToString();
 }

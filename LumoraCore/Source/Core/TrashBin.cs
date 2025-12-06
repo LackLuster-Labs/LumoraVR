@@ -10,7 +10,7 @@ namespace Lumora.Core;
 /// </summary>
 public class TrashBin
 {
-	private readonly Dictionary<ulong, TrashEntry> _trashedElements = new();
+	private readonly Dictionary<RefID, TrashEntry> _trashedElements = new();
 	private readonly World _world;
 
 	/// <summary>
@@ -35,20 +35,20 @@ public class TrashBin
 		{
 			Element = element,
 			TrashedTime = _world.TotalTime,
-			RefID = element.RefID
+			RefID = element.ReferenceID
 		};
 
-		_trashedElements[element.RefID] = entry;
+		_trashedElements[element.ReferenceID] = entry;
 
 		// Mark as destroyed to prevent further use, but don't actually destroy yet
 		// This allows recovery if deletion is rejected
-		AquaLogger.Debug($"Moved element {element.RefID} to trash");
+		AquaLogger.Debug($"Moved element {element.ReferenceID} to trash");
 	}
 
 	/// <summary>
 	/// Restore an element from trash (if deletion was rejected by authority).
 	/// </summary>
-	public bool RestoreFromTrash(ulong refID)
+	public bool RestoreFromTrash(RefID refID)
 	{
 		if (!_trashedElements.TryGetValue(refID, out var entry))
 		{
@@ -75,7 +75,7 @@ public class TrashBin
 	/// <summary>
 	/// Permanently delete an element from trash (authority confirmed deletion).
 	/// </summary>
-	public void PermanentlyDelete(ulong refID)
+	public void PermanentlyDelete(RefID refID)
 	{
 		if (!_trashedElements.TryGetValue(refID, out var entry))
 		{
@@ -104,7 +104,7 @@ public class TrashBin
 	public void Update()
 	{
 		var currentTime = _world.TotalTime;
-		var toRemove = new List<ulong>();
+		var toRemove = new List<RefID>();
 
 		foreach (var kvp in _trashedElements)
 		{
@@ -129,7 +129,7 @@ public class TrashBin
 	/// <summary>
 	/// Check if an element is in trash.
 	/// </summary>
-	public bool IsInTrash(ulong refID)
+	public bool IsInTrash(RefID refID)
 	{
 		return _trashedElements.ContainsKey(refID);
 	}
@@ -179,6 +179,6 @@ public class TrashBin
 internal class TrashEntry
 {
 	public IWorldElement Element { get; set; }
-	public ulong RefID { get; set; }
+	public RefID RefID { get; set; }
 	public double TrashedTime { get; set; }
 }

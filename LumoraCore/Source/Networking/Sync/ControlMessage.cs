@@ -57,7 +57,7 @@ public class ControlMessage : SyncMessage
 		var type = (Message)reader.ReadByte();
 		var msg = new ControlMessage(type);
 
-		var payloadLength = (int)reader.Read7BitEncodedUInt64();
+		var payloadLength = (int)reader.Read7BitEncoded();
 		if (payloadLength > 0)
 		{
 			msg.Payload = reader.ReadBytes(payloadLength);

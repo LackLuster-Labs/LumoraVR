@@ -78,13 +78,13 @@ public class SyncController : IDisposable
 
 				try
 				{
-					var writer = deltaBatch.BeginNewDataRecord(element.RefID);
+					var writer = deltaBatch.BeginNewDataRecord(element.ReferenceID);
 					element.EncodeDelta(writer, deltaBatch);
-					deltaBatch.FinishDataRecord(element.RefID);
+					deltaBatch.FinishDataRecord(element.ReferenceID);
 				}
 				catch (Exception ex)
 				{
-					Logger.Error($"SyncController: Failed to encode delta for {element.RefID}: {ex.Message}");
+					Logger.Error($"SyncController: Failed to encode delta for {element.ReferenceID}: {ex.Message}");
 				}
 			}
 
@@ -136,19 +136,19 @@ public class SyncController : IDisposable
 		{
 			if (element.IsLocalElement)
 			{
-				Logger.Warn($"SyncController: Cannot encode local element in full batch: {element.RefID}");
+				Logger.Warn($"SyncController: Cannot encode local element in full batch: {element.ReferenceID}");
 				continue;
 			}
 
 			try
 			{
-				var writer = fullBatch.BeginNewDataRecord(element.RefID);
+				var writer = fullBatch.BeginNewDataRecord(element.ReferenceID);
 				element.EncodeFull(writer, fullBatch);
-				fullBatch.FinishDataRecord(element.RefID);
+				fullBatch.FinishDataRecord(element.ReferenceID);
 			}
 			catch (Exception ex)
 			{
-				Logger.Error($"SyncController: Failed to encode full for {element.RefID}: {ex.Message}");
+				Logger.Error($"SyncController: Failed to encode full for {element.ReferenceID}: {ex.Message}");
 			}
 		}
 
@@ -159,7 +159,7 @@ public class SyncController : IDisposable
 	/// Encode full state for a single element into an existing batch.
 	/// Used for corrections.
 	/// </summary>
-	public void EncodeFull(ulong refID, BinaryMessageBatch batch)
+	public void EncodeFull(RefID refID, BinaryMessageBatch batch)
 	{
 		var element = World.FindElement(refID) as SyncElement;
 		if (element == null)
@@ -264,7 +264,7 @@ public class SyncController : IDisposable
 	/// <summary>
 	/// Apply confirmations from authority.
 	/// </summary>
-	public void ApplyConfirmations(IEnumerable<ulong> ids, ulong confirmTime)
+	public void ApplyConfirmations(IEnumerable<RefID> ids, ulong confirmTime)
 	{
 		foreach (var id in ids)
 		{
@@ -302,7 +302,7 @@ public class SyncController : IDisposable
 
 	private static int CompareSyncElements(SyncElement a, SyncElement b)
 	{
-		return a.RefID.CompareTo(b.RefID);
+		return a.ReferenceID.CompareTo(b.ReferenceID);
 	}
 
 	public void Dispose()
