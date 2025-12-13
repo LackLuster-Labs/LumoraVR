@@ -1,0 +1,248 @@
+[gd_scene load_steps=5 format=3 uid="uid://octlcsuwxy5r"]
+
+[ext_resource type="FontFile" uid="uid://dne06dcdmx5hj" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
+
+[sub_resource type="StyleBoxFlat" id="panel_bg"]
+bg_color = Color(0.08, 0.08, 0.1, 0.98)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.2, 0.18, 0.35, 0.8)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="header_bg"]
+bg_color = Color(0.12, 0.1, 0.18, 1)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+
+[sub_resource type="StyleBoxFlat" id="content_bg"]
+bg_color = Color(0.06, 0.06, 0.08, 1)
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+
+[node name="MaterialOrbInspector" type="Control"]
+custom_minimum_size = Vector2(300, 400)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MainPanel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("panel_bg")
+
+[node name="VBox" type="VBoxContainer" parent="MainPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="Panel" parent="MainPanel/VBox"]
+custom_minimum_size = Vector2(0, 32)
+layout_mode = 2
+theme_override_styles/panel = SubResource("header_bg")
+
+[node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/Header"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_right = -8.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Title" type="Label" parent="MainPanel/VBox/Header/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Material"
+vertical_alignment = 1
+
+[node name="CloseButton" type="Button" parent="MainPanel/VBox/Header/HBox"]
+custom_minimum_size = Vector2(24, 24)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.3, 0.3, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "X"
+
+[node name="Content" type="Panel" parent="MainPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("content_bg")
+
+[node name="Scroll" type="ScrollContainer" parent="MainPanel/VBox/Content"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBox" type="VBoxContainer" parent="MainPanel/VBox/Content/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 2
+
+[node name="Row_0" type="HBoxContainer" parent="MainPanel/VBox/Content/Scroll/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_0"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Property:"
+
+[node name="Swatch" type="ColorRect" parent="MainPanel/VBox/Content/Scroll/VBox/Row_0"]
+custom_minimum_size = Vector2(40, 12)
+layout_mode = 2
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_0"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "value"
+
+[node name="Row_1" type="HBoxContainer" parent="MainPanel/VBox/Content/Scroll/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_1"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Property:"
+
+[node name="Swatch" type="ColorRect" parent="MainPanel/VBox/Content/Scroll/VBox/Row_1"]
+custom_minimum_size = Vector2(40, 12)
+layout_mode = 2
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_1"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "value"
+
+[node name="Row_2" type="HBoxContainer" parent="MainPanel/VBox/Content/Scroll/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_2"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Property:"
+
+[node name="Swatch" type="ColorRect" parent="MainPanel/VBox/Content/Scroll/VBox/Row_2"]
+custom_minimum_size = Vector2(40, 12)
+layout_mode = 2
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_2"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "value"
+
+[node name="Row_3" type="HBoxContainer" parent="MainPanel/VBox/Content/Scroll/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_3"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Property:"
+
+[node name="Swatch" type="ColorRect" parent="MainPanel/VBox/Content/Scroll/VBox/Row_3"]
+custom_minimum_size = Vector2(40, 12)
+layout_mode = 2
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_3"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "value"
+
+[node name="Row_4" type="HBoxContainer" parent="MainPanel/VBox/Content/Scroll/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_4"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Property:"
+
+[node name="Swatch" type="ColorRect" parent="MainPanel/VBox/Content/Scroll/VBox/Row_4"]
+custom_minimum_size = Vector2(40, 12)
+layout_mode = 2
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_4"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "value"
+
+[node name="Row_5" type="HBoxContainer" parent="MainPanel/VBox/Content/Scroll/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_5"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Property:"
+
+[node name="Swatch" type="ColorRect" parent="MainPanel/VBox/Content/Scroll/VBox/Row_5"]
+custom_minimum_size = Vector2(40, 12)
+layout_mode = 2
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/Scroll/VBox/Row_5"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "value"

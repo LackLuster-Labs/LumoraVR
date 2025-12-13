@@ -154,7 +154,7 @@ public class SessionConnectionManager : IDisposable
             AssignedUserID = userID,
             AllocationIDStart = (ulong)allocStart,
             AllocationIDEnd = (ulong)allocEnd,
-            MaxUsers = World.RefIDAllocator.GetMaxUserCount(),
+            MaxUsers = World.RefIDAllocator.MaxUserCount,
             WorldTime = World.TotalTime,
             StateVersion = World.StateVersion
         };

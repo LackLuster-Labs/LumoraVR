@@ -186,6 +186,10 @@ public abstract class BinaryMessageBatch : SyncMessage
         writer.Write7BitEncoded(SenderStateVersion);
         writer.Write7BitEncoded(SenderSyncTick);
         writer.Write(SenderTime);
+        if (this is ConfirmationMessage confirmation)
+        {
+            writer.Write7BitEncoded(confirmation.ConfirmTime);
+        }
 
         // Record count
         writer.Write7BitEncoded((ulong)_dataRecords.Count);
@@ -206,18 +210,23 @@ public abstract class BinaryMessageBatch : SyncMessage
         using var input = new MemoryStream(data);
         using var reader = new BinaryReader(input);
 
-		var messageType = (MessageType)reader.ReadByte();
-		var stateVersion = reader.Read7BitEncoded();
-		var syncTick = reader.Read7BitEncoded();
-		var senderTime = reader.ReadDouble();
-		var recordCount = (int)reader.Read7BitEncoded();
-		var dataLength = (int)reader.Read7BitEncoded();
+        var messageType = (MessageType)reader.ReadByte();
+        var stateVersion = reader.Read7BitEncoded();
+        var syncTick = reader.Read7BitEncoded();
+        var senderTime = reader.ReadDouble();
+        var confirmTime = 0UL;
+        if (messageType == MessageType.Confirmation)
+        {
+            confirmTime = reader.Read7BitEncoded();
+        }
+        var recordCount = (int)reader.Read7BitEncoded();
+        var dataLength = (int)reader.Read7BitEncoded();
 
         BinaryMessageBatch batch = messageType switch
         {
             MessageType.Delta => new DeltaBatch(stateVersion, syncTick),
             MessageType.Full => new FullBatch(stateVersion, syncTick),
-            MessageType.Confirmation => new ConfirmationMessage(syncTick, stateVersion, syncTick),
+            MessageType.Confirmation => new ConfirmationMessage(confirmTime, stateVersion, syncTick),
             _ => throw new InvalidOperationException($"Unknown message type: {messageType}")
         };
 

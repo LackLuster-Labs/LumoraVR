@@ -6,8 +6,29 @@ using AquaLogger = Lumora.Core.Logging.Logger;
 namespace Lumora.Core;
 
 /// <summary>
+/// Head output device types.
+/// </summary>
+public enum HeadOutputDevice
+{
+    Server,
+    Screen,
+    VR,
+    Camera
+}
+
+/// <summary>
+/// Platform types.
+/// </summary>
+public enum Platform
+{
+    Windows,
+    Linux,
+    Android,
+    Other
+}
+
+/// <summary>
 /// Represents a user in the world.
-/// 
 /// </summary>
 public class User : ISyncObject, IWorldElement, IDisposable
 {
@@ -15,15 +36,29 @@ public class User : ISyncObject, IWorldElement, IDisposable
     private List<ISyncMember> _syncMembers;
 
     // Sync members - auto-discovered
-    public readonly Lumora.Core.Networking.Sync.Sync<string> UserName = new();
-    public readonly Lumora.Core.Networking.Sync.Sync<string> UserID = new();
-    public readonly Lumora.Core.Networking.Sync.Sync<ulong> AllocationIDStart = new();
-    public readonly Lumora.Core.Networking.Sync.Sync<ulong> AllocationIDEnd = new();
-    public readonly Lumora.Core.Networking.Sync.Sync<int> Ping = new();
-    public readonly Lumora.Core.Networking.Sync.Sync<bool> IsPresent = new();
-    public readonly Lumora.Core.Networking.Sync.Sync<bool> IsSilenced = new();
+    public readonly Sync<string> UserName = new();
+    public readonly Sync<string> UserID = new();
+    public readonly Sync<string> MachineID = new();
+    public readonly Sync<ulong> AllocationIDStart = new();
+    public readonly Sync<ulong> AllocationIDEnd = new();
+    public readonly Sync<byte> AllocationID = new();
+    public readonly Sync<int> Ping = new();
+    public readonly Sync<bool> IsPresent = new();
+    public readonly Sync<bool> IsSilenced = new();
+    public readonly Sync<bool> IsMuted = new();
+    public readonly Sync<bool> VRActive = new();
+    public readonly Sync<bool> PresentInWorld = new();
+    public readonly Sync<bool> PresentInHeadset = new();
+    public readonly Sync<bool> EditMode = new();
+    public readonly Sync<float> FPS = new();
+    public readonly Sync<HeadOutputDevice> HeadDevice = new();
+    public readonly Sync<Platform> UserPlatform = new();
+    public readonly Sync<float> DownloadSpeed = new();
+    public readonly Sync<float> UploadSpeed = new();
+    public readonly Sync<ulong> DownloadedBytes = new();
+    public readonly Sync<ulong> UploadedBytes = new();
 
-    // Network statistics
+    // Network statistics (non-synced)
     public ulong SentBytes { get; set; }
     public ulong ReceivedBytes { get; set; }
     public DateTime LastSyncMessage { get; set; }

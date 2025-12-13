@@ -93,6 +93,9 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
             // === 6. BUILD SIMPLE AVATAR ===
             // Just head and hands for tracking test
             BuildSimpleAvatar(headSlot, leftHandSlot, rightHandSlot);
+
+            // === 7. CREATE NAMEPLATE ===
+            CreateNameplate(headSlot, user);
         }
         catch (Exception ex)
         {
@@ -139,6 +142,22 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
         var mesh = slot.AttachComponent<Lumora.Core.Components.Meshes.BoxMesh>();
         mesh.Size.Value = size;
         renderer.Mesh.Value = mesh;
+    }
+
+    /// <summary>
+    /// Create a nameplate above the user's head.
+    /// </summary>
+    private void CreateNameplate(Slot headSlot, User user)
+    {
+        // Create nameplate slot as child of head slot
+        var nameplateSlot = headSlot.AddSlot("Nameplate");
+        nameplateSlot.LocalPosition.Value = new float3(0, 0.25f, 0); // Above head
+
+        // Attach nameplate component
+        var nameplate = nameplateSlot.AttachComponent<Nameplate>();
+        nameplate.Initialize(user);
+
+        AquaLogger.Log($"SimpleUserSpawn: Created nameplate for '{user.UserName.Value}'");
     }
 
     // Unused interface methods

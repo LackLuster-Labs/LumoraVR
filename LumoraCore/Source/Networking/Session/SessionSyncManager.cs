@@ -264,16 +264,13 @@ public class SessionSyncManager : IDisposable
         var controlMessagesToProcess = new List<ControlMessage>();
         ulong lastDeltaSyncTime = 0;
 
-        // Lock data model for sync thread
-        World.HookManager?.DataModelLock(Thread.CurrentThread);
-
         _syncThreadInitEvent.Set();
 
         while (_running && !_isDisposed)
         {
             try
             {
-                // Stage 1: Wait for world update or messages
+                // Stage 1: Wait for world update or messages (without holding lock)
                 DEBUG_SyncLoopStage = SyncLoopStage.WaitingForSyncThreadEvent;
 
                 if (_messagesToProcess.IsEmpty)
@@ -283,8 +280,13 @@ public class SessionSyncManager : IDisposable
 
                 if (_isDisposed) break;
 
-                // Stage 2: Process incoming messages
-                DEBUG_SyncLoopStage = SyncLoopStage.RunningMessageProcessing;
+                // Acquire DataModel lock for sync operations
+                World.HookManager?.DataModelLock(Thread.CurrentThread);
+
+                try
+                {
+                    // Stage 2: Process incoming messages
+                    DEBUG_SyncLoopStage = SyncLoopStage.RunningMessageProcessing;
 
                 while (_messagesToProcess.TryDequeue(out var message))
                 {
@@ -414,19 +416,25 @@ public class SessionSyncManager : IDisposable
                     EnqueueForTransmission(startDeltaMessage);
                 }
 
-                DEBUG_SyncLoopStage = SyncLoopStage.Finished;
-                if (LastGeneratedDeltaChanges > 0)
+                    DEBUG_SyncLoopStage = SyncLoopStage.Finished;
+                }
+                finally
                 {
-                    AquaLogger.Debug($"SyncLoop: DeltaChanges={LastGeneratedDeltaChanges}");
+                    // Release DataModel lock to allow main thread updates
+                    World.HookManager?.DataModelUnlock();
                 }
             }
             catch (Exception ex)
             {
                 AquaLogger.Error($"SyncLoop: Exception: {ex.Message}\n{ex.StackTrace}");
+                // Make sure we release lock on error too
+                if (World.HookManager?.Lock == HookManager.LockOwner.DataModel)
+                {
+                    World.HookManager?.DataModelUnlock();
+                }
             }
         }
 
-        World.HookManager?.DataModelUnlock();
         AquaLogger.Log("SyncLoop stopped");
     }
 

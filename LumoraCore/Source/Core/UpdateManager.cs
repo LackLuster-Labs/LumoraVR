@@ -19,6 +19,7 @@ public class UpdateManager
     private Queue<IUpdatable> _destructionQueue = new Queue<IUpdatable>();
     private SortedDictionary<int, Queue<IUpdatable>> _changeBuckets = new SortedDictionary<int, Queue<IUpdatable>>();
     private int _changeUpdateIndex = 0;
+    private Dictionary<IInitializable, List<IInitializable>> _initializableChildren = new Dictionary<IInitializable, List<IInitializable>>();
 
     // Currently updating component (for debugging)
     public IUpdatable CurrentlyUpdating { get; private set; }
@@ -294,5 +295,52 @@ public class UpdateManager
         _startupQueue.Clear();
         _destructionQueue.Clear();
         _changeBuckets.Clear();
+        _initializableChildren.Clear();
+    }
+
+    /// <summary>
+    /// Track a child initializable so its init phase can be ended when the parent finishes.
+    /// </summary>
+    public void AddInitializableChild(IInitializable parent, IInitializable child)
+    {
+        if (parent == null || child == null)
+            return;
+
+        if (!_initializableChildren.TryGetValue(parent, out var list))
+        {
+            list = new List<IInitializable>();
+            _initializableChildren[parent] = list;
+        }
+
+        list.Add(child);
+    }
+
+    /// <summary>
+    /// End initialization phase on all tracked children of the given parent.
+    /// </summary>
+    public void EndInitPhaseInChildren(IInitializable parent)
+    {
+        if (parent == null)
+            return;
+
+        if (_initializableChildren.TryGetValue(parent, out var children))
+        {
+            foreach (var child in children)
+            {
+                try
+                {
+                    if (child.IsInInitPhase)
+                    {
+                        child.EndInitPhase();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logging.Logger.Error($"UpdateManager: Error ending init phase for {child}: {ex.Message}");
+                }
+            }
+
+            _initializableChildren.Remove(parent);
+        }
     }
 }

@@ -66,6 +66,96 @@ public class World
 		OnWorldDestroy
 	}
 
+	/// <summary>
+	/// World statistics and metrics.
+	/// </summary>
+	public class WorldMetrics
+	{
+		/// <summary>Total slots in this world.</summary>
+		public int SlotCount { get; internal set; }
+
+		/// <summary>Total components in this world.</summary>
+		public int ComponentCount { get; internal set; }
+
+		/// <summary>Total sync elements (networked).</summary>
+		public int SyncElementCount { get; internal set; }
+
+		/// <summary>Total RefIDs allocated.</summary>
+		public long RefIDsAllocated { get; internal set; }
+
+		/// <summary>Network messages sent.</summary>
+		public long MessagesSent { get; internal set; }
+
+		/// <summary>Network messages received.</summary>
+		public long MessagesReceived { get; internal set; }
+
+		/// <summary>Total bytes sent.</summary>
+		public long BytesSent { get; internal set; }
+
+		/// <summary>Total bytes received.</summary>
+		public long BytesReceived { get; internal set; }
+
+		/// <summary>Updates processed.</summary>
+		public long UpdatesProcessed { get; internal set; }
+
+		/// <summary>Average update time in ms.</summary>
+		public double AverageUpdateTimeMs { get; internal set; }
+
+		/// <summary>Peak update time in ms.</summary>
+		public double PeakUpdateTimeMs { get; internal set; }
+
+		/// <summary>Render time in ms (from engine).</summary>
+		public double RenderTimeMs { get; set; }
+
+		/// <summary>Physics time in ms.</summary>
+		public double PhysicsTimeMs { get; set; }
+
+		/// <summary>Video memory usage in bytes.</summary>
+		public long VideoMemoryBytes { get; set; }
+
+		/// <summary>Total Godot objects.</summary>
+		public int GodotObjectCount { get; set; }
+
+		/// <summary>Total Godot nodes.</summary>
+		public int GodotNodeCount { get; set; }
+
+		public override string ToString()
+		{
+			return $"Slots: {SlotCount}, Components: {ComponentCount}, Users: N/A, " +
+			       $"Messages: {MessagesSent}/{MessagesReceived}, Updates: {UpdatesProcessed}";
+		}
+	}
+
+	/// <summary>
+	/// World configuration settings.
+	/// </summary>
+	public class WorldConfiguration
+	{
+		/// <summary>Maximum users allowed in this world.</summary>
+		public int MaxUsers { get; set; } = 32;
+
+		/// <summary>Whether to allow new users to join.</summary>
+		public bool AllowJoin { get; set; } = true;
+
+		/// <summary>Whether the world is publicly visible.</summary>
+		public bool IsPublic { get; set; } = false;
+
+		/// <summary>World description.</summary>
+		public string Description { get; set; } = "";
+
+		/// <summary>World tags for discovery.</summary>
+		public List<string> Tags { get; } = new List<string>();
+
+		/// <summary>Whether to persist world state.</summary>
+		public bool EnablePersistence { get; set; } = false;
+
+		/// <summary>Auto-save interval in seconds (0 = disabled).</summary>
+		public float AutoSaveInterval { get; set; } = 0;
+
+		/// <summary>Maximum world size in MB.</summary>
+		public int MaxWorldSizeMB { get; set; } = 512;
+	}
+
 	private readonly HashSet<IWorldElement> _dirtyElements = new();
 	private readonly Dictionary<string, List<Slot>> _slotsByTag = new();
 	private readonly List<Slot> _rootSlots = new();
@@ -83,6 +173,8 @@ public class World
 	private UpdateManager _updateManager;
 	private Queue<Action> _synchronousActions = new Queue<Action>();
 	private object _syncLock = new object();
+	private readonly WorldMetrics _metrics = new WorldMetrics();
+	private readonly WorldConfiguration _configuration = new WorldConfiguration();
 
 	// Static global hook type registry (shared across all worlds)
 	private static HookTypeRegistry _staticHookTypes = new HookTypeRegistry();
@@ -266,6 +358,44 @@ public class World
 	}
 
 	/// <summary>
+	/// World statistics and metrics.
+	/// </summary>
+	public WorldMetrics Metrics => _metrics;
+
+	/// <summary>
+	/// World configuration settings.
+	/// </summary>
+	public WorldConfiguration Configuration => _configuration;
+
+	/// <summary>
+	/// Get a diagnostic summary of this world.
+	/// </summary>
+	public string GetDiagnostics()
+	{
+		var sb = new System.Text.StringBuilder();
+		sb.AppendLine($"World: {Name}");
+		sb.AppendLine($"State: {State}");
+		sb.AppendLine($"SessionID: {SessionID?.Value ?? "N/A"}");
+		sb.AppendLine($"IsAuthority: {IsAuthority}");
+		sb.AppendLine($"Users: {UserCount}");
+		sb.AppendLine($"TotalTime: {TotalTime:F2}s");
+		sb.AppendLine($"SyncTick: {SyncTick}");
+		sb.AppendLine($"StateVersion: {StateVersion}");
+		sb.AppendLine($"Metrics: {_metrics}");
+		return sb.ToString();
+	}
+
+	/// <summary>
+	/// Update world metrics (call periodically).
+	/// </summary>
+	internal void UpdateMetrics()
+	{
+		_metrics.SlotCount = RootSlot?.GetDescendants(true).Count() ?? 0;
+		_metrics.ComponentCount = RootSlot?.GetDescendants(true).Sum(s => s.ComponentCount) ?? 0;
+		_metrics.RefIDsAllocated = ReferenceController?.ObjectCount ?? 0;
+	}
+
+	/// <summary>
 	/// Event triggered when a Slot is added to the World.
 	/// </summary>
 	public event Action<Slot> OnSlotAdded;
@@ -446,6 +576,7 @@ public class World
 		if (slot == null) return;
 
 		ReferenceController?.RegisterObject(slot);
+		Metrics.SlotCount++;
 
 		if (!string.IsNullOrEmpty(slot.Tag.Value))
 		{
@@ -473,6 +604,7 @@ public class World
 		if (slot == null) return;
 
 		ReferenceController?.UnregisterObject(slot.ReferenceID);
+		Metrics.SlotCount--;
 
 		if (!string.IsNullOrEmpty(slot.Tag.Value))
 		{
@@ -493,6 +625,7 @@ public class World
 	{
 		if (component == null) return;
 		ReferenceController?.RegisterObject(component);
+		Metrics.ComponentCount++;
 	}
 
 	/// <summary>
@@ -502,6 +635,7 @@ public class World
 	{
 		if (component == null) return;
 		ReferenceController?.UnregisterObject(component.ReferenceID);
+		Metrics.ComponentCount--;
 	}
 
 	/// <summary>
@@ -553,6 +687,14 @@ public class World
 	public IWorldElement FindElement(ulong refID)
 	{
 		return FindElement(new RefID(refID));
+	}
+
+	/// <summary>
+	/// Try to retrieve a trashed object for the given tick and ID (used during confirmations).
+	/// </summary>
+	public IWorldElement TryRetrieveFromTrash(ulong tick, RefID id)
+	{
+		return ReferenceController?.TryRetrieveFromTrash(tick, id);
 	}
 
 	/// <summary>
@@ -709,11 +851,9 @@ public class World
 
 			_refIDAllocator.Reset();
 
-			// Host doesn't need to wait for join grant, go straight to running
-			if (_state == WorldState.InitializingNetwork)
-			{
-				_state = WorldState.Running;
-			}
+			// NOTE: State remains InitializingNetwork here!
+			// The caller (StartSession factory) will set Running AFTER init callback completes.
+			// This allows the init callback to modify the world before the DataModel lock check kicks in.
 
 			AquaLogger.Log($"Started session network on port {port}");
 		}
@@ -738,15 +878,39 @@ public class World
 
 		hostUser.UserName.Value = resolvedName;
 		hostUser.UserID.Value = userRefId.ToString();
+		hostUser.MachineID.Value = System.Environment.MachineName;
 		hostUser.AllocationIDStart.Value = rangeStart;
 		hostUser.AllocationIDEnd.Value = rangeEnd;
 		hostUser.IsPresent.Value = true;
+		hostUser.PresentInWorld.Value = true;
 		hostUser.IsSilenced.Value = false;
+
+		// Set head device type based on VR status
+		var inputInterface = Engine.Current?.InputInterface;
+		hostUser.HeadDevice.Value = inputInterface?.CurrentHeadOutputDevice ?? HeadOutputDevice.Screen;
+		hostUser.VRActive.Value = inputInterface?.IsVRActive ?? false;
+
+		// Set platform
+		hostUser.UserPlatform.Value = GetCurrentPlatform();
 
 		SetLocalUser(hostUser);
 		AddUser(hostUser); // Add user to world and trigger OnUserJoined
 		AquaLogger.Log($"Created host user '{resolvedName}' with RefID {userRefId}");
 		return hostUser;
+	}
+
+	/// <summary>
+	/// Get the current platform type.
+	/// </summary>
+	private static Platform GetCurrentPlatform()
+	{
+		if (OperatingSystem.IsWindows())
+			return Platform.Windows;
+		if (OperatingSystem.IsLinux())
+			return Platform.Linux;
+		if (OperatingSystem.IsAndroid())
+			return Platform.Android;
+		return Platform.Other;
 	}
 
 	/// <summary>
@@ -803,6 +967,34 @@ public class World
 		{
 			_synchronousActions.Enqueue(action);
 		}
+	}
+
+	/// <summary>
+	/// Queue action to run after a number of update cycles.
+	/// </summary>
+	/// <param name="updateCount">Number of updates to wait</param>
+	/// <param name="action">Action to execute</param>
+	public void RunInUpdates(int updateCount, Action action)
+	{
+		if (IsDisposed || action == null) return;
+
+		if (updateCount <= 0)
+		{
+			RunSynchronously(action);
+			return;
+		}
+
+		// Wrap to count down updates
+		int remaining = updateCount;
+		void CountdownAction()
+		{
+			remaining--;
+			if (remaining <= 0)
+				action();
+			else
+				RunSynchronously(CountdownAction);
+		}
+		RunSynchronously(CountdownAction);
 	}
 
 	/// <summary>
@@ -874,47 +1066,62 @@ public class World
 	{
 		if (_state != WorldState.Running) return;
 
-		var scaledDelta = delta * TimeScale;
-		TotalTime += scaledDelta;
-		LastDelta = (float)scaledDelta;
-
-		// Stage 1: Process synchronous actions (immediate state changes)
-		ProcessSynchronousActions();
-
-		// Stage 2: Process world events (user joined/left, focus changes)
-		RunWorldEvents();
-
-		// Stage 3: Process input for this world (if focused)
-		if (_focus == WorldFocus.Focused)
+		// Acquire Implementer lock for main thread modifications
+		_hookManager?.ImplementerLock(System.Threading.Thread.CurrentThread);
+		try
 		{
-			ProcessInput((float)scaledDelta);
+			var scaledDelta = delta * TimeScale;
+			TotalTime += scaledDelta;
+			LastDelta = (float)scaledDelta;
+
+			// Stage 1: Process synchronous actions (immediate state changes)
+			ProcessSynchronousActions();
+
+			// Stage 2: Process world events (user joined/left, focus changes)
+			RunWorldEvents();
+
+			// Stage 3: Process input for this world (if focused)
+			if (_focus == WorldFocus.Focused)
+			{
+				ProcessInput((float)scaledDelta);
+			}
+
+			// Stage 4: Update coroutines
+			UpdateCoroutines((float)scaledDelta);
+
+			// Stage 5: Update components (main update)
+			UpdateComponents((float)scaledDelta);
+
+			// Stage 5.5: Sync slot hooks so transforms propagate to the platform scene graph
+			UpdateSlotHooks(RootSlot);
+
+			// Stage 6: Process changed elements
+			ProcessChangedElements();
+
+			// Stage 7: Process destructions
+			ProcessDestructions();
+
+			// Stage 8: Update hooks (sync with platform layer)
+			_updateManager?.ProcessHookUpdates((float)scaledDelta);
+
+			// Stage 9: Clean up trash bin
+			_trashBin?.Update();
+
+			// Stage 10: Signal sync manager
+			if (_session?.Sync != null)
+			{
+				_session.Sync.SignalWorldUpdateFinished();
+			}
+
+			// Stage 11: Update local user stats (FPS)
+			if (LocalUser != null && delta > 0)
+			{
+				LocalUser.FPS.Value = (float)(1.0 / delta);
+			}
 		}
-
-		// Stage 4: Update coroutines
-		UpdateCoroutines((float)scaledDelta);
-
-		// Stage 5: Update components (main update)
-		UpdateComponents((float)scaledDelta);
-
-		// Stage 5.5: Sync slot hooks so transforms propagate to the platform scene graph
-		UpdateSlotHooks(RootSlot);
-
-		// Stage 6: Process changed elements
-		ProcessChangedElements();
-
-		// Stage 7: Process destructions
-		ProcessDestructions();
-
-		// Stage 8: Update hooks (sync with platform layer)
-		_updateManager?.ProcessHookUpdates((float)scaledDelta);
-
-		// Stage 9: Clean up trash bin
-		_trashBin?.Update();
-
-		// Stage 10: Signal sync manager
-		if (_session?.Sync != null)
+		finally
 		{
-			_session.Sync.SignalWorldUpdateFinished();
+			_hookManager?.ImplementerUnlock();
 		}
 	}
 

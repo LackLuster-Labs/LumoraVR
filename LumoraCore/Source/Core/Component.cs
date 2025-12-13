@@ -1,4 +1,8 @@
 using System;
+using System.IO;
+using System.Linq;
+using System.Reflection;
+using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core;
 
@@ -127,11 +131,24 @@ public abstract class Component : IWorldElement, IUpdatable, IChangeable
     internal void Initialize(Slot slot)
     {
         Slot = slot;
+        var world = Slot?.World;
 
 		// Allocate RefID from World.ReferenceController
-		ReferenceID = Slot?.World?.ReferenceController?.AllocateID() ?? RefID.Null;
+		ReferenceID = world?.ReferenceController?.AllocateID() ?? RefID.Null;
+        // Note: Registration is handled by World.RegisterComponent (called below after IsInitialized = true)
 
+        // Create and initialize Enabled sync field
         Enabled = new Sync<bool>(this, true);
+
+        // Initialize all sync members (including Enabled) with RefIDs
+        if (world != null)
+        {
+            // Initialize the Enabled field we just created
+            Enabled.Initialize(world, this);
+
+            // Discover and initialize any other sync members defined in derived classes
+            SyncMemberDiscovery.DiscoverAndInitializeSyncMembers(this, world, this);
+        }
 
         // Hook up Enabled change handler for OnEnabled/OnDisabled lifecycle
         Enabled.OnChanged += (val) =>
@@ -151,7 +168,7 @@ public abstract class Component : IWorldElement, IUpdatable, IChangeable
         IsInitialized = true;
 
         // Register with World
-        Slot?.World?.RegisterComponent(this);
+        world?.RegisterComponent(this);
 
         // Call OnAttach lifecycle method
         OnAttach();
@@ -162,6 +179,18 @@ public abstract class Component : IWorldElement, IUpdatable, IChangeable
     /// Use this to initialize references and set up the Component.
     /// </summary>
     public virtual void OnAwake() { }
+
+    /// <summary>
+    /// Initialize sync members that were created after Component.Initialize() ran.
+    /// Call this in OnAwake after creating new Sync/SyncRef members.
+    /// </summary>
+    protected void InitializeNewSyncMembers()
+    {
+        if (World == null) return;
+
+        // Re-discover and initialize any sync members that don't have a World yet
+        Networking.Sync.SyncMemberDiscovery.DiscoverAndInitializeSyncMembers(this, World, this);
+    }
 
     /// <summary>
     /// Called after OnAwake, before OnStart.
@@ -361,4 +390,42 @@ public abstract class Component : IWorldElement, IUpdatable, IChangeable
     /// This runs AFTER OnBehaviorUpdate and is used for common updates.
     /// </summary>
     protected virtual void OnCommonUpdate() { }
+
+    // ===== Network Serialization =====
+
+    /// <summary>
+    /// Encode this component's sync members for network transmission.
+    /// </summary>
+    public virtual void Encode(BinaryWriter writer)
+    {
+        var props = GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => typeof(ISyncMember).IsAssignableFrom(p.PropertyType))
+            .ToArray();
+
+        writer.Write(props.Length);
+        foreach (var prop in props)
+        {
+            writer.Write(prop.Name);
+            var syncMember = prop.GetValue(this) as ISyncMember;
+            syncMember?.Encode(writer);
+        }
+    }
+
+    /// <summary>
+    /// Decode this component's sync members from network data.
+    /// </summary>
+    public virtual void Decode(BinaryReader reader)
+    {
+        int count = reader.ReadInt32();
+        for (int i = 0; i < count; i++)
+        {
+            var propName = reader.ReadString();
+            var prop = GetType().GetProperty(propName, BindingFlags.Public | BindingFlags.Instance);
+            if (prop != null)
+            {
+                var syncMember = prop.GetValue(this) as ISyncMember;
+                syncMember?.Decode(reader);
+            }
+        }
+    }
 }

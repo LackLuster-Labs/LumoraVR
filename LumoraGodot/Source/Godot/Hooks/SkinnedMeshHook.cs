@@ -52,12 +52,6 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>
             ApplyMesh();
         }
 
-        // Update materials if changed
-        if (Owner.MaterialsChanged)
-        {
-            ApplyMaterials();
-        }
-
         // Update enabled state
         bool enabled = Owner.Enabled;
         if (_meshInstance.Visible != enabled)

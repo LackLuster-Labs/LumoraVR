@@ -40,20 +40,34 @@ public class HookTypeRegistry
 
     /// <summary>
     /// Get the hook type for a component type.
+    /// Checks exact type first, then walks up the inheritance chain.
     /// Returns null if no hook is registered.
     /// </summary>
     public Type GetHookType(Type componentType)
     {
-        _componentToHook.TryGetValue(componentType, out Type hookType);
-        return hookType;
+        // Check exact type first
+        if (_componentToHook.TryGetValue(componentType, out Type hookType))
+            return hookType;
+
+        // Walk up inheritance chain to find a registered base type
+        var baseType = componentType.BaseType;
+        while (baseType != null && baseType != typeof(object))
+        {
+            if (_componentToHook.TryGetValue(baseType, out hookType))
+                return hookType;
+            baseType = baseType.BaseType;
+        }
+
+        return null;
     }
 
     /// <summary>
     /// Check if a hook is registered for a component type.
+    /// Checks exact type and base types.
     /// </summary>
     public bool HasHook(Type componentType)
     {
-        return _componentToHook.ContainsKey(componentType);
+        return GetHookType(componentType) != null;
     }
 
     /// <summary>

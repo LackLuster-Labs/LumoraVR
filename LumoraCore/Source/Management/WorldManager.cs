@@ -26,6 +26,7 @@ public class WorldManager : IDisposable
     private readonly object _worldsLock = new object();
 
     private World _focusedWorld;
+    private World _userspaceWorld;
     private World _setWorldFocus; // Queued focus change
     private bool _initialized = false;
     private Engine _engine;
@@ -42,6 +43,23 @@ public class WorldManager : IDisposable
     /// Currently focused world (main world user is interacting with).
     /// </summary>
     public World FocusedWorld => _focusedWorld;
+
+    /// <summary>
+    /// The userspace world (always present, contains UI overlays and settings).
+    /// </summary>
+    public World UserspaceWorld
+    {
+        get => _userspaceWorld;
+        set
+        {
+            _userspaceWorld = value;
+            if (_userspaceWorld != null)
+            {
+                // Userspace is always a private overlay
+                PrivateOverlayWorld(_userspaceWorld);
+            }
+        }
+    }
 
     /// <summary>
     /// Number of worlds currently managed.
@@ -510,7 +528,6 @@ public class WorldManager : IDisposable
             }
             catch (Exception ex)
             {
-                // Include stack trace so we can pinpoint UI/layout failures during development.
                 LumoraLogger.Error($"WorldManager: Error updating world '{world.WorldName.Value}': {ex}");
             }
         }

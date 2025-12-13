@@ -9,8 +9,8 @@ namespace Lumora.Core.Templates
     public static class Userspace
     {
         /// <summary>
-        /// Create and setup the userspace world.
-        /// This is the default user home world.
+        /// Setup the userspace world for the engine.
+        /// Userspace is a private overlay world for UI and settings.
         /// </summary>
         public static World SetupUserspace(Engine engine)
         {
@@ -29,6 +29,9 @@ namespace Lumora.Core.Templates
 
             // Set as private overlay (not visible to others, always on top)
             engine.WorldManager.PrivateOverlayWorld(world);
+
+            // Register with WorldManager as userspace world
+            engine.WorldManager.UserspaceWorld = world;
 
             Logger.Log("Userspace: Userspace setup complete");
             return world;

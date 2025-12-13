@@ -9,7 +9,7 @@ namespace Lumora.Core.Networking.Sync;
 /// <summary>
 /// Base class for all synchronizable elements.
 /// </summary>
-public abstract class SyncElement : IWorldElement, IDisposable
+public abstract class SyncElement : IWorldElement, IDisposable, IInitializable, ISyncMember
 {
     /// <summary>
     /// Flags stored as bits for fast checks.
@@ -23,6 +23,54 @@ public abstract class SyncElement : IWorldElement, IDisposable
 
     protected World _world;
     protected RefID _referenceID;
+
+    // ISyncMember fields
+    private int _memberIndex;
+    private string? _memberName;
+    private ulong _version;
+
+    /// <summary>
+    /// Parent element that owns this sync element.
+    /// </summary>
+    protected IWorldElement? _parent;
+
+    /// <summary>
+    /// Parent element that owns this sync element.
+    /// </summary>
+    public IWorldElement? Parent
+    {
+        get => _parent;
+        protected set => _parent = value;
+    }
+
+    protected SyncElement()
+    {
+        IsDrivable = true;
+        IsInInitPhase = true;
+    }
+
+    /// <summary>
+    /// Initialize this sync element with the world and parent.
+    /// Allocates RefID and registers with ReferenceController.
+    /// </summary>
+    public virtual void Initialize(World world, IWorldElement parent)
+    {
+        if (world == null)
+            throw new ArgumentNullException(nameof(world));
+
+        Parent = parent;
+        IsInInitPhase = true;
+
+        // Allocate RefID before setting World
+        ReferenceID = world.ReferenceController.AllocateID();
+        if (ReferenceID.IsLocalID)
+            IsLocalElement = true;
+
+        World = world;
+        world.ReferenceController.RegisterObject(this);
+
+        WasChanged = true;
+    }
 
     protected enum InternalFlags
     {
@@ -70,6 +118,20 @@ public abstract class SyncElement : IWorldElement, IDisposable
     /// </summary>
     public ulong RefIdNumeric => (ulong)ReferenceID;
 
+    /// <summary>
+    /// Internal helper for specialized initializers to set world and reference.
+    /// Avoids protected setter access limitations on derived instance creation.
+    /// </summary>
+    internal void SetWorldAndReference(World world, RefID id)
+    {
+        ReferenceID = id;
+        World = world;
+        if (ReferenceID.IsLocalID)
+        {
+            MarkLocalElement();
+        }
+    }
+
     protected bool GetFlag(int flag) => (_flags & (1 << flag)) != 0;
 
     protected void SetFlag(int flag, bool value)
@@ -101,7 +163,7 @@ public abstract class SyncElement : IWorldElement, IDisposable
     /// Whether this element is currently driven via link.
     /// Override in derived classes that expose ActiveLink.
     /// </summary>
-    protected virtual bool IsDriven => ActiveLink != null && ActiveLink.IsDriving;
+    protected virtual bool IsDriven => IsDrivable && ActiveLink != null && ActiveLink.IsDriving;
 
     protected virtual ILinkRef ActiveLink => null;
 
@@ -111,6 +173,8 @@ public abstract class SyncElement : IWorldElement, IDisposable
     /// Default hierarchy info used in messages.
     /// </summary>
     public virtual string ParentHierarchyToString() => Name;
+
+    public bool IsBlockedByDrive => IsDriven && ActiveLink != null && ActiveLink.WasLinkGranted && !ActiveLink.IsModificationAllowed;
 
     protected void BeginHook()
     {
@@ -140,6 +204,29 @@ public abstract class SyncElement : IWorldElement, IDisposable
         ModificationBlocked = false;
     }
 
+    public void EndInitPhase()
+    {
+        if (!IsInInitPhase)
+            throw new InvalidOperationException("Initialization phase already ended");
+
+        if (HasInitializableChildren)
+        {
+            World?.UpdateManager?.EndInitPhaseInChildren(this);
+            HasInitializableChildren = false;
+        }
+
+        IsInInitPhase = false;
+    }
+
+    protected void RegisterNewInitializable(IInitializable initializable)
+    {
+        if (initializable == null || World == null)
+            return;
+
+        HasInitializableChildren = true;
+        World.UpdateManager?.AddInitializableChild(this, initializable);
+    }
+
     protected bool BeginModification(bool throwOnError = true)
     {
         if (ModificationBlocked)
@@ -159,8 +246,7 @@ public abstract class SyncElement : IWorldElement, IDisposable
 
             World?.HookManager?.ThreadCheck();
 
-            if (ActiveLink != null && ActiveLink.WasLinkGranted && !IsLoading && !IsWithinHookCallback &&
-                !IsInInitPhase && !ActiveLink.IsModificationAllowed)
+            if (IsBlockedByDrive && !IsLoading && !IsWithinHookCallback && !IsInInitPhase)
             {
                 var msg = $"Element {Name} is driven and cannot be modified directly";
                 if (throwOnError) throw new InvalidOperationException(msg);
@@ -189,15 +275,21 @@ public abstract class SyncElement : IWorldElement, IDisposable
     /// </summary>
     public void InvalidateSyncElement()
     {
-        if (IsLocalElement || IsDisposed || IsSyncDirty)
+        if (IsLocalElement || IsDisposed || IsSyncDirty || !GenerateSyncData)
             return;
 
         if (World?.SyncController == null)
             return;
 
+        // Don't sync elements that don't have valid RefIDs yet
+        if (ReferenceID.IsNull)
+        {
+            AquaLogger.Warn($"SyncElement: Skipping sync for element with null RefID [{GetType().Name}] Parent={Parent?.GetType().Name ?? "null"}");
+            return;
+        }
+
         IsSyncDirty = true;
         World.SyncController.AddDirtySyncElement(this);
-        AquaLogger.Debug($"SyncElement: Invalidated {ReferenceID}");
     }
 
     public void MarkNonPersistent()
@@ -260,7 +352,7 @@ public abstract class SyncElement : IWorldElement, IDisposable
 
     #region Validation
 
-    public virtual MessageValidity Validate(BinaryMessageBatch syncMessage, BinaryReader reader, List<ValidationRule> rules)
+    public virtual MessageValidity Validate(BinaryMessageBatch syncMessage, BinaryReader reader, List<ValidationGroup.Rule> rules)
     {
         return MessageValidity.Valid;
     }
@@ -272,6 +364,109 @@ public abstract class SyncElement : IWorldElement, IDisposable
 
     public virtual void Confirm(ulong confirmSyncTime)
     {
+        IsSyncDirty = false;
+        WasChanged = false;
+        DriveErrorLogged = false;
+    }
+
+    #endregion
+
+    #region ISyncMember Implementation
+
+    /// <summary>
+    /// Index of this sync member in the parent's sync member list.
+    /// </summary>
+    public int MemberIndex
+    {
+        get => _memberIndex;
+        set => _memberIndex = value;
+    }
+
+    /// <summary>
+    /// Name of this sync member (field name).
+    /// </summary>
+    string? ISyncMember.Name
+    {
+        get => _memberName ?? Name;
+        set => _memberName = value;
+    }
+
+    /// <summary>
+    /// Whether this member has changed since last sync.
+    /// Maps to IsSyncDirty for SyncElements.
+    /// </summary>
+    bool ISyncMember.IsDirty
+    {
+        get => IsSyncDirty;
+        set => IsSyncDirty = value;
+    }
+
+    /// <summary>
+    /// Version of this member's value.
+    /// </summary>
+    public ulong Version
+    {
+        get => _version;
+        set => _version = value;
+    }
+
+    /// <summary>
+    /// Encode using delta encoding for ISyncMember compatibility.
+    /// </summary>
+    void ISyncMember.Encode(BinaryWriter writer)
+    {
+        InternalEncodeDelta(writer, null!);
+    }
+
+    /// <summary>
+    /// Decode using delta decoding for ISyncMember compatibility.
+    /// </summary>
+    void ISyncMember.Decode(BinaryReader reader)
+    {
+        InternalDecodeDelta(reader, null!);
+    }
+
+    /// <summary>
+    /// Get the current value as object.
+    /// Override in derived classes.
+    /// </summary>
+    public virtual object? GetValueAsObject() => null;
+
+    #endregion
+
+    #region Trash Support
+
+    /// <summary>
+    /// Move this element to trash for potential restoration.
+    /// Used when deleting elements that may need to be restored if authority rejects.
+    /// </summary>
+    public void MoveToTrash(ulong tick)
+    {
+        World?.ReferenceController?.MoveToTrash(this, tick);
+    }
+
+    /// <summary>
+    /// Restore this element from trash after deletion was rejected.
+    /// </summary>
+    public static bool RestoreFromTrash(World world, RefID id)
+    {
+        return world?.ReferenceController?.RestoreFromTrash(id) ?? false;
+    }
+
+    /// <summary>
+    /// Try to retrieve an element from trash.
+    /// </summary>
+    public static IWorldElement TryRetrieveFromTrash(World world, ulong tick, RefID id)
+    {
+        return world?.ReferenceController?.TryRetrieveFromTrash(tick, id);
+    }
+
+    /// <summary>
+    /// Permanently delete this element from trash.
+    /// </summary>
+    public static void DeleteFromTrash(World world, RefID id)
+    {
+        world?.ReferenceController?.DeleteFromTrash(id);
     }
 
     #endregion
@@ -280,7 +475,11 @@ public abstract class SyncElement : IWorldElement, IDisposable
 
     public virtual void Dispose()
     {
+        // Unregister from ReferenceController
+        World?.ReferenceController?.UnregisterObject(this);
+
         IsDisposed = true;
+        _parent = null;
         World = null;
     }
 
@@ -296,12 +495,6 @@ public enum MessageValidity
 {
     Valid,
     Invalid,
-    Conflict
-}
-
-public class ValidationRule
-{
-    public ulong OtherMessage { get; set; }
-    public bool MustExist { get; set; }
-    public Func<BinaryReader, bool> CustomValidation { get; set; }
+    Conflict,
+    Ignore
 }

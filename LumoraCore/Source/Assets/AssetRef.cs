@@ -88,15 +88,11 @@ public class AssetRef<A> : Sync<string>, IAssetRef where A : Asset
     {
         _wasChanged = true;
 
-        // Mark owner as dirty for network sync
-        if (Owner != null && Owner.World != null)
-        {
-            Owner.World.MarkElementDirty(Owner);
-        }
+        // Mark as dirty for network sync via SyncElement
+        InvalidateSyncElement();
 
-        // Trigger base OnChanged event (inherited from Sync<string>)
-        // This notifies subscribers that the asset reference changed
-        Value = Value; // Force OnChanged trigger by setting to self
+        // Force change notification
+        ForceSet(Value);
     }
 
     // ===== CLEANUP =====

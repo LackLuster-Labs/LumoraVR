@@ -33,7 +33,7 @@ public class AvatarPoseNode : Component, IAvatarObject, IInputUpdateReceiver
     /// <summary>
     /// Body nodes that cannot be equipped simultaneously.
     /// </summary>
-    public SyncList<BodyNode> MutuallyExclusiveNodes_ { get; private set; }
+    public SyncFieldList<BodyNode> MutuallyExclusiveNodes_ { get; private set; }
 
     /// <summary>
     /// Output: Whether tracking is currently active.
@@ -93,7 +93,7 @@ public class AvatarPoseNode : Component, IAvatarObject, IInputUpdateReceiver
         Node = new Sync<BodyNode>(this, BodyNode.NONE);
         EquipOrderPriority_ = new Sync<int>(this, 0);
         RunAfterInputUpdate = new Sync<bool>(this, false);
-        MutuallyExclusiveNodes_ = new SyncList<BodyNode>(this);
+        MutuallyExclusiveNodes_ = new SyncFieldList<BodyNode>();
         IsTracking = new Sync<bool>(this, false);
         SourceIsTracking = new Sync<bool>(this, false);
         SourceIsActive = new Sync<bool>(this, false);

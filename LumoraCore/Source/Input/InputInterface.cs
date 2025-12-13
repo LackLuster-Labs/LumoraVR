@@ -68,6 +68,24 @@ public class InputInterface : IDisposable
 
     public int InputDeviceCount => _inputDevices.Count;
 
+    /// <summary>
+    /// Check if any VR driver is active.
+    /// </summary>
+    public bool IsVRActive => _vrDrivers.Any(d => d.IsVRActive);
+
+    /// <summary>
+    /// Get the current head output device type based on VR status.
+    /// </summary>
+    public HeadOutputDevice CurrentHeadOutputDevice
+    {
+        get
+        {
+            if (_vrDrivers.Any(d => d.IsVRActive))
+                return HeadOutputDevice.VR;
+            return HeadOutputDevice.Screen;  // Desktop mode
+        }
+    }
+
     public InputInterface()
     {
     }

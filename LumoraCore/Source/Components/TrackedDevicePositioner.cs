@@ -323,9 +323,25 @@ public class TrackedDevicePositioner : Component, IInputUpdateReceiver
         pos = ClampPosition(pos);
         rot = FilterRotation(rot);
 
-        // Update slot transform
-        Slot.LocalPosition.Value = pos;
-        Slot.LocalRotation.Value = rot;
+        // Update slot transform only if change is significant (avoid syncing VR tracking jitter)
+        const float POS_THRESHOLD_SQ = 0.0001f * 0.0001f; // 0.1mm squared
+        const float ROT_THRESHOLD = 0.0001f;
+
+        var currentPos = Slot.LocalPosition.Value;
+        var currentRot = Slot.LocalRotation.Value;
+
+        float posDeltaSq = (pos - currentPos).LengthSquared;
+        float dot = floatQ.Dot(rot, currentRot);
+        float rotDelta = 1.0f - (dot < 0 ? -dot : dot);
+
+        if (posDeltaSq > POS_THRESHOLD_SQ)
+        {
+            Slot.LocalPosition.Value = pos;
+        }
+        if (rotDelta > ROT_THRESHOLD)
+        {
+            Slot.LocalRotation.Value = rot;
+        }
 
         // Update tracking state
         IsTracking.Value = tracking;

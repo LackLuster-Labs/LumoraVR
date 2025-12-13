@@ -3,7 +3,6 @@ using Lumora.Core;
 using Lumora.Core.Math;
 using Aquamarine.Source.Godot.Extensions;
 using Aquamarine.Godot.Hooks;
-using Aquamarine.Source.Godot.Assets;
 
 namespace Aquamarine.Godot.Helpers;
 
@@ -73,16 +72,4 @@ public static class GodotHelper
     //     var hook = mesh.Hook as MeshHook;
     //     return hook?.GodotMesh;
     // }
-
-    /// <summary>
-    /// Get Godot Material from LumoraCore IMaterial.
-    /// </summary>
-    public static Material GetGodot(this Lumora.Core.Assets.Material material)
-    {
-        if (material == null)
-            return null;
-
-        var hook = material.Hook as MaterialHook;
-        return hook?.GetGodotMaterial();
-    }
 }

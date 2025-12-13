@@ -26,7 +26,7 @@ public class SkeletonBuilder : ImplementableComponent
     /// List of bone names in skeleton order.
     /// Must match the order expected by mesh bone weights.
     /// </summary>
-    public SyncList<string> BoneNames { get; private set; }
+    public SyncFieldList<string> BoneNames { get; private set; }
 
     /// <summary>
     /// List of bone slot references in skeleton order.
@@ -38,7 +38,7 @@ public class SkeletonBuilder : ImplementableComponent
     /// Rest pose transforms for each bone (local space relative to parent bone).
     /// Used to calculate inverse bind pose matrices.
     /// </summary>
-    public SyncList<float4x4> RestPoseTransforms { get; private set; }
+    public SyncFieldList<float4x4> RestPoseTransforms { get; private set; }
 
     /// <summary>
     /// Whether the skeleton has been built and is ready to use.
@@ -59,9 +59,9 @@ public class SkeletonBuilder : ImplementableComponent
         base.OnAwake();
 
         RootBone = new SyncRef<Slot>(this, null);
-        BoneNames = new SyncList<string>(this);
+        BoneNames = new SyncFieldList<string>();
         BoneSlots = new SyncRefList<Slot>(this);
-        RestPoseTransforms = new SyncList<float4x4>(this);
+        RestPoseTransforms = new SyncFieldList<float4x4>();
         IsBuilt = new Sync<bool>(this, false);
 
         RootBone.OnChanged += (field) => BoneHierarchyChanged = true;

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Godot;
 using Lumora.Core;
+using Lumora.Core.Assets;
 using Lumora.Core.Input;
 using Lumora.Core.Components.Meshes;
 using Lumora.Core.Templates;
@@ -85,7 +86,7 @@ public partial class LumoraEngineRunner : Node
     {
         GD.Print("InitializeLoadingScreen: Loading loading screen scene...");
         // Load LoadingScreen scene
-        var loadingScreenScene = GD.Load<PackedScene>("res://Scenes/LoadingScreen.tscn");
+        var loadingScreenScene = GD.Load<PackedScene>(LumAssets.UI.LoadingScreen);
         if (loadingScreenScene != null)
         {
             GD.Print("InitializeLoadingScreen: Scene loaded, instantiating...");
@@ -464,6 +465,9 @@ public partial class LumoraEngineRunner : Node
         // Run engine update loop (world updates, slot hooks sync to Godot)
         _engine?.Update(delta);
 
+        // Update Godot metrics for debug panels
+        UpdateGodotMetrics();
+
         // Update HeadOutput camera positioning
         _headOutput?.UpdatePositioning(_engine);
     }
@@ -518,7 +522,6 @@ public partial class LumoraEngineRunner : Node
 
         // Register mesh hooks (use fully qualified names to avoid ambiguity with Godot types)
         Lumora.Core.World.HookTypes.Register<ProceduralMesh, Aquamarine.Godot.Hooks.MeshHook>();
-        Lumora.Core.World.HookTypes.Register<Lumora.Core.HelioUI.Rendering.HelioUIMesh, Aquamarine.Godot.Hooks.MeshHook>();
         Lumora.Core.World.HookTypes.Register<Lumora.Core.Components.Meshes.BoxMesh, Aquamarine.Godot.Hooks.MeshHook>();
         Lumora.Core.World.HookTypes.Register<Lumora.Core.Components.Meshes.QuadMesh, Aquamarine.Godot.Hooks.MeshHook>();
 
@@ -538,7 +541,48 @@ public partial class LumoraEngineRunner : Node
         Lumora.Core.World.HookTypes.Register<Lumora.Core.Components.SphereCollider, Aquamarine.Godot.Hooks.PhysicsColliderHook>();
         Lumora.Core.World.HookTypes.Register<Lumora.Core.Components.CharacterController, Aquamarine.Godot.Hooks.CharacterControllerHook>();
 
+        // Register GodotUI hooks (native Godot UI rendered to 3D)
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotUICanvas, Aquamarine.Godot.Hooks.GodotUI.GodotUICanvasHook>();
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotPanel, Aquamarine.Godot.Hooks.GodotUI.GodotPanelHook>();
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotLabel, Aquamarine.Godot.Hooks.GodotUI.GodotLabelHook>();
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotButton, Aquamarine.Godot.Hooks.GodotUI.GodotButtonHook>();
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotScrollContainer, Aquamarine.Godot.Hooks.GodotUI.GodotScrollContainerHook>();
+
+        // Register GodotUI scene loading hooks
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotSceneCanvas, Aquamarine.Godot.Hooks.GodotUI.GodotSceneCanvasHook>();
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotControlRef, Aquamarine.Godot.Hooks.GodotUI.GodotControlRefHook>();
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotLabelBinding, Aquamarine.Godot.Hooks.GodotUI.GodotLabelBindingHook>();
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotValueBinding, Aquamarine.Godot.Hooks.GodotUI.GodotValueBindingHook>();
+
+        // Register GodotUIPanel hook - inheritance now works automatically for derived types
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.GodotUI.GodotUIPanel, Aquamarine.Godot.Hooks.GodotUI.GodotUIPanelHook>();
+
+        // Register Nameplate hook for user nameplates
+        Lumora.Core.World.HookTypes.Register<Lumora.Core.Components.Nameplate, Aquamarine.Godot.Hooks.NameplateHook>();
+
         AquaLogger.Log("Hook registration complete");
+    }
+
+    /// <summary>
+    /// Update Godot-specific metrics for debug panels.
+    /// </summary>
+    private void UpdateGodotMetrics()
+    {
+        if (_engine?.WorldManager?.FocusedWorld == null) return;
+
+        var metrics = _engine.WorldManager.FocusedWorld.Metrics;
+        var perfMonitor = Performance.Singleton;
+
+        // Render time from Godot
+        metrics.RenderTimeMs = perfMonitor.GetMonitor(Performance.Monitor.TimeProcess) * 1000.0;
+        metrics.PhysicsTimeMs = perfMonitor.GetMonitor(Performance.Monitor.TimePhysicsProcess) * 1000.0;
+
+        // Memory from Godot
+        metrics.VideoMemoryBytes = (long)perfMonitor.GetMonitor(Performance.Monitor.RenderVideoMemUsed);
+
+        // Object counts
+        metrics.GodotObjectCount = (int)perfMonitor.GetMonitor(Performance.Monitor.ObjectCount);
+        metrics.GodotNodeCount = (int)perfMonitor.GetMonitor(Performance.Monitor.ObjectNodeCount);
     }
 
     /// <summary>

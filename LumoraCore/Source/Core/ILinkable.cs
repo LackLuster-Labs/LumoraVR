@@ -26,22 +26,22 @@ public interface ILinkable : IWorldElement
     /// <summary>
     /// The currently active link reference.
     /// </summary>
-    ILinkRef ActiveLink { get; }
+    ILinkRef? ActiveLink { get; }
 
     /// <summary>
     /// The direct link reference (not inherited from parent).
     /// </summary>
-    ILinkRef DirectLink { get; }
+    ILinkRef? DirectLink { get; }
 
     /// <summary>
     /// The inherited link reference (from parent element).
     /// </summary>
-    ILinkRef InheritedLink { get; }
+    ILinkRef? InheritedLink { get; }
 
     /// <summary>
     /// Children elements that can be linked.
     /// </summary>
-    IEnumerable<ILinkable> LinkableChildren { get; }
+    IEnumerable<ILinkable>? LinkableChildren { get; }
 
     /// <summary>
     /// Establish a direct link to this element.
@@ -76,7 +76,7 @@ public interface ILinkRef : IWorldElement
     /// <summary>
     /// The target element being linked to.
     /// </summary>
-    ILinkable Target { get; }
+    ILinkable? Target { get; }
 
     /// <summary>
     /// Whether the link is currently valid and active.

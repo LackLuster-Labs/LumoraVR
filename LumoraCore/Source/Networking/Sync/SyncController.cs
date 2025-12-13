@@ -95,10 +95,6 @@ public class SyncController : IDisposable
             _collectingDeltaMessages = false;
         }
 
-        if (deltaBatch.DataRecordCount > 0)
-        {
-            Logger.Debug($"SyncController: Collected {deltaBatch.DataRecordCount} dirty elements");
-        }
         return deltaBatch;
     }
 
@@ -204,10 +200,27 @@ public class SyncController : IDisposable
         var dataRecord = message.GetDataRecord(recordIndex);
         var element = World.FindElement(dataRecord.TargetID) as SyncElement;
 
+        if (dataRecord.Validity != MessageValidity.Valid)
+        {
+            return false;
+        }
+
         if (element == null)
         {
-            Logger.Warn($"SyncController: Element not found for decode: {dataRecord.TargetID}");
-            return false;
+            // Try to restore from trash (element was deleted locally but authority still has it)
+            var trashedElement = SyncElement.TryRetrieveFromTrash(World, message.SenderSyncTick, dataRecord.TargetID);
+            if (trashedElement is SyncElement restored)
+            {
+                // Re-register the restored element
+                World.ReferenceController.RegisterObject(restored);
+                element = restored;
+                Logger.Debug($"SyncController: Restored element from trash: {dataRecord.TargetID}");
+            }
+            else
+            {
+                Logger.Warn($"SyncController: Element not found for decode: {dataRecord.TargetID}");
+                return false;
+            }
         }
 
         var reader = message.SeekDataRecord(recordIndex);
@@ -236,7 +249,8 @@ public class SyncController : IDisposable
     /// </summary>
     public void ValidateDeltaMessages(DeltaBatch batch)
     {
-        var rules = new List<ValidationRule>();
+        var rules = new List<ValidationGroup.Rule>();
+        var validationGroups = new List<ValidationGroup>();
 
         for (int i = 0; i < batch.DataRecordCount; i++)
         {
@@ -257,8 +271,86 @@ public class SyncController : IDisposable
                 batch.InvalidateDataRecord(i, validity == MessageValidity.Conflict);
             }
 
-            rules.Clear();
+            if (rules.Count > 0)
+            {
+                // Capture rules for this record
+                var group = new ValidationGroup();
+                group.Set(i, element, new List<ValidationGroup.Rule>(rules));
+                validationGroups.Add(group);
+                rules.Clear();
+            }
         }
+
+        // Build lookup for referenced messages
+        var recordIndexById = new Dictionary<RefID, int>();
+        foreach (var group in validationGroups)
+        {
+            foreach (var rule in group.ValidationRules)
+            {
+                if (!recordIndexById.ContainsKey(rule.OtherMessage))
+                {
+                    recordIndexById[rule.OtherMessage] = batch.FindDataRecordIndex(rule.OtherMessage);
+                }
+            }
+        }
+
+        // Apply cross-record validations and mark conflicts
+        foreach (var group in validationGroups)
+        {
+            bool conflict = batch.GetDataRecord(group.RequestingRecordIndex).Validity == MessageValidity.Conflict;
+            var relatedIndices = new List<int>();
+
+            foreach (var rule in group.ValidationRules)
+            {
+                if (!recordIndexById.TryGetValue(rule.OtherMessage, out var otherIndex))
+                {
+                    // Should not happen, continue
+                    continue;
+                }
+
+                if (otherIndex < 0)
+                {
+                    if (rule.MustExist)
+                    {
+                        conflict = true;
+                    }
+                    continue;
+                }
+
+                relatedIndices.Add(otherIndex);
+                var otherRecord = batch.GetDataRecord(otherIndex);
+                if (otherRecord.Validity == MessageValidity.Conflict)
+                {
+                    conflict = true;
+                }
+
+                if (rule.CustomValidation != null)
+                {
+                    var reader = batch.SeekDataRecord(otherIndex);
+                    if (!rule.CustomValidation(reader))
+                    {
+                        conflict = true;
+                    }
+                }
+            }
+
+            if (!conflict)
+                continue;
+
+            batch.InvalidateDataRecord(group.RequestingRecordIndex, conflict: true);
+            group.RequestingSyncElement?.Invalidate();
+
+            foreach (var otherIndex in relatedIndices)
+            {
+                batch.InvalidateDataRecord(otherIndex, conflict: true);
+                var otherRecord = batch.GetDataRecord(otherIndex);
+                (World.FindElement(otherRecord.TargetID) as SyncElement)?.Invalidate();
+            }
+        }
+
+        // Cleanup
+        validationGroups.Clear();
+        recordIndexById.Clear();
     }
 
 	/// <summary>

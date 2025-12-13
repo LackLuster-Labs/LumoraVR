@@ -222,32 +222,37 @@ public class LocomotionController : Component
         _pitch = System.Math.Clamp(_pitch, -maxPitchRad, maxPitchRad);
     }
 
-    // Simulates head position/rotation in desktop mode
+    private const float POS_THRESHOLD_SQ = 0.0001f * 0.0001f;
+    private const float ROT_THRESHOLD = 0.0001f;
+
     private void UpdateHead()
     {
         if (_userRoot?.HeadSlot == null)
-        {
-            AquaLogger.Warn("[LocomotionController] UpdateHead: HeadSlot is null!");
             return;
-        }
 
-        // If head tracking is available and active, do not override
-        // VRLocomotionModule handles snap turns by modifying _yaw directly
         bool headTracked = _inputInterface?.HeadDevice?.IsTracked == true;
+        if (headTracked)
+            return;
 
-        if (!headTracked)
-        {
-            // Desktop mode: simulate head position and rotation
-            // Set head height from UserHeight (minus eye offset)
-            float userHeight = _inputInterface?.UserHeight ?? InputInterface.DEFAULT_USER_HEIGHT;
-            float headHeight = userHeight - InputInterface.EYE_HEAD_OFFSET;
-            _userRoot.HeadSlot.LocalPosition.Value = new float3(0, headHeight, 0);
+        float userHeight = _inputInterface?.UserHeight ?? InputInterface.DEFAULT_USER_HEIGHT;
+        float headHeight = userHeight - InputInterface.EYE_HEAD_OFFSET;
+        var newHeadPos = new float3(0, headHeight, 0);
 
-            // Apply yaw to body, pitch to head
-            Slot.GlobalRotation = floatQ.FromEuler(new float3(0, _yaw, 0));
-            _userRoot.HeadSlot.LocalRotation.Value = floatQ.FromEuler(new float3(_pitch, 0, 0));
-        }
-        // VR mode: Don't touch - TrackedDevicePositioner handles it
+        var currentHeadPos = _userRoot.HeadSlot.LocalPosition.Value;
+        if ((newHeadPos - currentHeadPos).LengthSquared > POS_THRESHOLD_SQ)
+            _userRoot.HeadSlot.LocalPosition.Value = newHeadPos;
+
+        var newBodyRot = floatQ.FromEuler(new float3(0, _yaw, 0));
+        var currentBodyRot = Slot.GlobalRotation;
+        float bodyDot = floatQ.Dot(newBodyRot, currentBodyRot);
+        if (1.0f - (bodyDot < 0 ? -bodyDot : bodyDot) > ROT_THRESHOLD)
+            Slot.GlobalRotation = newBodyRot;
+
+        var newHeadRot = floatQ.FromEuler(new float3(_pitch, 0, 0));
+        var currentHeadRot = _userRoot.HeadSlot.LocalRotation.Value;
+        float headDot = floatQ.Dot(newHeadRot, currentHeadRot);
+        if (1.0f - (headDot < 0 ? -headDot : headDot) > ROT_THRESHOLD)
+            _userRoot.HeadSlot.LocalRotation.Value = newHeadRot;
     }
 
     /// <summary>

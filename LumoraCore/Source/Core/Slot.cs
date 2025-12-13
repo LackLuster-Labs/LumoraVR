@@ -1,30 +1,29 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
+using System.Reflection;
+using Lumora.Core.Components;
 using Lumora.Core.Math;
+using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core;
 
 /// <summary>
-/// A Slot is a container for Components and other Slots.
-/// Forms a hierarchical structure for managing transforms.
+/// A Slot is the fundamental container for Components and child Slots.
+/// Forms a hierarchical structure for organizing objects in a World.
 /// </summary>
-public class Slot : IImplementable<IHook<Slot>>, IWorldElement
+public class Slot : IImplementable<IHook<Slot>>, IWorldElement, IChangeable
 {
+    #region Fields
+
     private readonly List<Slot> _children = new();
     private readonly List<Component> _components = new();
     private Slot _parent;
     private bool _isDestroyed;
-
-    // Platform-agnostic transform state
-    private float3 _position = float3.Zero;
-    private floatQ _rotation = floatQ.Identity;
-    private float3 _scale = float3.One;
-    private bool _visible = true;
-    private string _name = "Slot";
+    private bool _isRemoved;
 
     // Transform caching with dirty flags
-    // Dirty flags: bit 0=TRS, bit 1=LocalToWorld, bit 2=WorldToLocal, bit 3=GlobalPos, bit 4=GlobalRot, bit 5=GlobalScale
     private int _transformDirty = 0;
     private float4x4 _cachedTRS = float4x4.Identity;
     private float4x4 _cachedLocalToWorld = float4x4.Identity;
@@ -33,93 +32,84 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     private floatQ _cachedGlobalRotation = floatQ.Identity;
     private float3 _cachedGlobalScale = float3.One;
 
-	/// <summary>
-	/// Unique reference ID for network synchronization.
-	/// </summary>
-	public RefID ReferenceID { get; private set; }
+    // Transform cache constants
+    private const int DIRTY_TRS = 1;
+    private const int DIRTY_LOCAL_TO_WORLD = 2;
+    private const int DIRTY_WORLD_TO_LOCAL = 4;
+    private const int DIRTY_GLOBAL_POSITION = 8;
+    private const int DIRTY_GLOBAL_ROTATION = 16;
+    private const int DIRTY_GLOBAL_SCALE = 32;
+    private const int DIRTY_ALL_GLOBAL = DIRTY_LOCAL_TO_WORLD | DIRTY_WORLD_TO_LOCAL |
+                                          DIRTY_GLOBAL_POSITION | DIRTY_GLOBAL_ROTATION | DIRTY_GLOBAL_SCALE;
 
-	public ulong RefIdNumeric => (ulong)ReferenceID;
+    // Scheduled actions
+    private readonly Queue<Action> _scheduledActions = new();
+    private readonly object _scheduleLock = new();
 
-	public bool IsLocalElement => ReferenceID.IsLocalID;
+    #endregion
 
-	public bool IsPersistent => Persistent.Value;
+    #region Events
 
     /// <summary>
-    /// The World this Slot belongs to.
+    /// Event fired when this slot changes.
     /// </summary>
-    public World World { get; private set; }
+    public event Action<IChangeable> Changed;
 
     /// <summary>
-    /// The hook that implements this slot in the engine (Godot Node3D).
+    /// Event fired when a child is added.
     /// </summary>
-    public IHook<Slot> Hook { get; private set; }
+    public event Action<Slot, Slot> OnChildAdded;
 
     /// <summary>
-    /// Explicit interface implementation for non-generic IHook.
+    /// Event fired when a child is removed.
     /// </summary>
-    IHook IImplementable.Hook => Hook;
+    public event Action<Slot, Slot> OnChildRemoved;
 
     /// <summary>
-    /// Explicit interface implementation for IImplementable.Slot (Slot refers to itself).
+    /// Event fired when a component is added.
     /// </summary>
-    Slot IImplementable.Slot => this;
+    public event Action<Slot, Component> OnComponentAdded;
 
     /// <summary>
-    /// Whether this Slot has been destroyed.
+    /// Event fired when a component is removed.
     /// </summary>
-    public bool IsDestroyed => _isDestroyed;
+    public event Action<Slot, Component> OnComponentRemoved;
 
     /// <summary>
-    /// Whether this Slot has been initialized.
+    /// Event fired when parent changes.
     /// </summary>
-    public bool IsInitialized { get; private set; }
+    public event Action<Slot, Slot, Slot> OnParentChanged;
 
     /// <summary>
-    /// The parent Slot in the hierarchy (null if root).
+    /// Event fired when active state changes.
     /// </summary>
-    public Slot Parent
-    {
-        get => _parent;
-        set
-        {
-            if (_parent == value) return;
-
-            _parent?.RemoveChild(this);
-            _parent = value;
-            _parent?.AddChild(this);
-
-            // Invalidate global transforms when parent changes
-            InvalidateGlobalTransforms();
-        }
-    }
+    public event Action<Slot, bool> OnActiveChanged;
 
     /// <summary>
-    /// Read-only list of child Slots.
+    /// Event fired when name changes.
     /// </summary>
-    public IReadOnlyList<Slot> Children => _children.AsReadOnly();
+    public event Action<Slot, string> OnNameChanged;
 
     /// <summary>
-    /// Number of child Slots.
+    /// Event fired when children order is invalidated.
     /// </summary>
-    public int ChildCount => _children.Count;
+    public event Action<Slot> ChildrenOrderInvalidated;
+
+    // Simplified event aliases for UI compatibility
+    public event Action<Slot> ActiveChanged;
+    public event Action<Slot> ParentChanged;
+
+    #endregion
+
+    #region Sync Fields
 
     /// <summary>
-    /// Read-only list of Components attached to this Slot.
+    /// Name of this Slot (synchronized).
     /// </summary>
-    public IReadOnlyList<Component> Components => _components.AsReadOnly();
+    public Sync<string> Name { get; private set; }
 
     /// <summary>
-    /// Number of Components attached to this Slot.
-    /// </summary>
-    public int ComponentCount => _components.Count;
-
-    /// <summary>
-    /// Name of this Slot (synchronized across network).
-    /// </summary>
-    public Sync<string> SlotName { get; private set; }
-
-    /// <summary>
-    /// Whether this Slot is active in the hierarchy.
+    /// Whether this Slot is active locally (synchronized).
     /// </summary>
     public Sync<bool> ActiveSelf { get; private set; }
 
@@ -143,97 +133,339 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     /// </summary>
     public Sync<string> Tag { get; private set; }
 
-    // Transform cache constants
-    private const int DIRTY_TRS = 1;
-    private const int DIRTY_LOCAL_TO_WORLD = 2;
-    private const int DIRTY_WORLD_TO_LOCAL = 4;
-    private const int DIRTY_GLOBAL_POSITION = 8;
-    private const int DIRTY_GLOBAL_ROTATION = 16;
-    private const int DIRTY_GLOBAL_SCALE = 32;
-    private const int DIRTY_ALL_GLOBAL = DIRTY_LOCAL_TO_WORLD | DIRTY_WORLD_TO_LOCAL |
-                                          DIRTY_GLOBAL_POSITION | DIRTY_GLOBAL_ROTATION | DIRTY_GLOBAL_SCALE;
-
     /// <summary>
     /// Whether this Slot and its contents should persist when saved.
     /// </summary>
     public Sync<bool> Persistent { get; private set; }
 
     /// <summary>
-    /// Invalidates the transform cache and propagates to all children.
+    /// Order offset for sorting children.
     /// </summary>
-    private void InvalidateTransformCache()
-    {
-        // Mark TRS as dirty
-        _transformDirty |= DIRTY_TRS;
+    public Sync<long> OrderOffset { get; private set; }
 
-        // Mark all global transforms as dirty
+    /// <summary>
+    /// Alias for Name for backward compatibility.
+    /// </summary>
+    public Sync<string> SlotName => Name;
+
+    #endregion
+
+    #region Properties
+
+    /// <summary>
+    /// Unique reference ID for network synchronization.
+    /// </summary>
+    public RefID ReferenceID { get; private set; }
+
+    /// <summary>
+    /// Numeric alias for RefID.
+    /// </summary>
+    public ulong RefIdNumeric => (ulong)ReferenceID;
+
+    /// <summary>
+    /// Whether this is a local-only element.
+    /// </summary>
+    public bool IsLocalElement => ReferenceID.IsLocalID;
+
+    /// <summary>
+    /// Whether this Slot persists when saved.
+    /// </summary>
+    public bool IsPersistent => Persistent.Value;
+
+    /// <summary>
+    /// The World this Slot belongs to.
+    /// </summary>
+    public World World { get; private set; }
+
+    /// <summary>
+    /// The hook that implements this slot in the engine (e.g., Godot Node3D).
+    /// </summary>
+    public IHook<Slot> Hook { get; private set; }
+
+    /// <summary>
+    /// Explicit interface implementation for non-generic IHook.
+    /// </summary>
+    IHook IImplementable.Hook => Hook;
+
+    /// <summary>
+    /// Slot refers to itself for IImplementable.
+    /// </summary>
+    Slot IImplementable.Slot => this;
+
+    /// <summary>
+    /// Whether this Slot has been destroyed.
+    /// </summary>
+    public bool IsDestroyed => _isDestroyed;
+
+    /// <summary>
+    /// Whether this Slot has been removed from the hierarchy but not destroyed.
+    /// </summary>
+    public bool IsRemoved => _isRemoved;
+
+    /// <summary>
+    /// Whether this Slot has been initialized.
+    /// </summary>
+    public bool IsInitialized { get; private set; }
+
+    /// <summary>
+    /// Read-only list of child Slots.
+    /// </summary>
+    public IReadOnlyList<Slot> Children => _children.AsReadOnly();
+
+    /// <summary>
+    /// Number of child Slots.
+    /// </summary>
+    public int ChildCount => _children.Count;
+
+    /// <summary>
+    /// Read-only list of Components attached to this Slot.
+    /// </summary>
+    public IReadOnlyList<Component> Components => _components.AsReadOnly();
+
+    /// <summary>
+    /// Number of Components attached to this Slot.
+    /// </summary>
+    public int ComponentCount => _components.Count;
+
+    /// <summary>
+    /// Whether this is the root slot (has no parent).
+    /// </summary>
+    public bool IsRootSlot => _parent == null;
+
+    /// <summary>
+    /// Get the root slot of this hierarchy.
+    /// </summary>
+    public Slot Root
+    {
+        get
+        {
+            var current = this;
+            while (current._parent != null)
+                current = current._parent;
+            return current;
+        }
+    }
+
+    /// <summary>
+    /// Depth of this slot in the hierarchy (root = 0).
+    /// </summary>
+    public int Depth
+    {
+        get
+        {
+            int depth = 0;
+            var current = _parent;
+            while (current != null)
+            {
+                depth++;
+                current = current._parent;
+            }
+            return depth;
+        }
+    }
+
+    /// <summary>
+    /// Index of this slot among its siblings.
+    /// </summary>
+    public int SiblingIndex => _parent?._children.IndexOf(this) ?? 0;
+
+    /// <summary>
+    /// Get the object root (first slot with a specific component like UserRoot).
+    /// </summary>
+    public Slot ObjectRoot
+    {
+        get
+        {
+            var current = this;
+            while (current != null)
+            {
+                // Check for common object root markers
+                if (current.GetComponent<ObjectRoot>() != null)
+                    return current;
+                if (current._parent == null)
+                    return current;
+                current = current._parent;
+            }
+            return this;
+        }
+    }
+
+    /// <summary>
+    /// Whether this slot is under the local user's hierarchy.
+    /// </summary>
+    public bool IsUnderLocalUser
+    {
+        get
+        {
+            var current = this;
+            while (current != null)
+            {
+                var userRoot = current.GetComponent<UserRoot>();
+                if (userRoot != null)
+                {
+                    return userRoot.ActiveUser == World?.LocalUser;
+                }
+                current = current._parent;
+            }
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Get the user root if this slot is under one.
+    /// </summary>
+    public UserRoot GetUserRoot()
+    {
+        var current = this;
+        while (current != null)
+        {
+            var userRoot = current.GetComponent<UserRoot>();
+            if (userRoot != null)
+                return userRoot;
+            current = current._parent;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Get the active user if under a user root.
+    /// </summary>
+    public User ActiveUser => GetUserRoot()?.ActiveUser;
+
+    #endregion
+
+    #region Parent Property
+
+    /// <summary>
+    /// The parent Slot in the hierarchy (null if root).
+    /// </summary>
+    public Slot Parent
+    {
+        get => _parent;
+        set => SetParent(value, preserveGlobalTransform: false);
+    }
+
+    /// <summary>
+    /// Set parent with option to preserve global transform.
+    /// </summary>
+    public void SetParent(Slot newParent, bool preserveGlobalTransform = false)
+    {
+        if (_parent == newParent) return;
+        if (newParent != null && newParent.IsDescendantOf(this))
+        {
+            throw new InvalidOperationException("Cannot set a descendant as parent (would create cycle)");
+        }
+
+        var oldParent = _parent;
+        float3 globalPos = float3.Zero;
+        floatQ globalRot = floatQ.Identity;
+        float3 globalScale = float3.One;
+
+        if (preserveGlobalTransform)
+        {
+            globalPos = GlobalPosition;
+            globalRot = GlobalRotation;
+            globalScale = GlobalScale;
+        }
+
+        _parent?.RemoveChildInternal(this);
+        _parent = newParent;
+        _parent?.AddChildInternal(this);
+
         InvalidateGlobalTransforms();
+
+        if (preserveGlobalTransform && newParent != null)
+        {
+            GlobalPosition = globalPos;
+            GlobalRotation = globalRot;
+            GlobalScale = globalScale;
+        }
+
+        OnParentChanged?.Invoke(this, oldParent, newParent);
+        ParentChanged?.Invoke(this);
+        OnChanged();
     }
 
+    #endregion
+
+    #region Active State
+
     /// <summary>
-    /// Invalidates global transform caches (called when local transform or parent changes).
+    /// Whether this Slot is active (considering parent chain).
     /// </summary>
-    private void InvalidateGlobalTransforms()
+    public bool IsActive
     {
-        // If already dirty, no need to propagate
-        if ((_transformDirty & DIRTY_ALL_GLOBAL) == DIRTY_ALL_GLOBAL)
-            return;
-
-        // Mark all global transforms as dirty
-        _transformDirty |= DIRTY_ALL_GLOBAL;
-
-        // Propagate to all children
-        foreach (var child in _children)
+        get
         {
-            child.InvalidateGlobalTransforms();
+            if (!ActiveSelf.Value) return false;
+            return _parent?.IsActive ?? true;
         }
     }
 
     /// <summary>
-    /// Ensures the TRS matrix is valid.
+    /// Check if this slot is active and not destroyed.
     /// </summary>
-    private void EnsureValidTRS()
+    public bool IsActiveAndEnabled => IsActive && !_isDestroyed && !_isRemoved;
+
+    /// <summary>
+    /// Set active state, optionally affecting children.
+    /// </summary>
+    public void SetActive(bool active, bool recursive = false)
     {
-        if ((_transformDirty & DIRTY_TRS) != 0)
+        bool wasActive = ActiveSelf.Value;
+        ActiveSelf.Value = active;
+
+        if (wasActive != active)
         {
-            _cachedTRS = float4x4.TRS(LocalPosition.Value, LocalRotation.Value, LocalScale.Value);
-            _transformDirty &= ~DIRTY_TRS;
+            OnActiveChanged?.Invoke(this, active);
+            ActiveChanged?.Invoke(this);
+        }
+
+        if (recursive)
+        {
+            foreach (var child in _children)
+                child.SetActive(active, true);
         }
     }
 
+    #endregion
+
+    #region Transform Properties
+
     /// <summary>
-    /// Ensures the LocalToWorld matrix is valid.
+    /// Position in local space (convenience accessor).
     /// </summary>
-    private void EnsureValidLocalToWorld()
+    public float3 Position
     {
-        if ((_transformDirty & DIRTY_LOCAL_TO_WORLD) != 0)
-        {
-            if (_parent == null)
-            {
-                EnsureValidTRS();
-                _cachedLocalToWorld = _cachedTRS;
-            }
-            else
-            {
-                _parent.EnsureValidLocalToWorld();
-                EnsureValidTRS();
-                _cachedLocalToWorld = _parent._cachedLocalToWorld * _cachedTRS;
-            }
-            _transformDirty &= ~DIRTY_LOCAL_TO_WORLD;
-        }
+        get => LocalPosition.Value;
+        set => LocalPosition.Value = value;
     }
 
     /// <summary>
-    /// Ensures the WorldToLocal matrix is valid.
+    /// Rotation in local space (convenience accessor).
     /// </summary>
-    private void EnsureValidWorldToLocal()
+    public floatQ Rotation
     {
-        if ((_transformDirty & DIRTY_WORLD_TO_LOCAL) != 0)
-        {
-            EnsureValidLocalToWorld();
-            _cachedWorldToLocal = _cachedLocalToWorld.Inverse;
-            _transformDirty &= ~DIRTY_WORLD_TO_LOCAL;
-        }
+        get => LocalRotation.Value;
+        set => LocalRotation.Value = value;
+    }
+
+    /// <summary>
+    /// Quaternion alias for Rotation.
+    /// </summary>
+    public floatQ Quaternion
+    {
+        get => LocalRotation.Value;
+        set => LocalRotation.Value = value;
+    }
+
+    /// <summary>
+    /// Scale in local space (convenience accessor).
+    /// </summary>
+    public float3 Scale
+    {
+        get => LocalScale.Value;
+        set => LocalScale.Value = value;
     }
 
     /// <summary>
@@ -246,7 +478,6 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
             if ((_transformDirty & DIRTY_GLOBAL_POSITION) != 0)
             {
                 EnsureValidLocalToWorld();
-                // Extract position from the last column of the matrix
                 _cachedGlobalPosition = new float3(_cachedLocalToWorld.c3.x, _cachedLocalToWorld.c3.y, _cachedLocalToWorld.c3.z);
                 _transformDirty &= ~DIRTY_GLOBAL_POSITION;
             }
@@ -257,7 +488,6 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
             if (_parent == null)
             {
                 LocalPosition.Value = value;
-                // Cache the value since we know it's already in global space
                 _cachedGlobalPosition = value;
                 _transformDirty &= ~DIRTY_GLOBAL_POSITION;
                 return;
@@ -268,7 +498,6 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
             var delta = value - _parent.GlobalPosition;
             var unrotated = invParentRot * delta;
 
-            // Avoid division by zero by clamping scale
             float3 safeScale = new float3(
                 parentScale.x == 0 ? 1 : parentScale.x,
                 parentScale.y == 0 ? 1 : parentScale.y,
@@ -281,7 +510,6 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
                 unrotated.z / safeScale.z
             );
 
-            // Cache the global position since we just set it
             if ((_parent._transformDirty & DIRTY_ALL_GLOBAL) == 0)
             {
                 _cachedGlobalPosition = value;
@@ -299,14 +527,9 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
         {
             if ((_transformDirty & DIRTY_GLOBAL_ROTATION) != 0)
             {
-                if (_parent == null)
-                {
-                    _cachedGlobalRotation = LocalRotation.Value;
-                }
-                else
-                {
-                    _cachedGlobalRotation = _parent.GlobalRotation * LocalRotation.Value;
-                }
+                _cachedGlobalRotation = _parent == null
+                    ? LocalRotation.Value
+                    : _parent.GlobalRotation * LocalRotation.Value;
                 _transformDirty &= ~DIRTY_GLOBAL_ROTATION;
             }
             return _cachedGlobalRotation;
@@ -316,15 +539,11 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
             if (_parent == null)
             {
                 LocalRotation.Value = value;
-                // Cache the value since we know it's already in global space
                 _cachedGlobalRotation = value;
                 _transformDirty &= ~DIRTY_GLOBAL_ROTATION;
                 return;
             }
-            var invParentRot = _parent.GlobalRotation.Inverse;
-            LocalRotation.Value = invParentRot * value;
-
-            // Cache the global rotation since we just set it
+            LocalRotation.Value = _parent.GlobalRotation.Inverse * value;
             if ((_parent._transformDirty & DIRTY_GLOBAL_ROTATION) == 0)
             {
                 _cachedGlobalRotation = value;
@@ -334,17 +553,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Scale in local space.
-    /// Convenience accessor for LocalScale.Value.
-    /// </summary>
-    public float3 Scale
-    {
-        get => LocalScale.Value;
-        set => LocalScale.Value = value;
-    }
-
-    /// <summary>
-    /// Scale in global/world space (component-wise multiplied up the hierarchy).
+    /// Scale in global/world space.
     /// </summary>
     public float3 GlobalScale
     {
@@ -366,6 +575,35 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
             }
             return _cachedGlobalScale;
         }
+        set
+        {
+            if (_parent == null)
+            {
+                LocalScale.Value = value;
+                _cachedGlobalScale = value;
+                _transformDirty &= ~DIRTY_GLOBAL_SCALE;
+                return;
+            }
+
+            var parentScale = _parent.GlobalScale;
+            float3 safeParentScale = new float3(
+                parentScale.x == 0 ? 1 : parentScale.x,
+                parentScale.y == 0 ? 1 : parentScale.y,
+                parentScale.z == 0 ? 1 : parentScale.z
+            );
+
+            LocalScale.Value = new float3(
+                value.x / safeParentScale.x,
+                value.y / safeParentScale.y,
+                value.z / safeParentScale.z
+            );
+
+            if ((_parent._transformDirty & DIRTY_GLOBAL_SCALE) == 0)
+            {
+                _cachedGlobalScale = value;
+                _transformDirty &= ~DIRTY_GLOBAL_SCALE;
+            }
+        }
     }
 
     /// <summary>
@@ -381,8 +619,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Full global TRS matrix (parent * local).
-    /// Alias for LocalToWorld for consistency.
+    /// Full global TRS matrix.
     /// </summary>
     public float4x4 GlobalTransform
     {
@@ -418,7 +655,96 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Transform a point from global (world) space to this slot's local space.
+    /// Forward direction in global space.
+    /// </summary>
+    public float3 Forward => GlobalRotation * float3.Forward;
+
+    /// <summary>
+    /// Right direction in global space.
+    /// </summary>
+    public float3 Right => GlobalRotation * float3.Right;
+
+    /// <summary>
+    /// Up direction in global space.
+    /// </summary>
+    public float3 Up => GlobalRotation * float3.Up;
+
+    /// <summary>
+    /// Backward direction in global space.
+    /// </summary>
+    public float3 Backward => GlobalRotation * float3.Backward;
+
+    /// <summary>
+    /// Left direction in global space.
+    /// </summary>
+    public float3 Left => GlobalRotation * float3.Left;
+
+    /// <summary>
+    /// Down direction in global space.
+    /// </summary>
+    public float3 Down => GlobalRotation * float3.Down;
+
+    #endregion
+
+    #region Transform Methods
+
+    private void InvalidateTransformCache()
+    {
+        _transformDirty |= DIRTY_TRS;
+        InvalidateGlobalTransforms();
+    }
+
+    private void InvalidateGlobalTransforms()
+    {
+        if ((_transformDirty & DIRTY_ALL_GLOBAL) == DIRTY_ALL_GLOBAL)
+            return;
+
+        _transformDirty |= DIRTY_ALL_GLOBAL;
+
+        foreach (var child in _children)
+            child.InvalidateGlobalTransforms();
+    }
+
+    private void EnsureValidTRS()
+    {
+        if ((_transformDirty & DIRTY_TRS) != 0)
+        {
+            _cachedTRS = float4x4.TRS(LocalPosition.Value, LocalRotation.Value, LocalScale.Value);
+            _transformDirty &= ~DIRTY_TRS;
+        }
+    }
+
+    private void EnsureValidLocalToWorld()
+    {
+        if ((_transformDirty & DIRTY_LOCAL_TO_WORLD) != 0)
+        {
+            if (_parent == null)
+            {
+                EnsureValidTRS();
+                _cachedLocalToWorld = _cachedTRS;
+            }
+            else
+            {
+                _parent.EnsureValidLocalToWorld();
+                EnsureValidTRS();
+                _cachedLocalToWorld = _parent._cachedLocalToWorld * _cachedTRS;
+            }
+            _transformDirty &= ~DIRTY_LOCAL_TO_WORLD;
+        }
+    }
+
+    private void EnsureValidWorldToLocal()
+    {
+        if ((_transformDirty & DIRTY_WORLD_TO_LOCAL) != 0)
+        {
+            EnsureValidLocalToWorld();
+            _cachedWorldToLocal = _cachedLocalToWorld.Inverse;
+            _transformDirty &= ~DIRTY_WORLD_TO_LOCAL;
+        }
+    }
+
+    /// <summary>
+    /// Transform a point from global space to local space.
     /// </summary>
     public float3 GlobalPointToLocal(float3 globalPoint)
     {
@@ -427,7 +753,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Transform a point from global (world) space to this slot's local space (ref version).
+    /// Transform a point from global space to local space (ref version).
     /// </summary>
     public float3 GlobalPointToLocal(in float3 globalPoint)
     {
@@ -436,7 +762,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Transform a point from this slot's local space to global (world) space.
+    /// Transform a point from local space to global space.
     /// </summary>
     public float3 LocalPointToGlobal(float3 localPoint)
     {
@@ -445,7 +771,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Transform a point from this slot's local space to global (world) space (ref version).
+    /// Transform a point from local space to global space (ref version).
     /// </summary>
     public float3 LocalPointToGlobal(in float3 localPoint)
     {
@@ -454,7 +780,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Transform a direction from global (world) space to this slot's local space.
+    /// Transform a direction from global space to local space.
     /// </summary>
     public float3 GlobalDirectionToLocal(float3 globalDirection)
     {
@@ -463,7 +789,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Transform a direction from this slot's local space to global (world) space.
+    /// Transform a direction from local space to global space.
     /// </summary>
     public float3 LocalDirectionToGlobal(float3 localDirection)
     {
@@ -472,7 +798,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Transform a rotation from global (world) space to this slot's local space.
+    /// Transform a rotation from global space to local space.
     /// </summary>
     public floatQ GlobalRotationToLocal(floatQ globalRotation)
     {
@@ -480,7 +806,7 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Transform a rotation from this slot's local space to global (world) space.
+    /// Transform a rotation from local space to global space.
     /// </summary>
     public floatQ LocalRotationToGlobal(floatQ localRotation)
     {
@@ -488,91 +814,145 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
-    /// Position in local space.
-    /// Convenience accessor for LocalPosition.Value.
+    /// Look at a target position.
     /// </summary>
-    public float3 Position
+    public void LookAt(float3 target, float3? up = null)
     {
-        get => LocalPosition.Value;
-        set => LocalPosition.Value = value;
-    }
-
-    /// <summary>
-    /// Rotation in local space.
-    /// Convenience accessor for LocalRotation.Value.
-    /// </summary>
-    public floatQ Quaternion
-    {
-        get => LocalRotation.Value;
-        set => LocalRotation.Value = value;
-    }
-
-    /// <summary>
-    /// Whether this Slot is active (considering parent chain).
-    /// </summary>
-    public bool IsActive
-    {
-        get
+        var upVec = up ?? float3.Up;
+        var direction = (target - GlobalPosition).Normalized;
+        if (direction.LengthSquared > 0.0001f)
         {
-            if (!ActiveSelf.Value)
-                return false;
-
-            if (_parent != null)
-                return _parent.IsActive;
-
-            return true;
+            GlobalRotation = floatQ.LookRotation(direction, upVec);
         }
     }
 
     /// <summary>
-    /// Whether this is the root slot (has no parent).
+    /// Rotate by euler angles in degrees.
     /// </summary>
-    public bool IsRootSlot => _parent == null;
+    public void Rotate(float3 eulerAngles, bool worldSpace = false)
+    {
+        const float Deg2Rad = (float)(System.Math.PI / 180.0);
+        var rotation = floatQ.FromEuler(eulerAngles * Deg2Rad);
+        if (worldSpace)
+        {
+            GlobalRotation = rotation * GlobalRotation;
+        }
+        else
+        {
+            LocalRotation.Value = LocalRotation.Value * rotation;
+        }
+    }
 
-	public Slot()
-	{
-		ReferenceID = RefID.Null; // Will be assigned by ReferenceController during Initialize
-		InitializeSyncFields();
-	}
+    /// <summary>
+    /// Translate by offset.
+    /// </summary>
+    public void Translate(float3 translation, bool worldSpace = false)
+    {
+        if (worldSpace)
+        {
+            GlobalPosition += translation;
+        }
+        else
+        {
+            LocalPosition.Value += translation;
+        }
+    }
+
+    /// <summary>
+    /// Set local transform from TRS components.
+    /// </summary>
+    public void SetLocalTransform(float3 position, floatQ rotation, float3 scale)
+    {
+        LocalPosition.Value = position;
+        LocalRotation.Value = rotation;
+        LocalScale.Value = scale;
+    }
+
+    /// <summary>
+    /// Set global transform from TRS components.
+    /// </summary>
+    public void SetGlobalTransform(float3 position, floatQ rotation, float3 scale)
+    {
+        GlobalPosition = position;
+        GlobalRotation = rotation;
+        GlobalScale = scale;
+    }
+
+    /// <summary>
+    /// Copy transform from another slot.
+    /// </summary>
+    public void CopyTransformFrom(Slot source, bool global = false)
+    {
+        if (source == null) return;
+
+        if (global)
+        {
+            GlobalPosition = source.GlobalPosition;
+            GlobalRotation = source.GlobalRotation;
+            GlobalScale = source.GlobalScale;
+        }
+        else
+        {
+            LocalPosition.Value = source.LocalPosition.Value;
+            LocalRotation.Value = source.LocalRotation.Value;
+            LocalScale.Value = source.LocalScale.Value;
+        }
+    }
+
+    /// <summary>
+    /// Reset transform to identity.
+    /// </summary>
+    public void ResetTransform()
+    {
+        LocalPosition.Value = float3.Zero;
+        LocalRotation.Value = floatQ.Identity;
+        LocalScale.Value = float3.One;
+    }
+
+    #endregion
+
+    #region Constructor & Initialization
+
+    public Slot()
+    {
+        ReferenceID = RefID.Null;
+        InitializeSyncFields();
+    }
 
     private void InitializeSyncFields()
     {
-        SlotName = new Sync<string>(this, "Slot");
+        Name = new Sync<string>(this, "Slot");
         ActiveSelf = new Sync<bool>(this, true);
         LocalPosition = new Sync<float3>(this, float3.Zero);
         LocalRotation = new Sync<floatQ>(this, floatQ.Identity);
         LocalScale = new Sync<float3>(this, float3.One);
         Tag = new Sync<string>(this, string.Empty);
         Persistent = new Sync<bool>(this, true);
+        OrderOffset = new Sync<long>(this, 0);
 
-        // Hook up transform synchronization and cache invalidation
-        LocalPosition.OnChanged += (val) =>
+        ((ISyncMember)Name).Name = "Name";
+        ((ISyncMember)ActiveSelf).Name = "ActiveSelf";
+        ((ISyncMember)LocalPosition).Name = "LocalPosition";
+        ((ISyncMember)LocalRotation).Name = "LocalRotation";
+        ((ISyncMember)LocalScale).Name = "LocalScale";
+        ((ISyncMember)Tag).Name = "Tag";
+        ((ISyncMember)Persistent).Name = "Persistent";
+        ((ISyncMember)OrderOffset).Name = "OrderOffset";
+
+        LocalPosition.OnChanged += _ => InvalidateTransformCache();
+        LocalRotation.OnChanged += _ => InvalidateTransformCache();
+        LocalScale.OnChanged += _ => InvalidateTransformCache();
+        ActiveSelf.OnChanged += _ =>
         {
-            _position = val;
-            InvalidateTransformCache();
+            OnActiveChanged?.Invoke(this, ActiveSelf.Value);
+            ActiveChanged?.Invoke(this);
+            OnChanged();
         };
-
-        LocalRotation.OnChanged += (val) =>
+        Name.OnChanged += _ =>
         {
-            _rotation = val;
-            InvalidateTransformCache();
+            OnNameChanged?.Invoke(this, Name.Value);
+            OnChanged();
         };
-
-        LocalScale.OnChanged += (val) =>
-        {
-            _scale = val;
-            InvalidateTransformCache();
-        };
-
-        // Hook up visibility synchronization
-        ActiveSelf.OnChanged += (val) =>
-        {
-            _visible = val;
-            Console.WriteLine($"[Slot '{SlotName.Value}'] ActiveSelf changed to {val}");
-        };
-
-        // Hook up name synchronization
-        SlotName.OnChanged += (val) => _name = val ?? "Slot";
     }
 
     /// <summary>
@@ -581,15 +961,14 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     public void Initialize(World world)
     {
         World = world;
+        ReferenceID = World?.ReferenceController?.AllocateID() ?? RefID.Null;
+        // Note: Registration is handled by World.RegisterSlot, called by the parent (AddSlot/World.Initialize)
+        InitializeSyncMemberRefIDs();
+        IsInitialized = true;
 
-		// Allocate RefID from current allocation context (ReferenceController handles blocks)
-		ReferenceID = World?.ReferenceController?.AllocateID() ?? RefID.Null;
-		IsInitialized = true;
-
-        // Root slots have all transforms valid initially
         if (IsRootSlot)
         {
-            _transformDirty = 0; // All caches are valid for root
+            _transformDirty = 0;
             _cachedTRS = float4x4.TRS(LocalPosition.Value, LocalRotation.Value, LocalScale.Value);
             _cachedLocalToWorld = _cachedTRS;
             _cachedWorldToLocal = _cachedTRS.Inverse;
@@ -601,34 +980,103 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
         InitializeHook();
 
         foreach (var component in _components)
-        {
             component.OnAwake();
-        }
     }
 
-    /// <summary>
-    /// Create and assign the hook for this slot.
-    /// </summary>
+    private void InitializeSyncMemberRefIDs()
+    {
+        if (World == null) return;
+
+        Name?.Initialize(World, this);
+        ActiveSelf?.Initialize(World, this);
+        LocalPosition?.Initialize(World, this);
+        LocalRotation?.Initialize(World, this);
+        LocalScale?.Initialize(World, this);
+        Tag?.Initialize(World, this);
+        Persistent?.Initialize(World, this);
+        OrderOffset?.Initialize(World, this);
+    }
+
     private void InitializeHook()
     {
-        if (World == null)
-            return;
+        if (World == null) return;
 
         Type hookType = World.HookTypes.GetHookType(typeof(Slot));
-        if (hookType == null)
-            return;
+        if (hookType == null) return;
 
         Hook = (IHook<Slot>)Activator.CreateInstance(hookType);
         Hook?.AssignOwner(this);
         Hook?.Initialize();
     }
 
+    #endregion
+
+    #region Scheduling
+
     /// <summary>
-    /// Add a Component to this Slot.
+    /// Schedule an action to run on the next update.
+    /// </summary>
+    public void RunInUpdates(int updateCount, Action action)
+    {
+        if (action == null) return;
+
+        if (updateCount <= 0)
+        {
+            action();
+            return;
+        }
+
+        World?.RunInUpdates(updateCount, action);
+    }
+
+    /// <summary>
+    /// Schedule an action to run synchronously.
+    /// </summary>
+    public void RunSynchronously(Action action)
+    {
+        if (action == null) return;
+        World?.RunSynchronously(action);
+    }
+
+    /// <summary>
+    /// Schedule an action for the next frame.
+    /// </summary>
+    public void RunNextFrame(Action action)
+    {
+        RunInUpdates(1, action);
+    }
+
+    /// <summary>
+    /// Process scheduled actions.
+    /// </summary>
+    internal void ProcessScheduledActions()
+    {
+        lock (_scheduleLock)
+        {
+            while (_scheduledActions.Count > 0)
+            {
+                var action = _scheduledActions.Dequeue();
+                try
+                {
+                    action?.Invoke();
+                }
+                catch (Exception ex)
+                {
+                    Logging.Logger.Error($"Error in scheduled action: {ex}");
+                }
+            }
+        }
+    }
+
+    #endregion
+
+    #region Component Methods
+
+    /// <summary>
+    /// Attach a new Component to this Slot.
     /// </summary>
     public T AttachComponent<T>() where T : Component, new()
     {
-        // If not initialized yet, just create without allocation context
         if (!IsInitialized || World == null)
         {
             var uninitializedComponent = new T();
@@ -637,35 +1085,63 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
             return uninitializedComponent;
         }
 
-		var refController = World.ReferenceController;
-		if (refController == null)
-		{
-			throw new InvalidOperationException("ReferenceController is required for component allocation");
-		}
+        var refController = World.ReferenceController;
+        if (refController == null)
+            throw new InvalidOperationException("ReferenceController required for component allocation");
 
-		// Handle local allocation if parent slot is local
-		bool startedLocalBlock = false;
-		if (ReferenceID.IsLocalID && !refController.IsInLocalAllocation)
-		{
-			refController.LocalAllocationBlockBegin();
-			startedLocalBlock = true;
-		}
+        bool startedLocalBlock = false;
+        if (ReferenceID.IsLocalID && !refController.IsInLocalAllocation)
+        {
+            refController.LocalAllocationBlockBegin();
+            startedLocalBlock = true;
+        }
 
-		// Create and initialize the component - RefID is allocated sequentially
-		var component = new T();
-		component.Initialize(this);
-		_components.Add(component);
+        var component = new T();
+        component.Initialize(this);
+        _components.Add(component);
 
-		component.OnAwake();
-		component.OnInit();
-		component.OnStart();
+        component.OnAwake();
+        component.OnInit();
+        component.OnStart();
 
-		if (startedLocalBlock)
-		{
-			refController.LocalAllocationBlockEnd();
-		}
+        OnComponentAdded?.Invoke(this, component);
+
+        if (startedLocalBlock)
+            refController.LocalAllocationBlockEnd();
 
         return component;
+    }
+
+    /// <summary>
+    /// Attach a Component by type.
+    /// </summary>
+    public Component AttachComponent(Type componentType)
+    {
+        if (!typeof(Component).IsAssignableFrom(componentType))
+            throw new ArgumentException("Type must derive from Component", nameof(componentType));
+
+        var component = (Component)Activator.CreateInstance(componentType);
+        component.Initialize(this);
+        _components.Add(component);
+
+        if (IsInitialized)
+        {
+            component.OnAwake();
+            component.OnInit();
+            component.OnStart();
+        }
+
+        OnComponentAdded?.Invoke(this, component);
+        return component;
+    }
+
+    /// <summary>
+    /// Get or attach a component.
+    /// </summary>
+    public T GetOrAttachComponent<T>() where T : Component, new()
+    {
+        var existing = GetComponent<T>();
+        return existing ?? AttachComponent<T>();
     }
 
     /// <summary>
@@ -677,11 +1153,129 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     }
 
     /// <summary>
+    /// Get Component by type.
+    /// </summary>
+    public Component GetComponent(Type type)
+    {
+        return _components.FirstOrDefault(c => type.IsInstanceOfType(c));
+    }
+
+    /// <summary>
     /// Get all Components of the specified type.
     /// </summary>
     public IEnumerable<T> GetComponents<T>() where T : Component
     {
         return _components.OfType<T>();
+    }
+
+    /// <summary>
+    /// Get all Components.
+    /// </summary>
+    public IEnumerable<Component> GetAllComponents()
+    {
+        return _components;
+    }
+
+    /// <summary>
+    /// Get all Components implementing the specified interface type T.
+    /// Unlike GetComponents&lt;T&gt;, this works with interface types.
+    /// </summary>
+    public IEnumerable<T> GetComponentsImplementing<T>() where T : class
+    {
+        return _components.OfType<T>();
+    }
+
+    /// <summary>
+    /// Try to get a Component.
+    /// </summary>
+    public bool TryGetComponent<T>(out T component) where T : Component
+    {
+        component = GetComponent<T>();
+        return component != null;
+    }
+
+    /// <summary>
+    /// Get the first Component of the specified type matching a predicate.
+    /// </summary>
+    public T GetComponent<T>(Func<T, bool> predicate) where T : Component
+    {
+        return _components.OfType<T>().FirstOrDefault(predicate);
+    }
+
+    /// <summary>
+    /// Get Component in parent hierarchy.
+    /// </summary>
+    public T GetComponentInParent<T>(bool includeSelf = true) where T : Component
+    {
+        if (includeSelf)
+        {
+            var comp = GetComponent<T>();
+            if (comp != null) return comp;
+        }
+
+        return _parent?.GetComponentInParent<T>(true);
+    }
+
+    /// <summary>
+    /// Alias for GetComponentInParent for API compatibility.
+    /// </summary>
+    public T GetComponentInParents<T>(bool includeSelf = true) where T : Component
+        => GetComponentInParent<T>(includeSelf);
+
+    /// <summary>
+    /// Get Component in children hierarchy.
+    /// </summary>
+    public T GetComponentInChildren<T>(bool includeSelf = true) where T : Component
+    {
+        if (includeSelf)
+        {
+            var comp = GetComponent<T>();
+            if (comp != null) return comp;
+        }
+
+        foreach (var child in _children)
+        {
+            var comp = child.GetComponentInChildren<T>(true);
+            if (comp != null) return comp;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Get all Components in children hierarchy.
+    /// </summary>
+    public IEnumerable<T> GetComponentsInChildren<T>(bool includeSelf = true) where T : Component
+    {
+        if (includeSelf)
+        {
+            foreach (var comp in _components.OfType<T>())
+                yield return comp;
+        }
+
+        foreach (var child in _children)
+        {
+            foreach (var comp in child.GetComponentsInChildren<T>(true))
+                yield return comp;
+        }
+    }
+
+    /// <summary>
+    /// Get all Components in parent hierarchy.
+    /// </summary>
+    public IEnumerable<T> GetComponentsInParent<T>(bool includeSelf = true) where T : Component
+    {
+        if (includeSelf)
+        {
+            foreach (var comp in _components.OfType<T>())
+                yield return comp;
+        }
+
+        if (_parent != null)
+        {
+            foreach (var comp in _parent.GetComponentsInParent<T>(true))
+                yield return comp;
+        }
     }
 
     /// <summary>
@@ -691,131 +1285,611 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
     {
         if (_components.Remove(component))
         {
+            OnComponentRemoved?.Invoke(this, component);
             component.OnDestroy();
         }
     }
+
+    /// <summary>
+    /// Remove all Components of a type.
+    /// </summary>
+    public void RemoveComponents<T>() where T : Component
+    {
+        var toRemove = _components.OfType<T>().ToArray();
+        foreach (var comp in toRemove)
+            RemoveComponent(comp);
+    }
+
+    /// <summary>
+    /// Check if this slot has a component of type.
+    /// </summary>
+    public bool HasComponent<T>() where T : Component
+    {
+        return _components.OfType<T>().Any();
+    }
+
+    /// <summary>
+    /// Iterate all components with an action.
+    /// </summary>
+    public void ForeachComponent(Action<Component> action)
+    {
+        foreach (var comp in _components)
+            action(comp);
+    }
+
+    /// <summary>
+    /// Iterate all components in children.
+    /// </summary>
+    public void ForeachComponentInChildren<T>(Action<T> action, bool includeSelf = true) where T : Component
+    {
+        if (includeSelf)
+        {
+            foreach (var comp in _components.OfType<T>())
+                action(comp);
+        }
+
+        foreach (var child in _children)
+            child.ForeachComponentInChildren(action, true);
+    }
+
+    #endregion
+
+    #region Child Slot Methods
 
     /// <summary>
     /// Create a new child Slot.
     /// </summary>
     public Slot AddSlot(string name = "Slot")
     {
-        // If this slot is not initialized, just create without allocation
         if (World == null)
         {
             var uninitializedSlot = new Slot();
-            uninitializedSlot.SlotName.Value = name;
-            uninitializedSlot._name = name;
+            uninitializedSlot.Name.Value = name;
             uninitializedSlot.Parent = this;
             return uninitializedSlot;
         }
 
-		var refController = World.ReferenceController;
-		if (refController == null)
-		{
-			throw new InvalidOperationException("ReferenceController is required for slot allocation");
-		}
+        var refController = World.ReferenceController;
+        if (refController == null)
+            throw new InvalidOperationException("ReferenceController required for slot allocation");
 
-		// Handle local allocation if parent is local
-		bool startedLocalBlock = false;
-		if (ReferenceID.IsLocalID && !refController.IsInLocalAllocation)
-		{
-			refController.LocalAllocationBlockBegin();
-			startedLocalBlock = true;
-		}
+        bool startedLocalBlock = false;
+        if (ReferenceID.IsLocalID && !refController.IsInLocalAllocation)
+        {
+            refController.LocalAllocationBlockBegin();
+            startedLocalBlock = true;
+        }
 
-		// Create and initialize the slot - it will allocate its own RefID
-		var slot = new Slot();
-		slot.SlotName.Value = name;
-		slot._name = name;
+        var slot = new Slot();
+        slot.Name.Value = name;
+        slot.Parent = this;
+        slot.Initialize(World);
+        World.RegisterSlot(slot);
 
-		slot.Parent = this;
-		slot.Initialize(World);
-
-		// Register with the world
-		World.RegisterSlot(slot);
-
-		if (startedLocalBlock)
-		{
-			refController.LocalAllocationBlockEnd();
-		}
+        if (startedLocalBlock)
+            refController.LocalAllocationBlockEnd();
 
         return slot;
     }
 
     /// <summary>
-    /// Add an existing Slot as a child.
+    /// Add a local-only child slot (not synchronized).
     /// </summary>
-    public void AddChild(Slot child)
+    public Slot AddLocalSlot(string name = "LocalSlot")
     {
-        if (child == null || _children.Contains(child)) return;
+        if (World == null)
+            return AddSlot(name);
 
-        _children.Add(child);
+        var refController = World.ReferenceController;
+        refController?.LocalAllocationBlockBegin();
+
+        var slot = new Slot();
+        slot.Name.Value = name;
+        slot.Parent = this;
+        slot.Initialize(World);
+        World.RegisterSlot(slot);
+
+        refController?.LocalAllocationBlockEnd();
+
+        return slot;
+    }
+
+    private void AddChildInternal(Slot child)
+    {
+        if (child != null && !_children.Contains(child))
+        {
+            _children.Add(child);
+            OnChildAdded?.Invoke(this, child);
+        }
+    }
+
+    private void RemoveChildInternal(Slot child)
+    {
+        if (_children.Remove(child))
+        {
+            OnChildRemoved?.Invoke(this, child);
+        }
     }
 
     /// <summary>
-    /// Remove a child Slot.
+    /// Get child by index.
     /// </summary>
-    public void RemoveChild(Slot child)
+    public Slot GetChild(int index)
     {
-        _children.Remove(child);
+        if (index < 0 || index >= _children.Count)
+            return null;
+        return _children[index];
     }
 
     /// <summary>
-    /// Find the first child Slot with the specified name.
+    /// Indexer for children.
     /// </summary>
-    public Slot FindChild(string name, bool recursive = false)
+    public Slot this[int index] => GetChild(index);
+
+    /// <summary>
+    /// Indexer for children by name.
+    /// </summary>
+    public Slot this[string name] => GetChild(name);
+
+    /// <summary>
+    /// Get child by name (first match).
+    /// </summary>
+    public Slot GetChild(string name)
+    {
+        return _children.FirstOrDefault(c => c.Name.Value == name);
+    }
+
+    /// <summary>
+    /// Find child by name (recursive optional).
+    /// </summary>
+    public Slot FindChild(string name, bool recursive = false, int maxDepth = -1)
+    {
+        return FindChild(s => s.Name.Value == name, recursive, maxDepth);
+    }
+
+    /// <summary>
+    /// Find child by predicate.
+    /// </summary>
+    public Slot FindChild(Predicate<Slot> predicate, bool recursive = false, int maxDepth = -1)
     {
         foreach (var child in _children)
         {
-            if (child.SlotName.Value == name)
+            if (predicate(child))
                 return child;
 
-            if (recursive)
+            if (recursive && maxDepth != 0)
             {
-                var found = child.FindChild(name, true);
-                if (found != null) return found;
+                var found = child.FindChild(predicate, true, maxDepth > 0 ? maxDepth - 1 : -1);
+                if (found != null)
+                    return found;
             }
         }
         return null;
     }
 
     /// <summary>
-    /// Find all child Slots with the specified tag.
+    /// Find all children matching predicate.
     /// </summary>
-    public IEnumerable<Slot> FindChildrenByTag(string tag, bool recursive = false)
+    public IEnumerable<Slot> FindChildren(Predicate<Slot> predicate, bool recursive = false)
     {
         foreach (var child in _children)
         {
-            if (child.Tag.Value == tag)
+            if (predicate(child))
                 yield return child;
 
             if (recursive)
             {
-                foreach (var found in child.FindChildrenByTag(tag, true))
+                foreach (var found in child.FindChildren(predicate, true))
                     yield return found;
             }
         }
     }
 
     /// <summary>
-    /// Get the hierarchical path of this slot (e.g. "Root/Parent/Child").
+    /// Find children by tag.
+    /// </summary>
+    public IEnumerable<Slot> FindChildrenByTag(string tag, bool recursive = false)
+    {
+        return FindChildren(s => s.Tag.Value == tag, recursive);
+    }
+
+    /// <summary>
+    /// Find child or create if not found.
+    /// </summary>
+    public Slot FindChildOrAdd(string name, bool recursive = false)
+    {
+        var found = FindChild(name, recursive);
+        return found ?? AddSlot(name);
+    }
+
+    /// <summary>
+    /// Get or create a slot at a relative path.
+    /// </summary>
+    public Slot GetSlotAtPath(string path, bool createIfMissing = false)
+    {
+        if (string.IsNullOrEmpty(path))
+            return this;
+
+        var parts = path.Split('/');
+        var current = this;
+
+        foreach (var part in parts)
+        {
+            if (string.IsNullOrEmpty(part) || part == ".")
+                continue;
+
+            if (part == "..")
+            {
+                current = current._parent ?? current;
+                continue;
+            }
+
+            var child = current.GetChild(part);
+            if (child == null)
+            {
+                if (!createIfMissing)
+                    return null;
+                child = current.AddSlot(part);
+            }
+            current = child;
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// Iterate all children.
+    /// </summary>
+    public void ForeachChild(Action<Slot> action)
+    {
+        foreach (var child in _children)
+            action(child);
+    }
+
+    /// <summary>
+    /// Iterate all descendants.
+    /// </summary>
+    public void ForeachChildRecursive(Action<Slot> action)
+    {
+        foreach (var child in _children)
+        {
+            action(child);
+            child.ForeachChildRecursive(action);
+        }
+    }
+
+    /// <summary>
+    /// Move a child to a specific index.
+    /// </summary>
+    public void MoveChildToIndex(Slot child, int index)
+    {
+        if (!_children.Contains(child))
+            return;
+
+        _children.Remove(child);
+        index = System.Math.Clamp(index, 0, _children.Count);
+        _children.Insert(index, child);
+    }
+
+    /// <summary>
+    /// Sort children by order offset.
+    /// </summary>
+    public void SortChildren()
+    {
+        _children.Sort((a, b) => a.OrderOffset.Value.CompareTo(b.OrderOffset.Value));
+    }
+
+    /// <summary>
+    /// Sort children by name.
+    /// </summary>
+    public void SortChildrenByName()
+    {
+        _children.Sort((a, b) => string.Compare(a.Name.Value, b.Name.Value, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// Get all ancestors up to root.
+    /// </summary>
+    public IEnumerable<Slot> GetAncestors(bool includeSelf = false)
+    {
+        if (includeSelf)
+            yield return this;
+
+        var current = _parent;
+        while (current != null)
+        {
+            yield return current;
+            current = current._parent;
+        }
+    }
+
+    /// <summary>
+    /// Get all descendants.
+    /// </summary>
+    public IEnumerable<Slot> GetDescendants(bool includeSelf = false)
+    {
+        if (includeSelf)
+            yield return this;
+
+        foreach (var child in _children)
+        {
+            yield return child;
+            foreach (var desc in child.GetDescendants(false))
+                yield return desc;
+        }
+    }
+
+    /// <summary>
+    /// Check if this slot is a descendant of another.
+    /// </summary>
+    public bool IsDescendantOf(Slot slot)
+    {
+        if (slot == null) return false;
+        var current = _parent;
+        while (current != null)
+        {
+            if (current == slot)
+                return true;
+            current = current._parent;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Check if this slot is an ancestor of another.
+    /// </summary>
+    public bool IsAncestorOf(Slot slot)
+    {
+        return slot?.IsDescendantOf(this) ?? false;
+    }
+
+    /// <summary>
+    /// Find common ancestor with another slot.
+    /// </summary>
+    public Slot FindCommonAncestor(Slot other)
+    {
+        if (other == null) return null;
+
+        var ancestors = new HashSet<Slot>(GetAncestors(true));
+        foreach (var ancestor in other.GetAncestors(true))
+        {
+            if (ancestors.Contains(ancestor))
+                return ancestor;
+        }
+        return null;
+    }
+
+    /// <summary>
+    /// Count total descendants.
+    /// </summary>
+    public int CountDescendants()
+    {
+        int count = _children.Count;
+        foreach (var child in _children)
+            count += child.CountDescendants();
+        return count;
+    }
+
+    #endregion
+
+    #region Duplication
+
+    /// <summary>
+    /// Duplicate this slot and its contents.
+    /// </summary>
+    public Slot Duplicate(Slot newParent = null, bool preserveGlobalTransform = false)
+    {
+        newParent ??= _parent;
+        if (newParent == null || World == null)
+            return null;
+
+        // Create reference mapping for resolving references after duplication
+        var refMap = new Dictionary<RefID, RefID>();
+
+        return DuplicateInternal(newParent, preserveGlobalTransform, refMap);
+    }
+
+    private Slot DuplicateInternal(Slot newParent, bool preserveGlobalTransform, Dictionary<RefID, RefID> refMap)
+    {
+        var clone = newParent.AddSlot(Name.Value + " (Copy)");
+        refMap[ReferenceID] = clone.ReferenceID;
+
+        // Copy transform
+        if (preserveGlobalTransform)
+        {
+            clone.GlobalPosition = GlobalPosition;
+            clone.GlobalRotation = GlobalRotation;
+            clone.GlobalScale = GlobalScale;
+        }
+        else
+        {
+            clone.LocalPosition.Value = LocalPosition.Value;
+            clone.LocalRotation.Value = LocalRotation.Value;
+            clone.LocalScale.Value = LocalScale.Value;
+        }
+
+        // Copy properties
+        clone.ActiveSelf.Value = ActiveSelf.Value;
+        clone.Tag.Value = Tag.Value;
+        clone.Persistent.Value = Persistent.Value;
+        clone.OrderOffset.Value = OrderOffset.Value;
+
+        // Duplicate components with data copying
+        foreach (var component in _components)
+        {
+            var compType = component.GetType();
+            var cloneComp = clone.AttachComponent(compType);
+            refMap[component.ReferenceID] = cloneComp.ReferenceID;
+            CopyComponentData(component, cloneComp, refMap);
+        }
+
+        // Duplicate children
+        foreach (var child in _children)
+        {
+            child.DuplicateInternal(clone, false, refMap);
+        }
+
+        return clone;
+    }
+
+    /// <summary>
+    /// Copy all sync field data from source to target component.
+    /// </summary>
+    private void CopyComponentData(Component source, Component target, Dictionary<RefID, RefID> refMap)
+    {
+        var type = source.GetType();
+
+        // Get all sync field properties
+        var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => typeof(ISyncMember).IsAssignableFrom(p.PropertyType));
+
+        foreach (var prop in properties)
+        {
+            try
+            {
+                var sourceField = prop.GetValue(source) as ISyncMember;
+                var targetField = prop.GetValue(target) as ISyncMember;
+
+                if (sourceField != null && targetField != null)
+                {
+                    CopySyncMemberValue(sourceField, targetField, refMap);
+                }
+            }
+            catch (Exception ex)
+            {
+                Logging.Logger.Warn($"Failed to copy property {prop.Name}: {ex.Message}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Copy value from one sync member to another.
+    /// </summary>
+    private void CopySyncMemberValue(ISyncMember source, ISyncMember target, Dictionary<RefID, RefID> refMap)
+    {
+        var sourceType = source.GetType();
+        var targetType = target.GetType();
+
+        if (sourceType != targetType) return;
+
+        // Handle SyncRef types - need to remap references
+        if (sourceType.IsGenericType && sourceType.GetGenericTypeDefinition() == typeof(SyncRef<>))
+        {
+            var sourceValue = source.GetValueAsObject();
+            if (sourceValue is RefID refId && refMap.TryGetValue(refId, out var newRefId))
+            {
+                // Set remapped reference
+                var valueProperty = targetType.GetProperty("Value");
+                valueProperty?.SetValue(target, newRefId);
+            }
+            return;
+        }
+
+        // Handle regular sync fields
+        var sourceVal = source.GetValueAsObject();
+        if (sourceVal != null)
+        {
+            var valueProperty = targetType.GetProperty("Value");
+            if (valueProperty != null && valueProperty.CanWrite)
+            {
+                try
+                {
+                    valueProperty.SetValue(target, sourceVal);
+                }
+                catch
+                {
+                    // Value type mismatch, skip
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// Create a deep copy with all references resolved.
+    /// </summary>
+    public Slot DeepCopy(Slot newParent = null)
+    {
+        return Duplicate(newParent, false);
+    }
+
+    #endregion
+
+    #region Path & Hierarchy
+
+    /// <summary>
+    /// Get the hierarchical path of this slot.
     /// </summary>
     public string GetPath()
     {
         if (_parent == null)
-            return SlotName.Value;
+            return Name.Value;
+        return _parent.GetPath() + "/" + Name.Value;
+    }
 
-		return _parent.GetPath() + "/" + SlotName.Value;
-	}
+    /// <summary>
+    /// Get path relative to another slot.
+    /// </summary>
+    public string GetRelativePath(Slot relativeTo)
+    {
+        if (relativeTo == null || relativeTo == this)
+            return ".";
 
-	/// <summary>
-	/// Get a string representation of this slot for hierarchy tracing.
-	/// </summary>
-	public string ParentHierarchyToString()
-	{
-		return GetPath();
-	}
+        if (IsDescendantOf(relativeTo))
+        {
+            var path = new List<string>();
+            var current = this;
+            while (current != relativeTo)
+            {
+                path.Insert(0, current.Name.Value);
+                current = current._parent;
+            }
+            return string.Join("/", path);
+        }
+
+        // Need to go up to common ancestor
+        var ancestor = FindCommonAncestor(relativeTo);
+        if (ancestor == null)
+            return GetPath(); // No common ancestor, return full path
+
+        var upCount = 0;
+        var check = relativeTo;
+        while (check != ancestor)
+        {
+            upCount++;
+            check = check._parent;
+        }
+
+        var relativePath = GetRelativePath(ancestor);
+        var ups = string.Join("/", Enumerable.Repeat("..", upCount));
+        return ups + "/" + relativePath;
+    }
+
+    /// <summary>
+    /// Get a string representation for hierarchy tracing.
+    /// </summary>
+    public string ParentHierarchyToString()
+    {
+        return GetPath();
+    }
+
+    /// <summary>
+    /// Print hierarchy to string for debugging.
+    /// </summary>
+    public string PrintHierarchy(int indent = 0)
+    {
+        var sb = new System.Text.StringBuilder();
+        var prefix = new string(' ', indent * 2);
+        sb.AppendLine($"{prefix}{Name.Value} [{_components.Count} components]");
+        foreach (var child in _children)
+        {
+            sb.Append(child.PrintHierarchy(indent + 1));
+        }
+        return sb.ToString();
+    }
+
+    #endregion
+
+    #region Destroy & Cleanup
 
     /// <summary>
     /// Destroy this Slot and all its children and components.
@@ -828,13 +1902,12 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
 
         // Destroy all children
         foreach (var child in _children.ToArray())
-        {
             child.Destroy();
-        }
 
         // Destroy all components
         foreach (var component in _components.ToArray())
         {
+            OnComponentRemoved?.Invoke(this, component);
             component.OnDestroy();
         }
 
@@ -842,26 +1915,515 @@ public class Slot : IImplementable<IHook<Slot>>, IWorldElement
         _components.Clear();
 
         // Remove from parent
-        _parent?.RemoveChild(this);
+        _parent?.RemoveChildInternal(this);
 
-        // Remove from World
+        // Unregister from world
+        World?.ReferenceController?.UnregisterObject(this);
         World?.UnregisterSlot(this);
+
+        // Dispose hook
+        Hook?.Dispose();
     }
+
+    /// <summary>
+    /// Remove from hierarchy without destroying.
+    /// </summary>
+    public void RemoveFromHierarchy()
+    {
+        _isRemoved = true;
+        _parent?.RemoveChildInternal(this);
+        _parent = null;
+    }
+
+    /// <summary>
+    /// Destroy all children.
+    /// </summary>
+    public void DestroyChildren()
+    {
+        foreach (var child in _children.ToArray())
+            child.Destroy();
+    }
+
+    /// <summary>
+    /// Destroy all children matching predicate.
+    /// </summary>
+    public void DestroyChildren(Predicate<Slot> predicate)
+    {
+        foreach (var child in _children.ToArray())
+        {
+            if (predicate(child))
+                child.Destroy();
+        }
+    }
+
+    /// <summary>
+    /// Destroy with delay.
+    /// </summary>
+    public void DestroyDelayed(float seconds)
+    {
+        int updates = (int)(seconds * 60); // Approximate 60 fps
+        RunInUpdates(updates, Destroy);
+    }
+
+    #endregion
+
+    #region Update
 
     /// <summary>
     /// Update all components.
     /// </summary>
     public void UpdateComponents(float delta)
     {
-        // ALWAYS update components, even if slot is inactive
-        // This allows components to handle visibility changes (e.g., Dashboard toggling)
-        // Components should check Slot.ActiveSelf themselves if needed
+        ProcessScheduledActions();
+
         foreach (var component in _components)
         {
             if (component.Enabled.Value)
-            {
                 component.OnUpdate(delta);
+        }
+    }
+
+    private void OnChanged()
+    {
+        Changed?.Invoke(this);
+    }
+
+    #endregion
+
+    #region Network Serialization
+
+    /// <summary>
+    /// Encode slot state for network transmission.
+    /// </summary>
+    public void Encode(BinaryWriter writer)
+    {
+        // Write slot header
+        writer.Write((ulong)ReferenceID);
+        writer.Write((ulong)(_parent?.ReferenceID ?? RefID.Null));
+
+        // Write sync fields
+        EncodeSyncField(writer, Name);
+        EncodeSyncField(writer, ActiveSelf);
+        EncodeSyncField(writer, LocalPosition);
+        EncodeSyncField(writer, LocalRotation);
+        EncodeSyncField(writer, LocalScale);
+        EncodeSyncField(writer, Tag);
+        EncodeSyncField(writer, Persistent);
+        EncodeSyncField(writer, OrderOffset);
+
+        // Write components
+        writer.Write(_components.Count);
+        foreach (var comp in _components)
+        {
+            writer.Write(comp.GetType().AssemblyQualifiedName ?? comp.GetType().FullName ?? "");
+            writer.Write((ulong)comp.ReferenceID);
+            comp.Encode(writer);
+        }
+
+        // Write children count (children encoded separately)
+        writer.Write(_children.Count);
+        foreach (var child in _children)
+        {
+            writer.Write((ulong)child.ReferenceID);
+        }
+    }
+
+    /// <summary>
+    /// Decode slot state from network transmission.
+    /// </summary>
+    public void Decode(BinaryReader reader, Dictionary<RefID, object> refLookup)
+    {
+        // Read slot header
+        var refId = new RefID(reader.ReadUInt64());
+        var parentRefId = new RefID(reader.ReadUInt64());
+
+        // Read sync fields
+        DecodeSyncField(reader, Name);
+        DecodeSyncField(reader, ActiveSelf);
+        DecodeSyncField(reader, LocalPosition);
+        DecodeSyncField(reader, LocalRotation);
+        DecodeSyncField(reader, LocalScale);
+        DecodeSyncField(reader, Tag);
+        DecodeSyncField(reader, Persistent);
+        DecodeSyncField(reader, OrderOffset);
+
+        // Read components
+        int compCount = reader.ReadInt32();
+        for (int i = 0; i < compCount; i++)
+        {
+            var typeName = reader.ReadString();
+            var compRefId = new RefID(reader.ReadUInt64());
+
+            var type = Type.GetType(typeName);
+            if (type != null)
+            {
+                var comp = AttachComponent(type);
+                comp.Decode(reader);
+                refLookup[compRefId] = comp;
+            }
+        }
+
+        // Read children refs (resolved after all slots decoded)
+        int childCount = reader.ReadInt32();
+        for (int i = 0; i < childCount; i++)
+        {
+            var childRefId = new RefID(reader.ReadUInt64());
+            // Children are resolved in a second pass
+        }
+    }
+
+    private void EncodeSyncField<T>(BinaryWriter writer, Sync<T> field)
+    {
+        field?.Encode(writer);
+    }
+
+    private void DecodeSyncField<T>(BinaryReader reader, Sync<T> field)
+    {
+        field?.Decode(reader);
+    }
+
+    #endregion
+
+    #region Binary Serialization (File Save/Load)
+
+    /// <summary>
+    /// Save this slot to a binary writer.
+    /// </summary>
+    public void SaveToBinary(BinaryWriter writer)
+    {
+        // Write header
+        writer.Write("SLOT"); // Magic
+        writer.Write(1); // Version
+
+        // Write slot data
+        writer.Write(Name.Value ?? "");
+        writer.Write(ActiveSelf.Value);
+        writer.Write(Tag.Value ?? "");
+        writer.Write(Persistent.Value);
+        writer.Write(OrderOffset.Value);
+
+        // Transform
+        WriteFloat3(writer, LocalPosition.Value);
+        WriteFloatQ(writer, LocalRotation.Value);
+        WriteFloat3(writer, LocalScale.Value);
+
+        // Components
+        writer.Write(_components.Count);
+        foreach (var comp in _components)
+        {
+            writer.Write(comp.GetType().AssemblyQualifiedName ?? comp.GetType().FullName ?? "");
+            SaveComponentToBinary(writer, comp);
+        }
+
+        // Children
+        writer.Write(_children.Count);
+        foreach (var child in _children)
+            child.SaveToBinary(writer);
+    }
+
+    /// <summary>
+    /// Load this slot from a binary reader.
+    /// </summary>
+    public void LoadFromBinary(BinaryReader reader)
+    {
+        // Read header
+        var magic = reader.ReadString();
+        if (magic != "SLOT")
+            throw new InvalidDataException("Invalid slot data format");
+
+        var version = reader.ReadInt32();
+        if (version > 1)
+            throw new InvalidDataException($"Unsupported slot version: {version}");
+
+        // Read slot data
+        Name.Value = reader.ReadString();
+        ActiveSelf.Value = reader.ReadBoolean();
+        Tag.Value = reader.ReadString();
+        Persistent.Value = reader.ReadBoolean();
+        OrderOffset.Value = reader.ReadInt64();
+
+        // Transform
+        LocalPosition.Value = ReadFloat3(reader);
+        LocalRotation.Value = ReadFloatQ(reader);
+        LocalScale.Value = ReadFloat3(reader);
+
+        // Components
+        int compCount = reader.ReadInt32();
+        for (int i = 0; i < compCount; i++)
+        {
+            var typeName = reader.ReadString();
+            var type = Type.GetType(typeName);
+            if (type != null)
+            {
+                var comp = AttachComponent(type);
+                LoadComponentFromBinary(reader, comp);
+            }
+            else
+            {
+                // Skip unknown component data
+                SkipComponentData(reader);
+            }
+        }
+
+        // Children
+        int childCount = reader.ReadInt32();
+        for (int i = 0; i < childCount; i++)
+        {
+            var child = AddSlot();
+            child.LoadFromBinary(reader);
+        }
+    }
+
+    private void SaveComponentToBinary(BinaryWriter writer, Component comp)
+    {
+        var type = comp.GetType();
+        var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+            .Where(p => typeof(ISyncMember).IsAssignableFrom(p.PropertyType))
+            .ToArray();
+
+        writer.Write(properties.Length);
+
+        foreach (var prop in properties)
+        {
+            writer.Write(prop.Name);
+            var syncMember = prop.GetValue(comp) as ISyncMember;
+            if (syncMember != null)
+            {
+                var value = syncMember.GetValueAsObject();
+                WriteValue(writer, value);
+            }
+            else
+            {
+                WriteValue(writer, null);
             }
         }
     }
+
+    private void LoadComponentFromBinary(BinaryReader reader, Component comp)
+    {
+        var type = comp.GetType();
+        int propCount = reader.ReadInt32();
+
+        for (int i = 0; i < propCount; i++)
+        {
+            var propName = reader.ReadString();
+            var value = ReadValue(reader);
+
+            var prop = type.GetProperty(propName, BindingFlags.Public | BindingFlags.Instance);
+            if (prop != null && typeof(ISyncMember).IsAssignableFrom(prop.PropertyType))
+            {
+                var syncMember = prop.GetValue(comp) as ISyncMember;
+                if (syncMember != null)
+                {
+                    SetSyncMemberValue(syncMember, value);
+                }
+            }
+        }
+    }
+
+    private void SkipComponentData(BinaryReader reader)
+    {
+        int propCount = reader.ReadInt32();
+        for (int i = 0; i < propCount; i++)
+        {
+            reader.ReadString(); // Property name
+            ReadValue(reader); // Value (discarded)
+        }
+    }
+
+    private void SetSyncMemberValue(ISyncMember member, object value)
+    {
+        if (value == null) return;
+
+        var type = member.GetType();
+        var valueProp = type.GetProperty("Value");
+        if (valueProp != null && valueProp.CanWrite)
+        {
+            try
+            {
+                var convertedValue = Convert.ChangeType(value, valueProp.PropertyType);
+                valueProp.SetValue(member, convertedValue);
+            }
+            catch
+            {
+                // Type conversion failed, try direct assignment
+                try
+                {
+                    valueProp.SetValue(member, value);
+                }
+                catch
+                {
+                    // Skip incompatible value
+                }
+            }
+        }
+    }
+
+    private void WriteValue(BinaryWriter writer, object value)
+    {
+        if (value == null)
+        {
+            writer.Write((byte)0); // Null marker
+            return;
+        }
+
+        var type = value.GetType();
+
+        if (type == typeof(bool))
+        {
+            writer.Write((byte)1);
+            writer.Write((bool)value);
+        }
+        else if (type == typeof(int))
+        {
+            writer.Write((byte)2);
+            writer.Write((int)value);
+        }
+        else if (type == typeof(float))
+        {
+            writer.Write((byte)3);
+            writer.Write((float)value);
+        }
+        else if (type == typeof(double))
+        {
+            writer.Write((byte)4);
+            writer.Write((double)value);
+        }
+        else if (type == typeof(string))
+        {
+            writer.Write((byte)5);
+            writer.Write((string)value ?? "");
+        }
+        else if (type == typeof(float3))
+        {
+            writer.Write((byte)6);
+            WriteFloat3(writer, (float3)value);
+        }
+        else if (type == typeof(floatQ))
+        {
+            writer.Write((byte)7);
+            WriteFloatQ(writer, (floatQ)value);
+        }
+        else if (type == typeof(float2))
+        {
+            writer.Write((byte)8);
+            var v = (float2)value;
+            writer.Write(v.x);
+            writer.Write(v.y);
+        }
+        else if (type == typeof(float4))
+        {
+            writer.Write((byte)9);
+            var v = (float4)value;
+            writer.Write(v.x);
+            writer.Write(v.y);
+            writer.Write(v.z);
+            writer.Write(v.w);
+        }
+        else if (type == typeof(color))
+        {
+            writer.Write((byte)10);
+            var c = (color)value;
+            writer.Write(c.r);
+            writer.Write(c.g);
+            writer.Write(c.b);
+            writer.Write(c.a);
+        }
+        else if (type == typeof(long))
+        {
+            writer.Write((byte)11);
+            writer.Write((long)value);
+        }
+        else if (type == typeof(RefID))
+        {
+            writer.Write((byte)12);
+            writer.Write((ulong)(RefID)value);
+        }
+        else if (type.IsEnum)
+        {
+            writer.Write((byte)13);
+            writer.Write(type.AssemblyQualifiedName ?? type.FullName ?? "");
+            writer.Write(Convert.ToInt32(value));
+        }
+        else
+        {
+            // Unknown type, serialize as string if possible
+            writer.Write((byte)255);
+            writer.Write(value.ToString() ?? "");
+        }
+    }
+
+    private object ReadValue(BinaryReader reader)
+    {
+        var typeCode = reader.ReadByte();
+
+        return typeCode switch
+        {
+            0 => null,
+            1 => reader.ReadBoolean(),
+            2 => reader.ReadInt32(),
+            3 => reader.ReadSingle(),
+            4 => reader.ReadDouble(),
+            5 => reader.ReadString(),
+            6 => ReadFloat3(reader),
+            7 => ReadFloatQ(reader),
+            8 => new float2(reader.ReadSingle(), reader.ReadSingle()),
+            9 => new float4(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()),
+            10 => new color(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle()),
+            11 => reader.ReadInt64(),
+            12 => new RefID(reader.ReadUInt64()),
+            13 => ReadEnumValue(reader),
+            255 => reader.ReadString(), // String fallback
+            _ => null
+        };
+    }
+
+    private object ReadEnumValue(BinaryReader reader)
+    {
+        var typeName = reader.ReadString();
+        var intValue = reader.ReadInt32();
+
+        var type = Type.GetType(typeName);
+        if (type != null && type.IsEnum)
+        {
+            return Enum.ToObject(type, intValue);
+        }
+        return intValue;
+    }
+
+    private static void WriteFloat3(BinaryWriter writer, float3 v)
+    {
+        writer.Write(v.x);
+        writer.Write(v.y);
+        writer.Write(v.z);
+    }
+
+    private static float3 ReadFloat3(BinaryReader reader)
+    {
+        return new float3(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+    }
+
+    private static void WriteFloatQ(BinaryWriter writer, floatQ q)
+    {
+        writer.Write(q.x);
+        writer.Write(q.y);
+        writer.Write(q.z);
+        writer.Write(q.w);
+    }
+
+    private static floatQ ReadFloatQ(BinaryReader reader)
+    {
+        return new floatQ(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
+    }
+
+    #endregion
+
+    #region ToString
+
+    public override string ToString()
+    {
+        return $"Slot({Name.Value}, RefID={ReferenceID}, Children={_children.Count}, Components={_components.Count})";
+    }
+
+    #endregion
 }
