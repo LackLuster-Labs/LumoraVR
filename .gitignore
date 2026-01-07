@@ -8,3 +8,6 @@
 *.vsidx
 *.v2
 /.vs
+/LumoraGodot/.vs
+**/bin
+**/obj

@@ -1,7 +1,0 @@
-[gd_scene load_steps=2 format=3 uid="uid://bootstrap_scene"]
-
-[ext_resource type="Script" path="res://Source/Core/LumoraBootstrap.cs" id="1_bootstrap"]
-
-[node name="Bootstrap" type="Node"]
-script = ExtResource("1_bootstrap")
-InitializationScene = "res://Scenes/Client.tscn"

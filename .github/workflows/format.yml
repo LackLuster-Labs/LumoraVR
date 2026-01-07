@@ -18,13 +18,10 @@ jobs:
       with:
         dotnet-version: '9.0.x'
     
-    - name: Install dotnet-format
-      run: dotnet tool install -g dotnet-format
-    
     - name: Run dotnet format check
       run: |
         # Check formatting across the entire solution
-        dotnet format --verify-no-changes Aquamarine.csproj
+        dotnet format --verify-no-changes LumoraGodot/Aquamarine.sln
       
     - name: Add format-issues label if formatting issues found
       if: failure()
