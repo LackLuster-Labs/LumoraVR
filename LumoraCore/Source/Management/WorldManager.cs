@@ -26,6 +26,7 @@ public class WorldManager : IDisposable
     private readonly object _worldsLock = new object();
 
     private World _focusedWorld;
+    private World _userspaceWorld;
     private World _setWorldFocus; // Queued focus change
     private bool _initialized = false;
     private Engine _engine;
@@ -42,6 +43,23 @@ public class WorldManager : IDisposable
     /// Currently focused world (main world user is interacting with).
     /// </summary>
     public World FocusedWorld => _focusedWorld;
+
+    /// <summary>
+    /// The userspace world (always present, contains UI overlays and settings).
+    /// </summary>
+    public World UserspaceWorld
+    {
+        get => _userspaceWorld;
+        set
+        {
+            _userspaceWorld = value;
+            if (_userspaceWorld != null)
+            {
+                // Userspace is always a private overlay
+                PrivateOverlayWorld(_userspaceWorld);
+            }
+        }
+    }
 
     /// <summary>
     /// Number of worlds currently managed.
@@ -193,16 +211,50 @@ public class WorldManager : IDisposable
     }
 
     /// <summary>
+    /// Join a remote session (client) asynchronously.
+    /// </summary>
+    public async Task<World> JoinSessionAsync(string name, string address, ushort port)
+    {
+        try
+        {
+            LumoraLogger.Log($"WorldManager: Joining session at {address}:{port}");
+
+            var uri = new UriBuilder("lnl", address, port).Uri;
+            var world = await World.JoinSessionAsync(_engine, name, uri);
+            if (world == null)
+            {
+                LumoraLogger.Error($"WorldManager: Failed to join session at {address}:{port}");
+                return null;
+            }
+
+            AddWorld(world);
+            LumoraLogger.Log($"WorldManager: Successfully joined session at {address}:{port}");
+            return world;
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Error($"WorldManager: Failed to join session at {address}:{port}: {ex.Message}");
+            return null;
+        }
+    }
+
+    /// <summary>
     /// Add a world to managed list and fire events.
     /// Adds world to managed collection and triggers events.
     /// </summary>
-    private void AddWorld(World world)
+    public void AddWorld(World world)
     {
         if (world == null)
             return;
 
         // Set WorldManager reference
         world.WorldManager = this;
+
+        // Subscribe to world disconnection events
+        if (world.Session != null)
+        {
+            world.Session.OnDisconnected += () => OnWorldDisconnected(world);
+        }
 
         lock (_worldsLock)
         {
@@ -221,6 +273,52 @@ public class WorldManager : IDisposable
         {
             LumoraLogger.Error($"WorldManager: Error in WorldAdded event: {ex.Message}");
         }
+    }
+
+    /// <summary>
+    /// Handle world disconnection and switch focus to fallback world.
+    /// </summary>
+    private void OnWorldDisconnected(World disconnectedWorld)
+    {
+        LumoraLogger.Log($"WorldManager: World '{disconnectedWorld.WorldName.Value}' disconnected");
+
+        // If this was the focused world, switch to a fallback
+        if (_focusedWorld == disconnectedWorld)
+        {
+            LumoraLogger.Log("WorldManager: Disconnected world was focused, switching to fallback");
+
+            // Find fallback world (LocalHome or any available world)
+            World fallbackWorld = null;
+            lock (_worldsLock)
+            {
+                // Prefer LocalHome world
+                fallbackWorld = _worlds.Find(w => !w.IsDestroyed && 
+                                                  w.State == World.WorldState.Running && 
+                                                  w.WorldName.Value == "LocalHome");
+
+                // If no LocalHome, use any available running world
+                if (fallbackWorld == null)
+                {
+                    fallbackWorld = _worlds.Find(w => !w.IsDestroyed && 
+                                                      w.State == World.WorldState.Running &&
+                                                      w != disconnectedWorld);
+                }
+            }
+
+            if (fallbackWorld != null)
+            {
+                LumoraLogger.Log($"WorldManager: Switching focus to fallback world '{fallbackWorld.WorldName.Value}'");
+                FocusWorld(fallbackWorld);
+            }
+            else
+            {
+                LumoraLogger.Warn("WorldManager: No fallback world available after disconnect");
+                _focusedWorld = null;
+            }
+        }
+
+        // Queue the disconnected world for destruction
+        DestroyWorld(disconnectedWorld);
     }
 
     /// <summary>
@@ -288,6 +386,9 @@ public class WorldManager : IDisposable
         {
             _privateOverlayWorlds.Add(world);
         }
+
+        // Add to managed worlds so it gets a WorldHook
+        AddWorld(world);
 
         LumoraLogger.Log($"WorldManager: Set world '{world.WorldName.Value}' as private overlay");
     }
@@ -510,7 +611,6 @@ public class WorldManager : IDisposable
             }
             catch (Exception ex)
             {
-                // Include stack trace so we can pinpoint UI/layout failures during development.
                 LumoraLogger.Error($"WorldManager: Error updating world '{world.WorldName.Value}': {ex}");
             }
         }

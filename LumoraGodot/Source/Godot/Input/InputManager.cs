@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using Godot;
 using RuntimeEngine = Lumora.Core.Engine;
 using LocomotionController = Lumora.Core.Components.LocomotionController;
+using Aquamarine.Source.UI;
 
 namespace Aquamarine.Source.Input;
 
@@ -77,8 +78,16 @@ public partial class InputManager : Node
     {
         if (_isServer) return;
 
+        // Dashboard takes priority - release mouse when dashboard is visible
+        if (DashboardToggle.IsDashboardVisible)
+        {
+            if (!_movementLocked)
+            {
+                MovementLocked = true;  // Release the mouse for UI interaction
+            }
+        }
         // Check if LocomotionController is requesting mouse capture
-        if (LocomotionController.MouseCaptureRequested)
+        else if (LocomotionController.MouseCaptureRequested)
         {
             // MovementLocked = false means mouse is captured (inverted logic)
             if (_movementLocked)
@@ -97,6 +106,15 @@ public partial class InputManager : Node
 
         base._Process(delta);
 
+        // Block all movement input when dashboard is visible
+        if (DashboardToggle.IsDashboardVisible)
+        {
+            Movement = Vector2.Zero;
+            MouseMovement = Vector2.Zero;
+            _previousMouseMovement = Vector2.Zero;
+            return;
+        }
+
         MouseMovement -= _previousMouseMovement;
         _previousMouseMovement = MouseMovement;
 
@@ -107,6 +125,9 @@ public partial class InputManager : Node
         if (_isServer) return;
 
         base._Input(@event);
+
+        // Don't process mouse movement when dashboard is visible
+        if (DashboardToggle.IsDashboardVisible) return;
 
         // Note: Mouse events are forwarded to GodotMouseDriver by LumoraEngineRunner._Input()
         if (@event is InputEventMouseMotion motion) MouseMovement += -(motion.ScreenRelative / _window.Size.Y);

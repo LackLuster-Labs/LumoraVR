@@ -1,96 +1,64 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core;
 
 /// <summary>
-/// Network-synchronized list for collections.
+/// Network-synchronized list of sync members.
+/// Concrete implementation of SyncElementList that exposes IList interface.
 /// </summary>
-public class SyncList<T> : IList<T>
+public class SyncList<T> : SyncElementList<T>, IEnumerable<T>, IEnumerable, IList<T>, ICollection<T> where T : class, ISyncMember, new()
 {
-    private List<T> _list = new List<T>();
-    private Component _owner;
-
-    /// <summary>
-    /// Event fired when the list changes (add, remove, clear, etc.)
-    /// </summary>
-    public event Action<SyncList<T>> OnChanged;
-
-    public SyncList(Component owner)
+    T IList<T>.this[int index]
     {
-        _owner = owner;
+        get => base[index];
+        set => throw new NotSupportedException("Cannot assign values to specific index for SyncList");
     }
 
-    public T this[int index]
+    bool ICollection<T>.IsReadOnly => false;
+
+    void ICollection<T>.Add(T item)
     {
-        get => _list[index];
-        set
+        throw new NotSupportedException("Cannot add existing items to SyncList. Use Add() to create new items.");
+    }
+
+    bool ICollection<T>.Contains(T item)
+    {
+        return IndexOfElement(item) >= 0;
+    }
+
+    void ICollection<T>.CopyTo(T[] array, int arrayIndex)
+    {
+        for (int i = 0; i < Count; i++)
         {
-            _list[index] = value;
-            OnChanged?.Invoke(this);
+            array[arrayIndex + i] = base[i];
         }
     }
 
-    public int Count => _list.Count;
-    public bool IsReadOnly => false;
-
-    public void Add(T item)
+    public new Enumerator GetEnumerator()
     {
-        _list.Add(item);
-        OnChanged?.Invoke(this);
+        return GetElementsEnumerator();
     }
 
-    public void Clear()
+    void IList<T>.Insert(int index, T item)
     {
-        _list.Clear();
-        OnChanged?.Invoke(this);
+        throw new NotSupportedException("Cannot insert existing items to SyncList. Use Insert(index) to create new items.");
     }
 
-    public bool Contains(T item)
+    IEnumerator<T> IEnumerable<T>.GetEnumerator()
     {
-        return _list.Contains(item);
-    }
-
-    public void CopyTo(T[] array, int arrayIndex)
-    {
-        _list.CopyTo(array, arrayIndex);
-    }
-
-    public IEnumerator<T> GetEnumerator()
-    {
-        return _list.GetEnumerator();
-    }
-
-    public int IndexOf(T item)
-    {
-        return _list.IndexOf(item);
-    }
-
-    public void Insert(int index, T item)
-    {
-        _list.Insert(index, item);
-        OnChanged?.Invoke(this);
-    }
-
-    public bool Remove(T item)
-    {
-        bool removed = _list.Remove(item);
-        if (removed)
-        {
-            OnChanged?.Invoke(this);
-        }
-        return removed;
-    }
-
-    public void RemoveAt(int index)
-    {
-        _list.RemoveAt(index);
-        OnChanged?.Invoke(this);
+        return GetEnumerator();
     }
 
     IEnumerator IEnumerable.GetEnumerator()
     {
-        return _list.GetEnumerator();
+        return GetEnumerator();
+    }
+
+    public int IndexOf(T item)
+    {
+        return IndexOfElement(item);
     }
 }

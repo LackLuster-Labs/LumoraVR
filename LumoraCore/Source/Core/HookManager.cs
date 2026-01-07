@@ -5,6 +5,7 @@ namespace Lumora.Core;
 
 /// <summary>
 /// Manages thread-safe locking for World modifications.
+/// Uses a proper mutex to allow threads to wait for the lock.
 /// </summary>
 public class HookManager : IDisposable
 {
@@ -15,6 +16,7 @@ public class HookManager : IDisposable
         Implementer // Godot main thread
     }
 
+    private readonly object _lockObj = new object();
     private Thread _lockingThread;
 
     public World Owner { get; private set; }
@@ -22,16 +24,25 @@ public class HookManager : IDisposable
 
     /// <summary>
     /// Whether the current thread can modify world state.
+    /// Modifications are allowed when:
+    /// - World is not running (initialization phase)
+    /// - No lock is held (between update cycles)
+    /// - Current thread holds the lock
     /// </summary>
     public bool CanCurrentThreadModify
     {
         get
         {
-            if (Thread.CurrentThread != _lockingThread)
-            {
-                return Owner.State != World.WorldState.Running;
-            }
-            return true;
+            // Always allow modifications when world is not running
+            if (Owner.State != World.WorldState.Running)
+                return true;
+
+            // Allow modifications when no lock is held (between cycles)
+            if (Lock == LockOwner.None)
+                return true;
+
+            // Allow if current thread holds the lock
+            return Thread.CurrentThread == _lockingThread;
         }
     }
 
@@ -54,13 +65,11 @@ public class HookManager : IDisposable
 
     /// <summary>
     /// Lock for DataModel (sync thread) modifications.
+    /// Waits if another thread has the lock.
     /// </summary>
     public void DataModelLock(Thread ownerThread)
     {
-        if (Lock != LockOwner.None)
-        {
-            throw new Exception("DataModel cannot lock - already locked!");
-        }
+        Monitor.Enter(_lockObj);
         _lockingThread = ownerThread;
         Lock = LockOwner.DataModel;
     }
@@ -72,21 +81,20 @@ public class HookManager : IDisposable
     {
         if (Lock != LockOwner.DataModel)
         {
-            throw new Exception("DataModel cannot unlock - not locked by DataModel!");
+            return; // Silently ignore if not locked by DataModel
         }
         _lockingThread = null;
         Lock = LockOwner.None;
+        Monitor.Exit(_lockObj);
     }
 
     /// <summary>
     /// Lock for Implementer (main thread) modifications.
+    /// Waits if another thread has the lock.
     /// </summary>
     public void ImplementerLock(Thread ownerThread)
     {
-        if (Lock != LockOwner.None)
-        {
-            throw new Exception("Implementer cannot lock - already locked!");
-        }
+        Monitor.Enter(_lockObj);
         _lockingThread = ownerThread;
         Lock = LockOwner.Implementer;
     }
@@ -98,10 +106,11 @@ public class HookManager : IDisposable
     {
         if (Lock != LockOwner.Implementer)
         {
-            throw new Exception("Implementer cannot unlock - not locked by Implementer!");
+            return; // Silently ignore if not locked by Implementer
         }
         _lockingThread = null;
         Lock = LockOwner.None;
+        Monitor.Exit(_lockObj);
     }
 
     public void Dispose()

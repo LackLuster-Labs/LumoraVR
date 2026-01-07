@@ -1,0 +1,122 @@
+[gd_scene load_steps=4 format=3 uid="uid://worldcard001"]
+
+[ext_resource type="FontFile" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_card"]
+bg_color = Color(0.12, 0.11, 0.18, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.22, 0.4, 0.5)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_card_hover"]
+bg_color = Color(0.18, 0.16, 0.28, 0.95)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.47, 0.37, 0.94, 0.8)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="WorldCard" type="Button"]
+custom_minimum_size = Vector2(200, 160)
+theme_override_styles/normal = SubResource("StyleBoxFlat_card")
+theme_override_styles/hover = SubResource("StyleBoxFlat_card_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_card_hover")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+theme_override_constants/separation = 0
+
+[node name="ThumbnailContainer" type="PanelContainer" parent="VBox"]
+custom_minimum_size = Vector2(0, 110)
+layout_mode = 2
+size_flags_vertical = 3
+mouse_filter = 2
+
+[node name="Thumbnail" type="TextureRect" parent="VBox/ThumbnailContainer"]
+layout_mode = 2
+expand_mode = 1
+stretch_mode = 6
+mouse_filter = 2
+
+[node name="NoImageLabel" type="Label" parent="VBox/ThumbnailContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.48, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "NO IMAGE"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="UserCountBadge" type="PanelContainer" parent="VBox/ThumbnailContainer"]
+layout_mode = 1
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 4.0
+offset_top = -24.0
+offset_right = 50.0
+offset_bottom = -4.0
+mouse_filter = 2
+
+[node name="HBox" type="HBoxContainer" parent="VBox/ThumbnailContainer/UserCountBadge"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Icon" type="Label" parent="VBox/ThumbnailContainer/UserCountBadge/HBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "👤"
+
+[node name="Count" type="Label" parent="VBox/ThumbnailContainer/UserCountBadge/HBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "0"
+
+[node name="InfoPanel" type="MarginContainer" parent="VBox"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 6
+
+[node name="VBox" type="VBoxContainer" parent="VBox/InfoPanel"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 2
+
+[node name="Title" type="Label" parent="VBox/InfoPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "World Name"
+text_overrun_behavior = 3
+
+[node name="Host" type="Label" parent="VBox/InfoPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.58, 0.7, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 9
+text = "Host: Username"
+text_overrun_behavior = 3

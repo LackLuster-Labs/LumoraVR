@@ -96,10 +96,8 @@ public class Camera : ImplementableComponent
     /// </summary>
     public Sync<bool> RenderPostProcessing { get; private set; }
 
-    /// <summary>
-    /// Post-processing effects list (TODO: Replace with platform-agnostic type)
-    /// </summary>
-    public SyncList<object> PostProcessingEffects { get; private set; }
+    // TODO: Post-processing effects list - needs proper implementation
+    // public SyncList<PostProcessingEffect> PostProcessingEffects { get; private set; }
 
     public override void OnAwake()
     {
@@ -123,7 +121,7 @@ public class Camera : ImplementableComponent
         ViewportRect = new Sync<float4>(this, new float4(0f, 0f, 1f, 1f));
         SelectiveRender = new Sync<bool>(this, false);
         RenderPostProcessing = new Sync<bool>(this, true);
-        PostProcessingEffects = new SyncList<object>(this);
+        // PostProcessingEffects = new SyncList<PostProcessingEffect>();
     }
 
     public override void OnStart()

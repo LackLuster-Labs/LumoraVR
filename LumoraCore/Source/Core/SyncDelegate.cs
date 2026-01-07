@@ -1,150 +1,275 @@
 using System;
+using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core;
 
 /// <summary>
-/// A synchronized delegate that can be invoked across the network.
-/// Provides networked callbacks with change tracking.
+/// A synchronized delegate reference that extends SyncField<WorldDelegate>.
+/// Stores delegate target RefID and method name, resolving targets via ReferenceController.
 /// </summary>
-/// <typeparam name="T">The delegate type to synchronize.</typeparam>
-public class SyncDelegate<T> : IChangeable, IWorldElement where T : Delegate
+/// <typeparam name="T">Delegate type.</typeparam>
+public class SyncDelegate<T> : SyncField<WorldDelegate>, IWorldElementReceiver where T : Delegate
 {
-    private IWorldElement _owner;
-    private T _target;
-    private bool _isSyncing;
-
-    /// <summary>
-    /// Event fired when this delegate changes (IChangeable implementation).
-    /// </summary>
-    public event Action<IChangeable> Changed;
+    private T? _target;
+    private IWorldElement? _targetElement;
+    private bool _isPreassigned;
+    private ReferenceState _state;
 
     /// <summary>
     /// Event triggered when the delegate target changes.
     /// </summary>
-    public event Action<SyncDelegate<T>> DelegateChanged;
+    public event Action<SyncDelegate<T>>? DelegateChanged;
 
     /// <summary>
-    /// The current delegate target.
-    /// Setting this will trigger network synchronization.
+    /// Event triggered when the method becomes available after async resolution.
     /// </summary>
-    public T Target
+    public event Action<SyncDelegate<T>>? MethodAvailable;
+
+    static SyncDelegate()
     {
-        get => _target;
-        set
+        if (!typeof(Delegate).IsAssignableFrom(typeof(T)))
         {
-            if (Equals(_target, value)) return;
+            throw new Exception($"{typeof(T)} isn't a delegate type");
+        }
+    }
 
-            _target = value;
+    public SyncDelegate() : base()
+    {
+        _state = ReferenceState.Null;
+    }
 
-            // Mark owner as dirty for network sync (only if not currently syncing from network)
-            if (!_isSyncing && _owner != null)
-            {
-                _owner.World?.MarkElementDirty(_owner);
-
-                // Notify the parent component that this delegate changed
-                if (_owner is Component component)
-                {
-                    component.NotifyChanged();
-                }
-
-                // Fire the IChangeable Changed event
-                Changed?.Invoke(this);
-            }
-
-            // Fire the DelegateChanged event
-            DelegateChanged?.Invoke(this);
+    public SyncDelegate(IWorldElement? owner, T? target = null) : base()
+    {
+        _state = ReferenceState.Null;
+        if (target != null)
+        {
+            Target = target;
         }
     }
 
     /// <summary>
-    /// The world element that owns this SyncDelegate.
+    /// Current reference state.
     /// </summary>
-    public IWorldElement Owner => _owner;
-
-    /// <summary>
-    /// Whether this delegate is null.
-    /// </summary>
-    public bool IsNull => _target == null;
-
-    public SyncDelegate(IWorldElement owner, T target = null)
+    public ReferenceState State
     {
-        _owner = owner;
-        _target = target;
-        _isSyncing = false;
+        get
+        {
+            if (_state == ReferenceState.Available && _targetElement != null && _targetElement.IsDestroyed)
+            {
+                return ReferenceState.Removed;
+            }
+            return _state;
+        }
+        private set => _state = value;
     }
 
     /// <summary>
-    /// Invoke the delegate with the specified arguments.
+    /// The current delegate target.
     /// </summary>
-    /// <param name="args">Arguments to pass to the delegate.</param>
-    public void Invoke(params object[] args)
+    public T? Target
+    {
+        get => _target;
+        set
+        {
+            if (Equals(_target, value))
+                return;
+
+            if (value == null)
+            {
+                _isPreassigned = false;
+                Value = default;
+                return;
+            }
+
+            if (value is not Delegate del)
+                throw new ArgumentException("Target must be a delegate", nameof(value));
+
+            var method = del.Method;
+            var methodName = method.Name;
+            WorldDelegate info;
+            IWorldElement? targetElement = null;
+
+            if (del.Target == null)
+            {
+                // Static delegate
+                info = new WorldDelegate(RefID.Null, methodName, method.DeclaringType);
+            }
+            else
+            {
+                // Instance delegate
+                targetElement = del.Target as IWorldElement ??
+                                throw new ArgumentException("Delegate target must be a world element");
+
+                if (targetElement.World != World)
+                    throw new ArgumentException("Delegate target belongs to a different world");
+
+                info = new WorldDelegate(targetElement.ReferenceID, methodName, null);
+            }
+
+            _target = value;
+            _targetElement = targetElement;
+            _isPreassigned = true;
+            Value = info;
+            _isPreassigned = false;
+        }
+    }
+
+    /// <summary>
+    /// Underlying delegate descriptor.
+    /// </summary>
+    public WorldDelegate DelegateInfo => Value;
+
+    public bool IsNull => State == ReferenceState.Null;
+    public bool IsAvailable => State == ReferenceState.Available;
+
+    public string? MethodName
+    {
+        get => Value.Method;
+        set
+        {
+            if (Value.Method == value)
+                return;
+
+            var updated = new WorldDelegate(Value.Target, value ?? string.Empty, Value.Type);
+            Value = updated;
+        }
+    }
+
+    public void Clear() => Target = null;
+
+    public bool TrySet(Delegate? target)
+    {
+        if (target == null)
+        {
+            Clear();
+            return true;
+        }
+        if (target is T typed)
+        {
+            Target = typed;
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Called by ReferenceController when target becomes available.
+    /// </summary>
+    public void OnWorldElementAvailable(IWorldElement element)
+    {
+        if (element == null || element.ReferenceID != Value.Target || IsAvailable)
+            return;
+
+        ResolveInstanceDelegate(element);
+    }
+
+    public void Invoke(params object?[]? args)
     {
         _target?.DynamicInvoke(args);
     }
 
-    /// <summary>
-    /// Clear the delegate target.
-    /// </summary>
-    public void Clear()
+    protected override void ValueChanged()
     {
-        Target = null;
-    }
+        // Clear previous target unless preassigned
+        if (!_isPreassigned)
+        {
+            _target = null;
+            _targetElement = null;
+        }
 
-    /// <summary>
-    /// Set the value without triggering change events or network sync.
-    /// Used when receiving values from the network.
-    /// </summary>
-    internal void SetValueFromNetwork(T value)
-    {
-        _isSyncing = true;
-        _target = value;
+        var info = Value;
+
+        if (info.Target == RefID.Null)
+        {
+            if (string.IsNullOrEmpty(info.Method) || info.Type == null)
+            {
+                State = ReferenceState.Null;
+                base.ValueChanged();
+                DelegateChanged?.Invoke(this);
+                return;
+            }
+
+            // Static method - resolve immediately
+            var del = CreateDelegate(info.Type, info.Method, null);
+            if (del != null)
+            {
+                _target = del;
+                State = ReferenceState.Available;
+                base.ValueChanged();
+                DelegateChanged?.Invoke(this);
+                MethodAvailable?.Invoke(this);
+            }
+            else
+            {
+                State = ReferenceState.Invalid;
+                base.ValueChanged();
+                DelegateChanged?.Invoke(this);
+            }
+            return;
+        }
+
+        if (_isPreassigned && _target != null)
+        {
+            // Already have target cached from preassignment
+            State = ReferenceState.Available;
+            base.ValueChanged();
+            DelegateChanged?.Invoke(this);
+            MethodAvailable?.Invoke(this);
+            return;
+        }
+
+        // Instance delegate - request resolution
+        State = ReferenceState.Waiting;
+        World?.ReferenceController?.RequestObject(info.Target, this);
+        base.ValueChanged();
         DelegateChanged?.Invoke(this);
-        _isSyncing = false;
     }
 
-    public static implicit operator T(SyncDelegate<T> syncDelegate) => syncDelegate.Target;
-
-    public override string ToString() => _target?.ToString() ?? "null";
-
-    // IWorldElement implementation (forwarded to owner)
-
-    /// <summary>
-    /// The World this delegate belongs to.
-    /// </summary>
-    public World World => _owner?.World;
-
-	/// <summary>
-	/// Unique reference ID for this delegate within the world.
-	/// </summary>
-	public RefID ReferenceID => _owner?.ReferenceID ?? RefID.Null;
-
-    /// <summary>
-    /// Whether this delegate has been destroyed.
-    /// </summary>
-    public bool IsDestroyed => _owner?.IsDestroyed ?? false;
-
-	/// <summary>
-	/// Whether this delegate has been initialized.
-	/// </summary>
-	public bool IsInitialized => _owner?.IsInitialized ?? false;
-
-	public ulong RefIdNumeric => (ulong)ReferenceID;
-
-	public bool IsLocalElement => _owner?.IsLocalElement ?? false;
-
-	public bool IsPersistent => _owner?.IsPersistent ?? true;
-
-	public string ParentHierarchyToString() => _owner?.ParentHierarchyToString() ?? $"{GetType().Name}";
-
-    /// <summary>
-    /// Destroy this delegate (cannot be destroyed directly, owner must be destroyed).
-    /// </summary>
-    public void Destroy()
+    private void ResolveInstanceDelegate(IWorldElement element)
     {
-        // SyncDelegate fields cannot be destroyed directly
-        // They are destroyed when their owner is destroyed
-        _target = null;
-        Changed = null;
-        DelegateChanged = null;
+        var del = CreateDelegate(element.GetType(), Value.Method, element);
+        if (del == null)
+        {
+            State = ReferenceState.Invalid;
+            DelegateChanged?.Invoke(this);
+            return;
+        }
+
+        _targetElement = element;
+        _target = del;
+        State = ReferenceState.Available;
+        DelegateChanged?.Invoke(this);
+        MethodAvailable?.Invoke(this);
     }
+
+    private T? CreateDelegate(Type? declaringType, string? methodName, object? target)
+    {
+        if (declaringType == null || string.IsNullOrEmpty(methodName))
+            return null;
+
+        try
+        {
+            var created = target == null
+                ? Delegate.CreateDelegate(typeof(T), declaringType, methodName, false)
+                : Delegate.CreateDelegate(typeof(T), target, methodName, false);
+            return created as T;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public override object? GetValueAsObject() => Value;
+
+    public override void Dispose()
+    {
+        _target = null;
+        _targetElement = null;
+        DelegateChanged = null;
+        MethodAvailable = null;
+        base.Dispose();
+    }
+
+    public override string ToString() => Value.Method ?? "null";
 }

@@ -1,0 +1,793 @@
+[gd_scene load_steps=17 format=3 uid="uid://cjh7lam2pn4lf"]
+
+[ext_resource type="FontFile" uid="uid://bc0fpvfqcqrld" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
+[ext_resource type="Script" path="res://Scripts/UI/Dashboard/HomeDash.cs" id="2_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_background"]
+bg_color = Color(0.05, 0.04, 0.1, 0.98)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.18, 0.3, 0.5)
+corner_radius_top_left = 16
+corner_radius_top_right = 16
+corner_radius_bottom_right = 16
+corner_radius_bottom_left = 16
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_header"]
+bg_color = Color(0.12, 0.1, 0.18, 1)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.08, 0.08, 0.12, 0.95)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.18, 0.35, 0.6)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_normal"]
+bg_color = Color(0.15, 0.13, 0.25, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.25, 0.45, 0.5)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_hover"]
+bg_color = Color(0.25, 0.2, 0.4, 0.95)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.47, 0.37, 0.94, 0.6)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_pressed"]
+bg_color = Color(0.35, 0.28, 0.55, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.47, 0.37, 0.94, 0.8)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_separator"]
+bg_color = Color(0.25, 0.22, 0.35, 0.4)
+content_margin_top = 1
+content_margin_bottom = 1
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_card"]
+bg_color = Color(0.1, 0.09, 0.15, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.22, 0.4, 0.4)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_user_section"]
+bg_color = Color(0.1, 0.09, 0.15, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.25, 0.5, 0.5)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_avatar_circle"]
+bg_color = Color(0.2, 0.18, 0.3, 1)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.47, 0.37, 0.94, 0.6)
+corner_radius_top_left = 22
+corner_radius_top_right = 22
+corner_radius_bottom_right = 22
+corner_radius_bottom_left = 22
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_fps_box"]
+bg_color = Color(0.1, 0.09, 0.15, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.25, 0.5, 0.5)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_storage_bg"]
+bg_color = Color(0.15, 0.13, 0.22, 0.8)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_storage_fill"]
+bg_color = Color(0.47, 0.37, 0.94, 0.8)
+corner_radius_top_left = 2
+corner_radius_top_right = 2
+corner_radius_bottom_right = 2
+corner_radius_bottom_left = 2
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_status_dot"]
+bg_color = Color(0.3, 0.8, 0.5, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+
+[node name="HomeDash" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_script")
+
+[node name="Background" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_background")
+
+[node name="MainContainer" type="MarginContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="VBox" type="VBoxContainer" parent="MainContainer"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Header" type="Panel" parent="MainContainer/VBox"]
+custom_minimum_size = Vector2(0, 80)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_header")
+
+[node name="HeaderContent" type="HBoxContainer" parent="MainContainer/VBox/Header"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 16
+
+[node name="LeftMargin" type="Control" parent="MainContainer/VBox/Header/HeaderContent"]
+custom_minimum_size = Vector2(20, 0)
+layout_mode = 2
+
+[node name="TitleSection" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderContent"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+alignment = 1
+theme_override_constants/separation = 2
+
+[node name="Title" type="Label" parent="MainContainer/VBox/Header/HeaderContent/TitleSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 24
+text = "Lumora"
+
+[node name="Subtitle" type="Label" parent="MainContainer/VBox/Header/HeaderContent/TitleSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Home Dashboard"
+
+[node name="UserSectionPanel" type="Panel" parent="MainContainer/VBox/Header/HeaderContent"]
+custom_minimum_size = Vector2(220, 0)
+layout_mode = 2
+size_flags_vertical = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_user_section")
+
+[node name="UserSectionMargin" type="MarginContainer" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 8
+
+[node name="UserSection" type="HBoxContainer" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin"]
+layout_mode = 2
+size_flags_vertical = 1
+theme_override_constants/separation = 12
+
+[node name="UserInfoVBox" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+alignment = 1
+theme_override_constants/separation = 2
+
+[node name="Username" type="Label" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/UserInfoVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Guest User"
+horizontal_alignment = 2
+
+[node name="PatreonRole" type="Label" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/UserInfoVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 0.9)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Supporter"
+horizontal_alignment = 2
+
+[node name="StorageContainer" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/UserInfoVBox"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="StorageLabel" type="Label" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/UserInfoVBox/StorageContainer"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 9
+text = "Storage: 2.4 GB / 10 GB"
+horizontal_alignment = 2
+
+[node name="StorageBarBg" type="Panel" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/UserInfoVBox/StorageContainer"]
+custom_minimum_size = Vector2(100, 5)
+layout_mode = 2
+size_flags_horizontal = 10
+theme_override_styles/panel = SubResource("StyleBoxFlat_storage_bg")
+
+[node name="StorageBarFill" type="Panel" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/UserInfoVBox/StorageContainer/StorageBarBg"]
+custom_minimum_size = Vector2(24, 3)
+layout_mode = 0
+offset_left = 1.0
+offset_top = 1.0
+offset_right = 25.0
+offset_bottom = 4.0
+theme_override_styles/panel = SubResource("StyleBoxFlat_storage_fill")
+
+[node name="AvatarContainer" type="CenterContainer" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection"]
+custom_minimum_size = Vector2(48, 48)
+layout_mode = 2
+size_flags_vertical = 1
+
+[node name="AvatarCircle" type="Panel" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/AvatarContainer"]
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_avatar_circle")
+
+[node name="AvatarIcon" type="Label" parent="MainContainer/VBox/Header/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/AvatarContainer/AvatarCircle"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.7, 0.65, 0.85, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 18
+text = "G"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="FPSPanel" type="Panel" parent="MainContainer/VBox/Header/HeaderContent"]
+custom_minimum_size = Vector2(70, 0)
+layout_mode = 2
+size_flags_vertical = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
+
+[node name="FPSMargin" type="MarginContainer" parent="MainContainer/VBox/Header/HeaderContent/FPSPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="FPSVBox" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderContent/FPSPanel/FPSMargin"]
+layout_mode = 2
+alignment = 1
+theme_override_constants/separation = 0
+
+[node name="FPSValue" type="Label" parent="MainContainer/VBox/Header/HeaderContent/FPSPanel/FPSMargin/FPSVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.3, 0.85, 0.5, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 16
+text = "60"
+horizontal_alignment = 1
+
+[node name="FPSLabel" type="Label" parent="MainContainer/VBox/Header/HeaderContent/FPSPanel/FPSMargin/FPSVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 9
+text = "FPS"
+horizontal_alignment = 1
+
+[node name="RightMargin" type="Control" parent="MainContainer/VBox/Header/HeaderContent"]
+custom_minimum_size = Vector2(12, 0)
+layout_mode = 2
+
+[node name="ContentArea" type="HBoxContainer" parent="MainContainer/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 16
+
+[node name="Sidebar" type="Panel" parent="MainContainer/VBox/ContentArea"]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="SidebarMargin" type="MarginContainer" parent="MainContainer/VBox/ContentArea/Sidebar"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 16
+
+[node name="NavButtons" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="NavLabel" type="Label" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.45, 0.65, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "NAVIGATION"
+
+[node name="Spacer1" type="Control" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 4)
+layout_mode = 2
+
+[node name="BtnHome" type="Button" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_pressed")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
+text = "  Home"
+alignment = 0
+
+[node name="BtnWorlds" type="Button" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
+text = "  Worlds"
+alignment = 0
+
+[node name="BtnFriends" type="Button" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
+text = "  Friends"
+alignment = 0
+
+[node name="BtnGroups" type="Button" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
+text = "  Groups"
+alignment = 0
+
+[node name="BtnInventory" type="Button" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
+text = "  Inventory"
+alignment = 0
+
+[node name="Separator" type="HSeparator" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+layout_mode = 2
+theme_override_styles/separator = SubResource("StyleBoxFlat_separator")
+
+[node name="SettingsLabel" type="Label" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.45, 0.65, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "SYSTEM"
+
+[node name="Spacer2" type="Control" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 4)
+layout_mode = 2
+
+[node name="BtnSettings" type="Button" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
+theme_override_colors/font_pressed_color = Color(1, 1, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
+text = "  Settings"
+alignment = 0
+
+[node name="BtnExit" type="Button" parent="MainContainer/VBox/ContentArea/Sidebar/SidebarMargin/NavButtons"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.5, 0.5, 1)
+theme_override_colors/font_hover_color = Color(1, 0.6, 0.6, 1)
+theme_override_colors/font_pressed_color = Color(1, 0.7, 0.7, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
+text = "  Exit"
+alignment = 0
+
+[node name="MainContent" type="Panel" parent="MainContainer/VBox/ContentArea"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="ContentMargin" type="MarginContainer" parent="MainContainer/VBox/ContentArea/MainContent"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 20
+theme_override_constants/margin_right = 20
+theme_override_constants/margin_bottom = 20
+
+[node name="ContentVBox" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="WelcomeSection" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="WelcomeTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/WelcomeSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 20
+text = "Welcome back!"
+
+[node name="WelcomeSubtitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/WelcomeSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Ready to explore new worlds and connect with friends?"
+
+[node name="QuickActions" type="HBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="JoinWorld" type="Panel" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
+custom_minimum_size = Vector2(180, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="CardContent" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+
+[node name="CardTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld/CardContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Join World"
+horizontal_alignment = 1
+
+[node name="CardDesc" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld/CardContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Enter a session"
+horizontal_alignment = 1
+
+[node name="CreateWorld" type="Panel" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
+custom_minimum_size = Vector2(180, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="CardContent" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+
+[node name="CardTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld/CardContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.3, 0.75, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Create World"
+horizontal_alignment = 1
+
+[node name="CardDesc" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld/CardContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Start a new session"
+horizontal_alignment = 1
+
+[node name="BrowseAvatars" type="Panel" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
+custom_minimum_size = Vector2(180, 100)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="CardContent" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+alignment = 1
+
+[node name="CardTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars/CardContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.55, 0.25, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Avatars"
+horizontal_alignment = 1
+
+[node name="CardDesc" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars/CardContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Change your look"
+horizontal_alignment = 1
+
+[node name="RecentSection" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+
+[node name="RecentHeader" type="HBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection"]
+layout_mode = 2
+
+[node name="RecentTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentHeader"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Recent Activity"
+
+[node name="ViewAll" type="Button" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentHeader"]
+custom_minimum_size = Vector2(80, 30)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
+theme_override_colors/font_hover_color = Color(0.6, 0.5, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+text = "View All"
+
+[node name="RecentList" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 8
+
+[node name="RecentItem1" type="Panel" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList"]
+custom_minimum_size = Vector2(0, 50)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="ItemContent" type="HBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 12
+
+[node name="Margin" type="Control" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent"]
+custom_minimum_size = Vector2(16, 0)
+layout_mode = 2
+
+[node name="Info" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+alignment = 1
+
+[node name="ItemTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent/Info"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.85, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "No recent activity"
+
+[node name="ItemDesc" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent/Info"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Your recent worlds and sessions will appear here"
+
+[node name="StatusBar" type="Panel" parent="MainContainer/VBox"]
+custom_minimum_size = Vector2(0, 35)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_header")
+
+[node name="StatusContent" type="HBoxContainer" parent="MainContainer/VBox/StatusBar"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 16
+
+[node name="LeftMargin" type="Control" parent="MainContainer/VBox/StatusBar/StatusContent"]
+custom_minimum_size = Vector2(16, 0)
+layout_mode = 2
+
+[node name="ConnectionPanel" type="Panel" parent="MainContainer/VBox/StatusBar/StatusContent"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+size_flags_vertical = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
+
+[node name="ConnectionCenter" type="CenterContainer" parent="MainContainer/VBox/StatusBar/StatusContent/ConnectionPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ConnectionStatus" type="HBoxContainer" parent="MainContainer/VBox/StatusBar/StatusContent/ConnectionPanel/ConnectionCenter"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="DotContainer" type="CenterContainer" parent="MainContainer/VBox/StatusBar/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus"]
+custom_minimum_size = Vector2(10, 10)
+layout_mode = 2
+
+[node name="StatusDot" type="Panel" parent="MainContainer/VBox/StatusBar/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus/DotContainer"]
+custom_minimum_size = Vector2(10, 10)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_status_dot")
+
+[node name="StatusText" type="Label" parent="MainContainer/VBox/StatusBar/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.65, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Connected"
+
+[node name="Spacer" type="Control" parent="MainContainer/VBox/StatusBar/StatusContent"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="VersionPanel" type="Panel" parent="MainContainer/VBox/StatusBar/StatusContent"]
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+size_flags_vertical = 1
+theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
+
+[node name="VersionCenter" type="CenterContainer" parent="MainContainer/VBox/StatusBar/StatusContent/VersionPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Version" type="Label" parent="MainContainer/VBox/StatusBar/StatusContent/VersionPanel/VersionCenter"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = "Lumora v0.1.0-dev"
+
+[node name="RightMargin" type="Control" parent="MainContainer/VBox/StatusBar/StatusContent"]
+custom_minimum_size = Vector2(16, 0)
+layout_mode = 2

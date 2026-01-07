@@ -40,7 +40,7 @@ internal sealed class SocialSpaceWorldTemplate : WorldTemplateDefinition
         var uiPanelsSlot = world.RootSlot.AddSlot("UIPanels");
         uiPanelsSlot.LocalPosition.Value = new float3(0f, 1.4f, -2f);
 
-        AttachUserInspectorPanel(uiPanelsSlot, new float3(-1.2f, 0f, 0f));
-        AttachEngineDebugPanel(uiPanelsSlot, new float3(1.2f, 0f, 0f));
+        AttachGodotUserInspectorPanel(uiPanelsSlot, new float3(-0.4f, 0f, 0f));
+        AttachGodotEngineDebugPanel(uiPanelsSlot, new float3(0.5f, 0f, 0f));
     }
 }

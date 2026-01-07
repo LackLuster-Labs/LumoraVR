@@ -70,6 +70,8 @@ public abstract class Collider : ImplementableComponent
         Mass.OnChanged += _ => RunApplyChanges();
         CharacterCollider.OnChanged += _ => RunApplyChanges();
         IgnoreRaycasts.OnChanged += _ => RunApplyChanges();
+        Slot.LocalPosition.OnChanged += _ => RunApplyChanges();
+        Slot.LocalRotation.OnChanged += _ => RunApplyChanges();
 
         // Lumora Pattern: If this is a CharacterController collider,
         // notify CharacterController components in the SAME slot (not parent slots)

@@ -300,6 +300,18 @@ public class PhosMesh
     }
 
     /// <summary>
+    /// Set a UV coordinate at a specific vertex index.
+    /// </summary>
+    public void SetUV(int channel, int vertexIndex, float2 uv)
+    {
+        CheckUV(channel);
+        if (vertexIndex >= 0 && vertexIndex < VertexCount)
+        {
+            uvChannels[channel].uv2D![vertexIndex] = uv;
+        }
+    }
+
+    /// <summary>
     /// Try to get UV array (doesn't create).
     /// </summary>
     internal PhosUVArray TryGetRawUV_Array(int channel)

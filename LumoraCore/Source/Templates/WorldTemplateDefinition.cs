@@ -1,7 +1,7 @@
 using System;
 using Lumora.Core;
 using Lumora.Core.Components;
-using Lumora.Core.HelioUI;
+using Lumora.Core.GodotUI.Wizards;
 using Lumora.Core.Logging;
 using Lumora.Core.Math;
 
@@ -42,32 +42,38 @@ public abstract class WorldTemplateDefinition
     }
 
     /// <summary>
-    /// Shared helper to add the User Inspector panel into the template.
+    /// Shared helper to add a Godot-based User Inspector panel.
+    /// Uses native Godot UI loaded from a .tscn scene file.
     /// </summary>
-    protected static void AttachUserInspectorPanel(Slot parent, float3 offset)
+    protected static void AttachGodotUserInspectorPanel(Slot parent, float3 offset)
     {
-        var panelSlot = parent.AddSlot("UserInspector");
+        var panelSlot = parent.AddSlot("GodotUserInspector");
         panelSlot.LocalPosition.Value = offset;
         panelSlot.LocalRotation.Value = floatQ.Euler(0f, 0f, 0f);
-        panelSlot.LocalScale.Value = new float3(0.7f, 0.7f, 0.7f);
+        panelSlot.LocalScale.Value = new float3(1f, 1f, 1f);
 
-        panelSlot.AttachComponent<HelioUserInspector>();
+        var inspector = panelSlot.AttachComponent<GodotUserInspector>();
+        inspector.Size.Value = new float2(500, 600);
+        inspector.PixelsPerUnit.Value = 800f;
 
-        Logger.Log("WorldTemplates: Created User Inspector panel");
+        Logger.Log("WorldTemplates: Created Godot User Inspector panel");
     }
 
     /// <summary>
-    /// Shared helper to add the Engine Debug panel into the template.
+    /// Shared helper to add a Godot-based Engine Debug panel.
+    /// Displays world performance and memory statistics.
     /// </summary>
-    protected static void AttachEngineDebugPanel(Slot parent, float3 offset)
+    protected static void AttachGodotEngineDebugPanel(Slot parent, float3 offset)
     {
-        var panelSlot = parent.AddSlot("EngineDebug");
+        var panelSlot = parent.AddSlot("GodotEngineDebug");
         panelSlot.LocalPosition.Value = offset;
         panelSlot.LocalRotation.Value = floatQ.Euler(0f, 0f, 0f);
-        panelSlot.LocalScale.Value = new float3(0.35f, 0.35f, 0.35f);
+        panelSlot.LocalScale.Value = new float3(1f, 1f, 1f);
 
-        panelSlot.AttachComponent<EngineDebugWizard>();
+        var debugPanel = panelSlot.AttachComponent<GodotEngineDebug>();
+        debugPanel.Size.Value = new float2(600, 700);
+        debugPanel.PixelsPerUnit.Value = 800f;
 
-        Logger.Log("WorldTemplates: Created Engine Debug panel");
+        Logger.Log("WorldTemplates: Created Godot Engine Debug panel");
     }
 }

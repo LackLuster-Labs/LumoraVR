@@ -12,13 +12,13 @@ namespace Aquamarine.Godot.Hooks;
 /// Converts PhosMesh to Godot ArrayMesh and uploads to GPU.
 /// Platform mesh hook for Godot.
 /// </summary>
+#nullable enable
 public class MeshHook : ComponentHook<ProceduralMesh>
 {
     private ArrayMesh? godotMesh;
     private MeshInstance3D? meshInstance;
-    private SlotHook? slotHook;
+    private SlotHook? _meshSlotHook;
     private Node3D? parentNode;
-    private bool _uiMaterialApplied;
 
     /// <summary>
     /// Factory method for creating mesh hooks.
@@ -32,10 +32,12 @@ public class MeshHook : ComponentHook<ProceduralMesh>
     {
         Lumora.Core.Logging.Logger.Log($"MeshHook.Initialize: Starting for component on slot '{Owner?.Slot?.SlotName?.Value}'");
 
-        // Create Godot mesh instance
+        // Create the ArrayMesh to hold mesh data
+        godotMesh = new ArrayMesh();
+
+        // Create Godot mesh instance (will hide if MeshRenderer is present)
         meshInstance = new MeshInstance3D();
         meshInstance.Name = "PhosMesh";
-        godotMesh = new ArrayMesh();
         meshInstance.Mesh = godotMesh;
 
         // Create default material so mesh is visible
@@ -43,28 +45,20 @@ public class MeshHook : ComponentHook<ProceduralMesh>
         material.AlbedoColor = new Color(0.8f, 0.8f, 0.8f); // Light gray
         material.Roughness = 0.7f;
         material.ShadingMode = BaseMaterial3D.ShadingModeEnum.PerPixel;
-        meshInstance.MaterialOverride = material;
 
-        // UI meshes use vertex colors and unshaded rendering
-        if (Owner is Lumora.Core.HelioUI.Rendering.HelioUIMesh)
+        var slotName = Owner?.Slot?.SlotName?.Value;
+        if (!string.IsNullOrEmpty(slotName) && slotName.StartsWith("Default", System.StringComparison.Ordinal))
         {
-            material = new StandardMaterial3D
-            {
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-                Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-                VertexColorUseAsAlbedo = true,
-                CullMode = BaseMaterial3D.CullModeEnum.Disabled,
-                AlbedoColor = Colors.White
-            };
-            meshInstance.MaterialOverride = material;
-            _uiMaterialApplied = true;
+            material.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
+            material.CullMode = BaseMaterial3D.CullModeEnum.Disabled;
         }
+        meshInstance.MaterialOverride = material;
 
         // Get slot hook and request Node3D
         if (Owner.Slot?.Hook is SlotHook hook)
         {
-            slotHook = hook;
-            parentNode = slotHook.RequestNode3D();
+            _meshSlotHook = hook;
+            parentNode = _meshSlotHook.RequestNode3D();
             parentNode.AddChild(meshInstance);
             Lumora.Core.Logging.Logger.Log($"MeshHook: Successfully added mesh to slot '{Owner.Slot.SlotName.Value}'");
         }
@@ -89,19 +83,15 @@ public class MeshHook : ComponentHook<ProceduralMesh>
             Owner.ClearDirty();
         }
 
-        // Ensure UI materials stay unshaded even if material override gets cleared
-        if (!_uiMaterialApplied && Owner is Lumora.Core.HelioUI.Rendering.HelioUIMesh && meshInstance != null)
+        // Hide our MeshInstance3D if a MeshRenderer is handling rendering
+        // MeshRenderer creates its own MeshInstance3D with its own material
+        if (meshInstance != null)
         {
-            var mat = new StandardMaterial3D
+            bool hasMeshRenderer = Owner.Slot?.GetComponent<Lumora.Core.Components.MeshRenderer>() != null;
+            if (meshInstance.Visible != !hasMeshRenderer)
             {
-                ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded,
-                Transparency = BaseMaterial3D.TransparencyEnum.Alpha,
-                VertexColorUseAsAlbedo = true,
-                CullMode = BaseMaterial3D.CullModeEnum.Disabled,
-                AlbedoColor = Colors.White
-            };
-            meshInstance.MaterialOverride = mat;
-            _uiMaterialApplied = true;
+                meshInstance.Visible = !hasMeshRenderer;
+            }
         }
     }
 
@@ -111,7 +101,7 @@ public class MeshHook : ComponentHook<ProceduralMesh>
         if (!destroyingWorld)
         {
             // Free the Node3D request from slot hook
-            slotHook?.FreeNode3D();
+            _meshSlotHook?.FreeNode3D();
 
             if (meshInstance != null && GodotObject.IsInstanceValid(meshInstance))
             {
@@ -126,7 +116,7 @@ public class MeshHook : ComponentHook<ProceduralMesh>
 
         meshInstance = null;
         godotMesh = null;
-        slotHook = null;
+        _meshSlotHook = null;
         parentNode = null;
     }
 
@@ -236,7 +226,8 @@ public class MeshHook : ComponentHook<ProceduralMesh>
         }
 
         // Upload indices (ALWAYS required for triangle meshes)
-        if (submesh.IndexCount > 0 && submesh.RawIndices != null)
+        bool hasIndices = submesh.IndexCount > 0 && submesh.RawIndices != null;
+        if (hasIndices)
         {
             var indices = new int[submesh.IndexCount];
             for (int i = 0; i < submesh.IndexCount; i++)
@@ -250,6 +241,11 @@ public class MeshHook : ComponentHook<ProceduralMesh>
         var vertexArray = arrays[(int)Mesh.ArrayType.Vertex];
         if (vertexArray.VariantType != Variant.Type.Nil && vertexArray.AsVector3Array() != null)
         {
+            if (!hasIndices && (phosMesh.VertexCount % 3) != 0)
+            {
+                Lumora.Core.Logging.Logger.Warn($"MeshHook.UploadTriangleSubmesh: Skipping surface - no indices and vertex count {phosMesh.VertexCount} is not a multiple of 3");
+                return;
+            }
             godotMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
             // Lumora.Core.Logging.Logger.Log($"MeshHook.UploadTriangleSubmesh: Uploaded {submesh.IndexCount / 3} triangles");
         }

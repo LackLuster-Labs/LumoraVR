@@ -11,6 +11,7 @@ public class UpdateManager
 {
     private World _world;
     private HashSet<IImplementable> _pendingHookUpdates = new HashSet<IImplementable>();
+    private readonly object _hookUpdatesLock = new object();
     private float _currentDeltaTime = 0f;
 
     // Bucketed update system for ordered execution
@@ -19,6 +20,7 @@ public class UpdateManager
     private Queue<IUpdatable> _destructionQueue = new Queue<IUpdatable>();
     private SortedDictionary<int, Queue<IUpdatable>> _changeBuckets = new SortedDictionary<int, Queue<IUpdatable>>();
     private int _changeUpdateIndex = 0;
+    private Dictionary<IInitializable, List<IInitializable>> _initializableChildren = new Dictionary<IInitializable, List<IInitializable>>();
 
     // Currently updating component (for debugging)
     public IUpdatable CurrentlyUpdating { get; private set; }
@@ -138,7 +140,10 @@ public class UpdateManager
     {
         if (component != null && component.Hook != null)
         {
-            _pendingHookUpdates.Add(component);
+            lock (_hookUpdatesLock)
+            {
+                _pendingHookUpdates.Add(component);
+            }
         }
     }
 
@@ -267,21 +272,27 @@ public class UpdateManager
     /// </summary>
     public void ProcessHookUpdates(float deltaTime)
     {
-        if (_pendingHookUpdates.Count == 0)
-            return;
+        List<IImplementable> pending;
+        lock (_hookUpdatesLock)
+        {
+            if (_pendingHookUpdates.Count == 0)
+                return;
+
+            // Snapshot to avoid collection modification during hook updates
+            pending = new List<IImplementable>(_pendingHookUpdates);
+            _pendingHookUpdates.Clear();
+        }
 
         // Store delta time for hooks to access
         _currentDeltaTime = deltaTime;
 
-        foreach (var component in _pendingHookUpdates)
+        foreach (var component in pending)
         {
             if (component is ImplementableComponent<IHook> impl)
             {
                 impl.UpdateHook();
             }
         }
-
-        _pendingHookUpdates.Clear();
     }
 
     /// <summary>
@@ -289,10 +300,60 @@ public class UpdateManager
     /// </summary>
     public void Clear()
     {
-        _pendingHookUpdates.Clear();
+        lock (_hookUpdatesLock)
+        {
+            _pendingHookUpdates.Clear();
+        }
         _updateBuckets.Clear();
         _startupQueue.Clear();
         _destructionQueue.Clear();
         _changeBuckets.Clear();
+        _initializableChildren.Clear();
+    }
+
+    /// <summary>
+    /// Track a child initializable so its init phase can be ended when the parent finishes.
+    /// </summary>
+    public void AddInitializableChild(IInitializable parent, IInitializable child)
+    {
+        if (parent == null || child == null)
+            return;
+
+        if (!_initializableChildren.TryGetValue(parent, out var list))
+        {
+            list = new List<IInitializable>();
+            _initializableChildren[parent] = list;
+        }
+
+        list.Add(child);
+    }
+
+    /// <summary>
+    /// End initialization phase on all tracked children of the given parent.
+    /// </summary>
+    public void EndInitPhaseInChildren(IInitializable parent)
+    {
+        if (parent == null)
+            return;
+
+        if (_initializableChildren.TryGetValue(parent, out var children))
+        {
+            foreach (var child in children)
+            {
+                try
+                {
+                    if (child.IsInInitPhase)
+                    {
+                        child.EndInitPhase();
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logging.Logger.Error($"UpdateManager: Error ending init phase for {child}: {ex.Message}");
+                }
+            }
+
+            _initializableChildren.Remove(parent);
+        }
     }
 }

@@ -1,6 +1,51 @@
 using System;
+using System.Collections.Generic;
 
 namespace Lumora.Core.Assets;
+
+/// <summary>
+/// Static registry for asset hook types.
+/// Maps asset types to their hook implementations.
+/// </summary>
+public static class AssetHookRegistry
+{
+    private static readonly Dictionary<Type, Type> _assetToHook = new();
+
+    /// <summary>
+    /// Register a hook type for an asset type.
+    /// </summary>
+    public static void Register<TAsset, THook>()
+        where TAsset : IAsset
+        where THook : IAssetHook
+    {
+        _assetToHook[typeof(TAsset)] = typeof(THook);
+    }
+
+    /// <summary>
+    /// Get the hook type for an asset type.
+    /// </summary>
+    public static Type GetHookType(Type assetType)
+    {
+        if (_assetToHook.TryGetValue(assetType, out var hookType))
+            return hookType;
+
+        // Walk up inheritance chain
+        var baseType = assetType.BaseType;
+        while (baseType != null && baseType != typeof(object))
+        {
+            if (_assetToHook.TryGetValue(baseType, out hookType))
+                return hookType;
+            baseType = baseType.BaseType;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Clear all registrations.
+    /// </summary>
+    public static void Clear() => _assetToHook.Clear();
+}
 
 /// <summary>
 /// Base class for dynamic assets that have engine-specific hooks.
@@ -20,8 +65,6 @@ public abstract class DynamicImplementableAsset<C> : DynamicAsset where C : clas
     /// </summary>
     protected virtual C InstantiateHook()
     {
-        // TODO: Implement hook registration system for asset hook registration
-        // For now, derived classes should override this
         Type hookType = GetHookType();
         if (hookType == null)
         {
@@ -32,12 +75,11 @@ public abstract class DynamicImplementableAsset<C> : DynamicAsset where C : clas
 
     /// <summary>
     /// Get the hook type for this asset.
-    /// Override in derived classes or use a registration system.
+    /// Uses the AssetHookRegistry by default.
     /// </summary>
     protected virtual Type GetHookType()
     {
-        // Will be replaced with AssetInitializer system later
-        return null;
+        return AssetHookRegistry.GetHookType(GetType());
     }
 
     public override void InitializeDynamic()

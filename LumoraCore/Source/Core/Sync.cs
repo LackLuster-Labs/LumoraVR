@@ -1,58 +1,46 @@
 using System;
 using System.Collections.Generic;
-using System.Text.Json;
+using System.IO;
+using System.Runtime.CompilerServices;
+using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core;
 
 /// <summary>
 /// Synchronized field that automatically replicates changes across the network.
 /// Supports linking and driving for IK and animation systems.
-/// Implements IChangeable for reactive change tracking.
 /// </summary>
 /// <typeparam name="T">The type of value to synchronize.</typeparam>
-public class SyncField<T> : ILinkable, IChangeable, IWorldElement
+public abstract class SyncField<T> : ConflictingSyncElement, IField<T>
 {
-	private T _value;
-	private IWorldElement _owner;
-	private bool _isSyncing;
-	private bool _isInHook;
-	private ILinkRef _directLink;
-	private ILinkRef _inheritedLink;
-	protected int _flags;
-
-	protected bool GetFlag(int flag) => (_flags & (1 << flag)) != 0;
-	protected void SetFlag(int flag, bool value)
-	{
-		if (value)
-			_flags |= (1 << flag);
-		else
-			_flags &= ~(1 << flag);
-	}
-
-	protected bool IsWithinHookCallback => _isInHook;
-	protected virtual bool IsInInitPhase => false;
-	protected virtual bool IsLoading => false;
-	protected virtual string Name => GetType().Name;
+    protected T _value;
 
     /// <summary>
-    /// Event triggered when the value changes.
+    /// Optional filter applied to values before setting.
     /// </summary>
-    public event Action<T> OnChanged;
+    public Func<T, IField<T>, T>? LocalFilter;
 
-    /// <summary>
-    /// Event fired when this sync field changes (IChangeable implementation).
-    /// </summary>
-    public event Action<IChangeable> Changed;
+    private ILinkRef? _directLink;
+    private ILinkRef? _inheritedLink;
 
-    /// <summary>
-    /// Event triggered when this field is linked to a FieldDrive.
-    /// </summary>
-    public event Action OnLinkedEvent;
+    // Flag check mask for hook bypass: init(5) + hookcallback(10) + loading(9)
+    private const int HOOK_CHECK_FLAGS = 0x620;
 
-    /// <summary>
-    /// Event triggered when this field is unlinked from a FieldDrive.
-    /// </summary>
-    public event Action OnUnlinkedEvent;
+    #region IField Implementation
+
+    object IField.BoxedValue
+    {
+        get => Value;
+        set => Value = (T)value;
+    }
+
+    public Type ValueType => typeof(T);
+
+    public virtual bool CanWrite => true;
+
+    #endregion
+
+    #region Value Property
 
     /// <summary>
     /// The current value.
@@ -60,157 +48,72 @@ public class SyncField<T> : ILinkable, IChangeable, IWorldElement
     /// When driven/linked, the value comes from the drive source.
     /// If hooked and modification not allowed, calls the hook instead.
     /// </summary>
-    public T Value
+    public virtual T Value
     {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => _value;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set
         {
-            // If hooked and modification not allowed, call the hook
-            if (IsHooked && !_isInHook && ActiveLink is FieldHook<T> fieldHook && !fieldHook.IsModificationAllowed)
+            // If hooked, NOT modification allowed, and not in special state, call hook
+            if (IsHooked && !ActiveLink.IsModificationAllowed &&
+                (_flags & HOOK_CHECK_FLAGS) == 0 &&
+                ActiveLink is FieldHook<T> fieldHook && fieldHook.ValueSetHook != null)
             {
-                if (fieldHook.ValueSetHook != null)
+                try
                 {
-                    try
-                    {
-                        BeginHook();
-                        fieldHook.ValueSetHook(this, value);
-                        return;
-                    }
-                    finally
-                    {
-                        EndHook();
-                    }
+                    BeginHook();
+                    fieldHook.ValueSetHook(this, value);
+                    return;
+                }
+                finally
+                {
+                    EndHook();
                 }
             }
 
-            // If driven, ignore direct value sets (value comes from drive)
-            if (IsDriven)
+            if (LocalFilter != null)
             {
-                return;
+                value = LocalFilter(value, this);
             }
 
-            InternalSetValue(value);
+            InternalSetValue(in value);
         }
     }
 
-	/// <summary>
-	/// Begin hook processing (prevents reentrancy).
-	/// </summary>
-	protected void BeginHook()
-	{
-		_isInHook = true;
-	}
-
-	/// <summary>
-	/// End hook processing.
-	/// </summary>
-	protected void EndHook()
-	{
-		_isInHook = false;
-	}
-
-	/// <summary>
-	/// Internal method to set value with change tracking.
-	/// </summary>
-	protected bool InternalSetValue(T value)
-	{
-		if (Equals(_value, value)) return false;
-
-        var oldValue = _value;
-        _value = value;
-        IsDirty = true;
-
-        // Trigger change event
-        OnChanged?.Invoke(_value);
-
-        // Mark owner as dirty for network sync (only if not currently syncing from network)
-        if (!_isSyncing && _owner != null)
-        {
-            _owner.World?.MarkElementDirty(_owner);
-
-            // Notify the parent component that this sync field changed
-            if (_owner is Component component)
-            {
-                component.NotifyChanged();
-            }
-
-			// Fire the IChangeable Changed event
-			Changed?.Invoke(this);
-
-			ValueChanged();
-		}
-		return true;
-	}
-
     /// <summary>
-    /// The world element that owns this Sync field.
+    /// Direct value bypassing hook machinery.
     /// </summary>
-    public IWorldElement Owner => _owner;
-
-    /// <summary>
-    /// Whether this field has been modified since last sync.
-    /// </summary>
-    public bool IsDirty { get; internal set; }
-
-	protected SyncField()
-	{
-		_owner = null;
-		_value = default;
-		IsDirty = false;
-	}
-
-	public SyncField(IWorldElement owner, T defaultValue = default)
-	{
-		_owner = owner;
-		_value = defaultValue;
-		IsDirty = false;
-	}
-
-    /// <summary>
-    /// Set the value without triggering change events or network sync.
-    /// Used when receiving values from the network.
-    /// </summary>
-    internal void SetValueFromNetwork(T value)
+    public T DirectValue
     {
-        _isSyncing = true;
-        _value = value;
-        OnChanged?.Invoke(_value);
-        _isSyncing = false;
-        IsDirty = false;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _value;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        set => InternalSetValue(in value);
     }
 
-    /// <summary>
-    /// Encode this value for network transmission.
-    /// </summary>
-    public byte[] Encode()
-    {
-        return JsonSerializer.Serialize(_value);
-    }
+    #endregion
+
+    #region Events
 
     /// <summary>
-    /// Decode and set value from network data.
+    /// Event triggered when the value changes.
     /// </summary>
-    public void Decode(byte[] data)
-    {
-        var value = JsonSerializer.Deserialize<T>(data);
-        SetValueFromNetwork(value);
-    }
+    public event SyncFieldEvent<T>? OnValueChange;
 
     /// <summary>
-    /// Check if value was changed and clear the dirty flag.
+    /// Event triggered when the value changes (backward compatible alias).
     /// </summary>
-    public bool GetWasChangedAndClear()
-    {
-        bool wasChanged = IsDirty;
-        IsDirty = false;
-        return wasChanged;
-    }
+    public event Action<T>? OnChanged;
 
-	public static implicit operator T(SyncField<T> sync) => sync.Value;
+    /// <summary>
+    /// Event fired when this sync field changes (IChangeable implementation).
+    /// </summary>
+    public event Action<IChangeable>? Changed;
 
-    public override string ToString() => _value?.ToString() ?? "null";
+    #endregion
 
-    // ILinkable implementation
+    #region Linking
 
     /// <summary>
     /// Whether this field is currently linked to another element.
@@ -220,60 +123,53 @@ public class SyncField<T> : ILinkable, IChangeable, IWorldElement
     /// <summary>
     /// Whether this field is being driven (value controlled by another element).
     /// </summary>
-    public bool IsDriven
+    public new bool IsDriven
     {
         get
         {
-            var activeLink = ActiveLink;
-            return activeLink != null && activeLink.IsDriving;
+            var link = ActiveLink;
+            return link != null && link.IsDriving && IsDrivable;
         }
     }
 
     /// <summary>
     /// Whether this field is hooked (has callback intercepting changes).
     /// </summary>
-    public bool IsHooked
-    {
-        get
-        {
-            var activeLink = ActiveLink;
-            return activeLink != null && activeLink.IsHooking;
-        }
-    }
+    public bool IsHooked => ActiveLink?.IsHooking ?? false;
 
     /// <summary>
     /// The currently active link reference (inherited takes precedence over direct).
     /// </summary>
-    public ILinkRef ActiveLink => _inheritedLink ?? _directLink;
+    public new ILinkRef? ActiveLink => _inheritedLink ?? _directLink;
 
     /// <summary>
     /// The direct link reference (not inherited from parent).
     /// </summary>
-    public ILinkRef DirectLink => _directLink;
+    public ILinkRef? DirectLink => _directLink;
 
     /// <summary>
     /// The inherited link reference (from parent element).
     /// </summary>
-    public ILinkRef InheritedLink => _inheritedLink;
+    public ILinkRef? InheritedLink => _inheritedLink;
 
     /// <summary>
     /// Children elements that can be linked (Sync fields don't have linkable children).
     /// </summary>
-    public IEnumerable<ILinkable> LinkableChildren => null;
+    public IEnumerable<ILinkable>? LinkableChildren => null;
+
+    ILinkRef? ILinkable.ActiveLink => ActiveLink;
 
     /// <summary>
     /// Establish a direct link to this field.
     /// </summary>
     public void Link(ILinkRef link)
     {
-        // Release previous link if any
-        if (_directLink != null && _directLink != link)
-        {
-            _directLink = null;
-        }
-
         _directLink = link;
-        OnLinked();
+        if (link == ActiveLink)
+        {
+            UpdateLinkHierarchy(link);
+        }
+        SyncElementChanged();
     }
 
     /// <summary>
@@ -282,7 +178,8 @@ public class SyncField<T> : ILinkable, IChangeable, IWorldElement
     public void InheritLink(ILinkRef link)
     {
         _inheritedLink = link;
-        OnLinked();
+        UpdateLinkHierarchy(link);
+        SyncElementChanged();
     }
 
     /// <summary>
@@ -293,7 +190,8 @@ public class SyncField<T> : ILinkable, IChangeable, IWorldElement
         if (_directLink == link)
         {
             _directLink = null;
-            OnUnlinked();
+            UpdateLinkHierarchy(link);
+            SyncElementChanged();
         }
     }
 
@@ -302,41 +200,103 @@ public class SyncField<T> : ILinkable, IChangeable, IWorldElement
     /// </summary>
     public void ReleaseInheritedLink(ILinkRef link)
     {
-        if (_inheritedLink == link)
+        if (_inheritedLink != link)
+            throw new InvalidOperationException("The link being released isn't the one currently inherited");
+
+        _inheritedLink = null;
+        UpdateLinkHierarchy(link);
+        SyncElementChanged();
+    }
+
+    protected void UpdateLinkHierarchy(ILinkRef changedLink)
+    {
+        if (IsDisposed)
+            return;
+
+        if (changedLink.WasLinkGranted && changedLink.IsDriving)
         {
-            _inheritedLink = null;
-            OnUnlinked();
+            Invalidate();
+        }
+
+        // Fields don't have linkable children
+    }
+
+    #endregion
+
+    #region Internal Value Setting
+
+    /// <summary>
+    /// Internal method to set value with change tracking.
+    /// </summary>
+    protected virtual bool InternalSetValue(in T value, bool sync = true, bool change = true)
+    {
+        if (BeginModification(throwOnError: false))
+        {
+            _value = value;
+
+            if (sync && GenerateSyncData)
+            {
+                InvalidateSyncElement();
+            }
+
+            if (change)
+            {
+                BlockModification();
+                ValueChanged();
+                UnblockModification();
+            }
+
+            EndModification();
+            return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Called when value changes to fire events.
+    /// </summary>
+    protected virtual void ValueChanged()
+    {
+        SyncElementChanged();
+        OnValueChange?.Invoke(this);
+        OnChanged?.Invoke(_value);
+    }
+
+    /// <summary>
+    /// Notify parent and fire Changed event.
+    /// </summary>
+    protected void SyncElementChanged(IChangeable member = null)
+    {
+        member = member ?? this;
+        try
+        {
+            Changed?.Invoke(member);
+        }
+        catch (Exception ex)
+        {
+            Logging.Logger.Error($"Exception in SyncElementChanged: {ex}");
+        }
+
+        if (member == this)
+        {
+            WasChanged = true;
         }
     }
 
     /// <summary>
-    /// Called when a link is established.
+    /// Force set value bypassing equality check.
     /// </summary>
-    public void OnLinked()
+    public void ForceSet(T value)
     {
-        // Mark as dirty when linked to ensure network sync
-        if (_owner != null)
-        {
-            _owner.World?.MarkElementDirty(_owner);
-        }
-
-        // Fire the OnLinked event for components to subscribe to
-        OnLinkedEvent?.Invoke();
+        InternalSetValue(in value);
     }
 
     /// <summary>
-    /// Called when a link is released.
+    /// Set value without generating sync data (used for remote-applied updates).
     /// </summary>
-    public void OnUnlinked()
+    internal void SetValueSilently(T value, bool change = true)
     {
-        // Mark as dirty when unlinked to ensure network sync
-        if (_owner != null)
-        {
-            _owner.World?.MarkElementDirty(_owner);
-        }
-
-        // Fire the OnUnlinked event for components to subscribe to
-        OnUnlinkedEvent?.Invoke();
+        InternalSetValue(in value, sync: false, change: change);
     }
 
     /// <summary>
@@ -345,103 +305,181 @@ public class SyncField<T> : ILinkable, IChangeable, IWorldElement
     /// </summary>
     internal void SetDrivenValue(T value)
     {
-        if (Equals(_value, value)) return;
+        if (SyncCoder.Equals(_value, value)) return;
 
         _value = value;
-        IsDirty = true;
+        WasChanged = true;
 
-        // Trigger change event
-        OnChanged?.Invoke(_value);
-
-        // Mark owner as dirty for network sync
-        if (_owner != null)
+        if (GenerateSyncData)
         {
-            _owner.World?.MarkElementDirty(_owner);
+            InvalidateSyncElement();
+        }
 
-			// Notify the parent component that this delegate changed
-			if (_owner is Component component)
-			{
-				component.NotifyChanged();
-			}
+        ValueChanged();
+    }
 
-			// Fire the IChangeable Changed event
-			Changed?.Invoke(this);
-		}
+    #endregion
 
-		ValueChanged();
-	}
+    #region Constructors
 
-	/// <summary>
-	/// Hook that derived classes can override when the value changes.
-	/// </summary>
-	protected virtual void ValueChanged() { }
+    public SyncField()
+    {
+        _value = SyncCoder.GetDefault<T>();
+    }
 
-    // IWorldElement implementation (forwarded to owner)
+    protected SyncField(T init)
+    {
+        _value = init;
+    }
+
+    #endregion
+
+    #region Encoding/Decoding
+
+    protected override void InternalEncodeFull(BinaryWriter writer, BinaryMessageBatch outboundMessage)
+    {
+        SyncCoder.Encode(writer, _value);
+    }
+
+    protected override void InternalDecodeFull(BinaryReader reader, BinaryMessageBatch inboundMessage)
+    {
+        T value = SyncCoder.Decode<T>(reader);
+        InternalSetValue(in value, sync: false);
+    }
+
+    protected override void InternalEncodeDelta(BinaryWriter writer, BinaryMessageBatch outboundMessage)
+    {
+        InternalEncodeFull(writer, outboundMessage);
+    }
+
+    protected override void InternalDecodeDelta(BinaryReader reader, BinaryMessageBatch inboundMessage)
+    {
+        InternalDecodeFull(reader, inboundMessage);
+    }
+
+    protected override void InternalClearDirty()
+    {
+        // No additional dirty state to clear
+    }
 
     /// <summary>
-    /// The World this field belongs to.
+    /// Encode the current value to binary.
     /// </summary>
-    public World World => _owner?.World;
-
-	/// <summary>
-	/// Unique reference ID for this field within the world.
-	/// </summary>
-	public RefID ReferenceID => _owner?.ReferenceID ?? RefID.Null;
-
-	/// <summary>
-	/// Legacy alias for numeric RefID.
-	/// </summary>
-	public ulong RefIdNumeric => (ulong)ReferenceID;
+    public void Encode(BinaryWriter writer)
+    {
+        SyncCoder.Encode(writer, _value);
+    }
 
     /// <summary>
-    /// Whether this field has been destroyed.
+    /// Decode a value from binary and set it.
     /// </summary>
-    public bool IsDestroyed => _owner?.IsDestroyed ?? false;
+    public void Decode(BinaryReader reader)
+    {
+        T value = SyncCoder.Decode<T>(reader);
+        InternalSetValue(in value, sync: false);
+    }
+
+    #endregion
+
+    #region Disposal
+
+    public override void Dispose()
+    {
+        OnValueChange = null;
+        Changed = null;
+        _directLink = null;
+        _inheritedLink = null;
+        base.Dispose();
+    }
+
+    #endregion
+
+    #region Utility
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static implicit operator T(SyncField<T> field) => field.Value;
+
+    public override string ToString() => _value?.ToString() ?? "<null>";
+
+    public override object? GetValueAsObject() => _value;
 
     /// <summary>
-    /// Whether this field has been initialized.
+    /// Provide better hierarchy info for debugging.
     /// </summary>
-    public bool IsInitialized => _owner?.IsInitialized ?? false;
+    public override string ParentHierarchyToString()
+    {
+        var memberName = ((ISyncMember)this).Name ?? GetType().Name;
+        if (_parent is Slot slot)
+            return $"{slot.Name?.Value ?? "?"}/{memberName}";
+        if (_parent != null)
+            return $"{_parent.GetType().Name}/{memberName}";
+        return memberName;
+    }
 
-	/// <summary>
-	/// Destroy this field (cannot be destroyed directly, owner must be destroyed).
-	/// </summary>
-	public void Destroy()
-	{
-		// Sync fields cannot be destroyed directly
-		// They are destroyed when their owner is destroyed
-	}
+    /// <summary>
+    /// Whether this field has been changed since the last clear.
+    /// Alias for WasChanged for hook compatibility.
+    /// </summary>
+    public bool IsDirty => WasChanged;
 
-	public bool IsLocalElement => _owner?.IsLocalElement ?? false;
-	public bool IsPersistent => _owner?.IsPersistent ?? true;
-	public string ParentHierarchyToString() => _owner?.ParentHierarchyToString() ?? $"{Name}<{typeof(T).Name}>";
+    /// <summary>
+    /// Get whether this field was changed and clear the changed flag.
+    /// Used by hooks to check and acknowledge changes.
+    /// </summary>
+    public bool GetWasChangedAndClear()
+    {
+        bool changed = WasChanged;
+        WasChanged = false;
+        return changed;
+    }
+
+    #endregion
 }
 
 /// <summary>
-/// Convenience wrapper preserving the original Sync&lt;T&gt; surface area.
+/// Concrete synchronized field implementation with equality checking.
 /// </summary>
 /// <typeparam name="T">Value type.</typeparam>
 public class Sync<T> : SyncField<T>
 {
-	public Sync(IWorldElement owner, T defaultValue = default)
-		: base(owner, defaultValue)
-	{
-	}
-}
+    /// <summary>
+    /// Event triggered when the value changes (backward compatible alias).
+    /// </summary>
+    public new event Action<T>? OnChanged;
 
-/// <summary>
-/// Helper class for serializing values for network transmission using JSON.
-/// </summary>
-public static class JsonSerializer
-{
-    public static byte[] Serialize<T>(T value)
+    public override T Value
     {
-        // Use System.Text.Json for serialization
-        return System.Text.Json.JsonSerializer.SerializeToUtf8Bytes(value);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _value;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        set
+        {
+            if (!SyncCoder.Equals(_value, value))
+            {
+                base.Value = value;
+            }
+        }
     }
 
-    public static T Deserialize<T>(byte[] data)
+    protected override void ValueChanged()
     {
-        return System.Text.Json.JsonSerializer.Deserialize<T>(data);
+        base.ValueChanged();
+        OnChanged?.Invoke(_value);
     }
+
+    public Sync() : base()
+    {
+    }
+
+    public Sync(T init) : base(init)
+    {
+    }
+
+    public Sync(IWorldElement? owner, T init) : base(init)
+    {
+        _parent = owner;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static implicit operator T(Sync<T> field) => field.Value;
 }

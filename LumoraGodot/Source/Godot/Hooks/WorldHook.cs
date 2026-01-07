@@ -48,7 +48,13 @@ public class WorldHook : IWorldHook
         Owner.GodotSceneRoot = WorldRoot;
 
         // Reparent any existing slot Node3Ds that were created before world root existed
-        ReparentExistingSlots(Owner.RootSlot);
+        if (Owner.IsAuthority || Owner.State == World.WorldState.Running)
+        {
+            ReparentExistingSlots(Owner.RootSlot);
+        }
+
+        // Apply the world's current focus state (important for worlds that set focus before hook was created)
+        ChangeFocus(Owner.Focus);
     }
 
     /// <summary>
@@ -63,8 +69,10 @@ public class WorldHook : IWorldHook
         if (slot.Hook is SlotHook slotHook && slotHook.GeneratedNode3D != null)
         {
             Node3D node3D = slotHook.GeneratedNode3D;
-            // For root slot, add directly to WorldRoot
-            if (slot.Parent == null || slot.IsRootSlot)
+            // For root slot, add directly to WorldRoot. Don't treat pending-parent slots as roots.
+            bool isRootSlot = slot.IsRootSlot;
+            bool isExplicitOrphan = slot.Parent == null && !slot.HasPendingParent && !slot.IsParentUnknown;
+            if (isRootSlot || isExplicitOrphan)
             {
                 // If node is orphaned (no parent), add it. Otherwise reparent it.
                 if (node3D.GetParent() == null)
@@ -119,16 +127,22 @@ public class WorldHook : IWorldHook
             case World.WorldFocus.Focused:
             case World.WorldFocus.Overlay:
                 WorldRoot.Visible = true;
+                // Re-enable all processing (physics, input, colliders) for focused worlds
+                WorldRoot.ProcessMode = Node.ProcessModeEnum.Inherit;
                 break;
 
             case World.WorldFocus.PrivateOverlay:
                 WorldRoot.Visible = true;
+                WorldRoot.ProcessMode = Node.ProcessModeEnum.Inherit;
                 // TODO: Set layer recursively for private rendering
                 // SetLayerRecursively(WorldRoot, RenderHelper.PRIVATE_LAYER);
                 break;
 
             case World.WorldFocus.Background:
                 WorldRoot.Visible = false;
+                // Disable all processing (physics, input, colliders) for background worlds
+                // This prevents interaction with unfocused world's colliders/UI
+                WorldRoot.ProcessMode = Node.ProcessModeEnum.Disabled;
                 break;
         }
     }

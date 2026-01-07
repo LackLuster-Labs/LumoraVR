@@ -6,6 +6,7 @@ using Lumora.Core;
 using Lumora.Core.Networking.LNL;
 using Lumora.Core.Networking.Sync;
 using LegacyJoinGrantData = Lumora.Core.Networking.Messages.JoinGrantData;
+using LegacyJoinRequestData = Lumora.Core.Networking.Messages.JoinRequestData;
 using AquaLogger = Lumora.Core.Logging.Logger;
 
 namespace Lumora.Core.Networking.Session;
@@ -19,12 +20,18 @@ public class SessionConnectionManager : IDisposable
     private readonly object _lock = new();
     private readonly Dictionary<IConnection, User> _connectionToUser = new();
     private readonly Dictionary<User, IConnection> _userToConnection = new();
+    private readonly HashSet<IConnection> _pendingConnections = new(); // Connections waiting for JoinRequest
 
     public Session Session { get; private set; }
     public World World => Session?.World;
 
     public LNLListener Listener { get; private set; }
     public IConnection HostConnection { get; private set; }
+
+    /// <summary>
+    /// Event triggered when host connection is lost (client side).
+    /// </summary>
+    public event Action OnHostDisconnected;
 
     public SessionConnectionManager(Session session)
     {
@@ -82,31 +89,80 @@ public class SessionConnectionManager : IDisposable
         connection.Connected += (c) =>
         {
             AquaLogger.Log($"Connected to {c.Address}");
-            taskCompletionSource.SetResult(true);
+            taskCompletionSource.TrySetResult(true);
         };
 
         connection.ConnectionFailed += (c) =>
         {
             AquaLogger.Error($"Connection failed: {c.FailReason}");
-            taskCompletionSource.SetResult(false);
+            taskCompletionSource.TrySetResult(false);
         };
 
         connection.Closed += (c) =>
         {
             AquaLogger.Warn($"Connection closed: {c.FailReason}");
             taskCompletionSource.TrySetResult(false);
+            
+            // Trigger host disconnected event if this was the host connection
+            if (HostConnection == c)
+            {
+                OnHostDisconnected?.Invoke();
+            }
         };
 
         connection.DataReceived += (data, length) => OnConnectionDataReceived(connection, data, length);
         connection.Connect(null);
 
-        bool success = await taskCompletionSource.Task;
+        var timeoutTask = Task.Delay(10000);
+        var completedTask = await Task.WhenAny(taskCompletionSource.Task, timeoutTask);
+        bool success = completedTask == taskCompletionSource.Task && taskCompletionSource.Task.Result;
+
         if (success)
         {
             HostConnection = connection;
+
+            // Send JoinRequest to host with our username
+            SendJoinRequest();
+            return true;
         }
 
-        return success;
+        if (completedTask == timeoutTask)
+        {
+            AquaLogger.Warn($"Connection timed out: {uri}");
+        }
+
+        connection.Close();
+        return false;
+    }
+
+    /// <summary>
+    /// Send JoinRequest to host (client only).
+    /// </summary>
+    private void SendJoinRequest()
+    {
+        if (HostConnection == null)
+        {
+            AquaLogger.Error("SendJoinRequest: No host connection");
+            return;
+        }
+
+        var requestData = new LegacyJoinRequestData
+        {
+            UserName = Environment.MachineName,
+            MachineID = Environment.MachineName,
+            UserID = "",
+            HeadDevice = (byte)(Engine.Current?.InputInterface?.CurrentHeadOutputDevice ?? HeadOutputDevice.Screen)
+        };
+
+        var controlMessage = new ControlMessage(ControlMessage.Message.JoinRequest)
+        {
+            Payload = requestData.Encode()
+        };
+
+        byte[] encoded = controlMessage.Encode();
+        HostConnection.Send(encoded, encoded.Length, reliable: true, background: false);
+
+        AquaLogger.Log($"Sent JoinRequest to host - UserName='{requestData.UserName}'");
     }
 
     private void OnPeerConnected(LNLPeer peer)
@@ -115,8 +171,12 @@ public class SessionConnectionManager : IDisposable
 
         peer.DataReceived += (data, length) => OnConnectionDataReceived(peer, data, length);
 
-        // Send JoinGrant
-        SendJoinGrant(peer);
+        // Add to pending connections - will send JoinGrant when JoinRequest is received
+        lock (_lock)
+        {
+            _pendingConnections.Add(peer);
+        }
+        AquaLogger.Log($"Peer {peer.Identifier} added to pending - waiting for JoinRequest");
     }
 
     private void OnPeerDisconnected(LNLPeer peer)
@@ -125,6 +185,7 @@ public class SessionConnectionManager : IDisposable
 
         lock (_lock)
         {
+            _pendingConnections.Remove(peer);
             if (_connectionToUser.TryGetValue(peer, out var user))
             {
                 _connectionToUser.Remove(peer);
@@ -134,7 +195,28 @@ public class SessionConnectionManager : IDisposable
         }
     }
 
-    private void SendJoinGrant(IConnection connection)
+    /// <summary>
+    /// Handle incoming JoinRequest from client.
+    /// </summary>
+    public void HandleJoinRequest(IConnection connection, LegacyJoinRequestData requestData)
+    {
+        bool isPending;
+        lock (_lock)
+        {
+            isPending = _pendingConnections.Remove(connection);
+        }
+
+        if (!isPending)
+        {
+            AquaLogger.Warn($"HandleJoinRequest: Connection {connection.Identifier} was not pending");
+            return;
+        }
+
+        AquaLogger.Log($"HandleJoinRequest: Received from {connection.Identifier} - UserName='{requestData.UserName}'");
+        SendJoinGrant(connection, requestData.UserName, requestData.MachineID);
+    }
+
+    private void SendJoinGrant(IConnection connection, string userName, string machineId)
     {
         if (!World.IsAuthority)
         {
@@ -154,7 +236,7 @@ public class SessionConnectionManager : IDisposable
             AssignedUserID = userID,
             AllocationIDStart = (ulong)allocStart,
             AllocationIDEnd = (ulong)allocEnd,
-            MaxUsers = World.RefIDAllocator.GetMaxUserCount(),
+            MaxUsers = World.RefIDAllocator.MaxUserCount,
             WorldTime = World.TotalTime,
             StateVersion = World.StateVersion
         };
@@ -167,22 +249,38 @@ public class SessionConnectionManager : IDisposable
         byte[] encoded = controlMessage.Encode();
         connection.Send(encoded, encoded.Length, reliable: true, background: false);
 
-        AquaLogger.Log($"Sent JoinGrant to {connection.Identifier} - UserID: {userID}");
+        AquaLogger.Log($"Sent JoinGrant to {connection.Identifier} - UserID: {userID}, UserName: '{userName}'");
 
-        // Create user
-        var user = new User(World, userRefID);
+        // Create user instance, populate fields, then add to the user bag for initialization
+        var user = new User();
         user.UserID.Value = userID.ToString();
+        user.UserName.Value = !string.IsNullOrEmpty(userName) ? userName : $"Guest {userRefID.GetUserByte()}";
+        user.MachineID.Value = machineId ?? "";
         user.AllocationIDStart.Value = (ulong)allocStart;
         user.AllocationIDEnd.Value = (ulong)allocEnd;
+        user.AllocationID.Value = userRefID.GetUserByte();
+        user.IsPresent.Value = true;
+        user.PresentInWorld.Value = true;
 
         lock (_lock)
         {
             _connectionToUser[connection] = user;
             _userToConnection[user] = connection;
         }
+        AquaLogger.Log($"SendJoinGrant: Added connection-user mapping for '{userName}'");
 
-        World.AddUser(user);
-        Session.Sync?.QueueUserForInitialization(user);
+        World.AddUserToBag(user, userRefID, isNewlyCreated: true);
+        AquaLogger.Log($"SendJoinGrant: User '{userName}' added to world");
+
+        if (Session.Sync != null)
+        {
+            AquaLogger.Log($"SendJoinGrant: Calling QueueUserForInitialization for '{userName}'");
+            Session.Sync.QueueUserForInitialization(user);
+        }
+        else
+        {
+            AquaLogger.Error("SendJoinGrant: Session.Sync is NULL - cannot queue user for initialization!");
+        }
     }
 
     private void RemoveUser(User user)

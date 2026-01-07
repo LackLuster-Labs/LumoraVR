@@ -37,6 +37,9 @@ public class LocomotionController : Component
     private float _yaw = 0.0f;
     private bool _mouseCaptured = false;
     private bool _escapeWasPressed = false;
+    private bool _initialized = false;
+    private bool _loggedMissingUserRoot = false;
+    private bool _loggedActiveUserState = false;
 
     /// <summary>
     /// Property for platform layer to check if mouse should be captured
@@ -57,50 +60,8 @@ public class LocomotionController : Component
     {
         base.OnAwake();
 
-        _userRoot = Slot.GetComponent<UserRoot>();
-        if (_userRoot == null)
-        {
-            AquaLogger.Warn("LocomotionController: No UserRoot found!");
-            return;
-        }
-
-        // Only work for local user
-        if (_userRoot.ActiveUser != World.LocalUser)
-            return;
-
-        // Get CharacterController
-        _characterController = Slot.GetComponent<CharacterController>();
-        if (_characterController == null)
-        {
-            AquaLogger.Warn("LocomotionController: No CharacterController found!");
-            return;
-        }
-
-        // Get input devices from InputInterface
-        _inputInterface = Lumora.Core.Engine.Current?.InputInterface;
-        if (_inputInterface != null)
-        {
-            _mouse = _inputInterface.Mouse;
-            _keyboardDriver = _inputInterface.GetKeyboardDriver();
-            // Input devices resolved
-        }
-        else
-        {
-            AquaLogger.Warn("[LocomotionController] No InputInterface found!");
-        }
-
-        // Initialize modules (desktop/VR delegation)
-        _modules.Add(new VRLocomotionModule());
-        _modules.Add(new DesktopLocomotionModule());
-        _modules.Add(new NullLocomotionModule()); // placeholder fallback
-                                                  // Pick module based on current platform state
-        ActivateModule(IsVRActive() ? 0 : 1);
-
-        // Desktop default: request mouse capture so look works immediately
-        if (!IsVRActive())
-            SetMouseCaptureRequested(true);
-
-        // Initialized
+        AquaLogger.Log($"LocomotionController: OnAwake started");
+        TryInitializeLocalUser();
     }
 
     private void CaptureMouse()
@@ -123,7 +84,10 @@ public class LocomotionController : Component
             _keyboardDriver = _inputInterface.GetKeyboardDriver();
         }
 
-        if (_characterController == null || _userRoot?.ActiveUser != World.LocalUser)
+        if (!TryInitializeLocalUser())
+            return;
+
+        if (_characterController == null || !(_userRoot?.IsLocalUserRoot ?? false))
             return;
 
         EnsurePlatformModule();
@@ -137,6 +101,70 @@ public class LocomotionController : Component
 
         // Only send movement/jump commands if CharacterController is ready
         _activeModule?.Update(delta);
+    }
+
+    private bool TryInitializeLocalUser()
+    {
+        if (_initialized)
+            return true;
+
+        if (_userRoot == null)
+        {
+            _userRoot = Slot.GetComponent<UserRoot>();
+            if (_userRoot == null)
+            {
+                if (!_loggedMissingUserRoot)
+                {
+                    AquaLogger.Warn("LocomotionController: No UserRoot found!");
+                    _loggedMissingUserRoot = true;
+                }
+                return false;
+            }
+        }
+
+        if (!_loggedActiveUserState)
+        {
+            AquaLogger.Log($"LocomotionController: UserRoot.ActiveUser={_userRoot.ActiveUser?.UserName?.Value ?? "(null)"}, World.LocalUser={World?.LocalUser?.UserName?.Value ?? "(null)"}");
+            _loggedActiveUserState = true;
+        }
+
+        if (!_userRoot.IsLocalUserRoot)
+            return false;
+
+        _characterController = Slot.GetComponent<CharacterController>();
+        if (_characterController == null)
+        {
+            AquaLogger.Warn("LocomotionController: No CharacterController found!");
+            return false;
+        }
+
+        _inputInterface = Lumora.Core.Engine.Current?.InputInterface;
+        if (_inputInterface != null)
+        {
+            _mouse = _inputInterface.Mouse;
+            _keyboardDriver = _inputInterface.GetKeyboardDriver();
+            AquaLogger.Log($"LocomotionController: Input bound - Mouse={_mouse != null}, Keyboard={_keyboardDriver != null}");
+        }
+        else
+        {
+            AquaLogger.Warn("[LocomotionController] No InputInterface found - will try late binding");
+        }
+
+        if (_modules.Count == 0)
+        {
+            _modules.Add(new VRLocomotionModule());
+            _modules.Add(new DesktopLocomotionModule());
+            _modules.Add(new NullLocomotionModule());
+        }
+
+        ActivateModule(IsVRActive() ? 0 : 1);
+
+        if (!IsVRActive())
+            SetMouseCaptureRequested(true);
+
+        AquaLogger.Log($"LocomotionController: Initialized for user '{_userRoot.ActiveUser?.UserName?.Value}' (VR={IsVRActive()}, Module={_activeModule?.GetType().Name})");
+        _initialized = true;
+        return true;
     }
 
     private void HandleModuleSwitching()
@@ -222,32 +250,37 @@ public class LocomotionController : Component
         _pitch = System.Math.Clamp(_pitch, -maxPitchRad, maxPitchRad);
     }
 
-    // Simulates head position/rotation in desktop mode
+    private const float POS_THRESHOLD_SQ = 0.0001f * 0.0001f;
+    private const float ROT_THRESHOLD = 0.0001f;
+
     private void UpdateHead()
     {
         if (_userRoot?.HeadSlot == null)
-        {
-            AquaLogger.Warn("[LocomotionController] UpdateHead: HeadSlot is null!");
             return;
-        }
 
-        // If head tracking is available and active, do not override
-        // VRLocomotionModule handles snap turns by modifying _yaw directly
         bool headTracked = _inputInterface?.HeadDevice?.IsTracked == true;
+        if (headTracked)
+            return;
 
-        if (!headTracked)
-        {
-            // Desktop mode: simulate head position and rotation
-            // Set head height from UserHeight (minus eye offset)
-            float userHeight = _inputInterface?.UserHeight ?? InputInterface.DEFAULT_USER_HEIGHT;
-            float headHeight = userHeight - InputInterface.EYE_HEAD_OFFSET;
-            _userRoot.HeadSlot.LocalPosition.Value = new float3(0, headHeight, 0);
+        float userHeight = _inputInterface?.UserHeight ?? InputInterface.DEFAULT_USER_HEIGHT;
+        float headHeight = userHeight - InputInterface.EYE_HEAD_OFFSET;
+        var newHeadPos = new float3(0, headHeight, 0);
 
-            // Apply yaw to body, pitch to head
-            Slot.GlobalRotation = floatQ.FromEuler(new float3(0, _yaw, 0));
-            _userRoot.HeadSlot.LocalRotation.Value = floatQ.FromEuler(new float3(_pitch, 0, 0));
-        }
-        // VR mode: Don't touch - TrackedDevicePositioner handles it
+        var currentHeadPos = _userRoot.HeadSlot.LocalPosition.Value;
+        if ((newHeadPos - currentHeadPos).LengthSquared > POS_THRESHOLD_SQ)
+            _userRoot.HeadSlot.LocalPosition.Value = newHeadPos;
+
+        var newBodyRot = floatQ.FromEuler(new float3(0, _yaw, 0));
+        var currentBodyRot = Slot.GlobalRotation;
+        float bodyDot = floatQ.Dot(newBodyRot, currentBodyRot);
+        if (1.0f - (bodyDot < 0 ? -bodyDot : bodyDot) > ROT_THRESHOLD)
+            Slot.GlobalRotation = newBodyRot;
+
+        var newHeadRot = floatQ.FromEuler(new float3(_pitch, 0, 0));
+        var currentHeadRot = _userRoot.HeadSlot.LocalRotation.Value;
+        float headDot = floatQ.Dot(newHeadRot, currentHeadRot);
+        if (1.0f - (headDot < 0 ? -headDot : headDot) > ROT_THRESHOLD)
+            _userRoot.HeadSlot.LocalRotation.Value = newHeadRot;
     }
 
     /// <summary>

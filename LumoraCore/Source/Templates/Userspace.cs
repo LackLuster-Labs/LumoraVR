@@ -1,4 +1,5 @@
 using System;
+using Lumora.Core.GodotUI;
 using Lumora.Core.Logging;
 
 namespace Lumora.Core.Templates
@@ -9,8 +10,8 @@ namespace Lumora.Core.Templates
     public static class Userspace
     {
         /// <summary>
-        /// Create and setup the userspace world.
-        /// This is the default user home world.
+        /// Setup the userspace world for the engine.
+        /// Userspace is a private overlay world for UI and settings.
         /// </summary>
         public static World SetupUserspace(Engine engine)
         {
@@ -24,11 +25,18 @@ namespace Lumora.Core.Templates
                 // Create root structure
                 var userspaceRoot = w.RootSlot.AddSlot("UserspaceRoot");
 
+                // Create Dashboard panel (hidden by default, toggled with menu button/Escape)
+                var dashboardSlot = userspaceRoot.AddSlot("Dashboard");
+                var dashboardPanel = dashboardSlot.AttachComponent<DashboardPanel>();
+                dashboardPanel.IsVisible.Value = false;
+
+                Logger.Log("Userspace: Dashboard panel created");
                 Logger.Log("Userspace: Userspace world initialized");
             });
 
-            // Set as private overlay (not visible to others, always on top)
-            engine.WorldManager.PrivateOverlayWorld(world);
+            // Register with WorldManager as userspace world
+            // (UserspaceWorld setter automatically calls PrivateOverlayWorld which adds to managed worlds)
+            engine.WorldManager.UserspaceWorld = world;
 
             Logger.Log("Userspace: Userspace setup complete");
             return world;

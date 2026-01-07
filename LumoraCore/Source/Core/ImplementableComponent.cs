@@ -123,6 +123,15 @@ public abstract class ImplementableComponent<C> : Component, IImplementable<C> w
     }
 
     /// <summary>
+    /// When component changes, apply changes to the hook.
+    /// </summary>
+    public override void OnChanges()
+    {
+        base.OnChanges();
+        UpdateHook();
+    }
+
+    /// <summary>
     /// Destroy the hook when the component is destroyed.
     /// </summary>
     public override void OnDestroy()

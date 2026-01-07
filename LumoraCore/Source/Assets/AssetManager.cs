@@ -435,8 +435,22 @@ public class TextureAssetLoader : BaseAssetLoader
 
     public override long EstimateSize(object asset)
     {
-        // Estimate based on texture dimensions
-        return 1024 * 1024; // 1MB placeholder
+        if (asset is TextureAsset textureAsset)
+        {
+            // Calculate based on actual texture data
+            long size = textureAsset.MemorySize;
+            if (size > 0) return size;
+
+            // Estimate from dimensions (RGBA8 = 4 bytes per pixel)
+            long pixelSize = textureAsset.Width * textureAsset.Height * 4L;
+            if (textureAsset.HasMipmaps)
+            {
+                // Mipmaps add ~33% overhead
+                pixelSize = (long)(pixelSize * 1.33);
+            }
+            return pixelSize > 0 ? pixelSize : 1024 * 1024; // Default 1MB
+        }
+        return 1024 * 1024; // Default 1MB for unknown textures
     }
 }
 
@@ -454,8 +468,19 @@ public class MeshAssetLoader : BaseAssetLoader
 
     public override long EstimateSize(object asset)
     {
-        // Estimate based on vertex count
-        return 512 * 1024; // 512KB placeholder
+        if (asset is MeshDataAsset meshAsset)
+        {
+            int vertexCount = meshAsset.VertexCount;
+            int triangleCount = meshAsset.TriangleCount;
+
+            // Estimate: position(12) + normal(12) + uv(8) + tangent(16) = ~48 bytes per vertex
+            // Plus indices: 4 bytes per index, 3 indices per triangle
+            long vertexSize = vertexCount * 48L;
+            long indexSize = triangleCount * 3L * 4L;
+            long size = vertexSize + indexSize;
+            return size > 0 ? size : 512 * 1024; // Default 512KB
+        }
+        return 512 * 1024; // Default 512KB for unknown meshes
     }
 }
 
@@ -473,8 +498,9 @@ public class AudioAssetLoader : BaseAssetLoader
 
     public override long EstimateSize(object asset)
     {
-        // Estimate based on duration and sample rate
-        return 2 * 1024 * 1024; // 2MB placeholder
+        // Audio size depends on sample rate, bit depth, channels, and duration
+        // Default estimate: 44.1kHz, 16-bit stereo, ~30 seconds = ~5MB
+        return 5 * 1024 * 1024;
     }
 }
 
@@ -492,7 +518,9 @@ public class MaterialAssetLoader : BaseAssetLoader
 
     public override long EstimateSize(object asset)
     {
-        return 4 * 1024; // 4KB placeholder
+        // Materials are lightweight - just property data
+        // Actual textures are tracked separately
+        return 4 * 1024; // 4KB for material properties
     }
 }
 
@@ -510,6 +538,7 @@ public class ShaderAssetLoader : BaseAssetLoader
 
     public override long EstimateSize(object asset)
     {
-        return 8 * 1024; // 8KB placeholder
+        // Shader source code and compiled bytecode
+        return 16 * 1024; // 16KB for shader
     }
 }

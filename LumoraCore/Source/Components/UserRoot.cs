@@ -28,16 +28,24 @@ public class UserRoot : Component
     }
 
     // ===== USER REFERENCE =====
-    private User _activeUser;
+    /// <summary>
+    /// Synced reference to the user that owns this UserRoot.
+    /// This syncs over the network so clients can identify their own UserRoot.
+    /// </summary>
+    public readonly SyncRef<User> TargetUser;
+
+    private bool _isRegistered = false;
 
     /// <summary>
     /// The User that owns this UserRoot.
     /// </summary>
-    public User ActiveUser
-    {
-        get => _activeUser;
-        private set => _activeUser = value;
-    }
+    public User ActiveUser => TargetUser?.Target;
+
+    /// <summary>
+    /// Check if this UserRoot belongs to the local user.
+    /// Uses direct object reference comparison.
+    /// </summary>
+    public bool IsLocalUserRoot => TargetUser?.Target != null && TargetUser.Target == World?.LocalUser;
 
     // ===== CACHED BODY NODES =====
     private Slot _cachedHeadSlot;
@@ -267,6 +275,7 @@ public class UserRoot : Component
     /// <summary>
     /// Initialize this UserRoot with a User.
     /// Called by SimpleUserSpawn after attaching the component.
+    /// Sets TargetUser which syncs to clients.
     /// </summary>
     public void Initialize(User user)
     {
@@ -276,8 +285,43 @@ public class UserRoot : Component
             return;
         }
 
-        ActiveUser = user;
+        // Set the synced reference - this will sync to clients
+        TargetUser.Target = user;
+
+        // Register with user on authority
+        if (World?.IsAuthority == true)
+        {
+            user.Root = this;
+            AquaLogger.Log($"User: Registered UserRoot for authority user '{user.UserName.Value}'");
+        }
+
         AquaLogger.Log($"UserRoot: Initialized for user '{user.UserName.Value}' (RefID: {user.ReferenceID})");
+    }
+
+    /// <summary>
+    /// Called when synced fields change. Handles client-side local user detection.
+    /// Simple direct object reference comparison.
+    /// </summary>
+    public override void OnChanges()
+    {
+        base.OnChanges();
+
+        // Simple direct reference comparison
+        if (TargetUser.Target == World?.LocalUser && !_isRegistered)
+        {
+            World.LocalUser.Root = this;
+            _isRegistered = true;
+            AquaLogger.Log($"UserRoot: Registered as Root for local user '{TargetUser.Target?.UserName?.Value}'");
+        }
+
+        if (TargetUser.Target != World?.LocalUser && _isRegistered)
+        {
+            if (World?.LocalUser?.Root == this)
+            {
+                World.LocalUser.Root = null;
+            }
+            _isRegistered = false;
+        }
     }
 
     /// <summary>
@@ -414,6 +458,13 @@ public class UserRoot : Component
     {
         AquaLogger.Log($"UserRoot: Destroying UserRoot for user '{ActiveUser?.UserName.Value ?? "Unknown"}'");
 
+        // Unregister from user
+        if (_isRegistered && World?.LocalUser?.Root == this)
+        {
+            World.LocalUser.Root = null;
+        }
+        _isRegistered = false;
+
         // Clear cached references
         _cachedHeadSlot = null;
         _cachedBodySlot = null;
@@ -421,7 +472,6 @@ public class UserRoot : Component
         _cachedRightHandSlot = null;
         _cachedLeftFootSlot = null;
         _cachedRightFootSlot = null;
-        ActiveUser = null;
 
         base.OnDestroy();
     }

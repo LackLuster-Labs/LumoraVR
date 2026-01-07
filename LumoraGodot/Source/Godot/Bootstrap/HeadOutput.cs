@@ -33,7 +33,7 @@ public partial class HeadOutput : Node
     // ===== CONFIGURATION =====
     [Export] public OutputType Type { get; set; } = OutputType.Screen;
     [Export] public float DefaultFOV { get; set; } = 90f;
-    [Export] public float NearClip { get; set; } = 0.05f;
+    [Export] public float NearClip { get; set; } = 0.25f; // Clips through head sphere
     [Export] public float FarClip { get; set; } = 1000f;
 
     // ===== CAMERA REFERENCES =====
@@ -181,7 +181,7 @@ public partial class HeadOutput : Node
             return;
 
         // Align the XR origin to the local user's root so HMD/controllers match avatar transforms
-        var userRootSlot = world.LocalUser.UserRootSlot;
+        var userRootSlot = world.LocalUser.Root?.Slot;
         if (_xrOrigin != null)
         {
             if (userRootSlot != null)
@@ -212,18 +212,10 @@ public partial class HeadOutput : Node
         else
         {
             // Follow local user's head position if they have a UserRoot
-            if (world.LocalUser?.UserRootSlot != null)
+            if (world.LocalUser?.Root != null)
             {
-                var userRoot = world.LocalUser.UserRootSlot.GetComponent<Lumora.Core.Components.UserRoot>();
-                if (userRoot != null)
-                {
-                    _camera.GlobalPosition = userRoot.HeadPosition.ToGodot();
-                }
-                else
-                {
-                    // Fallback to default height
-                    _camera.GlobalPosition = new Vector3(0, 1.6f, 0);
-                }
+                var userRoot = world.LocalUser.Root;
+                _camera.GlobalPosition = userRoot.HeadPosition.ToGodot();
             }
             else
             {
@@ -239,14 +231,11 @@ public partial class HeadOutput : Node
         else
         {
             // Follow local user's head rotation if they have a UserRoot
-            if (world.LocalUser?.UserRootSlot != null)
+            if (world.LocalUser?.Root != null)
             {
-                var userRoot = world.LocalUser.UserRootSlot.GetComponent<Lumora.Core.Components.UserRoot>();
-                if (userRoot != null)
-                {
-                    var rotation = userRoot.HeadRotation;
-                    _camera.GlobalTransform = new Transform3D(new Basis(rotation.ToGodot()), _camera.GlobalPosition);
-                }
+                var userRoot = world.LocalUser.Root;
+                var rotation = userRoot.HeadRotation;
+                _camera.GlobalTransform = new Transform3D(new Basis(rotation.ToGodot()), _camera.GlobalPosition);
             }
         }
     }

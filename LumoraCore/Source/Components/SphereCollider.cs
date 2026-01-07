@@ -25,6 +25,7 @@ public class SphereCollider : Collider
     public override void OnAwake()
     {
         base.OnAwake();
+        Radius.OnChanged += _ => RunApplyChanges();
         AquaLogger.Log($"SphereCollider: Initialized with Radius={Radius.Value}");
     }
 

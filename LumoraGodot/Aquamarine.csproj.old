@@ -1,0 +1,23 @@
+﻿<Project Sdk="Godot.NET.Sdk/4.5.1">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <LangVersion>preview</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="DiscordRichPresence" Version="1.2.1.24" />
+    <PackageReference Include="LiteNetLib" Version="1.3.1" />
+    <PackageReference Include="Wasmtime" Version="22.0.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LumoraCore\LumoraCore.csproj" />
+  </ItemGroup>
+
+  <!-- Copy LumoraCore.dll to addons folder after build -->
+  <Target Name="CopyLumoraCoreToAddons" AfterTargets="Build">
+    <MakeDir Directories="$(ProjectDir)addons\lumora\bin" />
+    <Copy SourceFiles="$(OutputPath)LumoraCore.dll" DestinationFolder="$(ProjectDir)addons\lumora\bin" />
+    <Copy SourceFiles="$(OutputPath)LumoraCore.pdb" DestinationFolder="$(ProjectDir)addons\lumora\bin" Condition="Exists('$(OutputPath)LumoraCore.pdb')" />
+  </Target>
+</Project>
+

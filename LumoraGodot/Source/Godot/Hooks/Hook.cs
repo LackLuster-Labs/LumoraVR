@@ -58,4 +58,12 @@ public abstract class Hook<D> : IHook<D> where D : IImplementable
     /// Override this to free Godot nodes.
     /// </summary>
     public abstract void Destroy(bool destroyingWorld);
+
+    /// <summary>
+    /// Dispose of the hook and release resources.
+    /// </summary>
+    public virtual void Dispose()
+    {
+        Destroy(false);
+    }
 }

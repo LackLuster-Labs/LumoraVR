@@ -37,6 +37,8 @@ public class CapsuleCollider : Collider
     public override void OnAwake()
     {
         base.OnAwake();
+        Height.OnChanged += _ => RunApplyChanges();
+        Radius.OnChanged += _ => RunApplyChanges();
         AquaLogger.Log($"CapsuleCollider: Initialized with Height={Height.Value}, Radius={Radius.Value}");
     }
 

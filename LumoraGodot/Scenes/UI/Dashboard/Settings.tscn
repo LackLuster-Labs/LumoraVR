@@ -1,0 +1,629 @@
+[gd_scene load_steps=10 format=3 uid="uid://settings_panel"]
+
+[ext_resource type="FontFile" uid="uid://bc0fpvfqcqrld" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
+[ext_resource type="Script" path="res://Scripts/UI/Dashboard/Settings.cs" id="2_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_panel"]
+bg_color = Color(0.08, 0.08, 0.12, 0.95)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.18, 0.35, 0.6)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tab_normal"]
+bg_color = Color(0.12, 0.1, 0.18, 0.8)
+border_width_bottom = 2
+border_color = Color(0.2, 0.18, 0.3, 0.5)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_tab_active"]
+bg_color = Color(0.18, 0.15, 0.28, 1)
+border_width_bottom = 2
+border_color = Color(0.47, 0.37, 0.94, 0.9)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_card"]
+bg_color = Color(0.1, 0.09, 0.15, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.22, 0.4, 0.4)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_input"]
+bg_color = Color(0.06, 0.05, 0.1, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.25, 0.45, 0.5)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+content_margin_left = 10
+content_margin_right = 10
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button"]
+bg_color = Color(0.15, 0.13, 0.25, 0.9)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.25, 0.45, 0.5)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_hover"]
+bg_color = Color(0.25, 0.2, 0.4, 0.95)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.47, 0.37, 0.94, 0.6)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="Settings" type="Control"]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_script")
+
+[node name="VBox" type="VBoxContainer" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 0
+
+[node name="Header" type="HBoxContainer" parent="VBox"]
+custom_minimum_size = Vector2(0, 50)
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="TabProfile" type="Button" parent="VBox/Header"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_tab_active")
+theme_override_styles/hover = SubResource("StyleBoxFlat_tab_active")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_tab_active")
+text = "Profile"
+
+[node name="TabSecurity" type="Button" parent="VBox/Header"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_tab_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_tab_active")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_tab_active")
+text = "Security"
+
+[node name="TabPreferences" type="Button" parent="VBox/Header"]
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_tab_normal")
+theme_override_styles/hover = SubResource("StyleBoxFlat_tab_active")
+theme_override_styles/pressed = SubResource("StyleBoxFlat_tab_active")
+text = "Preferences"
+
+[node name="Spacer" type="Control" parent="VBox/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ContentPanel" type="Panel" parent="VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
+
+[node name="Margin" type="MarginContainer" parent="VBox/ContentPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 24
+theme_override_constants/margin_top = 24
+theme_override_constants/margin_right = 24
+theme_override_constants/margin_bottom = 24
+
+[node name="TabContainer" type="Control" parent="VBox/ContentPanel/Margin"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="ProfileTab" type="ScrollContainer" parent="VBox/ContentPanel/Margin/TabContainer"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="ProfileContent" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 20
+
+[node name="ProfileHeader" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 18
+text = "Profile Settings"
+
+[node name="AvatarSection" type="Panel" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent"]
+custom_minimum_size = Vector2(0, 120)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="AvatarMargin" type="MarginContainer" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/AvatarSection"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="AvatarHBox" type="HBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/AvatarSection/AvatarMargin"]
+layout_mode = 2
+theme_override_constants/separation = 20
+
+[node name="AvatarPreview" type="Panel" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/AvatarSection/AvatarMargin/AvatarHBox"]
+custom_minimum_size = Vector2(80, 80)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="AvatarLabel" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/AvatarSection/AvatarMargin/AvatarHBox/AvatarPreview"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.7, 0.65, 0.85, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 28
+text = "?"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="AvatarInfo" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/AvatarSection/AvatarMargin/AvatarHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 1
+alignment = 1
+theme_override_constants/separation = 8
+
+[node name="AvatarTitle" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/AvatarSection/AvatarMargin/AvatarHBox/AvatarInfo"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Profile Picture"
+
+[node name="BtnChangeAvatar" type="Button" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/AvatarSection/AvatarMargin/AvatarHBox/AvatarInfo"]
+custom_minimum_size = Vector2(140, 36)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+text = "Change Avatar"
+
+[node name="BioSection" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="BioLabel" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/BioSection"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Bio"
+
+[node name="BioInput" type="TextEdit" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent/BioSection"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_input")
+placeholder_text = "Tell us about yourself..."
+
+[node name="SaveButton" type="Button" parent="VBox/ContentPanel/Margin/TabContainer/ProfileTab/ProfileContent"]
+custom_minimum_size = Vector2(120, 40)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+text = "Save Changes"
+
+[node name="SecurityTab" type="ScrollContainer" parent="VBox/ContentPanel/Margin/TabContainer"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="SecurityContent" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 20
+
+[node name="SecurityHeader" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 18
+text = "Security Settings"
+
+[node name="PasswordSection" type="Panel" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent"]
+custom_minimum_size = Vector2(0, 180)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="PasswordMargin" type="MarginContainer" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/PasswordSection"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="PasswordVBox" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/PasswordSection/PasswordMargin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="PasswordTitle" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/PasswordSection/PasswordMargin/PasswordVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Change Password"
+
+[node name="CurrentPassword" type="LineEdit" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/PasswordSection/PasswordMargin/PasswordVBox"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_input")
+placeholder_text = "Current password"
+secret = true
+
+[node name="NewPassword" type="LineEdit" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/PasswordSection/PasswordMargin/PasswordVBox"]
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_input")
+placeholder_text = "New password"
+secret = true
+
+[node name="BtnChangePassword" type="Button" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/PasswordSection/PasswordMargin/PasswordVBox"]
+custom_minimum_size = Vector2(160, 36)
+layout_mode = 2
+size_flags_horizontal = 0
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+text = "Update Password"
+
+[node name="TwoFactorSection" type="Panel" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent"]
+custom_minimum_size = Vector2(0, 100)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="TwoFactorMargin" type="MarginContainer" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/TwoFactorSection"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="TwoFactorHBox" type="HBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/TwoFactorSection/TwoFactorMargin"]
+layout_mode = 2
+size_flags_vertical = 1
+
+[node name="TwoFactorInfo" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/TwoFactorSection/TwoFactorMargin/TwoFactorHBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="TwoFactorTitle" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/TwoFactorSection/TwoFactorMargin/TwoFactorHBox/TwoFactorInfo"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Two-Factor Authentication"
+
+[node name="TwoFactorStatus" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/TwoFactorSection/TwoFactorMargin/TwoFactorHBox/TwoFactorInfo"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.5, 0.5, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Not enabled"
+
+[node name="BtnEnable2FA" type="Button" parent="VBox/ContentPanel/Margin/TabContainer/SecurityTab/SecurityContent/TwoFactorSection/TwoFactorMargin/TwoFactorHBox"]
+custom_minimum_size = Vector2(100, 36)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+text = "Enable"
+
+[node name="PreferencesTab" type="ScrollContainer" parent="VBox/ContentPanel/Margin/TabContainer"]
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="PreferencesContent" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 20
+
+[node name="PreferencesHeader" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 18
+text = "Preferences"
+
+[node name="AudioSection" type="Panel" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent"]
+custom_minimum_size = Vector2(0, 140)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="AudioMargin" type="MarginContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="AudioVBox" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="AudioTitle" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Audio"
+
+[node name="MasterVolumeHBox" type="HBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MasterLabel" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox/MasterVolumeHBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Master Volume"
+
+[node name="MasterSlider" type="HSlider" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox/MasterVolumeHBox"]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+value = 80.0
+
+[node name="MasterValue" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox/MasterVolumeHBox"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "80%"
+horizontal_alignment = 2
+
+[node name="MusicVolumeHBox" type="HBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="MusicLabel" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox/MusicVolumeHBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Music Volume"
+
+[node name="MusicSlider" type="HSlider" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox/MusicVolumeHBox"]
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+value = 60.0
+
+[node name="MusicValue" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/AudioSection/AudioMargin/AudioVBox/MusicVolumeHBox"]
+custom_minimum_size = Vector2(40, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "60%"
+horizontal_alignment = 2
+
+[node name="GraphicsSection" type="Panel" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent"]
+custom_minimum_size = Vector2(0, 220)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_card")
+
+[node name="GraphicsMargin" type="MarginContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 16
+theme_override_constants/margin_top = 16
+theme_override_constants/margin_right = 16
+theme_override_constants/margin_bottom = 16
+
+[node name="GraphicsVBox" type="VBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="GraphicsTitle" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Graphics"
+
+[node name="QualityHBox" type="HBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="QualityLabel" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/QualityHBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Quality"
+
+[node name="QualityOption" type="OptionButton" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/QualityHBox"]
+custom_minimum_size = Vector2(150, 32)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+selected = 1
+item_count = 3
+popup/item_0/text = "Low"
+popup/item_1/text = "Medium"
+popup/item_1/id = 1
+popup/item_2/text = "High"
+popup/item_2/id = 2
+
+[node name="FPSLimitHBox" type="HBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="FPSLimitLabel" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/FPSLimitHBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "FPS Limit"
+
+[node name="FPSLimitToggle" type="CheckButton" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/FPSLimitHBox"]
+layout_mode = 2
+
+[node name="FPSLimitSlider" type="HSlider" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/FPSLimitHBox"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+min_value = 30.0
+max_value = 240.0
+step = 10.0
+value = 60.0
+
+[node name="FPSLimitValue" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/FPSLimitHBox"]
+custom_minimum_size = Vector2(60, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Off"
+horizontal_alignment = 2
+
+[node name="VSyncHBox" type="HBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="VSyncLabel" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/VSyncHBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "VSync"
+
+[node name="VSyncToggle" type="CheckButton" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/VSyncHBox"]
+layout_mode = 2
+button_pressed = true
+
+[node name="FullscreenHBox" type="HBoxContainer" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox"]
+layout_mode = 2
+theme_override_constants/separation = 12
+
+[node name="FullscreenLabel" type="Label" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/FullscreenHBox"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "Fullscreen"
+
+[node name="FullscreenToggle" type="CheckButton" parent="VBox/ContentPanel/Margin/TabContainer/PreferencesTab/PreferencesContent/GraphicsSection/GraphicsMargin/GraphicsVBox/FullscreenHBox"]
+layout_mode = 2

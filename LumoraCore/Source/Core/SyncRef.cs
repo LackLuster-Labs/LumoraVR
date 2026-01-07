@@ -34,20 +34,21 @@ public class SyncRef<T> : SyncField<RefID>, ISyncRef, IWorldElementReceiver
         State = ReferenceState.Null;
     }
 
-    public SyncRef(IWorldElement owner)
-        : base(owner)
+    public SyncRef(IWorldElement? owner) : base()
     {
         State = ReferenceState.Null;
+        // Don't set _world here! That causes GenerateSyncData to return true
+        // before RefID is allocated. Set _parent for later Initialize() to use.
+        _parent = owner;
     }
 
-    public SyncRef(IWorldElement owner, T defaultTarget)
-        : base(owner)
+    public SyncRef(IWorldElement? owner, T? defaultTarget) : base()
     {
         State = ReferenceState.Null;
-        if (defaultTarget != null)
-        {
-            Target = defaultTarget;
-        }
+        // Don't set _world here! Set _parent for later Initialize() to use.
+        _parent = owner;
+        // Note: Don't set Target here either - it might try to sync before RefID is allocated
+        // The target should be set after Initialize() is called
     }
 
     private const int PreassignedFlag = 16;
@@ -118,7 +119,9 @@ public class SyncRef<T> : SyncField<RefID>, ISyncRef, IWorldElementReceiver
                 return;
             }
 
-            if (value.World != World)
+            // Skip world validation if our World is null (during pre-initialization construction)
+            // After Initialize() is called, World will be set and validation will occur
+            if (World != null && value.World != World)
             {
                 if (value.IsDestroyed)
                 {
@@ -131,7 +134,9 @@ public class SyncRef<T> : SyncField<RefID>, ISyncRef, IWorldElementReceiver
                     $"Reference World: {World}\nTarget:\n{value.ParentHierarchyToString()}");
             }
 
-            if (value.IsLocalElement && !IsLocalElement)
+            // Skip local element check if World is null (during pre-initialization)
+            // IsLocalElement depends on ReferenceID which isn't set until Initialize()
+            if (World != null && value.IsLocalElement && !IsLocalElement)
             {
                 throw new ArgumentException(
                     $"Cannot reference local targets from non-local reference.\n" +
@@ -293,12 +298,13 @@ public class SyncRef<T> : SyncField<RefID>, ISyncRef, IWorldElementReceiver
         OnTargetChange?.Invoke(this);
     }
 
-    public void Dispose()
+    public override void Dispose()
     {
         _target = null;
         OnReferenceChange = null;
         OnObjectAvailable = null;
         OnTargetChange = null;
+        base.Dispose();
     }
 
     public override string ToString()

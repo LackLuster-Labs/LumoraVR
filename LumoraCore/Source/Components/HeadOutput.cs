@@ -11,6 +11,8 @@ namespace Lumora.Core.Components;
 public class HeadOutput : ImplementableComponent
 {
     public UserRoot UserRoot { get; private set; }
+    private bool _loggedMissingUserRoot;
+    private bool _loggedMissingUser;
 
     public override void OnAwake()
     {
@@ -19,11 +21,26 @@ public class HeadOutput : ImplementableComponent
         UserRoot = Slot.GetComponent<UserRoot>();
         if (UserRoot == null)
         {
-            AquaLogger.Warn("HeadOutput: No UserRoot found!");
+            if (!_loggedMissingUserRoot)
+            {
+                AquaLogger.Warn("HeadOutput: No UserRoot found!");
+                _loggedMissingUserRoot = true;
+            }
             return;
         }
 
-        AquaLogger.Log($"HeadOutput: Initialized for user '{UserRoot.ActiveUser.UserName.Value}'");
+        var activeUser = UserRoot.ActiveUser;
+        if (activeUser == null)
+        {
+            if (!_loggedMissingUser)
+            {
+                AquaLogger.Warn("HeadOutput: UserRoot has no ActiveUser yet");
+                _loggedMissingUser = true;
+            }
+            return;
+        }
+
+        AquaLogger.Log($"HeadOutput: Initialized for user '{activeUser.UserName.Value}'");
     }
 
     public override void OnStart()

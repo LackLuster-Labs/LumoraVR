@@ -52,8 +52,8 @@ public class InputInterface : IDisposable
     public VRController RightController { get; private set; }
     public HeadDevice HeadDevice { get; private set; }
 
-    // VR state
-    public bool VR_Active { get; set; }
+    // VR state - synced from VR drivers automatically
+    public bool VR_Active => IsVRActive;
     public float UserHeight { get; set; } = DEFAULT_USER_HEIGHT;
 
     // Global tracking offset
@@ -67,6 +67,24 @@ public class InputInterface : IDisposable
     private HashSet<string> _loggedBodyNodeAssignments = new HashSet<string>();
 
     public int InputDeviceCount => _inputDevices.Count;
+
+    /// <summary>
+    /// Check if any VR driver is active.
+    /// </summary>
+    public bool IsVRActive => _vrDrivers.Any(d => d.IsVRActive);
+
+    /// <summary>
+    /// Get the current head output device type based on VR status.
+    /// </summary>
+    public HeadOutputDevice CurrentHeadOutputDevice
+    {
+        get
+        {
+            if (_vrDrivers.Any(d => d.IsVRActive))
+                return HeadOutputDevice.VR;
+            return HeadOutputDevice.Screen;  // Desktop mode
+        }
+    }
 
     public InputInterface()
     {

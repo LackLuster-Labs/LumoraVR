@@ -4,7 +4,7 @@ using Lumora.Core.Math;
 namespace Lumora.Core.Components;
 
 /// <summary>
-/// Desktop locomotion module: WASD movement + space jump, oriented by head facing.
+/// Desktop locomotion module: WASD movement + space jump + crouch, oriented by head facing.
 /// </summary>
 public class DesktopLocomotionModule : ILocomotionModule
 {
@@ -13,6 +13,8 @@ public class DesktopLocomotionModule : ILocomotionModule
     private InputInterface _inputInterface;
     private IKeyboardDriver _keyboardDriver;
     private bool _wasJumpPressed;
+    private bool _isCrouching;
+    private bool _isSprinting;
 
     public void Activate(LocomotionController owner)
     {
@@ -61,13 +63,30 @@ public class DesktopLocomotionModule : ILocomotionModule
 
         _characterController.SetMovementDirection(moveDir);
 
-        // Jump
+        // Jump (can't jump while crouching)
         bool isJumpPressed = _keyboardDriver.GetKeyState(Key.Space);
-        if (isJumpPressed && !_wasJumpPressed)
+        if (isJumpPressed && !_wasJumpPressed && !_isCrouching)
         {
             _characterController.RequestJump();
         }
         _wasJumpPressed = isJumpPressed;
+
+        // Crouch (Left Ctrl or C)
+        bool isCrouchPressed = _keyboardDriver.GetKeyState(Key.LeftControl) || _keyboardDriver.GetKeyState(Key.C);
+        if (isCrouchPressed != _isCrouching)
+        {
+            _isCrouching = isCrouchPressed;
+            _characterController.SetCrouching(_isCrouching);
+        }
+
+        // Sprint (Left Shift or Right Shift)
+        bool isSprintPressed = _keyboardDriver.GetKeyState(Key.LeftShift) || _keyboardDriver.GetKeyState(Key.RightShift);
+        bool wantsSprint = isSprintPressed && !_isCrouching;
+        if (wantsSprint != _isSprinting)
+        {
+            _isSprinting = wantsSprint;
+            _characterController.SetSprinting(_isSprinting);
+        }
     }
 
     public void Dispose()

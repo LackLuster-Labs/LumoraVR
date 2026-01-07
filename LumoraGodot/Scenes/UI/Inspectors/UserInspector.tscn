@@ -1,0 +1,442 @@
+[gd_scene load_steps=12 format=3 uid="uid://user_inspector_scene"]
+
+[ext_resource type="FontFile" uid="uid://dne06dcdmx5hj" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
+
+[sub_resource type="StyleBoxFlat" id="panel_bg"]
+bg_color = Color(0.08, 0.08, 0.1, 0.98)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.2, 0.18, 0.35, 0.8)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="header_bg"]
+bg_color = Color(0.12, 0.1, 0.18, 1)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+
+[sub_resource type="StyleBoxFlat" id="left_panel_bg"]
+bg_color = Color(0.1, 0.1, 0.12, 1)
+corner_radius_bottom_left = 10
+
+[sub_resource type="StyleBoxFlat" id="right_panel_bg"]
+bg_color = Color(0.06, 0.06, 0.08, 1)
+corner_radius_bottom_right = 10
+
+[sub_resource type="StyleBoxFlat" id="user_item_normal"]
+bg_color = Color(0.12, 0.12, 0.15, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="user_item_hover"]
+bg_color = Color(0.18, 0.16, 0.25, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="user_item_selected"]
+bg_color = Color(0.25, 0.2, 0.4, 1)
+border_width_left = 3
+border_color = Color(0.47, 0.37, 0.94, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="section_header_bg"]
+bg_color = Color(0.1, 0.09, 0.14, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="button_normal"]
+bg_color = Color(0.2, 0.18, 0.3, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[sub_resource type="StyleBoxFlat" id="button_hover"]
+bg_color = Color(0.3, 0.25, 0.45, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+
+[node name="UserInspector" type="Control"]
+custom_minimum_size = Vector2(320, 380)
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="MainPanel" type="Panel" parent="."]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+theme_override_styles/panel = SubResource("panel_bg")
+
+[node name="VBox" type="VBoxContainer" parent="MainPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+theme_override_constants/separation = 0
+
+[node name="Header" type="Panel" parent="MainPanel/VBox"]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_styles/panel = SubResource("header_bg")
+
+[node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/Header"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 16.0
+offset_right = -8.0
+theme_override_constants/separation = 16
+
+[node name="TitleLabel" type="Label" parent="MainPanel/VBox/Header/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 18
+text = "User Inspector"
+vertical_alignment = 1
+
+[node name="UserTitle" type="Label" parent="MainPanel/VBox/Header/HBox"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.8, 0.8, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "User: Select a user"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="CloseButton" type="Button" parent="MainPanel/VBox/Header/HBox"]
+custom_minimum_size = Vector2(32, 32)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.3, 0.3, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 16
+text = "✕"
+
+[node name="Content" type="HSplitContainer" parent="MainPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 4
+split_offset = 150
+
+[node name="LeftPanel" type="Panel" parent="MainPanel/VBox/Content"]
+custom_minimum_size = Vector2(140, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("left_panel_bg")
+
+[node name="VBox" type="VBoxContainer" parent="MainPanel/VBox/Content/LeftPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+theme_override_constants/separation = 8
+
+[node name="UsersLabel" type="Label" parent="MainPanel/VBox/Content/LeftPanel/VBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.6, 0.7, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+text = "USERS"
+
+[node name="UserList" type="ScrollContainer" parent="MainPanel/VBox/Content/LeftPanel/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="UserListContent" type="VBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/VBox/UserList"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="RightPanel" type="Panel" parent="MainPanel/VBox/Content"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_styles/panel = SubResource("right_panel_bg")
+
+[node name="ScrollContainer" type="ScrollContainer" parent="MainPanel/VBox/Content/RightPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+offset_top = 8.0
+offset_right = -8.0
+offset_bottom = -8.0
+horizontal_scroll_mode = 0
+
+[node name="DetailContent" type="VBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+
+[node name="BasicInfo" type="VBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="SectionHeader" type="Panel" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_header_bg")
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo/SectionHeader"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+theme_override_colors/font_color = Color(0.7, 0.65, 0.9, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "BASIC INFO"
+vertical_alignment = 1
+
+[node name="UserName" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo/UserName"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "userName:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo/UserName"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="UserID" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo/UserID"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "userID:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo/UserID"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="MachineID" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo/MachineID"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "machineID:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/BasicInfo/MachineID"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="Spacer1" type="Control" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="Status" type="VBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="SectionHeader" type="Panel" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_header_bg")
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/SectionHeader"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+theme_override_colors/font_color = Color(0.65, 0.8, 0.65, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "STATUS"
+vertical_alignment = 1
+
+[node name="HeadDevice" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/HeadDevice"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "headDevice:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/HeadDevice"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Desktop"
+
+[node name="Platform" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/Platform"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "platform:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/Platform"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Windows"
+
+[node name="VRActive" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/VRActive"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "vrActive:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/VRActive"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "false"
+
+[node name="Present" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/Present"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "presentInWorld:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Status/Present"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.4, 0.9, 0.4, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "✓"
+
+[node name="Spacer2" type="Control" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent"]
+custom_minimum_size = Vector2(0, 8)
+layout_mode = 2
+
+[node name="Performance" type="VBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="SectionHeader" type="Panel" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Performance"]
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_header_bg")
+
+[node name="Label" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Performance/SectionHeader"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 8.0
+theme_override_colors/font_color = Color(0.8, 0.7, 0.5, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "PERFORMANCE"
+vertical_alignment = 1
+
+[node name="FPS" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Performance"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Performance/FPS"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "fps:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Performance/FPS"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "60.0"
+
+[node name="Ping" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Performance"]
+layout_mode = 2
+
+[node name="Key" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Performance/Ping"]
+custom_minimum_size = Vector2(100, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "ping:"
+
+[node name="Value" type="Label" parent="MainPanel/VBox/Content/RightPanel/ScrollContainer/DetailContent/Performance/Ping"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "0 ms"

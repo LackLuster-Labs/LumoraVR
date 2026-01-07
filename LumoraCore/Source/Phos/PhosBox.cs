@@ -58,8 +58,8 @@ public class PhosBox : PhosShape
     /// </summary>
     public override void Remove()
     {
-        base.Remove();
         Mesh.RemoveVertices(FirstVertex.Index, TOTAL_VERTICES, updateSubmeshes: false);
+        base.Remove();
     }
 
     /// <summary>

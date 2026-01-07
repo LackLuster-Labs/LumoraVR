@@ -28,11 +28,11 @@ public sealed class LumoraClient : IDisposable
 
     public static TimeSpan ApiTimeout { get; set; } = TimeSpan.FromSeconds(30);
     public static TimeSpan ContentTimeout { get; set; } = TimeSpan.FromMinutes(10);
-    public static bool EnableCompression { get; set; } = true;
+    public static bool EnableCompression { get; set; } = false;
 
     public string DeviceId => _deviceId;
     public Session? CurrentSession => _session;
-    public bool IsAuthenticated => _session != null && DateTime.UtcNow < _session.Expires;
+    public bool IsAuthenticated => _session != null && !string.IsNullOrEmpty(_session.Token);
 
     public event Action<Session>? Authenticated;
     public event Action? SignedOut;
@@ -76,13 +76,16 @@ public sealed class LumoraClient : IDisposable
 
     #region Auth
 
-    public async Task<ApiResponse<Session>> SignIn(string username, string password, bool remember = false)
+    public async Task<ApiResponse<Session>> SignIn(string username, string password, bool remember = false, string? twoFactorCode = null)
     {
         if (!Connectivity.IsOnline)
             return ApiResponse<Session>.Fail(HttpStatusCode.ServiceUnavailable, "Offline");
 
-        var payload = new { Username = username, Password = password, Remember = remember, DeviceId = _deviceId };
-        var result = await PostAsync<Session>($"{ServiceConfig.Current.ApiBase}/auth/login", payload);
+        object payload = string.IsNullOrEmpty(twoFactorCode)
+            ? new { Username = username, Password = password, Remember = remember, DeviceId = _deviceId }
+            : new { Username = username, Password = password, Remember = remember, DeviceId = _deviceId, TwoFactorCode = twoFactorCode };
+
+        var result = await PostAsync<Session>($"{ServiceConfig.Current.ApiBase}/api/user/login", payload);
 
         if (result.Success && result.Data != null)
             ApplySession(result.Data);
@@ -96,7 +99,7 @@ public sealed class LumoraClient : IDisposable
             return ApiResponse<Session>.Fail(HttpStatusCode.ServiceUnavailable, "Offline");
 
         var payload = new { UserId = userId, Token = token, DeviceId = _deviceId };
-        var result = await PostAsync<Session>($"{ServiceConfig.Current.ApiBase}/auth/token", payload);
+        var result = await PostAsync<Session>($"{ServiceConfig.Current.ApiBase}/api/user/token", payload);
 
         if (result.Success && result.Data != null)
             ApplySession(result.Data);
@@ -115,7 +118,7 @@ public sealed class LumoraClient : IDisposable
             return ApiResponse.Ok("Signed out locally (offline)");
         }
 
-        var result = await PostAsync($"{ServiceConfig.Current.ApiBase}/auth/logout", null);
+        var result = await PostAsync($"{ServiceConfig.Current.ApiBase}/api/user/logout", null);
         ClearSession();
         return result;
     }
@@ -134,6 +137,48 @@ public sealed class LumoraClient : IDisposable
         _session = null;
         _api.DefaultRequestHeaders.Authorization = null;
         SignedOut?.Invoke();
+    }
+
+    #endregion
+
+    #region User Profile
+
+    public Task<ApiResponse<UserProfile>> GetCurrentUser()
+        => GetAsync<UserProfile>($"{ServiceConfig.Current.ApiBase}/api/user/me");
+
+    public async Task<ApiResponse> ChangePassword(string currentPassword, string newPassword)
+    {
+        if (!IsAuthenticated)
+            return ApiResponse.Fail(HttpStatusCode.Unauthorized, "Not authenticated");
+
+        var payload = new { CurrentPassword = currentPassword, NewPassword = newPassword };
+        return await PostAsync($"{ServiceConfig.Current.ApiBase}/api/user/reset-password", payload);
+    }
+
+    public async Task<ApiResponse<TwoFactorSetup>> Enable2FA()
+    {
+        if (!IsAuthenticated)
+            return ApiResponse<TwoFactorSetup>.Fail(HttpStatusCode.Unauthorized, "Not authenticated");
+
+        return await PostAsync<TwoFactorSetup>($"{ServiceConfig.Current.ApiBase}/api/user/enable2fa", null);
+    }
+
+    public async Task<ApiResponse> Verify2FA(string code)
+    {
+        if (!IsAuthenticated)
+            return ApiResponse.Fail(HttpStatusCode.Unauthorized, "Not authenticated");
+
+        var payload = new { Code = code };
+        return await PostAsync($"{ServiceConfig.Current.ApiBase}/api/user/verify2fa", payload);
+    }
+
+    public async Task<ApiResponse> Disable2FA(string code)
+    {
+        if (!IsAuthenticated)
+            return ApiResponse.Fail(HttpStatusCode.Unauthorized, "Not authenticated");
+
+        var payload = new { Code = code };
+        return await PostAsync($"{ServiceConfig.Current.ApiBase}/api/user/disable2fa", payload);
     }
 
     #endregion

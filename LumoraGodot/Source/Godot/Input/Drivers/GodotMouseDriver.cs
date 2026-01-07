@@ -1,6 +1,7 @@
 using Lumora.Core.Input;
 using Lumora.Core.Math;
 using Godot;
+using Aquamarine.Source.UI;
 
 namespace Aquamarine.Source.Godot.Input.Drivers;
 
@@ -40,8 +41,14 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
         bool hadMotionEvent = _mouseMotionReceived;
         _mouseMotionReceived = false;
 
-        // Honor capture requests from locomotion
-        if (Lumora.Core.Components.LocomotionController.MouseCaptureRequested)
+        // Dashboard takes priority - hide system cursor but allow mouse movement (we use custom cursor)
+        if (DashboardToggle.IsDashboardVisible)
+        {
+            if (global::Godot.Input.MouseMode != global::Godot.Input.MouseModeEnum.Hidden)
+                global::Godot.Input.MouseMode = global::Godot.Input.MouseModeEnum.Hidden;
+        }
+        // Honor capture requests from locomotion when dashboard is closed
+        else if (Lumora.Core.Components.LocomotionController.MouseCaptureRequested)
         {
             if (global::Godot.Input.MouseMode != global::Godot.Input.MouseModeEnum.Captured)
                 global::Godot.Input.MouseMode = global::Godot.Input.MouseModeEnum.Captured;
@@ -110,7 +117,8 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
 
         _lastMousePosition = mousePos;
 
-        float2 delta = new float2(motion.X, motion.Y);
+        // Don't send mouse delta to locomotion when dashboard is visible
+        float2 delta = DashboardToggle.IsDashboardVisible ? float2.Zero : new float2(motion.X, motion.Y);
 
         mouse.DirectDelta.UpdateValue(delta, deltaTime);
 

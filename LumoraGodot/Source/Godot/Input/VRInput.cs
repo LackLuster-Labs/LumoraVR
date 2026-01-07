@@ -17,7 +17,14 @@ public partial class VRInput : Node3D, IInputProvider
     private Vector3 _playspaceDelta;
     private float _rotation;
 
-    public static readonly PackedScene PackedScene = ResourceLoader.Load<PackedScene>("res://Scenes/VRInput.tscn");
+    // Laser interaction for UI
+    private LaserInteractionManager _laserManager;
+    private GrabManager _grabManager;
+
+    /// <summary>
+    /// Laser interaction manager for VR UI interaction.
+    /// </summary>
+    public LaserInteractionManager LaserManager => _laserManager;
 
     public override void _Ready()
     {
@@ -35,6 +42,15 @@ public partial class VRInput : Node3D, IInputProvider
             _hip.ProcessPriority = -10;
             _leftFoot.ProcessPriority = -10;
             _rightFoot.ProcessPriority = -10;
+
+            // Create laser interaction manager for UI
+            _laserManager = new LaserInteractionManager();
+            _laserManager.Name = "LaserInteraction";
+            AddChild(_laserManager);
+
+            _grabManager = new GrabManager();
+            _grabManager.Name = "GrabManager";
+            AddChild(_grabManager);
 
             AquaLogger.Log("XRInput initialized successfully.");
         }

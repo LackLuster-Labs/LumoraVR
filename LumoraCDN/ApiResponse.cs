@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using System.Net;
+using System.Text.Json.Serialization;
 
 namespace Lumora.CDN;
 
@@ -103,14 +105,11 @@ public enum TransferState
     Error
 }
 
-// auth session
+// auth session - API only returns token, user info comes from /api/user/me
 public record Session
 {
-    public required string UserId { get; init; }
-    public required string DisplayName { get; init; }
-    public required string Token { get; init; }
-    public DateTime Expires { get; init; }
-    public bool Persistent { get; init; }
+    [JsonPropertyName("token")]
+    public string Token { get; init; } = "";
 }
 
 // upload handle from server
@@ -121,4 +120,63 @@ public record UploadHandle
     public DateTime Expires { get; init; }
     public int ChunkSize { get; init; }
     public int TotalChunks { get; init; }
+}
+
+// user profile from /api/user/me
+public record UserProfile
+{
+    [JsonPropertyName("id")]
+    public string Id { get; init; } = "";
+    [JsonPropertyName("email")]
+    public string? Email { get; init; }
+    [JsonPropertyName("username")]
+    public string Username { get; init; } = "";
+    [JsonPropertyName("normalizedUsername")]
+    public string? NormalizedUsername { get; init; }
+    [JsonPropertyName("registrationDate")]
+    public DateTime RegistrationDate { get; init; }
+    [JsonPropertyName("isVerified")]
+    public bool IsVerified { get; init; }
+    [JsonPropertyName("isLocked")]
+    public bool IsLocked { get; init; }
+    [JsonPropertyName("nameColor")]
+    public string NameColor { get; init; } = "#FFFFFF";
+    [JsonPropertyName("twoFactorEnabled")]
+    public bool TwoFactorEnabled { get; init; }
+    [JsonPropertyName("patreonData")]
+    public PatreonInfo? PatreonData { get; init; }
+    [JsonPropertyName("storageQuota")]
+    public StorageQuota? StorageQuota { get; init; }
+}
+
+public record PatreonInfo
+{
+    [JsonPropertyName("isActiveSupporter")]
+    public bool IsActiveSupporter { get; init; }
+    [JsonPropertyName("tierName")]
+    public string TierName { get; init; } = "";
+    [JsonPropertyName("tierColor")]
+    public string? TierColor { get; init; }
+    [JsonPropertyName("totalSupportMonths")]
+    public int TotalSupportMonths { get; init; }
+}
+
+public record StorageQuota
+{
+    [JsonPropertyName("quotaMB")]
+    public int QuotaMB { get; init; }
+    [JsonPropertyName("usedMB")]
+    public int UsedMB { get; init; }
+    [JsonPropertyName("availableMB")]
+    public int AvailableMB { get; init; }
+    [JsonPropertyName("percentUsed")]
+    public double PercentUsed { get; init; }
+}
+
+// 2FA setup response
+public record TwoFactorSetup
+{
+    public required string Secret { get; init; }
+    public required string QrCode { get; init; }
+    public required List<string> RecoveryCodes { get; init; }
 }

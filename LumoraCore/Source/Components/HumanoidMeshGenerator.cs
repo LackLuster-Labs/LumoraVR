@@ -12,6 +12,18 @@ namespace Lumora.Core.Components;
 public static class HumanoidMeshGenerator
 {
     /// <summary>
+    /// Bone names in order matching bone indices used in mesh generation.
+    /// </summary>
+    public static readonly string[] BoneNameOrder = new string[]
+    {
+        "Root", "Hips", "Spine", "Chest", "UpperChest", "Neck", "Head",
+        "LeftShoulder", "LeftUpperArm", "LeftLowerArm", "LeftHand",
+        "RightShoulder", "RightUpperArm", "RightLowerArm", "RightHand",
+        "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "LeftToes",
+        "RightUpperLeg", "RightLowerLeg", "RightFoot", "RightToes"
+    };
+
+    /// <summary>
     /// Generate a complete humanoid body mesh with proper bone weights.
     /// Creates simple shapes for body parts weighted to a standard humanoid skeleton.
     /// </summary>
@@ -21,7 +33,8 @@ public static class HumanoidMeshGenerator
         out float2[] uvs,
         out int[] indices,
         out int4[] boneIndices,
-        out float4[] boneWeights)
+        out float4[] boneWeights,
+        out string[] boneNames)
     {
         var vertexList = new List<float3>();
         var normalList = new List<float3>();
@@ -30,26 +43,35 @@ public static class HumanoidMeshGenerator
         var boneIndexList = new List<int4>();
         var boneWeightList = new List<float4>();
 
-        // Define bone indices for standard humanoid skeleton
-        const int BONE_HIPS = 0;
-        const int BONE_SPINE = 1;
-        const int BONE_CHEST = 2;
-        const int BONE_NECK = 3;
-        const int BONE_HEAD = 4;
-        const int BONE_LEFT_SHOULDER = 5;
-        const int BONE_LEFT_UPPER_ARM = 6;
-        const int BONE_LEFT_LOWER_ARM = 7;
-        const int BONE_LEFT_HAND = 8;
-        const int BONE_RIGHT_SHOULDER = 9;
-        const int BONE_RIGHT_UPPER_ARM = 10;
-        const int BONE_RIGHT_LOWER_ARM = 11;
-        const int BONE_RIGHT_HAND = 12;
-        const int BONE_LEFT_UPPER_LEG = 13;
-        const int BONE_LEFT_LOWER_LEG = 14;
-        const int BONE_LEFT_FOOT = 15;
-        const int BONE_RIGHT_UPPER_LEG = 16;
-        const int BONE_RIGHT_LOWER_LEG = 17;
-        const int BONE_RIGHT_FOOT = 18;
+        // Define bone indices matching DefaultAVI skeleton order:
+        // 0=Root, 1=Hips, 2=Spine, 3=Chest, 4=UpperChest, 5=Neck, 6=Head
+        // 7=LeftShoulder, 8=LeftUpperArm, 9=LeftLowerArm, 10=LeftHand
+        // 11=RightShoulder, 12=RightUpperArm, 13=RightLowerArm, 14=RightHand
+        // 15=LeftUpperLeg, 16=LeftLowerLeg, 17=LeftFoot, 18=LeftToes
+        // 19=RightUpperLeg, 20=RightLowerLeg, 21=RightFoot, 22=RightToes
+        const int BONE_ROOT = 0;
+        const int BONE_HIPS = 1;
+        const int BONE_SPINE = 2;
+        const int BONE_CHEST = 3;
+        const int BONE_UPPER_CHEST = 4;
+        const int BONE_NECK = 5;
+        const int BONE_HEAD = 6;
+        const int BONE_LEFT_SHOULDER = 7;
+        const int BONE_LEFT_UPPER_ARM = 8;
+        const int BONE_LEFT_LOWER_ARM = 9;
+        const int BONE_LEFT_HAND = 10;
+        const int BONE_RIGHT_SHOULDER = 11;
+        const int BONE_RIGHT_UPPER_ARM = 12;
+        const int BONE_RIGHT_LOWER_ARM = 13;
+        const int BONE_RIGHT_HAND = 14;
+        const int BONE_LEFT_UPPER_LEG = 15;
+        const int BONE_LEFT_LOWER_LEG = 16;
+        const int BONE_LEFT_FOOT = 17;
+        const int BONE_LEFT_TOES = 18;
+        const int BONE_RIGHT_UPPER_LEG = 19;
+        const int BONE_RIGHT_LOWER_LEG = 20;
+        const int BONE_RIGHT_FOOT = 21;
+        const int BONE_RIGHT_TOES = 22;
 
         // Generate body parts
         // Torso (capsule) - weighted to Hips, Spine, Chest
@@ -125,8 +147,9 @@ public static class HumanoidMeshGenerator
         indices = indexList.ToArray();
         boneIndices = boneIndexList.ToArray();
         boneWeights = boneWeightList.ToArray();
+        boneNames = BoneNameOrder;
 
-        AquaLogger.Log($"HumanoidMeshGenerator: Generated mesh with {vertices.Length} vertices, {indices.Length / 3} triangles");
+        AquaLogger.Log($"HumanoidMeshGenerator: Generated mesh with {vertices.Length} vertices, {indices.Length / 3} triangles, {boneNames.Length} bones");
     }
 
     // ===== MESH PRIMITIVE GENERATORS =====

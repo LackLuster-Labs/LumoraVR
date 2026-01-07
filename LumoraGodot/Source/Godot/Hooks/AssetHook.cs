@@ -14,9 +14,20 @@ public abstract class AssetHook : IAssetHook
     protected IAsset asset;
 
     /// <summary>
-    /// The engine this asset belongs to (currently unused in Lumora).
+    /// The engine instance. Assets are global and not tied to a specific world.
     /// </summary>
-    public object Engine => null; // TODO: Assets don't have World reference yet
+    public Engine Engine => Lumora.Core.Engine.Current;
+
+    /// <summary>
+    /// The currently focused world (convenience accessor).
+    /// May be null if no world is focused.
+    /// </summary>
+    public World FocusedWorld => Engine?.WorldManager?.FocusedWorld;
+
+    /// <summary>
+    /// The asset this hook is attached to.
+    /// </summary>
+    public IAsset Asset => asset;
 
     /// <summary>
     /// Initialize the asset hook.

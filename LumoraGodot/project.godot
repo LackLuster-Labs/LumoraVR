@@ -8,11 +8,15 @@
 
 config_version=5
 
+[animation]
+
+compatibility/default_parent_skeleton_in_mesh_instance_3d=true
+
 [application]
 
 config/name="Aquamarine"
-run/main_scene="res://Scenes/Bootstrap.tscn"
-config/features=PackedStringArray("4.5", "C#", "Forward Plus")
+run/main_scene="uid://c8sly288nngj4"
+config/features=PackedStringArray("4.6", "C#", "Forward Plus")
 config/icon="res://Assets/Textures/lumoravricon.svg"
 
 [debug_draw_3d]

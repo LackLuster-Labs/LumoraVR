@@ -1,3 +1,5 @@
+using System;
+
 namespace Lumora.Core;
 
 /// <summary>
@@ -44,7 +46,7 @@ public interface IHook
 /// <summary>
 /// Generic hook interface with typed owner.
 /// </summary>
-public interface IHook<T> : IHook where T : IImplementable
+public interface IHook<T> : IHook, IDisposable where T : IImplementable
 {
     /// <summary>
     /// The typed component that owns this hook.

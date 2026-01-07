@@ -14,7 +14,9 @@ public class ControlMessage : SyncMessage
         JoinGrant,
         JoinStartDelta,
         JoinReject,
-        ServerClose
+        ServerClose,
+        WorldSnapshot,
+        RequestFullState
     }
 
     public override MessageType MessageType => MessageType.Control;

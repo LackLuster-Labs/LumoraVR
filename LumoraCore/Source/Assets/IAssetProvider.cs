@@ -7,7 +7,7 @@ namespace Lumora.Core.Assets;
 /// <summary>
 /// Non-generic interface for asset providers.
 /// </summary>
-public interface IAssetProvider
+public interface IAssetProvider : IWorldElement
 {
     /// <summary>
     /// The generic asset instance (use typed providers for specific asset types).

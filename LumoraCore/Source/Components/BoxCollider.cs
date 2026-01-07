@@ -25,6 +25,7 @@ public class BoxCollider : Collider
     public override void OnAwake()
     {
         base.OnAwake();
+        Size.OnChanged += _ => RunApplyChanges();
         AquaLogger.Log($"BoxCollider: Initialized with Size={Size.Value}");
     }
 

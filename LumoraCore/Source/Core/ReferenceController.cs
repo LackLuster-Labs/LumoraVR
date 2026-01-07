@@ -8,9 +8,71 @@ namespace Lumora.Core;
 /// <summary>
 /// Central controller for world element references.
 /// Handles registration, lookup, async resolution, and allocation context management.
+/// Supports allocation blocking during decode/init.
 /// </summary>
 public class ReferenceController : IDisposable
 {
+    /// <summary>
+    /// If true, new RefID allocations are blocked to prevent wrong-context creation.
+    /// </summary>
+    public bool BlockAllocations { get; set; }
+
+    /// <summary>
+    /// Nesting counter for allocation blocking.
+    /// Allocations are blocked when this is > 0.
+    /// </summary>
+    private int _allocationBlockCount;
+
+    /// <summary>
+    /// Whether allocations are hard-blocked (will throw).
+    /// Soft blocks during OnAwake only warn.
+    /// </summary>
+    public bool AllocationsBlocked => BlockAllocations;
+
+    /// <summary>
+    /// Whether we're in a soft-block context (OnAwake) that will warn on allocation.
+    /// </summary>
+    public bool InSoftBlockContext => _allocationBlockCount > 0;
+
+    /// <summary>
+    /// Whether the world is currently decoding a batch (slots/components should defer full init).
+    /// </summary>
+    public bool IsDecodingBatch { get; private set; }
+
+    /// <summary>
+    /// Begin blocking allocations (can be nested).
+    /// Used during OnAwake to prevent components from creating new objects.
+    /// </summary>
+    public void BlockAllocationsStart()
+    {
+        _allocationBlockCount++;
+    }
+
+    /// <summary>
+    /// End blocking allocations (can be nested).
+    /// </summary>
+    public void BlockAllocationsEnd()
+    {
+        if (_allocationBlockCount > 0)
+            _allocationBlockCount--;
+    }
+
+    /// <summary>
+    /// Begin batch decode mode. Slots/components should defer full initialization.
+    /// </summary>
+    public void BeginBatchDecode()
+    {
+        IsDecodingBatch = true;
+    }
+
+    /// <summary>
+    /// End batch decode mode.
+    /// </summary>
+    public void EndBatchDecode()
+    {
+        IsDecodingBatch = false;
+    }
+
     // Object registry
     private readonly Dictionary<RefID, IWorldElement> _objects = new();
     
@@ -23,6 +85,7 @@ public class ReferenceController : IDisposable
     
     // Local allocation tracking
     private ulong _localAllocationPosition = 1;
+    private int _localAllocationDepth;
     
     // Trash bin integration (for restore from trash)
     private readonly Dictionary<RefID, TrashEntry> _trashedObjects = new();
@@ -61,7 +124,8 @@ public class ReferenceController : IDisposable
         _currentAllocation = new AllocationContext
         {
             UserByte = RefIDConstants.AUTHORITY_BYTE,
-            Position = 1
+            Position = 1,
+            NestedDepth = 0
         };
     }
     
@@ -234,16 +298,23 @@ public class ReferenceController : IDisposable
     /// </summary>
     public void AllocationBlockBegin(in RefID id)
     {
+        CheckAllocation();
         byte userByte = id.GetUserByte();
         ulong position = id.GetPosition();
-        
-        // Push current context
+
+        if (_currentAllocation.UserByte == userByte && _currentAllocation.Position == position)
+        {
+            _currentAllocation.NestedDepth++;
+            return;
+        }
+
         _allocationStack.Push(_currentAllocation);
-        
+
         _currentAllocation = new AllocationContext
         {
             UserByte = userByte,
-            Position = position
+            Position = position,
+            NestedDepth = 0
         };
     }
     
@@ -252,6 +323,12 @@ public class ReferenceController : IDisposable
     /// </summary>
     public void AllocationBlockEnd()
     {
+        if (_currentAllocation.NestedDepth > 0)
+        {
+            _currentAllocation.NestedDepth--;
+            return;
+        }
+
         if (_allocationStack.Count == 0)
         {
             throw new InvalidOperationException("Allocation stack is empty, cannot end block!");
@@ -265,14 +342,21 @@ public class ReferenceController : IDisposable
     /// </summary>
     public void LocalAllocationBlockBegin()
     {
-        // If already in local allocation, this is a nested call - just push
+        CheckAllocation();
+        if (_currentAllocation.UserByte == RefIDConstants.LOCAL_BYTE)
+        {
+            _localAllocationDepth++;
+            return;
+        }
+
         _allocationStack.Push(_currentAllocation);
-        
         _currentAllocation = new AllocationContext
         {
             UserByte = RefIDConstants.LOCAL_BYTE,
-            Position = _localAllocationPosition
+            Position = _localAllocationPosition,
+            NestedDepth = 0
         };
+        _localAllocationDepth = 1;
     }
     
     /// <summary>
@@ -284,15 +368,23 @@ public class ReferenceController : IDisposable
         {
             throw new InvalidOperationException("Not in local allocation block!");
         }
-        
+
+        if (_localAllocationDepth > 1)
+        {
+            _localAllocationDepth--;
+            return;
+        }
+
+        _localAllocationDepth = 0;
+
         // Save local position for next local block
         _localAllocationPosition = _currentAllocation.Position;
-        
+
         if (_allocationStack.Count == 0)
         {
             throw new InvalidOperationException("Allocation stack is empty!");
         }
-        
+
         _currentAllocation = _allocationStack.Pop();
     }
     
@@ -301,6 +393,7 @@ public class ReferenceController : IDisposable
     /// </summary>
     public RefID AllocateID()
     {
+        CheckAllocation();
         RefID id = RefID.Construct(_currentAllocation.UserByte, _currentAllocation.Position);
         _currentAllocation.Position++;
         return id;
@@ -311,6 +404,7 @@ public class ReferenceController : IDisposable
     /// </summary>
     public RefID PeekID()
     {
+        CheckAllocation();
         return RefID.Construct(_currentAllocation.UserByte, _currentAllocation.Position);
     }
     
@@ -320,10 +414,12 @@ public class ReferenceController : IDisposable
     /// </summary>
     public void SetAllocationContext(byte userByte, ulong position)
     {
+        CheckAllocation();
         _currentAllocation = new AllocationContext
         {
             UserByte = userByte,
-            Position = position
+            Position = position,
+            NestedDepth = 0
         };
     }
     
@@ -420,11 +516,16 @@ public class ReferenceController : IDisposable
         _trashedObjects.Clear();
         _allocationStack.Clear();
         _localAllocationPosition = 1;
-        
+        _localAllocationDepth = 0;
+        BlockAllocations = false;
+        _allocationBlockCount = 0;
+        IsDecodingBatch = false;
+
         _currentAllocation = new AllocationContext
         {
             UserByte = RefIDConstants.AUTHORITY_BYTE,
-            Position = 1
+            Position = 1,
+            NestedDepth = 0
         };
     }
     
@@ -434,6 +535,26 @@ public class ReferenceController : IDisposable
     }
     
     #endregion
+
+    private void CheckAllocation()
+    {
+        // Warn about allocations during OnAwake context
+        // but don't throw - some components legitimately need to create sync members
+        if (_allocationBlockCount > 0)
+        {
+            AquaLogger.Warn(
+                "RefID allocation during OnAwake context. This may indicate a component " +
+                "creating new objects during initialization. Consider deferring to OnInit.");
+        }
+
+        // The hard block (BlockAllocations property) still throws
+        if (BlockAllocations)
+        {
+            throw new InvalidOperationException(
+                "New RefID allocations are currently blocked. Are you accidentally " +
+                "creating new objects in the wrong context?");
+        }
+    }
     
     #region Internal Types
     
@@ -441,6 +562,7 @@ public class ReferenceController : IDisposable
     {
         public byte UserByte;
         public ulong Position;
+        public int NestedDepth;
     }
     
     private struct TrashEntry

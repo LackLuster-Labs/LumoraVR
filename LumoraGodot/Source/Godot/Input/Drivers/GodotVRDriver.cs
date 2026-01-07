@@ -1,6 +1,7 @@
 using Godot;
 using Lumora.Core.Input;
 using Lumora.Core.Math;
+using Aquamarine.Source.Input;
 using System.Numerics;
 using Quaternion = System.Numerics.Quaternion;
 using Vector3 = System.Numerics.Vector3;
