@@ -27,6 +27,7 @@ corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
 [node name="WorldCard" type="Button"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(200, 160)
 theme_override_styles/normal = SubResource("StyleBoxFlat_card")
 theme_override_styles/hover = SubResource("StyleBoxFlat_card_hover")
@@ -43,18 +44,21 @@ mouse_filter = 2
 theme_override_constants/separation = 0
 
 [node name="ThumbnailContainer" type="PanelContainer" parent="VBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 110)
 layout_mode = 2
 size_flags_vertical = 3
 mouse_filter = 2
 
 [node name="Thumbnail" type="TextureRect" parent="VBox/ThumbnailContainer"]
+unique_name_in_owner = true
 layout_mode = 2
 expand_mode = 1
 stretch_mode = 6
 mouse_filter = 2
 
 [node name="NoImageLabel" type="Label" parent="VBox/ThumbnailContainer"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.48, 0.6, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -64,6 +68,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="UserCountBadge" type="PanelContainer" parent="VBox/ThumbnailContainer"]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 2
 anchor_top = 1.0
@@ -75,10 +80,12 @@ offset_bottom = -4.0
 mouse_filter = 2
 
 [node name="HBox" type="HBoxContainer" parent="VBox/ThumbnailContainer/UserCountBadge"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 4
 
 [node name="Icon" type="Label" parent="VBox/ThumbnailContainer/UserCountBadge/HBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -86,6 +93,7 @@ theme_override_font_sizes/font_size = 10
 text = "👤"
 
 [node name="Count" type="Label" parent="VBox/ThumbnailContainer/UserCountBadge/HBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -93,6 +101,7 @@ theme_override_font_sizes/font_size = 10
 text = "0"
 
 [node name="InfoPanel" type="MarginContainer" parent="VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 mouse_filter = 2
 theme_override_constants/margin_left = 8
@@ -106,6 +115,7 @@ mouse_filter = 2
 theme_override_constants/separation = 2
 
 [node name="Title" type="Label" parent="VBox/InfoPanel/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -114,6 +124,7 @@ text = "World Name"
 text_overrun_behavior = 3
 
 [node name="Host" type="Label" parent="VBox/InfoPanel/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.58, 0.7, 1)
 theme_override_fonts/font = ExtResource("1_font")

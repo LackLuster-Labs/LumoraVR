@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using Lumora.Core;
 using Lumora.Core.Components.Avatar;
 using AquaLogger = Lumora.Core.Logging.Logger;
@@ -17,6 +18,9 @@ namespace Lumora.Core.Components;
 [ComponentCategory("Users")]
 public class SimpleUserSpawn : Component, IWorldEventReceiver
 {
+    // Track spawned users to prevent duplicates
+    private Dictionary<User, Slot> _userSlots = new Dictionary<User, Slot>();
+
     public override void OnAwake()
     {
         base.OnAwake();
@@ -39,8 +43,22 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
     {
         if (user == null) return;
 
-        AquaLogger.Log($"SimpleUserSpawn: OnUserJoined - UserName='{user.UserName.Value ?? "(null)"}', UserID='{user.UserID.Value ?? "(null)"}', RefID={user.ReferenceID}");
-        AquaLogger.Log($"SimpleUserSpawn: IsLocalUser={user == World?.LocalUser}, World.LocalUser='{World?.LocalUser?.UserName?.Value ?? "(null)"}'");
+        // CRITICAL: Only authority spawns users!
+        // Clients receive the spawned slots via network sync.
+        if (!World.IsAuthority)
+        {
+            AquaLogger.Log($"SimpleUserSpawn: Client ignoring OnUserJoined for '{user.UserName.Value}' - authority will spawn and sync");
+            return;
+        }
+
+        // Prevent duplicate spawns
+        if (_userSlots.ContainsKey(user))
+        {
+            AquaLogger.Warn($"SimpleUserSpawn: User '{user.UserName.Value}' already spawned, ignoring duplicate");
+            return;
+        }
+
+        AquaLogger.Log($"SimpleUserSpawn: [Authority] Spawning user '{user.UserName.Value ?? "(null)"}', RefID={user.ReferenceID}");
 
         try
         {
@@ -49,7 +67,6 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
             if (string.IsNullOrEmpty(userName))
             {
                 userName = $"User_{user.ReferenceID}";
-                AquaLogger.Warn($"SimpleUserSpawn: Username was empty, using fallback: {userName}");
             }
 
             var userSlot = World.RootSlot.AddSlot($"User {userName}");
@@ -57,10 +74,13 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
             userSlot.LocalPosition.Value = Slot.LocalPosition.Value;
             userSlot.LocalRotation.Value = Slot.LocalRotation.Value;
 
+            // Track the user slot
+            _userSlots.Add(user, userSlot);
+
             // Use DefaultAVI to spawn user with full skeleton avatar
             DefaultAVI.SpawnWithDefaultAvatar(userSlot, user);
 
-            AquaLogger.Log($"SimpleUserSpawn: Spawned user '{userName}' with default avatar");
+            AquaLogger.Log($"SimpleUserSpawn: [Authority] Spawned user '{userName}' - slots will sync to clients");
         }
         catch (Exception ex)
         {
@@ -70,9 +90,16 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
 
     public void OnUserLeft(User user)
     {
-        if (user?.Root?.Slot == null) return;
-        user.Root.Slot.Destroy();
-        user.Root = null;
+        if (user == null) return;
+
+        // Only authority manages user slots
+        if (!World.IsAuthority) return;
+
+        if (_userSlots.TryGetValue(user, out var slot))
+        {
+            slot.Destroy();
+            _userSlots.Remove(user);
+        }
     }
 
     // Unused interface methods

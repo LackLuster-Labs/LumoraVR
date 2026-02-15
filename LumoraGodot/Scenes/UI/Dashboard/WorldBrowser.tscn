@@ -4,7 +4,7 @@
 [ext_resource type="Script" path="res://Scripts/UI/Dashboard/WorldBrowser.cs" id="2_script"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_main_bg"]
-bg_color = Color(0.06, 0.055, 0.09, 0.98)
+bg_color = Color(0.06, 0.055, 0.09, 0.42)
 border_width_left = 1
 border_width_top = 1
 border_width_right = 1
@@ -16,12 +16,19 @@ corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_sidebar"]
-bg_color = Color(0.08, 0.07, 0.12, 0.95)
+bg_color = Color(0.08, 0.07, 0.12, 0.4)
+border_width_left = 1
+border_width_top = 1
 border_width_right = 1
+border_width_bottom = 1
 border_color = Color(0.2, 0.18, 0.3, 0.5)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_search"]
-bg_color = Color(0.1, 0.09, 0.15, 0.8)
+bg_color = Color(0.1, 0.09, 0.15, 0.5)
 border_width_left = 1
 border_width_top = 1
 border_width_right = 1
@@ -33,11 +40,19 @@ corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_header"]
-bg_color = Color(0.1, 0.09, 0.15, 0.9)
+bg_color = Color(0.1, 0.09, 0.15, 0.48)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
 border_width_bottom = 1
 border_color = Color(0.25, 0.22, 0.4, 0.5)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
 
 [node name="WorldBrowser" type="Control"]
+unique_name_in_owner = true
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -47,15 +62,18 @@ grow_vertical = 2
 script = ExtResource("2_script")
 
 [node name="Background" type="Panel" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+clip_contents = true
 theme_override_styles/panel = SubResource("StyleBoxFlat_main_bg")
 
 [node name="MainHBox" type="HBoxContainer" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -65,11 +83,13 @@ grow_vertical = 2
 theme_override_constants/separation = 0
 
 [node name="Sidebar" type="PanelContainer" parent="MainHBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_sidebar")
 
 [node name="SidebarMargin" type="MarginContainer" parent="MainHBox/Sidebar"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/margin_left = 8
 theme_override_constants/margin_top = 12
@@ -77,14 +97,17 @@ theme_override_constants/margin_right = 8
 theme_override_constants/margin_bottom = 12
 
 [node name="SidebarVBox" type="VBoxContainer" parent="MainHBox/Sidebar/SidebarMargin"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 4
 
 [node name="TitleHBox" type="HBoxContainer" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 8
 
 [node name="Icon" type="Label" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox/TitleHBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -92,6 +115,7 @@ theme_override_font_sizes/font_size = 18
 text = "🌍"
 
 [node name="Title" type="Label" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox/TitleHBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -99,10 +123,12 @@ theme_override_font_sizes/font_size = 16
 text = "Worlds"
 
 [node name="Spacer1" type="Control" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 8)
 layout_mode = 2
 
 [node name="CurrentWorldLabel" type="Label" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.48, 0.6, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -110,6 +136,7 @@ theme_override_font_sizes/font_size = 9
 text = "CURRENT WORLD"
 
 [node name="CurrentWorld" type="Label" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -118,30 +145,36 @@ text = "Local World"
 text_overrun_behavior = 3
 
 [node name="Spacer2" type="Control" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 12)
 layout_mode = 2
 
 [node name="CategoriesScroll" type="ScrollContainer" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 
 [node name="CategoriesList" type="VBoxContainer" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox/CategoriesScroll"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 2
 
 [node name="ContentArea" type="VBoxContainer" parent="MainHBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 0
 
 [node name="Header" type="PanelContainer" parent="MainHBox/ContentArea"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 60)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_header")
 
 [node name="HeaderMargin" type="MarginContainer" parent="MainHBox/ContentArea/Header"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/margin_left = 16
 theme_override_constants/margin_top = 12
@@ -149,10 +182,12 @@ theme_override_constants/margin_right = 16
 theme_override_constants/margin_bottom = 12
 
 [node name="HeaderHBox" type="HBoxContainer" parent="MainHBox/ContentArea/Header/HeaderMargin"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 16
 
 [node name="SearchBox" type="LineEdit" parent="MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
@@ -163,10 +198,12 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_search")
 placeholder_text = "🔍 Search worlds..."
 
 [node name="Spacer" type="Control" parent="MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 
 [node name="ResultCount" type="Label" parent="MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.58, 0.7, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -174,6 +211,7 @@ theme_override_font_sizes/font_size = 11
 text = "0 - 24"
 
 [node name="RefreshButton" type="Button" parent="MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(32, 32)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
@@ -182,6 +220,7 @@ theme_override_font_sizes/font_size = 14
 text = "↻"
 
 [node name="ContentMargin" type="MarginContainer" parent="MainHBox/ContentArea"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/margin_left = 16
@@ -190,10 +229,12 @@ theme_override_constants/margin_right = 16
 theme_override_constants/margin_bottom = 16
 
 [node name="WorldsScroll" type="ScrollContainer" parent="MainHBox/ContentArea/ContentMargin"]
+unique_name_in_owner = true
 layout_mode = 2
 horizontal_scroll_mode = 0
 
 [node name="WorldsGrid" type="GridContainer" parent="MainHBox/ContentArea/ContentMargin/WorldsScroll"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/h_separation = 12
@@ -201,6 +242,7 @@ theme_override_constants/v_separation = 12
 columns = 4
 
 [node name="LoadingLabel" type="Label" parent="MainHBox/ContentArea/ContentMargin"]
+unique_name_in_owner = true
 visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.58, 0.7, 1)
@@ -211,6 +253,7 @@ horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="NoResultsLabel" type="Label" parent="MainHBox/ContentArea/ContentMargin"]
+unique_name_in_owner = true
 visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.58, 0.7, 1)

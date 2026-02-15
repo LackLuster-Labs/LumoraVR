@@ -6,10 +6,11 @@ namespace Lumora.Core;
 
 /// <summary>
 /// Strongly-typed reference identifier for world elements.
+/// Bit layout optimized for network compatibility.
 ///
 /// RefID Structure (64 bits):
-/// - Bits 56-63 (8 bits): User byte - identifies allocation domain
-/// - Bits 0-55 (56 bits): Position - sequential counter within domain
+/// - Bits 0-7 (8 bits): User byte - identifies allocation domain
+/// - Bits 8-63 (56 bits): Position - sequential counter within domain
 ///
 /// User Byte Allocation:
 /// - 0: Authority/Host allocated IDs
@@ -28,19 +29,24 @@ public readonly struct RefID : IEquatable<RefID>, IComparable<RefID>
     public static readonly RefID Null = default;
 
     /// <summary>
+    /// Number of bits used for user byte (low 8 bits for user domain).
+    /// </summary>
+    public const int USER_BITS = 8;
+
+    /// <summary>
+    /// Mask for extracting user byte (low 8 bits).
+    /// </summary>
+    public const ulong USER_MASK = 0xFFUL;
+
+    /// <summary>
+    /// Mask for extracting position (high 56 bits).
+    /// </summary>
+    public const ulong ID_MASK = ~USER_MASK;
+
+    /// <summary>
     /// Maximum position value (56 bits).
     /// </summary>
     public const ulong MaxPosition = 0x00FFFFFFFFFFFFFFUL;
-
-    /// <summary>
-    /// Mask for extracting position from raw value.
-    /// </summary>
-    private const ulong PositionMask = 0x00FFFFFFFFFFFFFFUL;
-
-    /// <summary>
-    /// Number of bits used for position.
-    /// </summary>
-    private const int PositionBits = 56;
 
     private readonly ulong _value;
 
@@ -127,16 +133,16 @@ public readonly struct RefID : IEquatable<RefID>, IComparable<RefID>
     }
 
     /// <summary>
-    /// Extract the user allocation byte (MSB).
+    /// Extract the user allocation byte (low 8 bits).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public byte GetUserByte() => (byte)(_value >> PositionBits);
+    public byte GetUserByte() => (byte)(_value & USER_MASK);
 
     /// <summary>
-    /// Extract the position counter (lower 56 bits).
+    /// Extract the position counter (high 56 bits).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ulong GetPosition() => _value & PositionMask;
+    public ulong GetPosition() => _value >> USER_BITS;
 
     /// <summary>
     /// Check if this RefID belongs to a specific user byte.
@@ -157,28 +163,28 @@ public readonly struct RefID : IEquatable<RefID>, IComparable<RefID>
     public bool IsInRangeInclusive(RefID start, RefID end) => _value >= start._value && _value <= end._value;
 
     /// <summary>
-    /// Get the distance between this RefID and another.
+    /// Get the distance between this RefID and another (in position units).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public long DistanceTo(RefID other) => (long)(other._value - _value);
+    public long DistanceTo(RefID other) => (long)((other._value - _value) >> USER_BITS);
 
     /// <summary>
-    /// Create a new RefID offset from this one.
+    /// Create a new RefID offset from this one (offset is in position units).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public RefID Offset(long amount) => new RefID((ulong)((long)_value + amount));
+    public RefID Offset(long amount) => new RefID((ulong)((long)_value + (amount << USER_BITS)));
 
     /// <summary>
-    /// Get the next RefID in sequence.
+    /// Get the next RefID in sequence (increments position by 1).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public RefID Next() => new RefID(_value + 1);
+    public RefID Next() => new RefID(_value + (1UL << USER_BITS));
 
     /// <summary>
-    /// Get the previous RefID in sequence.
+    /// Get the previous RefID in sequence (decrements position by 1).
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public RefID Previous() => new RefID(_value - 1);
+    public RefID Previous() => new RefID(_value - (1UL << USER_BITS));
 
     /// <summary>
     /// Create a RefID with the same user byte but different position.
@@ -200,7 +206,17 @@ public readonly struct RefID : IEquatable<RefID>, IComparable<RefID>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static RefID Construct(byte userByte, ulong position)
     {
-        return new RefID(((ulong)userByte << PositionBits) | (position & PositionMask));
+        return new RefID((position << USER_BITS) | (userByte & USER_MASK));
+    }
+
+    /// <summary>
+    /// Extract both user byte and position from a RefID.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static void ExtractID(RefID id, out ulong position, out byte user)
+    {
+        position = (ulong)id >> USER_BITS;
+        user = (byte)((ulong)id & USER_MASK);
     }
 
     /// <summary>
@@ -366,10 +382,10 @@ public readonly struct RefID : IEquatable<RefID>, IComparable<RefID>
     public static ulong operator -(RefID left, RefID right) => left._value - right._value;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RefID operator ++(RefID id) => new RefID(id._value + 1);
+    public static RefID operator ++(RefID id) => new RefID(id._value + (1UL << USER_BITS));
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static RefID operator --(RefID id) => new RefID(id._value - 1);
+    public static RefID operator --(RefID id) => new RefID(id._value - (1UL << USER_BITS));
 
     #endregion
 

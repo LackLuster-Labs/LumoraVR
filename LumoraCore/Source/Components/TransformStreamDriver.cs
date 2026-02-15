@@ -1,105 +1,138 @@
-using Lumora.Core.Math;
 using Lumora.Core.Networking.Streams;
+using AquaLogger = Lumora.Core.Logging.Logger;
 
 namespace Lumora.Core.Components;
 
 /// <summary>
 /// Drives slot transforms from tracking streams and publishes local transforms to streams.
+/// - Uses SyncRef for stream references (synced over network)
+/// - For local user: reads slot position and writes to stream
+/// - For remote user: reads stream and writes to slot position
 /// </summary>
 [ComponentCategory("Users")]
-[DefaultUpdateOrder(-900000)]
+[DefaultUpdateOrder(-10000)]
 public class TransformStreamDriver : Component
 {
-    private const float PositionThresholdSq = 0.0001f * 0.0001f;
-    private const float RotationThreshold = 0.0001f;
+    // Synced references to the streams - these sync over the network
+    // so clients can resolve them by RefID
+    // Initialized by Worker.InitializeSyncMembers() via reflection
+    public readonly SyncRef<Float3ValueStream> PositionStream = null!;
+    public readonly SyncRef<FloatQValueStream> RotationStream = null!;
 
-    public StreamRef<Float3ValueStream> PositionStream { get; private set; } = new();
-    public StreamRef<FloatQValueStream> RotationStream { get; private set; } = new();
+    private int _debugCounter = 0;
+    private bool _loggedStreamInfo = false;
 
-    private bool _hasSent;
+    /// <summary>
+    /// Get the user that owns these streams.
+    /// </summary>
+    public User? User
+    {
+        get
+        {
+            var posTarget = PositionStream?.Target;
+            if (posTarget != null) return posTarget.Owner;
+
+            var rotTarget = RotationStream?.Target;
+            if (rotTarget != null) return rotTarget.Owner;
+
+            return null;
+        }
+    }
 
     public override void OnUpdate(float delta)
     {
         base.OnUpdate(delta);
 
-        var positionStream = PositionStream?.Target;
-        var rotationStream = RotationStream?.Target;
-        if (positionStream == null && rotationStream == null)
-            return;
-
-        var owner = positionStream?.Owner ?? rotationStream?.Owner;
-        if (owner == null)
-            return;
-
-        if (owner.IsLocal)
+        // Debug logging every ~2 seconds
+        _debugCounter++;
+        if (!_loggedStreamInfo && _debugCounter > 120)
         {
-            UpdateLocalStreams(positionStream, rotationStream);
+            _debugCounter = 0;
+            var posState = PositionStream?.State.ToString() ?? "null";
+            var posRefID = PositionStream?.Value.ToString() ?? "null";
+            var posTarget = PositionStream?.Target;
+            var user = User;
+            AquaLogger.Log($"[TSD] {Slot.SlotName.Value}: PosState={posState} RefID={posRefID} Target={posTarget != null} User={user?.UserName?.Value ?? "null"} IsLocal={user?.IsLocal}");
+            if (user != null)
+                _loggedStreamInfo = true;
+        }
+
+        var currentUser = User;
+        if (currentUser == null)
+            return;
+
+        if (currentUser.IsLocal)
+        {
+            // Local user: read slot transform, write to streams
+            UpdateLocalStreams();
         }
         else
         {
-            ApplyRemoteStreams(positionStream, rotationStream);
+            // Remote user: read streams, write to slot transform
+            ApplyRemoteStreams();
         }
     }
 
-    private void UpdateLocalStreams(Float3ValueStream positionStream, FloatQValueStream rotationStream)
+    /// <summary>
+    /// For local user: push slot transform to streams for network transmission.
+    /// </summary>
+    private void UpdateLocalStreams()
     {
-        var position = Slot.LocalPosition.Value;
-        var rotation = Slot.LocalRotation.Value;
+        var positionStream = PositionStream?.Target;
+        var rotationStream = RotationStream?.Target;
 
-        bool sent = false;
-
-        if (positionStream != null)
+        // Write position to stream
+        if (positionStream != null && positionStream.IsLocal)
         {
-            if (!_hasSent || (position - positionStream.Value).LengthSquared > PositionThresholdSq)
-            {
-                positionStream.Value = position;
-                positionStream.ForceUpdate();
-                sent = true;
-            }
+            var position = Slot.LocalPosition.Value;
+            positionStream.Value = position;
         }
 
-        if (rotationStream != null)
+        // Write rotation to stream
+        if (rotationStream != null && rotationStream.IsLocal)
         {
-            var current = rotationStream.Value;
-            float dot = floatQ.Dot(rotation, current);
-            float delta = 1.0f - (dot < 0 ? -dot : dot);
-
-            if (!_hasSent || delta > RotationThreshold)
-            {
-                rotationStream.Value = rotation;
-                rotationStream.ForceUpdate();
-                sent = true;
-            }
-        }
-
-        if (sent)
-        {
-            _hasSent = true;
+            var rotation = Slot.LocalRotation.Value;
+            rotationStream.Value = rotation;
         }
     }
 
-    private void ApplyRemoteStreams(Float3ValueStream positionStream, FloatQValueStream rotationStream)
+    /// <summary>
+    /// For remote user: apply stream data to slot transform.
+    /// </summary>
+    private void ApplyRemoteStreams()
     {
+        var positionStream = PositionStream?.Target;
+        var rotationStream = RotationStream?.Target;
+
+        // Apply position from stream
         if (positionStream != null && positionStream.HasValidData)
         {
             var position = positionStream.Value;
-            var current = Slot.LocalPosition.Value;
-            if ((position - current).LengthSquared > PositionThresholdSq)
-            {
-                Slot.LocalPosition.SetValueSilently(position);
-            }
+
+            // Skip invalid values
+            if (!float.IsFinite(position.x) || !float.IsFinite(position.y) || !float.IsFinite(position.z))
+                return;
+
+            Slot.LocalPosition.Value = position;
         }
 
+        // Apply rotation from stream
         if (rotationStream != null && rotationStream.HasValidData)
         {
             var rotation = rotationStream.Value;
-            var current = Slot.LocalRotation.Value;
-            float dot = floatQ.Dot(rotation, current);
-            float delta = 1.0f - (dot < 0 ? -dot : dot);
-            if (delta > RotationThreshold)
-            {
-                Slot.LocalRotation.SetValueSilently(rotation);
-            }
+
+            // Skip invalid values
+            if (!float.IsFinite(rotation.x) || !float.IsFinite(rotation.y) ||
+                !float.IsFinite(rotation.z) || !float.IsFinite(rotation.w))
+                return;
+
+            // Skip zero-length quaternion
+            float lengthSq = rotation.x * rotation.x + rotation.y * rotation.y +
+                             rotation.z * rotation.z + rotation.w * rotation.w;
+            if (lengthSq < 0.0001f)
+                return;
+
+            Slot.LocalRotation.Value = rotation;
         }
     }
 }

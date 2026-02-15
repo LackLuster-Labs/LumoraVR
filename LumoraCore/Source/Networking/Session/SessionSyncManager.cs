@@ -466,21 +466,31 @@ public class SessionSyncManager : IDisposable
                     var streams = new List<StreamMessage>();
                     World.SyncController.GatherStreams(streams);
 
+                    int sentCount = 0;
                     foreach (var stream in streams)
                     {
                         AddStreamTargets(stream, excludeSender: false);
                         if (stream.Targets.Count > 0)
                         {
                             EnqueueForTransmission(stream);
+                            sentCount++;
                         }
                         else
                         {
                             stream.Dispose();
                         }
                     }
+
+                    // Log stream transmission summary periodically (every 60 ticks = ~1 sec at 60 fps)
+                    if (streams.Count > 0 && World.SyncTick % 60 == 0)
+                    {
+                        AquaLogger.Log($"[Stream] Gathered {streams.Count} messages, sent {sentCount} (LocalUser streams: {World.LocalUser?.StreamCount ?? 0})");
+                    }
                 }
 
                 DEBUG_SyncLoopStage = SyncLoopStage.FinishingSyncCycle;
+
+                World.LocalUser?.ClearJustAddedStreams();
 
                 lastDeltaSyncTime = World.StateVersion;
                 World.IncrementSyncTick();
@@ -913,7 +923,7 @@ public class SessionSyncManager : IDisposable
         int remaining = batch.DataRecordCount;
         int passes = 0;
 
-        AquaLogger.Log($"ApplyDataRecords: Starting with {batch.DataRecordCount} records, isFull={batch is FullBatch}");
+        // AquaLogger.Log($"ApplyDataRecords: Starting with {batch.DataRecordCount} records, isFull={batch is FullBatch}");
 
         while (remaining > 0)
         {
@@ -950,7 +960,7 @@ public class SessionSyncManager : IDisposable
                 }
             }
 
-            AquaLogger.Log($"ApplyDataRecords: Pass {passes} decoded {decodedThisPass} records, {remaining} remaining");
+            // AquaLogger.Log($"ApplyDataRecords: Pass {passes} decoded {decodedThisPass} records, {remaining} remaining");
 
             // If no progress in this pass, we're done
             if (remaining == startRemaining)

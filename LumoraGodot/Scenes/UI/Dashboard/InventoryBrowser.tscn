@@ -1,0 +1,397 @@
+[gd_scene load_steps=8 format=3 uid="uid://c36emls3c8sv5"]
+
+[ext_resource type="FontFile" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
+[ext_resource type="Script" path="res://Scripts/UI/Dashboard/InventoryBrowser.cs" id="2_script"]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_main_bg"]
+bg_color = Color(0.06, 0.055, 0.09, 0.34)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.18, 0.3, 0.35)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_toolbar"]
+bg_color = Color(0.1, 0.09, 0.15, 0.58)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.26, 0.22, 0.4, 0.55)
+corner_radius_top_left = 10
+corner_radius_top_right = 10
+corner_radius_bottom_right = 10
+corner_radius_bottom_left = 10
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_content"]
+bg_color = Color(0.07, 0.065, 0.11, 0.5)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.2, 0.18, 0.3, 0.5)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_input"]
+bg_color = Color(0.1, 0.09, 0.15, 0.52)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.25, 0.22, 0.4, 0.5)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button"]
+bg_color = Color(0.16, 0.13, 0.26, 0.72)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.33, 0.27, 0.5, 0.55)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_danger"]
+bg_color = Color(0.26, 0.11, 0.16, 0.8)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.75, 0.25, 0.36, 0.6)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[node name="InventoryBrowser" type="Control"]
+unique_name_in_owner = true
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("2_script")
+
+[node name="Background" type="Panel" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+clip_contents = true
+theme_override_styles/panel = SubResource("StyleBoxFlat_main_bg")
+
+[node name="RootMargin" type="MarginContainer" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="RootVBox" type="VBoxContainer" parent="RootMargin"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ToolbarPanel" type="PanelContainer" parent="RootMargin/RootVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 0)
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_toolbar")
+
+[node name="ToolbarMargin" type="MarginContainer" parent="RootMargin/RootVBox/ToolbarPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="ToolbarVBox" type="VBoxContainer" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 7
+
+[node name="ActionRow" type="HBoxContainer" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="InventoriesButton" type="Button" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(104, 32)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "Inventories"
+
+[node name="ShareButton" type="Button" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(84, 32)
+layout_mode = 2
+disabled = true
+theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "Share"
+
+[node name="UnshareButton" type="Button" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(92, 32)
+layout_mode = 2
+disabled = true
+theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "Unshare"
+
+[node name="GetUrlButton" type="Button" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(86, 32)
+layout_mode = 2
+disabled = true
+theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "Get URL"
+
+[node name="DeleteButton" type="Button" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(76, 32)
+layout_mode = 2
+disabled = true
+theme_override_colors/font_color = Color(1, 0.75, 0.78, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button_danger")
+text = "Delete"
+
+[node name="SaveAvatarButton" type="Button" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(108, 32)
+layout_mode = 2
+disabled = true
+theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "Save Avatar"
+
+[node name="ActionSpacer" type="Control" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/ActionRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="QuotaLabel" type="Label" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/ActionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(98, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.68, 0.65, 0.78, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Quota: --"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="FilterRow" type="HBoxContainer" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="FolderSelector" type="OptionButton" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/FilterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 32)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+
+[node name="CreateFolderButton" type="Button" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/FilterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(96, 32)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "Create Folder"
+
+[node name="TypeFilter" type="OptionButton" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/FilterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(94, 32)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+
+[node name="SearchBox" type="LineEdit" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/FilterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(132, 32)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_colors/font_placeholder_color = Color(0.55, 0.52, 0.66, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_input")
+placeholder_text = "Search assets..."
+
+[node name="FilterSpacer" type="Control" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/FilterRow"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="Status" type="Label" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/FilterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.65, 0.62, 0.78, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 10
+text = ""
+clip_text = true
+text_overrun_behavior = 3
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="ResultCount" type="Label" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/FilterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(62, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.66, 0.63, 0.8, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "0 assets"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="RefreshButton" type="Button" parent="RootMargin/RootVBox/ToolbarPanel/ToolbarMargin/ToolbarVBox/FilterRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(68, 32)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+theme_override_styles/normal = SubResource("StyleBoxFlat_button")
+text = "Refresh"
+
+[node name="ContentPanel" type="PanelContainer" parent="RootMargin/RootVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+clip_contents = true
+theme_override_styles/panel = SubResource("StyleBoxFlat_content")
+
+[node name="ContentMargin" type="MarginContainer" parent="RootMargin/RootVBox/ContentPanel"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 10
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 10
+
+[node name="AssetsScroll" type="ScrollContainer" parent="RootMargin/RootVBox/ContentPanel/ContentMargin"]
+unique_name_in_owner = true
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="AssetGrid" type="GridContainer" parent="RootMargin/RootVBox/ContentPanel/ContentMargin/AssetsScroll"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/h_separation = 12
+theme_override_constants/v_separation = 12
+columns = 1
+
+[node name="LoadingLabel" type="Label" parent="RootMargin/RootVBox/ContentPanel"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.66, 0.62, 0.78, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Loading inventory..."
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="NoResultsLabel" type="Label" parent="RootMargin/RootVBox/ContentPanel"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.66, 0.62, 0.78, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "No assets found"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="CreateFolderDialog" type="ConfirmationDialog" parent="."]
+unique_name_in_owner = true
+initial_position = 2
+title = "Create Folder"
+ok_button_text = "Create"
+
+[node name="Margin" type="MarginContainer" parent="CreateFolderDialog"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/margin_left = 12
+theme_override_constants/margin_top = 12
+theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 12
+
+[node name="VBox" type="VBoxContainer" parent="CreateFolderDialog/Margin"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Prompt" type="Label" parent="CreateFolderDialog/Margin/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Folder name"
+
+[node name="FolderNameInput" type="LineEdit" parent="CreateFolderDialog/Margin/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+placeholder_text = "New Folder"

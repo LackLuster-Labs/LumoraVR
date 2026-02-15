@@ -299,6 +299,14 @@ public class SyncController
 
 		var syncTick = Owner.SyncTick;
 
+		foreach (var stream in localUser.Streams)
+		{
+			if (stream.Active && !localUser.StreamGroupManager.ContainsStream(stream))
+			{
+				localUser.StreamGroupManager.AssignToGroup(stream, null);
+			}
+		}
+
 		// Iterate through all stream groups
 		foreach (var group in localUser.StreamGroupManager.Groups)
 		{
@@ -316,7 +324,10 @@ public class SyncController
 				bool shouldSend = stream.IsImplicitUpdatePoint(syncTick) ||
 				                  stream.IsExplicitUpdatePoint(syncTick);
 
-				if (shouldSend && stream.HasValidData)
+				// For local streams (sending), we always send if shouldSend is true.
+				// HasValidData is for RECEIVING to filter out invalid remote data.
+				// Local streams should send their current value regardless.
+				if (shouldSend)
 				{
 					// Write stream RefID and encode data
 					writer.Write((ulong)stream.ReferenceID);
@@ -346,6 +357,9 @@ public class SyncController
 		}
 	}
 
+	// Counter for periodic stream receive logging
+	private int _appliedStreamCount;
+
 	/// <summary>
 	/// Apply received stream data to remote user's streams.
 	/// Called by SessionSyncManager when a StreamMessage is received.
@@ -373,16 +387,10 @@ public class SyncController
 			return;
 		}
 
-		// Get the stream group
-		var group = user.StreamGroupManager.GetGroup(message.StreamGroup);
-		if (group == null)
-		{
-			return;
-		}
-
 		// Read and apply stream data
 		var data = message.GetData();
 		using var reader = new BinaryReader(data);
+		int streamCount = 0;
 
 		while (data.Position < data.Length)
 		{
@@ -396,6 +404,7 @@ public class SyncController
 				if (streamElement is IStream stream && stream.Active)
 				{
 					stream.Decode(reader, message);
+					streamCount++;
 				}
 				else
 				{
@@ -413,6 +422,14 @@ public class SyncController
 				break;
 			}
 		}
+
+		_appliedStreamCount += streamCount;
+
+		// Log stream receive summary periodically (every 60 messages)
+		// if (_appliedStreamCount > 0 && _appliedStreamCount % 60 == 0)
+		// {
+		// 	AquaLogger.Log($"[Stream] Applied {_appliedStreamCount} streams from remote users");
+		// }
 	}
 
 	public void Dispose()

@@ -173,6 +173,19 @@ public partial class LaserPointer : Node3D
         ProcessInput();
     }
 
+    public override void _Input(InputEvent @event)
+    {
+        if (_currentViewport == null) return;
+        if (@event is not InputEventKey keyEvent) return;
+
+        // Forward keyboard events into focused controls inside the hovered SubViewport
+        // so LineEdit/SpinBox editors can be typed into.
+        if (_currentViewport.GuiGetFocusOwner() == null) return;
+
+        var forwardedEvent = (InputEventKey)keyEvent.Duplicate();
+        _currentViewport.PushInput(forwardedEvent, true);
+    }
+
     private void UpdateLaserFromInput()
     {
         var input = IInputProvider.Instance;
@@ -465,6 +478,8 @@ public partial class LaserPointer : Node3D
         var moveEvent = new InputEventMouseMotion();
         moveEvent.Position = pos;
         moveEvent.GlobalPosition = pos;
+        // Set button mask based on current trigger state
+        moveEvent.ButtonMask = _wasTriggerPressed ? MouseButtonMask.Left : 0;
 
         _currentViewport.PushInput(moveEvent, true);
     }
@@ -478,7 +493,10 @@ public partial class LaserPointer : Node3D
         clickEvent.GlobalPosition = pos;
         clickEvent.ButtonIndex = MouseButton.Left;
         clickEvent.Pressed = pressed;
+        // Set button mask - required by some controls for proper click detection
+        clickEvent.ButtonMask = pressed ? MouseButtonMask.Left : 0;
 
+        AquaLogger.Log($"LaserPointer: Sending mouse {(pressed ? "press" : "release")} at viewport pos {pos}");
         _currentViewport.PushInput(clickEvent, true);
     }
 

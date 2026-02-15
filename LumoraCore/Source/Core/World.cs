@@ -1006,7 +1006,13 @@ public class World
 	public void SetLocalUser(User user)
 	{
 		LocalUser = user;
-		user?.ConfigureLocalTrackingStreams();
+		// Only configure streams if world is already Running.
+		// For clients, streams are decoded AFTER SetLocalUser is called during FullBatch processing.
+		// ConfigureLocalTrackingStreams will be called in StartRunning() instead.
+		if (_state == WorldState.Running)
+		{
+			user?.ConfigureLocalTrackingStreams();
+		}
 		AddUser(user);
 		AquaLogger.Log($"Local user set: {user.UserName.Value}");
 	}
@@ -1273,6 +1279,15 @@ public class World
 		_initState = InitializationState.Finished;
 		_state = WorldState.Running;
 		AquaLogger.Log("World is now running");
+
+		// For clients: configure local user's tracking streams now that all sync members are decoded.
+		// This was deferred from SetLocalUser because streams weren't decoded yet during FullBatch processing.
+		if (!IsAuthority && LocalUser != null)
+		{
+			LocalUser.ConfigureLocalTrackingStreams();
+			AquaLogger.Log($"Configured tracking streams for local user '{LocalUser.UserName.Value}' on world Running");
+		}
+
 		OnStateChanged?.Invoke(oldState, _state);
 	}
 

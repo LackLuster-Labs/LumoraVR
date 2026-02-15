@@ -296,6 +296,22 @@ public class ValueStream<T> : ImplicitStream, IValue<T>
 /// </summary>
 public class Float3ValueStream : ValueStream<Lumora.Core.Math.float3>
 {
+    /// <summary>
+    /// Override to check for valid float3 (no NaN or Infinity values).
+    /// </summary>
+    public override bool HasValidData
+    {
+        get
+        {
+            if (!base.HasValidData)
+                return false;
+
+            // Check for NaN or Infinity
+            var v = _value;
+            return float.IsFinite(v.x) && float.IsFinite(v.y) && float.IsFinite(v.z);
+        }
+    }
+
     protected override Lumora.Core.Math.float3 Interpolate(
         Lumora.Core.Math.float3 a,
         Lumora.Core.Math.float3 b,
@@ -314,6 +330,24 @@ public class Float3ValueStream : ValueStream<Lumora.Core.Math.float3>
 /// </summary>
 public class FloatQValueStream : ValueStream<Lumora.Core.Math.floatQ>
 {
+    /// <summary>
+    /// Override to check for valid quaternion (non-zero length).
+    /// A zero quaternion is invalid and would cause NaN when normalized.
+    /// </summary>
+    public override bool HasValidData
+    {
+        get
+        {
+            if (!base.HasValidData)
+                return false;
+
+            // Check if the quaternion has valid (non-zero) length
+            var q = _value;
+            float lengthSq = q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w;
+            return lengthSq > 0.0001f;
+        }
+    }
+
     protected override Lumora.Core.Math.floatQ Interpolate(
         Lumora.Core.Math.floatQ a,
         Lumora.Core.Math.floatQ b,

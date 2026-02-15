@@ -42,6 +42,7 @@ corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
 
 [node name="EngineDebug" type="Control"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(420, 360)
 layout_mode = 3
 anchors_preset = 15
@@ -51,6 +52,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="MainPanel" type="Panel" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -69,11 +71,13 @@ offset_bottom = -8.0
 theme_override_constants/separation = 0
 
 [node name="Header" type="Panel" parent="MainPanel/VBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
 theme_override_styles/panel = SubResource("header_bg")
 
 [node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/Header"]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -82,6 +86,7 @@ offset_left = 16.0
 offset_right = -8.0
 
 [node name="Title" type="Label" parent="MainPanel/VBox/Header/HBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
@@ -91,6 +96,7 @@ text = "Engine Debug"
 vertical_alignment = 1
 
 [node name="CloseButton" type="Button" parent="MainPanel/VBox/Header/HBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(28, 28)
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.3, 0.3, 1)
@@ -99,17 +105,20 @@ theme_override_font_sizes/font_size = 14
 text = "X"
 
 [node name="Content" type="HSplitContainer" parent="MainPanel/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 4
 split_offset = 280
 
 [node name="LeftPanel" type="Panel" parent="MainPanel/VBox/Content"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(260, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("left_panel_bg")
 
 [node name="Scroll" type="ScrollContainer" parent="MainPanel/VBox/Content/LeftPanel"]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -126,6 +135,7 @@ size_flags_horizontal = 3
 theme_override_constants/separation = 8
 
 [node name="WorldInfo" type="VBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 2
 
@@ -147,6 +157,7 @@ text = "WORLD INFO"
 vertical_alignment = 1
 
 [node name="WorldName" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldInfo"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldInfo/WorldName"]
@@ -167,6 +178,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="WorldFocus" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldInfo"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldInfo/WorldFocus"]
@@ -187,6 +199,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="Authority" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldInfo"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldInfo/Authority"]
@@ -207,6 +220,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="LocalUser" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldInfo"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldInfo/LocalUser"]
@@ -227,6 +241,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="Performance" type="VBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 2
 
@@ -248,6 +263,7 @@ text = "PERFORMANCE"
 vertical_alignment = 1
 
 [node name="FPS" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Performance"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Performance/FPS"]
@@ -268,6 +284,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="FrameTime" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Performance"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Performance/FrameTime"]
@@ -288,6 +305,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="RenderTime" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Performance"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Performance/RenderTime"]
@@ -308,6 +326,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="PhysicsTime" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Performance"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Performance/PhysicsTime"]
@@ -328,6 +347,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="Memory" type="VBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 2
 
@@ -349,6 +369,7 @@ text = "MEMORY"
 vertical_alignment = 1
 
 [node name="StaticMem" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Memory"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Memory/StaticMem"]
@@ -369,6 +390,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="VideoMem" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Memory"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Memory/VideoMem"]
@@ -389,6 +411,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="Objects" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Memory"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Memory/Objects"]
@@ -409,6 +432,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="Nodes" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Memory"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/Memory/Nodes"]
@@ -429,6 +453,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="WorldStats" type="VBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 2
 
@@ -450,6 +475,7 @@ text = "WORLD STATISTICS"
 vertical_alignment = 1
 
 [node name="Slots" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldStats"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldStats/Slots"]
@@ -470,6 +496,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="Components" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldStats"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldStats/Components"]
@@ -490,6 +517,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="Users" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldStats"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldStats/Users"]
@@ -510,6 +538,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="MaxDepth" type="HBoxContainer" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldStats"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Label" type="Label" parent="MainPanel/VBox/Content/LeftPanel/Scroll/VBox/WorldStats/MaxDepth"]
@@ -530,6 +559,7 @@ text = "-"
 horizontal_alignment = 2
 
 [node name="RightPanel" type="Panel" parent="MainPanel/VBox/Content"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("right_panel_bg")
@@ -563,16 +593,19 @@ text = "MEMORY PROFILER"
 vertical_alignment = 1
 
 [node name="ScrollContainer" type="ScrollContainer" parent="MainPanel/VBox/Content/RightPanel/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 
 [node name="MemoryList" type="VBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 3
 
 [node name="Item0" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item0"]
@@ -591,6 +624,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item1" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item1"]
@@ -609,6 +643,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item2" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item2"]
@@ -627,6 +662,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item3" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item3"]
@@ -645,6 +681,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item4" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item4"]
@@ -663,6 +700,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item5" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item5"]
@@ -681,6 +719,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item6" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item6"]
@@ -699,6 +738,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item7" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item7"]
@@ -717,6 +757,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item8" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item8"]
@@ -735,6 +776,7 @@ theme_override_font_sizes/font_size = 12
 text = "-"
 
 [node name="Item9" type="HBoxContainer" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList"]
+unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Name" type="Label" parent="MainPanel/VBox/Content/RightPanel/VBox/ScrollContainer/MemoryList/Item9"]

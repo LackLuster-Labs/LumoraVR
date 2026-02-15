@@ -37,6 +37,7 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
     private List<ISyncMember> _syncMembers = new();
     private readonly Dictionary<BodyNode, TrackingStreamPair> _trackingStreams = new();
     private bool _trackingStreamsInitialized;
+    private readonly HashSet<IStream> _justAddedStreams = new();
 
     private const string TrackingGroupName = "Tracking";
     private static readonly BodyNode[] TrackingNodes =
@@ -58,7 +59,6 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
         }
     }
 
-    // Sync members - auto-discovered
     public readonly Sync<string> UserName = new();
     public readonly Sync<string> UserID = new();
     public readonly Sync<string> MachineID = new();
@@ -80,6 +80,8 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
     public readonly Sync<float> UploadSpeed = new();
     public readonly Sync<ulong> DownloadedBytes = new();
     public readonly Sync<ulong> UploadedBytes = new();
+    public readonly SyncStreamBag streamBag = new();
+    public readonly Sync<uint> streamConfiguration = new();
 
     // Network statistics (non-synced)
     public ulong SentBytes { get; set; }
@@ -106,28 +108,17 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
         Dispose();
     }
 
-    // Stream control
     public bool ReceiveStreams { get; set; } = true;
 
-    /// <summary>
-    /// Legacy stream bag for simple stream data (transforms, etc.)
-    /// </summary>
     public Lumora.Core.Networking.Sync.UserStreamBag LegacyStreamBag { get; private set; } = new();
 
-    /// <summary>
-    /// New stream bag for full stream system.
-    /// </summary>
-    public StreamBag Streams { get; private set; }
+    public IEnumerable<Stream> Streams => streamBag.Streams;
 
-    /// <summary>
-    /// Stream group manager for organizing streams.
-    /// </summary>
+    public int StreamCount => streamBag.Count;
+
     public StreamGroupManager StreamGroupManager { get; private set; }
 
-    /// <summary>
-    /// Stream configuration version - incremented when streams change.
-    /// </summary>
-    public uint StreamConfigurationVersion { get; private set; }
+    public uint StreamConfigurationVersion => streamConfiguration.Value;
 
     /// <summary>
     /// Whether this is the local user.
@@ -189,16 +180,19 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
                 _syncMembers.Add(GetSyncMember(i));
             }
 
-            // Initialize stream infrastructure
             StreamGroupManager = new StreamGroupManager(this);
-            Streams = new StreamBag();
-            Streams.Initialize(this);
+            streamBag.Initialize(this);
+            streamBag.OnElementAdded += OnStreamAdded;
+            streamBag.OnElementRemoved += OnStreamRemoved;
 
             // Bind UserRootRef changes to keep UserRoot.ActiveUser in sync
             UserRootRef.OnTargetChange += OnUserRootRefChanged;
 
-            // Streams should use the user's allocation context for consistent RefIDs.
-            EnsureTrackingStreamsInitialized();
+            // Only create tracking streams on authority - clients receive them via sync
+            if (world.IsAuthority)
+            {
+                EnsureTrackingStreamsInitialized();
+            }
             EndInitPhase();
 
             AquaLogger.Debug($"User created with {_syncMembers.Count} sync members");
@@ -274,55 +268,68 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
 
     #region Stream Management
 
-    /// <summary>
-    /// Add a stream to this user.
-    /// </summary>
+    public IStream GetStream(RefID id)
+    {
+        return streamBag.TryGetValue(id, out var stream) ? stream : null;
+    }
+
     public S AddStream<S>() where S : Networking.Streams.Stream, new()
     {
         var stream = new S();
+        RefID key = World.ReferenceController.PeekID();
+        streamBag.Add(key, stream, isNewlyCreated: true);
+        return stream;
+    }
+
+    public void RemoveStream(Networking.Streams.Stream stream)
+    {
+        streamBag.Remove(stream.ReferenceID);
+    }
+
+    public void StreamConfigurationChanged()
+    {
+        if (!streamConfiguration.IsSyncDirty)
+        {
+            streamConfiguration.Value++;
+        }
+    }
+
+    public bool WasStreamJustAdded(Networking.Streams.Stream stream)
+    {
+        return _justAddedStreams.Contains(stream);
+    }
+
+    public void UpdateStreams()
+    {
+        streamBag.Update();
+    }
+
+    private void OnStreamAdded(ReplicatedDictionary<RefID, Stream> bag, RefID key, Stream stream, bool isNew)
+    {
+        World.ReferenceController.AllocationBlockBegin(key);
         stream.Initialize(this);
-        Streams.Add(stream);
+        World.ReferenceController.AllocationBlockEnd();
 
         if (IsLocal)
         {
             stream.Group = "Default";
             stream.Active = true;
         }
-
-        return stream;
+        else
+        {
+            _justAddedStreams.Add(stream);
+        }
     }
 
-    /// <summary>
-    /// Remove a stream from this user.
-    /// </summary>
-    public void RemoveStream(Networking.Streams.Stream stream)
+    private void OnStreamRemoved(ReplicatedDictionary<RefID, Stream> bag, RefID key, Stream stream)
     {
-        Streams.Remove(stream);
+        _justAddedStreams.Remove(stream);
         stream.Dispose();
     }
 
-    /// <summary>
-    /// Called when stream configuration changes.
-    /// </summary>
-    public void StreamConfigurationChanged()
+    internal void ClearJustAddedStreams()
     {
-        StreamConfigurationVersion++;
-    }
-
-    /// <summary>
-    /// Check if a stream was just added (can be modified by non-owner briefly).
-    /// </summary>
-    public bool WasStreamJustAdded(Networking.Streams.Stream stream)
-    {
-        return Streams.WasJustAdded(stream);
-    }
-
-    /// <summary>
-    /// Update all streams for this user.
-    /// </summary>
-    public void UpdateStreams()
-    {
-        Streams.Update();
+        _justAddedStreams.Clear();
     }
 
     /// <summary>
@@ -342,19 +349,36 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
         rotation = pair.Rotation;
     }
 
-    /// <summary>
-    /// Configure tracking stream periods once this user becomes local.
-    /// </summary>
     internal void ConfigureLocalTrackingStreams()
     {
-        if (!_trackingStreamsInitialized)
-            return;
-
-        foreach (var pair in _trackingStreams.Values)
+        foreach (var stream in Streams)
         {
-            pair.Position.SetUpdatePeriod(1, 0);
-            pair.Rotation.SetUpdatePeriod(1, 0);
+            stream.Active = true;
+
+            if (stream is ImplicitStream implicitStream)
+            {
+                implicitStream.SetUpdatePeriod(1, 0);
+            }
+
+            StreamGroupManager.AssignToGroup(stream, null);
         }
+
+        if (_trackingStreamsInitialized)
+        {
+            foreach (var pair in _trackingStreams.Values)
+            {
+                pair.Position.Active = true;
+                pair.Rotation.Active = true;
+
+                pair.Position.SetUpdatePeriod(1, 0);
+                pair.Rotation.SetUpdatePeriod(1, 0);
+
+                StreamGroupManager.AssignToGroup(pair.Position, null);
+                StreamGroupManager.AssignToGroup(pair.Rotation, null);
+            }
+        }
+
+        AquaLogger.Log($"ConfigureLocalTrackingStreams: Configured {StreamCount} streams for local user");
     }
 
     private void EnsureTrackingStreamsInitialized()
@@ -383,8 +407,8 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
     private T CreateTrackingStream<T>() where T : Stream, new()
     {
         var stream = new T();
-        stream.Initialize(this);
-        Streams.Add(stream);
+        RefID key = World.ReferenceController.PeekID();
+        streamBag.Add(key, stream, isNewlyCreated: true);
 
         stream.InitializeDefaults(active: true, groupName: TrackingGroupName);
 
@@ -407,11 +431,13 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
         IsDisposed = true;
 
         UserRootRef.OnTargetChange -= OnUserRootRefChanged;
+        streamBag.OnElementAdded -= OnStreamAdded;
+        streamBag.OnElementRemoved -= OnStreamRemoved;
 
-        // Clean up streams
-        Streams?.Clear();
+        streamBag.Clear();
         StreamGroupManager?.Clear();
         _trackingStreams.Clear();
+        _justAddedStreams.Clear();
 
         base.Dispose();
     }

@@ -15,44 +15,44 @@ public class Nameplate : ImplementableComponent
     /// <summary>
     /// Reference to the user this nameplate belongs to.
     /// </summary>
-    public SyncRef<User> TargetUser { get; private set; } = null!;
+    public readonly SyncRef<User> TargetUser = new();
 
     /// <summary>
     /// Username text to display.
     /// </summary>
-    public Sync<string> DisplayName { get; private set; } = null!;
+    public readonly Sync<string> DisplayName = new();
 
     /// <summary>
     /// Rim glow color based on user status.
     /// White = normal logged in, Grey = not logged in, Colored = patreon tier.
     /// </summary>
-    public Sync<color> RimColor { get; private set; } = null!;
+    public readonly Sync<color> RimColor = new();
 
     /// <summary>
     /// Whether the user is logged in (affects rim color).
     /// </summary>
-    public Sync<bool> IsLoggedIn { get; private set; } = null!;
+    public readonly Sync<bool> IsLoggedIn = new();
 
     /// <summary>
     /// Patreon tier color hex (e.g. "#00FF00" for Enthusiast).
     /// Empty string means no patreon tier.
     /// </summary>
-    public Sync<string> PatreonColorHex { get; private set; } = null!;
+    public readonly Sync<string> PatreonColorHex = new();
 
     /// <summary>
     /// Size of the nameplate in world units.
     /// </summary>
-    public Sync<float2> Size { get; private set; } = null!;
+    public readonly Sync<float2> Size = new();
 
     /// <summary>
     /// Vertical offset above the head slot.
     /// </summary>
-    public Sync<float> HeadOffset { get; private set; } = null!;
+    public readonly Sync<float> HeadOffset = new();
 
     /// <summary>
     /// Whether the nameplate should billboard (always face camera).
     /// </summary>
-    public Sync<bool> Billboard { get; private set; } = null!;
+    public readonly Sync<bool> Billboard = new();
 
     // Patreon tier colors
     public static readonly color ColorNotLoggedIn = new color(0.5f, 0.5f, 0.5f, 1f); // Grey
@@ -62,23 +62,18 @@ public class Nameplate : ImplementableComponent
     public static readonly color ColorInsider = new color(0.58f, 0f, 0.827f, 1f); // Purple #9400D3
     public static readonly color ColorVisionary = new color(1f, 0.843f, 0f, 1f); // Gold #FFD700
 
-    public override void OnAwake()
+    public override void OnInit()
     {
-        base.OnAwake();
-        InitializeSyncMembers();
-    }
+        base.OnInit();
 
-    private void InitializeSyncMembers()
-    {
-        TargetUser = new SyncRef<User>(this);
-        DisplayName = new Sync<string>(this, "");
-        RimColor = new Sync<color>(this, ColorNormal);
-        IsLoggedIn = new Sync<bool>(this, true);
-        PatreonColorHex = new Sync<string>(this, "");
-        Size = new Sync<float2>(this, new float2(0.45f, 0.12f)); // 45cm x 12cm default
-        HeadOffset = new Sync<float>(this, 0.3f); // 30cm above head
-        Billboard = new Sync<bool>(this, true);
+        // Set default values
+        RimColor.Value = ColorNormal;
+        IsLoggedIn.Value = true;
+        Size.Value = new float2(0.45f, 0.12f); // 45cm x 12cm default
+        HeadOffset.Value = 0.3f; // 30cm above head
+        Billboard.Value = true;
 
+        // Subscribe to change events
         TargetUser.OnChanged += _ => UpdateFromUser();
         IsLoggedIn.OnChanged += _ => UpdateRimColor();
         PatreonColorHex.OnChanged += _ => UpdateRimColor();
@@ -91,26 +86,14 @@ public class Nameplate : ImplementableComponent
 
     /// <summary>
     /// Initialize the nameplate for a specific user.
+    /// Called on authority when creating the nameplate.
+    /// Clients receive TargetUser via sync and UpdateFromUser handles subscription.
     /// </summary>
     public void Initialize(User user)
     {
-        // Unsubscribe from previous user if any
-        if (_subscribedUser != null)
-        {
-            _subscribedUser.UserName.Changed -= OnUserNameChanged;
-        }
-
         TargetUser.Target = user;
-        _subscribedUser = user;
-
-        // Subscribe to username changes so nameplate updates when username is set
-        if (user != null)
-        {
-            user.UserName.Changed += OnUserNameChanged;
-            Logging.Logger.Log($"Nameplate: Initialized for user '{user.UserName.Value ?? "(null)"}' RefID={user.ReferenceID}");
-        }
-
-        UpdateFromUser();
+        Logging.Logger.Log($"Nameplate: Initialized for user '{user?.UserName?.Value ?? "(null)"}' RefID={user?.ReferenceID}");
+        // UpdateFromUser is called via TargetUser.OnChanged
     }
 
     private void OnUserNameChanged(IChangeable _)
@@ -123,13 +106,41 @@ public class Nameplate : ImplementableComponent
         var user = TargetUser.Target;
         if (user == null)
         {
+            // Unsubscribe from previous user if any
+            if (_subscribedUser != null)
+            {
+                _subscribedUser.UserName.Changed -= OnUserNameChanged;
+                _subscribedUser = null;
+            }
             DisplayName.Value = "";
             return;
         }
 
-        var newName = user.UserName.Value ?? "Unknown";
-        Logging.Logger.Log($"Nameplate: UpdateFromUser - UserName='{newName}'");
-        DisplayName.Value = newName;
+        // Subscribe to username changes if not already subscribed
+        // This handles both Initialize() calls (authority) and sync receives (client)
+        if (_subscribedUser != user)
+        {
+            if (_subscribedUser != null)
+            {
+                _subscribedUser.UserName.Changed -= OnUserNameChanged;
+            }
+            _subscribedUser = user;
+            user.UserName.Changed += OnUserNameChanged;
+            Logging.Logger.Log($"Nameplate: Subscribed to UserName changes for '{user.UserName.Value ?? "(null)"}' RefID={user.ReferenceID}");
+        }
+
+        var newName = user.UserName.Value;
+        if (string.IsNullOrEmpty(newName))
+        {
+            newName = "Unknown";
+        }
+
+        // Only update and log if name actually changed
+        if (DisplayName.Value != newName)
+        {
+            Logging.Logger.Log($"Nameplate: DisplayName changed from '{DisplayName.Value}' to '{newName}'");
+            DisplayName.Value = newName;
+        }
 
         // Check login status from user
         IsLoggedIn.Value = !string.IsNullOrEmpty(user.UserID.Value);

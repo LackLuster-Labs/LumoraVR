@@ -156,8 +156,9 @@ public static class DefaultAVI
         var bodyNodes = userSlot.AddSlot("Body Nodes");
 
         // Create Head slot - UserRoot auto-resolves from "Body Nodes/Head"
+        // Start at origin - VR tracking includes height, desktop fallback in TrackedDevicePositioner
         var headSlot = bodyNodes.AddSlot("Head");
-        headSlot.LocalPosition.Value = new float3(0, DEFAULT_HEIGHT - 0.1f, 0);
+        headSlot.LocalPosition.Value = float3.Zero;
         var headPositioner = headSlot.AttachComponent<TrackedDevicePositioner>();
         headPositioner.AutoBodyNode.Value = BodyNode.Head;
         var headStreamDriver = headSlot.AttachComponent<TransformStreamDriver>();
@@ -166,9 +167,9 @@ public static class DefaultAVI
         headStreamDriver.RotationStream.Target = headRotationStream;
 
         // Create LeftHand slot - UserRoot auto-resolves from "Body Nodes/LeftHand"
-        // Default position: at rest by the side (not T-pose)
+        // Start at origin - VR tracking provides actual position
         var leftHandSlot = bodyNodes.AddSlot("LeftHand");
-        leftHandSlot.LocalPosition.Value = new float3(-0.2f, 0.9f, 0.1f); // By left hip, slightly forward
+        leftHandSlot.LocalPosition.Value = float3.Zero;
         var leftHandPositioner = leftHandSlot.AttachComponent<TrackedDevicePositioner>();
         leftHandPositioner.AutoBodyNode.Value = BodyNode.LeftController;
         var leftHandStreamDriver = leftHandSlot.AttachComponent<TransformStreamDriver>();
@@ -177,9 +178,9 @@ public static class DefaultAVI
         leftHandStreamDriver.RotationStream.Target = leftRotationStream;
 
         // Create RightHand slot - UserRoot auto-resolves from "Body Nodes/RightHand"
-        // Default position: at rest by the side (not T-pose)
+        // Start at origin - VR tracking provides actual position
         var rightHandSlot = bodyNodes.AddSlot("RightHand");
-        rightHandSlot.LocalPosition.Value = new float3(0.2f, 0.9f, 0.1f); // By right hip, slightly forward
+        rightHandSlot.LocalPosition.Value = float3.Zero;
         var rightHandPositioner = rightHandSlot.AttachComponent<TrackedDevicePositioner>();
         rightHandPositioner.AutoBodyNode.Value = BodyNode.RightController;
         var rightHandStreamDriver = rightHandSlot.AttachComponent<TransformStreamDriver>();

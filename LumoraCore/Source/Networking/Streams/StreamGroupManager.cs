@@ -104,6 +104,18 @@ public class StreamGroupManager
     }
 
     /// <summary>
+    /// Check if a stream is assigned to any group.
+    /// </summary>
+    public bool ContainsStream(IStream stream)
+    {
+        if (_groups.TryGetValue(stream.GroupIndex, out var group))
+        {
+            return group.Streams.Contains(stream);
+        }
+        return false;
+    }
+
+    /// <summary>
     /// Clear all groups.
     /// </summary>
     public void Clear()

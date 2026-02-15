@@ -1,7 +1,9 @@
 using Lumora.Core.Assets;
 using Lumora.Core.Components;
+using Lumora.Core.Components.Gizmos;
 using Lumora.Core.Components.Meshes;
 using Lumora.Core.GodotUI;
+using Lumora.Core.GodotUI.Inspectors;
 using Lumora.Core.GodotUI.Wizards;
 using Lumora.Core;
 
@@ -47,6 +49,15 @@ public static class GodotHookRegistry
         World.HookTypes.Register<DashboardPanel, Aquamarine.Godot.Hooks.GodotUI.DashboardPanelHook>();
         World.HookTypes.Register<GodotMaterialInspector, Aquamarine.Godot.Hooks.GodotUI.GodotMaterialInspectorHook>();
         World.HookTypes.Register<Nameplate, Aquamarine.Godot.Hooks.NameplateHook>();
+
+        // Inspector hooks
+        World.HookTypes.Register<SlotInspector, Aquamarine.Godot.Hooks.GodotUI.Inspectors.SlotInspectorHook>();
+        World.HookTypes.Register<ComponentInspector, Aquamarine.Godot.Hooks.GodotUI.Inspectors.ComponentInspectorHook>();
+        World.HookTypes.Register<SceneInspector, Aquamarine.Godot.Hooks.GodotUI.Inspectors.SceneInspectorHook>();
+        World.HookTypes.Register<ComponentAttacher, Aquamarine.Godot.Hooks.GodotUI.Inspectors.ComponentAttacherHook>();
+
+        // Gizmo hooks
+        World.HookTypes.Register<SlotGizmo, Aquamarine.Godot.Hooks.Gizmos.SlotGizmoHook>();
 
         // Asset hooks
         AssetHookRegistry.Register<TextureAsset, Aquamarine.Godot.Hooks.TextureAssetHook>();

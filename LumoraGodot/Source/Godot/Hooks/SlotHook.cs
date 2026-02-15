@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Godot;
 using Lumora.Core;
 using Lumora.Core.Math;
@@ -16,6 +17,9 @@ namespace Aquamarine.Godot.Hooks;
 /// </summary>
 public class SlotHook : Hook<Slot>, ISlotHook
 {
+    // Static registry to find Slot from Godot Node
+    private static readonly Dictionary<Node, Slot> _nodeToSlot = new();
+
     private Slot _lastParent;
     private int _node3DRequests;
     private bool _shouldDestroy;
@@ -68,6 +72,24 @@ public class SlotHook : Hook<Slot>, ISlotHook
     }
 
     /// <summary>
+    /// Find a Lumora Slot from a Godot Node.
+    /// Traverses up the node hierarchy to find a registered slot.
+    /// </summary>
+    /// <param name="node">The Godot node to search from.</param>
+    /// <returns>The associated Slot, or null if not found.</returns>
+    public static Slot? GetSlotFromNode(Node? node)
+    {
+        var current = node;
+        while (current != null)
+        {
+            if (_nodeToSlot.TryGetValue(current, out var slot))
+                return slot;
+            current = current.GetParent();
+        }
+        return null;
+    }
+
+    /// <summary>
     /// Force get the Node3D (create if needed).
     /// </summary>
     public Node3D ForceGetNode3D()
@@ -113,11 +135,18 @@ public class SlotHook : Hook<Slot>, ISlotHook
         {
             if (GeneratedNode3D != null && GodotObject.IsInstanceValid(GeneratedNode3D))
             {
+                // Unregister from slot lookup
+                _nodeToSlot.Remove(GeneratedNode3D);
                 GeneratedNode3D.QueueFree();
             }
 
             // Free parent request if we had one
             _parentHook?.FreeNode3D();
+        }
+        else if (GeneratedNode3D != null)
+        {
+            // Still need to unregister even when destroying world
+            _nodeToSlot.Remove(GeneratedNode3D);
         }
 
         GeneratedNode3D = null;
@@ -130,9 +159,11 @@ public class SlotHook : Hook<Slot>, ISlotHook
     /// </summary>
     private void GenerateNode3D()
     {
-
         GeneratedNode3D = new Node3D();
         GeneratedNode3D.Name = Owner.SlotName.Value;
+
+        // Register this node for slot lookup
+        _nodeToSlot[GeneratedNode3D] = Owner;
 
         UpdateParent();
         SetData();

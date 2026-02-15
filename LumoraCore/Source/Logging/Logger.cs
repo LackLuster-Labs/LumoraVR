@@ -33,6 +33,7 @@ namespace Lumora.Core.Logging
 
         public static event Action<string> OnFormattedLogMessageWritten;
         public static event Action<string> OnPrettyLogMessageWritten;
+        public static event Action<LogLevel, string, string> OnLogWritten;
 
         private static void WriteLog(LogLevel level, string message)
         {
@@ -58,6 +59,7 @@ namespace Lumora.Core.Logging
             catch { /* Ignore if not in Godot context */ }
 
             OnFormattedLogMessageWritten?.Invoke(message);
+            OnLogWritten?.Invoke(level, timestamp, message);
             switch (level)
             {
                 case LogLevel.LOG:

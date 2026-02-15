@@ -1,0 +1,707 @@
+[gd_scene load_steps=12 format=3 uid="uid://debug_window_scene"]
+
+[ext_resource type="FontFile" uid="uid://dne06dcdmx5hj" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
+[ext_resource type="Script" path="res://Source/Godot/Debug/DebugWindow.cs" id="2_script"]
+
+[sub_resource type="StyleBoxFlat" id="bg_panel"]
+bg_color = Color(0.08, 0.08, 0.1, 1)
+
+[sub_resource type="StyleBoxFlat" id="tab_panel"]
+bg_color = Color(0.06, 0.06, 0.08, 1)
+content_margin_left = 8.0
+content_margin_top = 8.0
+content_margin_right = 8.0
+content_margin_bottom = 8.0
+
+[sub_resource type="StyleBoxFlat" id="section_bg"]
+bg_color = Color(0.1, 0.09, 0.14, 1)
+corner_radius_top_left = 6
+corner_radius_top_right = 6
+corner_radius_bottom_right = 6
+corner_radius_bottom_left = 6
+content_margin_left = 10.0
+content_margin_top = 6.0
+content_margin_right = 10.0
+content_margin_bottom = 6.0
+
+[sub_resource type="StyleBoxFlat" id="log_bg"]
+bg_color = Color(0.04, 0.04, 0.05, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+content_margin_left = 8.0
+content_margin_top = 6.0
+content_margin_right = 8.0
+content_margin_bottom = 6.0
+
+[sub_resource type="StyleBoxFlat" id="toolbar_bg"]
+bg_color = Color(0.1, 0.1, 0.12, 1)
+corner_radius_top_left = 4
+corner_radius_top_right = 4
+corner_radius_bottom_right = 4
+corner_radius_bottom_left = 4
+content_margin_left = 6.0
+content_margin_top = 4.0
+content_margin_right = 6.0
+content_margin_bottom = 4.0
+
+[sub_resource type="StyleBoxFlat" id="stat_row_bg"]
+bg_color = Color(0.09, 0.09, 0.11, 0.5)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+
+[sub_resource type="StyleBoxFlat" id="stat_row_alt_bg"]
+bg_color = Color(0.1, 0.1, 0.13, 0.5)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+
+[sub_resource type="StyleBoxFlat" id="memory_bar_bg"]
+bg_color = Color(0.15, 0.12, 0.2, 1)
+corner_radius_top_left = 3
+corner_radius_top_right = 3
+corner_radius_bottom_right = 3
+corner_radius_bottom_left = 3
+
+[sub_resource type="StyleBoxFlat" id="status_bg"]
+bg_color = Color(0.06, 0.06, 0.08, 1)
+content_margin_left = 8.0
+content_margin_top = 2.0
+content_margin_right = 8.0
+content_margin_bottom = 2.0
+
+[node name="DebugWindow" type="Control"]
+unique_name_in_owner = true
+script = ExtResource("2_script")
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Background" type="Panel" parent="."]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_styles/panel = SubResource("bg_panel")
+
+[node name="RootMargin" type="MarginContainer" parent="Background"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 6
+theme_override_constants/margin_top = 6
+theme_override_constants/margin_right = 6
+theme_override_constants/margin_bottom = 6
+
+[node name="RootVBox" type="VBoxContainer" parent="Background/RootMargin"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Tabs" type="TabContainer" parent="Background/RootMargin/RootVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+theme_override_styles/panel = SubResource("tab_panel")
+
+; ============================================================
+; TAB 1: LOGS
+; ============================================================
+
+[node name="Logs" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="Toolbar" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Logs"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("toolbar_bg")
+
+[node name="ToolbarHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="FilterLog" type="CheckButton" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+theme_override_colors/font_color = Color(0.6, 0.8, 0.6, 1)
+theme_override_colors/font_pressed_color = Color(0.6, 0.8, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "LOG"
+
+[node name="FilterWarn" type="CheckButton" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+theme_override_colors/font_color = Color(1, 0.85, 0.2, 1)
+theme_override_colors/font_pressed_color = Color(1, 0.85, 0.2, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "WARN"
+
+[node name="FilterError" type="CheckButton" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+theme_override_colors/font_color = Color(1, 0.3, 0.3, 1)
+theme_override_colors/font_pressed_color = Color(1, 0.3, 0.3, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "ERROR"
+
+[node name="FilterDebug" type="CheckButton" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_colors/font_pressed_color = Color(0.5, 0.5, 0.55, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "DEBUG"
+
+[node name="Spacer1" type="Control" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="SearchBox" type="LineEdit" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 12
+placeholder_text = "Search..."
+
+[node name="AutoScroll" type="CheckButton" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Auto"
+
+[node name="ClearBtn" type="Button" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "Clear"
+
+[node name="LogDisplay" type="RichTextLabel" parent="Background/RootMargin/RootVBox/Tabs/Logs"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_fonts/normal_font = ExtResource("1_font")
+theme_override_font_sizes/normal_font_size = 12
+theme_override_styles/normal = SubResource("log_bg")
+scroll_following = true
+selection_enabled = true
+
+[node name="LogStatus" type="Panel" parent="Background/RootMargin/RootVBox/Tabs/Logs"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("status_bg")
+
+[node name="StatusLabel" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Logs/LogStatus"]
+unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_colors/font_color = Color(0.45, 0.45, 0.5, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "0 messages"
+
+; ============================================================
+; TAB 2: PERFORMANCE
+; ============================================================
+
+[node name="Performance" type="ScrollContainer" parent="Background/RootMargin/RootVBox/Tabs"]
+unique_name_in_owner = true
+layout_mode = 2
+horizontal_scroll_mode = 0
+
+[node name="PerfVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 10
+
+; -- Framerate Section --
+[node name="FramerateSection" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_bg")
+
+[node name="FramerateVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="FramerateHeader" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.7, 0.3, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "FRAMERATE"
+
+[node name="Sep1" type="HSeparator" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="FPSRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_bg")
+
+[node name="FPSHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/FPSRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="FPSKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/FPSRow/FPSHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "FPS"
+
+[node name="FPSValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/FPSRow/FPSHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.3, 0.9, 0.4, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="FrameTimeRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_alt_bg")
+
+[node name="FrameTimeHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/FrameTimeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="FrameTimeKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/FrameTimeRow/FrameTimeHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Frame Time"
+
+[node name="FrameTimeValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/FrameTimeRow/FrameTimeHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="RenderTimeRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_bg")
+
+[node name="RenderTimeHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/RenderTimeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="RenderTimeKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/RenderTimeRow/RenderTimeHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Render Time"
+
+[node name="RenderTimeValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/RenderTimeRow/RenderTimeHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="PhysicsTimeRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_alt_bg")
+
+[node name="PhysicsTimeHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/PhysicsTimeRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="PhysicsTimeKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/PhysicsTimeRow/PhysicsTimeHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Physics Time"
+
+[node name="PhysicsTimeValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/FramerateSection/FramerateVBox/PhysicsTimeRow/PhysicsTimeHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+; -- World Section --
+[node name="WorldSection" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_bg")
+
+[node name="WorldVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="WorldHeader" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.5, 0.8, 1, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "WORLD"
+
+[node name="Sep2" type="HSeparator" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="WorldNameRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_bg")
+
+[node name="WorldNameHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/WorldNameRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="WorldNameKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/WorldNameRow/WorldNameHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "World"
+
+[node name="WorldNameValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/WorldNameRow/WorldNameHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="SlotsRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_alt_bg")
+
+[node name="SlotsHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/SlotsRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="SlotsKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/SlotsRow/SlotsHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Slots"
+
+[node name="SlotsValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/SlotsRow/SlotsHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="ComponentsRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_bg")
+
+[node name="ComponentsHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/ComponentsRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ComponentsKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/ComponentsRow/ComponentsHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Components"
+
+[node name="ComponentsValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/ComponentsRow/ComponentsHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="UsersRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_alt_bg")
+
+[node name="UsersHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/UsersRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="UsersKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/UsersRow/UsersHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Users"
+
+[node name="UsersValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/WorldSection/WorldVBox/UsersRow/UsersHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+; -- Memory Section --
+[node name="MemorySection" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_bg")
+
+[node name="MemoryVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="MemoryHeader" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 1, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "MEMORY"
+
+[node name="Sep3" type="HSeparator" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="GCMemRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_bg")
+
+[node name="GCMemHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/GCMemRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="GCMemKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/GCMemRow/GCMemHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "GC Memory"
+
+[node name="GCMemValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/GCMemRow/GCMemHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="VideoMemRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_alt_bg")
+
+[node name="VideoMemHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/VideoMemRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="VideoMemKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/VideoMemRow/VideoMemHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Video Memory"
+
+[node name="VideoMemValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/VideoMemRow/VideoMemHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="ObjectsRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_bg")
+
+[node name="ObjectsHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/ObjectsRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="ObjectsKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/ObjectsRow/ObjectsHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Godot Objects"
+
+[node name="ObjectsValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/ObjectsRow/ObjectsHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+[node name="NodesRow" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("stat_row_alt_bg")
+
+[node name="NodesHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/NodesRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="NodesKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/NodesRow/NodesHBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(160, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Godot Nodes"
+
+[node name="NodesValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox/NodesRow/NodesHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "-"
+
+; ============================================================
+; TAB 3: MEMORY PROFILER
+; ============================================================
+
+[node name="Memory Profiler" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="MemoryHeader" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("toolbar_bg")
+
+[node name="MemoryHeaderHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemoryHeader"]
+unique_name_in_owner = true
+layout_mode = 2
+
+[node name="MemoryTitle" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemoryHeader/MemoryHeaderHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(1, 0.7, 0.3, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 14
+text = "Component Memory Breakdown"
+
+[node name="TotalMemLabel" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemoryHeader/MemoryHeaderHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.6, 0.85, 0.6, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 13
+text = "Total: -"
+
+[node name="MemoryDisplay" type="RichTextLabel" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_fonts/normal_font = ExtResource("1_font")
+theme_override_font_sizes/normal_font_size = 12
+theme_override_styles/normal = SubResource("log_bg")
+selection_enabled = true
+
+[node name="GCInfo" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("status_bg")
+
+[node name="GCLabel" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/GCInfo"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45, 0.45, 0.5, 1)
+theme_override_fonts/font = ExtResource("1_font")
+theme_override_font_sizes/font_size = 11
+text = "GC: -"

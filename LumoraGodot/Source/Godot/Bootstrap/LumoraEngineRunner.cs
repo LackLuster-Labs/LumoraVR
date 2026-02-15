@@ -13,7 +13,10 @@ using Aquamarine.Source.Godot.UI;
 using Aquamarine.Source.Input;
 using Aquamarine.Source.UI;
 using Lumora.Godot.Input;
+using Aquamarine.Godot.Debug;
 using AquaLogger = Lumora.Core.Logging.Logger;
+
+using InspectorInputHandler = Aquamarine.Source.Input.InspectorInputHandler;
 
 namespace Aquamarine.Source.Godot.Bootstrap;
 
@@ -23,6 +26,11 @@ namespace Aquamarine.Source.Godot.Bootstrap;
 /// </summary>
 public partial class LumoraEngineRunner : Node
 {
+    private const string DebugFlag = "--Lumora-Debug";
+    private const string DebugConsoleFlag = "--Lumora-DebugConsole";
+    private const string DebugConsoleScenePath = "res://Scenes/UI/Debug/DebugWindow.tscn";
+    private const double DebugPerfSendIntervalSec = 0.25;
+
     // ===== CONFIGURATION =====
     [Export] public bool VerboseInit { get; set; } = false;
     [Export] public bool AutoHostLocalHome { get; set; } = true;
@@ -42,10 +50,13 @@ public partial class LumoraEngineRunner : Node
     private GodotVRDriver _vrDriver;
     private ClipboardImporter _clipboardImporter;
     private LocalDB _localDB;
+    private InspectorInputHandler _inspectorInputHandler;
+    private DebugUdpSender? _debugUdpSender;
 
     // ===== STATE =====
     private bool _engineInitialized = false;
     private bool _shutdownRequested = false;
+    private double _debugPerfTimer;
     private InitializationPhase _currentPhase = InitializationPhase.EnvironmentSetup;
 
     // ===== SCENE REFERENCES =====
@@ -68,6 +79,13 @@ public partial class LumoraEngineRunner : Node
 
     public override void _Ready()
     {
+        if (HasCommandLineFlag(DebugConsoleFlag))
+        {
+            AquaLogger.Log("LumoraEngineRunner: Starting in debug console mode");
+            CallDeferred(nameof(SwitchToDebugConsoleScene));
+            return;
+        }
+
         GD.Print("==========================================================");
         GD.Print("LumoraEngineRunner: _Ready() called - Starting bootstrap...");
         GD.Print("==========================================================");
@@ -76,11 +94,85 @@ public partial class LumoraEngineRunner : Node
         AquaLogger.Log("LumoraEngineRunner: Starting engine bootstrap...");
         AquaLogger.Log("==========================================================");
 
+        if (HasCommandLineFlag(DebugFlag))
+        {
+            _debugUdpSender = new DebugUdpSender();
+            LaunchDebugConsoleProcess();
+        }
+
         // Load and show loading screen
         InitializeLoadingScreen();
 
         // Start initialization sequence
         CallDeferred(MethodName.StartInitialization);
+    }
+
+    private void SwitchToDebugConsoleScene()
+    {
+        var result = GetTree().ChangeSceneToFile(DebugConsoleScenePath);
+        if (result != Error.Ok)
+        {
+            AquaLogger.Error($"DebugConsole: failed to open scene '{DebugConsoleScenePath}' ({result})");
+            GD.PrintErr($"DebugConsole: failed to open scene '{DebugConsoleScenePath}' ({result})");
+        }
+    }
+
+    private static bool HasCommandLineFlag(string flag)
+    {
+        foreach (var arg in OS.GetCmdlineArgs())
+        {
+            if (arg.Trim().Equals(flag, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        foreach (var arg in OS.GetCmdlineUserArgs())
+        {
+            if (arg.Trim().Equals(flag, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private void LaunchDebugConsoleProcess()
+    {
+        try
+        {
+            var executablePath = OS.GetExecutablePath();
+            if (string.IsNullOrWhiteSpace(executablePath))
+            {
+                AquaLogger.Warn("DebugConsole: could not resolve executable path");
+                return;
+            }
+
+            var args = new List<string>();
+            if (OS.HasFeature("editor"))
+            {
+                args.Add("--path");
+                args.Add(ProjectSettings.GlobalizePath("res://"));
+            }
+
+            args.Add("--");
+            args.Add(DebugConsoleFlag);
+
+            var processId = OS.CreateProcess(executablePath, args.ToArray(), false);
+            if (processId > 0)
+            {
+                AquaLogger.Log($"DebugConsole: launched separate process (pid={processId})");
+            }
+            else
+            {
+                AquaLogger.Warn($"DebugConsole: process launch failed (pid={processId})");
+            }
+        }
+        catch (Exception ex)
+        {
+            AquaLogger.Error($"DebugConsole: process launch exception: {ex.Message}");
+        }
     }
 
     /// <summary>
@@ -485,6 +577,13 @@ public partial class LumoraEngineRunner : Node
             AquaLogger.Log("ClipboardImporter: Configured with engine reference");
         }
 
+        // Create inspector input handler for "I" key inspection
+        _inspectorInputHandler = new InspectorInputHandler();
+        _inspectorInputHandler.Name = "InspectorInputHandler";
+        _inspectorInputHandler.Engine = _engine;
+        AddChild(_inspectorInputHandler);
+        AquaLogger.Log("InspectorInputHandler: Created for object inspection");
+
         // DEBUG: Print scene tree
         await Task.Delay(500); // Wait for everything to settle
         PrintSceneTree();
@@ -529,6 +628,7 @@ public partial class LumoraEngineRunner : Node
 
         // Update Godot metrics for debug panels
         UpdateGodotMetrics();
+        SendDebugPerf(delta);
 
         // Update HeadOutput camera positioning
         _headOutput?.UpdatePositioning(_engine);
@@ -605,6 +705,40 @@ public partial class LumoraEngineRunner : Node
         metrics.GodotNodeCount = (int)perfMonitor.GetMonitor(Performance.Monitor.ObjectNodeCount);
     }
 
+    private void SendDebugPerf(double delta)
+    {
+        if (_debugUdpSender == null || _engine?.WorldManager?.FocusedWorld == null)
+        {
+            return;
+        }
+
+        _debugPerfTimer += delta;
+        if (_debugPerfTimer < DebugPerfSendIntervalSec)
+        {
+            return;
+        }
+        _debugPerfTimer = 0;
+
+        var world = _engine.WorldManager.FocusedWorld;
+        var metrics = world.Metrics;
+        var fps = world.LocalUser?.FPS.Value ?? (float)global::Godot.Engine.GetFramesPerSecond();
+        var frameTime = fps > 0f ? 1000f / fps : 0f;
+
+        _debugUdpSender.SendPerf(
+            fps,
+            frameTime,
+            (float)metrics.RenderTimeMs,
+            (float)metrics.PhysicsTimeMs,
+            world.WorldName.Value ?? "Unnamed",
+            metrics.SlotCount,
+            metrics.ComponentCount,
+            world.GetAllUsers().Count,
+            GC.GetTotalMemory(false),
+            metrics.VideoMemoryBytes,
+            metrics.GodotObjectCount,
+            metrics.GodotNodeCount);
+    }
+
     /// <summary>
     /// Debug: Print the entire scene tree to see what exists.
     /// </summary>
@@ -669,6 +803,7 @@ public partial class LumoraEngineRunner : Node
     {
         AquaLogger.Log("LumoraEngineRunner: Shutting down...");
 
+        _debugUdpSender?.Dispose();
         _engine?.Dispose();
         _headOutput?.Dispose();
 

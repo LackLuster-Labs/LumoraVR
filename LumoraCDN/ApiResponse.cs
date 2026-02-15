@@ -180,3 +180,88 @@ public record TwoFactorSetup
     public required string QrCode { get; init; }
     public required List<string> RecoveryCodes { get; init; }
 }
+
+// inventory models matching backend Inventory.cs
+
+public enum AssetType
+{
+    Avatar,
+    World,
+    Prop
+}
+
+public record AssetRef
+{
+    [JsonPropertyName("assetId")] public string AssetId { get; init; } = "";
+    [JsonPropertyName("hash")] public string Hash { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("type")] public AssetType Type { get; init; }
+    [JsonPropertyName("addedAt")] public DateTime AddedAt { get; init; }
+    [JsonPropertyName("tags")] public List<string> Tags { get; init; } = new();
+    [JsonPropertyName("thumbnailHash")] public string? ThumbnailHash { get; init; }
+    [JsonPropertyName("sizeBytes")] public long SizeBytes { get; init; }
+}
+
+public record UserFolder
+{
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("parentId")] public string? ParentId { get; init; }
+    [JsonPropertyName("assets")] public List<AssetRef> Assets { get; init; } = new();
+    [JsonPropertyName("subfolders")] public List<UserFolder> Subfolders { get; init; } = new();
+    [JsonPropertyName("createdAt")] public DateTime CreatedAt { get; init; }
+}
+
+public record InventoryResponse
+{
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    [JsonPropertyName("userId")] public string UserId { get; init; } = "";
+    [JsonPropertyName("folders")] public List<UserFolder> Folders { get; init; } = new();
+    [JsonPropertyName("lastUpdated")] public DateTime LastUpdated { get; init; }
+}
+
+public record UserQuotaResponse
+{
+    [JsonPropertyName("userId")] public string UserId { get; init; } = "";
+    [JsonPropertyName("quotaMB")] public int QuotaMB { get; init; }
+    [JsonPropertyName("usedMB")] public long UsedMB { get; init; }
+    [JsonPropertyName("availableMB")] public long AvailableMB { get; init; }
+    [JsonPropertyName("percentUsed")] public double PercentUsed { get; init; }
+}
+
+public record AssetComponentInfo
+{
+    [JsonPropertyName("hash")] public string Hash { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("extension")] public string Extension { get; init; } = "";
+    [JsonPropertyName("type")] public string Type { get; init; } = "";
+    [JsonPropertyName("sizeBytes")] public long SizeBytes { get; init; }
+}
+
+public record AssetSharingInfo
+{
+    [JsonPropertyName("level")] public string Level { get; init; } = "Private";
+    [JsonPropertyName("allowedUserIds")] public List<string> AllowedUserIds { get; init; } = new();
+    [JsonPropertyName("allowCopy")] public bool AllowCopy { get; init; }
+    [JsonPropertyName("allowModify")] public bool AllowModify { get; init; }
+    [JsonPropertyName("sharedAt")] public DateTime? SharedAt { get; init; }
+    [JsonPropertyName("sharedBy")] public string? SharedBy { get; init; }
+}
+
+public record AssetInfo
+{
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    [JsonPropertyName("hash")] public string Hash { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("extension")] public string Extension { get; init; } = "";
+    [JsonPropertyName("description")] public string? Description { get; init; }
+    [JsonPropertyName("type")] public AssetType Type { get; init; }
+    [JsonPropertyName("ownerId")] public string OwnerId { get; init; } = "";
+    [JsonPropertyName("originalSizeBytes")] public long OriginalSizeBytes { get; init; }
+    [JsonPropertyName("processedComponents")] public List<AssetComponentInfo> ProcessedComponents { get; init; } = new();
+    [JsonPropertyName("uploadedAt")] public DateTime UploadedAt { get; init; }
+    [JsonPropertyName("lastModifiedAt")] public DateTime LastModifiedAt { get; init; }
+    [JsonPropertyName("metadata")] public Dictionary<string, object> Metadata { get; init; } = new();
+    [JsonPropertyName("thumbnailHash")] public string? ThumbnailHash { get; init; }
+    [JsonPropertyName("sharing")] public AssetSharingInfo? Sharing { get; init; }
+}

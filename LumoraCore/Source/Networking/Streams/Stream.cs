@@ -154,6 +154,7 @@ public abstract class Stream : IStream, IWorker, IWorldElement
 
     /// <summary>
     /// Initialize this stream with its owning user.
+    /// Allocates a new RefID for the stream.
     /// </summary>
     internal void Initialize(User user)
     {
@@ -162,6 +163,30 @@ public abstract class Stream : IStream, IWorker, IWorldElement
         _referenceID = _world.ReferenceController.AllocateID();
         _world.ReferenceController.RegisterObject(this);
 
+        InitializeInternal();
+    }
+
+    /// <summary>
+    /// Initialize this stream from a sync bag with an assigned RefID.
+    /// Used when receiving streams from network.
+    /// Must be called within AllocationBlockBegin/End for proper RefID allocation.
+    /// </summary>
+    internal void InitializeFromBag(User user, RefID assignedId)
+    {
+        Owner = user;
+        _world = user.World;
+
+        // Use AllocateID() to properly increment the allocation counter
+        // AllocationBlockBegin(assignedId) was called before this, so AllocateID() returns assignedId
+        // and subsequent calls (for sync members) get sequential RefIDs
+        _referenceID = _world.ReferenceController.AllocateID();
+        _world.ReferenceController.RegisterObject(this);
+
+        InitializeInternal();
+    }
+
+    private void InitializeInternal()
+    {
         // Initialize sync members
         _active.Initialize(_world, this);
         _group.Initialize(_world, this);
@@ -200,16 +225,16 @@ public abstract class Stream : IStream, IWorker, IWorldElement
 
     private void OnGroupChanged(IChangeable member)
     {
-        if (_world?.State == World.WorldState.Running)
+        if (Owner?.StreamGroupManager != null)
         {
-            Owner?.StreamGroupManager?.AssignToGroup(this, _oldGroup);
+            Owner.StreamGroupManager.AssignToGroup(this, _oldGroup);
             _groupAssigned = true;
             _oldGroup = GroupIndex;
+        }
 
-            if (_isInitialized && _groupAssigned)
-            {
-                Owner?.StreamGroupManager?.StreamModified(this);
-            }
+        if (_world?.State == World.WorldState.Running && _isInitialized && _groupAssigned)
+        {
+            Owner?.StreamGroupManager?.StreamModified(this);
         }
     }
 

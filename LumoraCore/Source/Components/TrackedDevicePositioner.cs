@@ -157,16 +157,41 @@ public class TrackedDevicePositioner : Component, IInputUpdateReceiver
         base.OnStart();
 
         FindUserRoot();
+        TryRegisterWithInput();
+    }
 
-        // Register with InputInterface for BeforeInputUpdate/AfterInputUpdate
-        if (IsUnderLocalUser)
+    /// <summary>
+    /// Called every frame. Check if we need to register (handles late SyncRef resolution).
+    /// </summary>
+    public override void OnUpdate(float delta)
+    {
+        base.OnUpdate(delta);
+
+        // If not registered yet, keep trying (SyncRef may resolve later on client)
+        if (!_isRegistered)
         {
-            var input = Engine.Current?.InputInterface;
-            if (input != null)
-            {
-                input.RegisterInputEventReceiver(this);
-                _isRegistered = true;
-            }
+            FindUserRoot();
+            TryRegisterWithInput();
+        }
+    }
+
+    /// <summary>
+    /// Try to register with InputInterface if we're under the local user.
+    /// </summary>
+    private void TryRegisterWithInput()
+    {
+        if (_isRegistered)
+            return;
+
+        if (!IsUnderLocalUser)
+            return;
+
+        var input = Engine.Current?.InputInterface;
+        if (input != null)
+        {
+            input.RegisterInputEventReceiver(this);
+            _isRegistered = true;
+            AquaLogger.Log($"TrackedDevicePositioner: Registered for input on '{Slot.SlotName.Value}' (node: {AutoBodyNode.Value})");
         }
     }
 

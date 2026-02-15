@@ -69,6 +69,7 @@ corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
 [node name="LoginOverlay" type="Control"]
+unique_name_in_owner = true
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -78,6 +79,7 @@ grow_vertical = 2
 script = ExtResource("2_script")
 
 [node name="Background" type="Panel" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -87,6 +89,7 @@ grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_overlay_bg")
 
 [node name="CenterContainer" type="CenterContainer" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -95,11 +98,13 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="LoginPanel" type="Panel" parent="CenterContainer"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(400, 450)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
 [node name="Margin" type="MarginContainer" parent="CenterContainer/LoginPanel"]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -112,14 +117,17 @@ theme_override_constants/margin_right = 32
 theme_override_constants/margin_bottom = 32
 
 [node name="VBox" type="VBoxContainer" parent="CenterContainer/LoginPanel/Margin"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 20
 
 [node name="Header" type="VBoxContainer" parent="CenterContainer/LoginPanel/Margin/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 8
 
 [node name="Title" type="Label" parent="CenterContainer/LoginPanel/Margin/VBox/Header"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -128,6 +136,7 @@ text = "Sign In"
 horizontal_alignment = 1
 
 [node name="Subtitle" type="Label" parent="CenterContainer/LoginPanel/Margin/VBox/Header"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.5, 0.6, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -136,15 +145,18 @@ text = "Welcome to Lumora"
 horizontal_alignment = 1
 
 [node name="Form" type="VBoxContainer" parent="CenterContainer/LoginPanel/Margin/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 16
 
 [node name="UsernameSection" type="VBoxContainer" parent="CenterContainer/LoginPanel/Margin/VBox/Form"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 6
 
 [node name="UsernameLabel" type="Label" parent="CenterContainer/LoginPanel/Margin/VBox/Form/UsernameSection"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -152,6 +164,7 @@ theme_override_font_sizes/font_size = 12
 text = "Username"
 
 [node name="UsernameInput" type="LineEdit" parent="CenterContainer/LoginPanel/Margin/VBox/Form/UsernameSection"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
@@ -161,10 +174,12 @@ theme_override_styles/normal = SubResource("StyleBoxFlat_input")
 placeholder_text = "Enter your username"
 
 [node name="PasswordSection" type="VBoxContainer" parent="CenterContainer/LoginPanel/Margin/VBox/Form"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 6
 
 [node name="PasswordLabel" type="Label" parent="CenterContainer/LoginPanel/Margin/VBox/Form/PasswordSection"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -172,6 +187,7 @@ theme_override_font_sizes/font_size = 12
 text = "Password"
 
 [node name="PasswordInput" type="LineEdit" parent="CenterContainer/LoginPanel/Margin/VBox/Form/PasswordSection"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
@@ -182,11 +198,13 @@ placeholder_text = "Enter your password"
 secret = true
 
 [node name="TwoFactorSection" type="VBoxContainer" parent="CenterContainer/LoginPanel/Margin/VBox/Form"]
+unique_name_in_owner = true
 visible = false
 layout_mode = 2
 theme_override_constants/separation = 6
 
 [node name="TwoFactorLabel" type="Label" parent="CenterContainer/LoginPanel/Margin/VBox/Form/TwoFactorSection"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -194,6 +212,7 @@ theme_override_font_sizes/font_size = 12
 text = "Two-Factor Code"
 
 [node name="TwoFactorInput" type="LineEdit" parent="CenterContainer/LoginPanel/Margin/VBox/Form/TwoFactorSection"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
@@ -204,6 +223,7 @@ placeholder_text = "Enter 6-digit code"
 max_length = 6
 
 [node name="RememberMe" type="CheckBox" parent="CenterContainer/LoginPanel/Margin/VBox/Form"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -212,6 +232,7 @@ button_pressed = true
 text = "Remember me"
 
 [node name="ErrorLabel" type="Label" parent="CenterContainer/LoginPanel/Margin/VBox/Form"]
+unique_name_in_owner = true
 visible = false
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.4, 0.4, 1)
@@ -222,10 +243,12 @@ horizontal_alignment = 1
 autowrap_mode = 2
 
 [node name="Buttons" type="VBoxContainer" parent="CenterContainer/LoginPanel/Margin/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 12
 
 [node name="LoginButton" type="Button" parent="CenterContainer/LoginPanel/Margin/VBox/Buttons"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 48)
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
@@ -237,6 +260,7 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_button")
 text = "Sign In"
 
 [node name="CancelButton" type="Button" parent="CenterContainer/LoginPanel/Margin/VBox/Buttons"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.7, 0.7, 0.75, 1)
@@ -247,11 +271,13 @@ theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 text = "Cancel"
 
 [node name="Footer" type="HBoxContainer" parent="CenterContainer/LoginPanel/Margin/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 alignment = 1
 theme_override_constants/separation = 4
 
 [node name="FooterText" type="Label" parent="CenterContainer/LoginPanel/Margin/VBox/Footer"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.4, 0.4, 0.45, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -259,6 +285,7 @@ theme_override_font_sizes/font_size = 10
 text = "Don't have an account?"
 
 [node name="RegisterLink" type="LinkButton" parent="CenterContainer/LoginPanel/Margin/VBox/Footer"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
 theme_override_colors/font_hover_color = Color(0.6, 0.5, 1, 1)

@@ -22,6 +22,7 @@ outline_size = 2
 outline_color = Color(0, 0, 0, 0.6)
 
 [node name="Nameplate" type="Control"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(200, 50)
 layout_mode = 3
 anchors_preset = 8
@@ -37,6 +38,7 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Background" type="Panel" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -44,6 +46,7 @@ anchor_bottom = 1.0
 theme_override_styles/panel = SubResource("pill_background")
 
 [node name="NameLabel" type="Label" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0

@@ -56,6 +56,7 @@ corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
 
 [node name="VRKeyboard" type="Control"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(660, 340)
 layout_mode = 3
 anchors_preset = 0
@@ -64,6 +65,7 @@ offset_bottom = 340.0
 script = ExtResource("2_script")
 
 [node name="Background" type="Panel" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -73,6 +75,7 @@ grow_vertical = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_background")
 
 [node name="MainMargin" type="MarginContainer" parent="."]
+unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -85,15 +88,18 @@ theme_override_constants/margin_right = 12
 theme_override_constants/margin_bottom = 12
 
 [node name="VBox" type="VBoxContainer" parent="MainMargin"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 8
 
 [node name="Header" type="PanelContainer" parent="MainMargin/VBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_header")
 
 [node name="HeaderMargin" type="MarginContainer" parent="MainMargin/VBox/Header"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/margin_left = 12
 theme_override_constants/margin_top = 6
@@ -101,10 +107,12 @@ theme_override_constants/margin_right = 12
 theme_override_constants/margin_bottom = 6
 
 [node name="HeaderHBox" type="HBoxContainer" parent="MainMargin/VBox/Header/HeaderMargin"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 12
 
 [node name="Title" type="Label" parent="MainMargin/VBox/Header/HeaderMargin/HeaderHBox"]
+unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.7, 0.68, 0.8, 1)
 theme_override_fonts/font = ExtResource("1_font")
@@ -112,10 +120,12 @@ theme_override_font_sizes/font_size = 12
 text = "Keyboard"
 
 [node name="Spacer" type="Control" parent="MainMargin/VBox/Header/HeaderMargin/HeaderHBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 
 [node name="TextPreview" type="LineEdit" parent="MainMargin/VBox/Header/HeaderMargin/HeaderHBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(350, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
@@ -127,6 +137,7 @@ placeholder_text = "Type here..."
 editable = false
 
 [node name="CloseButton" type="Button" parent="MainMargin/VBox/Header/HeaderMargin/HeaderHBox"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(28, 28)
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 1)
@@ -138,31 +149,37 @@ theme_override_styles/pressed = SubResource("StyleBoxFlat_close_pressed")
 text = "✕"
 
 [node name="KeyboardArea" type="VBoxContainer" parent="MainMargin/VBox"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 6
 
 [node name="Row1" type="HBoxContainer" parent="MainMargin/VBox/KeyboardArea"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_constants/separation = 3
 
 [node name="Row2" type="HBoxContainer" parent="MainMargin/VBox/KeyboardArea"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_constants/separation = 3
 
 [node name="Row3" type="HBoxContainer" parent="MainMargin/VBox/KeyboardArea"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_constants/separation = 3
 
 [node name="Row4" type="HBoxContainer" parent="MainMargin/VBox/KeyboardArea"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_constants/separation = 3
 
 [node name="Row5" type="HBoxContainer" parent="MainMargin/VBox/KeyboardArea"]
+unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 4
 theme_override_constants/separation = 3
