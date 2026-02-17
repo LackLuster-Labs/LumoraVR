@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Environment = System.Environment;
@@ -14,6 +15,18 @@ namespace Lumora.Core.Logging
         private static readonly ConcurrentQueue<string> _logQueue = new();
         private static readonly AutoResetEvent _logEvent = new(false);
         private static readonly CancellationTokenSource _cancellationTokenSource = new();
+        private static readonly Lazy<MethodInfo?> GodotPrintMethod = new(() =>
+        {
+            try
+            {
+                var godotType = Type.GetType("Godot.GD, GodotSharp");
+                return godotType?.GetMethod("Print", new[] { typeof(object[]) });
+            }
+            catch
+            {
+                return null;
+            }
+        });
 
         static Logger()
         {
@@ -41,22 +54,18 @@ namespace Lumora.Core.Logging
             string logEntry = $"[{timestamp}] [{level}] {message}";
             _logQueue.Enqueue(logEntry);
             _logEvent.Set();
-            Console.WriteLine(logEntry);
 
-            // Also output to Godot console if running in Godot
-            try
+            // Keep console output focused on important messages.
+            if (level == LogLevel.WARN || level == LogLevel.ERROR)
             {
-                var godotType = Type.GetType("Godot.GD, GodotSharp");
-                if (godotType != null)
-                {
-                    var printMethod = godotType.GetMethod("Print", new[] { typeof(object[]) });
-                    if (printMethod != null)
-                    {
-                        printMethod.Invoke(null, new object[] { new object[] { $"[{level}] {message}" } });
-                    }
-                }
+                Console.WriteLine(logEntry);
             }
-            catch { /* Ignore if not in Godot context */ }
+
+            // Mirror only warnings/errors to Godot console.
+            if (level == LogLevel.WARN || level == LogLevel.ERROR)
+            {
+                TryMirrorToGodotConsole(level, message);
+            }
 
             OnFormattedLogMessageWritten?.Invoke(message);
             OnLogWritten?.Invoke(level, timestamp, message);
@@ -74,6 +83,22 @@ namespace Lumora.Core.Logging
                 case LogLevel.DEBUG:
                     OnPrettyLogMessageWritten?.Invoke($"  [{DateTime.Now:HH:mm:ss}] [{level}] {message}");
                     break;
+            }
+        }
+
+        private static void TryMirrorToGodotConsole(LogLevel level, string message)
+        {
+            try
+            {
+                var printMethod = GodotPrintMethod.Value;
+                if (printMethod != null)
+                {
+                    printMethod.Invoke(null, new object[] { new object[] { $"[{level}] {message}" } });
+                }
+            }
+            catch
+            {
+                // Ignore if not running in Godot context.
             }
         }
 

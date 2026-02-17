@@ -79,7 +79,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 text = "Material"
 vertical_alignment = 1
@@ -89,7 +88,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(24, 24)
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.3, 0.3, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 text = "X"
 
@@ -125,7 +123,6 @@ layout_mode = 2
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Property:"
 
@@ -137,7 +134,6 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "value"
 
@@ -149,7 +145,6 @@ layout_mode = 2
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Property:"
 
@@ -161,7 +156,6 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "value"
 
@@ -173,7 +167,6 @@ layout_mode = 2
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Property:"
 
@@ -185,7 +178,6 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "value"
 
@@ -197,7 +189,6 @@ layout_mode = 2
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Property:"
 
@@ -209,7 +200,6 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "value"
 
@@ -221,7 +211,6 @@ layout_mode = 2
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Property:"
 
@@ -233,7 +222,6 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "value"
 
@@ -245,7 +233,6 @@ layout_mode = 2
 custom_minimum_size = Vector2(100, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.6, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Property:"
 
@@ -257,6 +244,5 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "value"

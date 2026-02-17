@@ -98,7 +98,6 @@ public partial class Settings : Control
         ConnectSignals();
         UpdateTabVisuals();
 
-        GD.Print("Settings: Initialized");
     }
 
     private void ConnectSignals()
@@ -137,7 +136,6 @@ public partial class Settings : Control
         if (_preferencesTab != null) _preferencesTab.Visible = tab == "Preferences";
 
         UpdateTabVisuals();
-        GD.Print($"Settings: Switched to {tab} tab");
     }
 
     private void UpdateTabVisuals()
@@ -165,15 +163,11 @@ public partial class Settings : Control
 
     private void OnChangeAvatarPressed()
     {
-        GD.Print("Settings: Change avatar pressed");
         // TODO: Open avatar picker
     }
 
     private void OnSaveProfilePressed()
     {
-        var bio = _bioInput?.Text ?? "";
-
-        GD.Print($"Settings: Save profile - Bio length: {bio.Length}");
         // TODO: Save to LumoraClient
     }
 
@@ -184,26 +178,21 @@ public partial class Settings : Control
 
         if (string.IsNullOrEmpty(currentPass) || string.IsNullOrEmpty(newPass))
         {
-            GD.Print("Settings: Password fields cannot be empty");
             return;
         }
 
         if (_client == null)
         {
-            GD.Print("Settings: Not connected to server");
             return;
         }
 
         if (_btnChangePassword != null)
             _btnChangePassword.Disabled = true;
 
-        GD.Print("Settings: Change password requested");
-
         var result = await _client.ChangePassword(currentPass, newPass);
 
         if (result.Success)
         {
-            GD.Print("Settings: Password changed successfully");
         }
         else
         {
@@ -222,7 +211,6 @@ public partial class Settings : Control
     {
         if (_client == null)
         {
-            GD.Print("Settings: Not connected to server");
             return;
         }
 
@@ -232,19 +220,16 @@ public partial class Settings : Control
         if (_has2FA)
         {
             // Disable 2FA - would need a code input dialog in real implementation
-            GD.Print("Settings: Disable 2FA requested");
             // For now just log - real implementation would show code input dialog
             // var result = await _client.Disable2FA(code);
         }
         else
         {
             // Enable 2FA
-            GD.Print("Settings: Enable 2FA requested");
             var result = await _client.Enable2FA();
 
             if (result.Success && result.Data != null)
             {
-                GD.Print("Settings: 2FA setup initiated - QR code ready");
                 // TODO: Show QR code dialog with result.Data.QrCode and result.Data.RecoveryCodes
                 // After user verifies with code, call _client.Verify2FA(code)
             }
@@ -287,7 +272,6 @@ public partial class Settings : Control
             2 => "High",
             _ => "Medium"
         };
-        GD.Print($"Settings: Quality set to {quality}");
         // TODO: Apply graphics quality setting
     }
 
@@ -302,14 +286,12 @@ public partial class Settings : Control
             Engine.MaxFps = fps;
             if (_fpsLimitValue != null)
                 _fpsLimitValue.Text = $"{fps} FPS";
-            GD.Print($"Settings: FPS limit enabled at {fps}");
         }
         else
         {
             Engine.MaxFps = 0; // Unlimited
             if (_fpsLimitValue != null)
                 _fpsLimitValue.Text = "Off";
-            GD.Print("Settings: FPS limit disabled (unlimited)");
         }
     }
 
@@ -324,7 +306,6 @@ public partial class Settings : Control
             _fpsLimitValue.Text = $"{fps} FPS";
 
         Engine.MaxFps = fps;
-        GD.Print($"Settings: FPS limit set to {fps}");
     }
 
     private void OnVSyncToggled(bool enabled)
@@ -332,7 +313,6 @@ public partial class Settings : Control
         DisplayServer.WindowSetVsyncMode(
             enabled ? DisplayServer.VSyncMode.Enabled : DisplayServer.VSyncMode.Disabled
         );
-        GD.Print($"Settings: VSync {(enabled ? "enabled" : "disabled")}");
     }
 
     private void OnFullscreenToggled(bool enabled)
@@ -340,7 +320,6 @@ public partial class Settings : Control
         DisplayServer.WindowSetMode(
             enabled ? DisplayServer.WindowMode.Fullscreen : DisplayServer.WindowMode.Windowed
         );
-        GD.Print($"Settings: Fullscreen {(enabled ? "enabled" : "disabled")}");
     }
 
     private static float LinearToDb(float linear)

@@ -1,4 +1,5 @@
 using Godot;
+using Aquamarine.Godot.Hooks;
 using Lumora.Core;
 using Lumora.Core.Components;
 using Lumora.Core.Math;
@@ -13,7 +14,8 @@ namespace Aquamarine.Source.Input;
 public partial class GrabManager : Node3D
 {
     private const float MaxGrabDistance = 10f;
-    private const uint GrabCollisionMask = 1u << 0;
+    // Layer 1: physics colliders/rigid bodies, Layer 4: UI panel Area3D colliders (inspectors).
+    private const uint GrabCollisionMask = (1u << 0) | (1u << 3);
 
     private RayCast3D _raycast;
     private Camera3D _camera;
@@ -32,7 +34,7 @@ public partial class GrabManager : Node3D
             Name = "GrabRaycast",
             TargetPosition = new Vector3(0, 0, -MaxGrabDistance),
             CollisionMask = GrabCollisionMask,
-            CollideWithAreas = false,
+            CollideWithAreas = true,
             CollideWithBodies = true,
             Enabled = true
         };
@@ -96,15 +98,10 @@ public partial class GrabManager : Node3D
             return;
 
         var collider = _raycast.GetCollider() as Node;
-        if (collider == null || !collider.HasMeta("LumoraSlotRef"))
+        if (collider == null)
             return;
 
-        var refString = collider.GetMeta("LumoraSlotRef").ToString();
-        if (!ulong.TryParse(refString, out ulong rawRef))
-            return;
-
-        var world = Lumora.Core.Engine.Current?.WorldManager?.FocusedWorld;
-        var slot = world?.ReferenceController?.GetObjectOrNull(new RefID(rawRef)) as Slot;
+        var slot = ResolveSlotFromCollider(collider);
         if (slot == null)
             return;
 
@@ -133,6 +130,33 @@ public partial class GrabManager : Node3D
         }
 
         AquaLogger.Log($"GrabManager: Grabbed '{slot.SlotName.Value}'");
+    }
+
+    private static Slot? ResolveSlotFromCollider(Node collider)
+    {
+        // First try slot-hook lookup (works for inspector/UI Area3D colliders parented under slot node).
+        var slot = SlotHook.GetSlotFromNode(collider);
+        if (slot != null)
+            return slot;
+
+        // Fallback for physics bodies that store explicit slot ref metadata.
+        Node? current = collider;
+        while (current != null)
+        {
+            if (current.HasMeta("LumoraSlotRef"))
+            {
+                var refString = current.GetMeta("LumoraSlotRef").ToString();
+                if (ulong.TryParse(refString, out ulong rawRef))
+                {
+                    var world = Lumora.Core.Engine.Current?.WorldManager?.FocusedWorld;
+                    return world?.ReferenceController?.GetObjectOrNull(new RefID(rawRef)) as Slot;
+                }
+            }
+
+            current = current.GetParent();
+        }
+
+        return null;
     }
 
     private void UpdateGrabbedTransform(IInputProvider input)

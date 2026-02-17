@@ -1,7 +1,8 @@
-[gd_scene load_steps=12 format=3 uid="uid://debug_window_scene"]
+[gd_scene load_steps=13 format=3 uid="uid://debug_window_scene"]
 
 [ext_resource type="FontFile" uid="uid://dne06dcdmx5hj" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
 [ext_resource type="Script" path="res://Source/Godot/Debug/DebugWindow.cs" id="2_script"]
+[ext_resource type="Script" path="res://Source/Godot/Debug/MemoryHistoryGraph.cs" id="3_mem_graph"]
 
 [sub_resource type="StyleBoxFlat" id="bg_panel"]
 bg_color = Color(0.08, 0.08, 0.1, 1)
@@ -124,7 +125,6 @@ theme_override_constants/separation = 4
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 theme_override_styles/panel = SubResource("tab_panel")
 
@@ -153,7 +153,6 @@ layout_mode = 2
 button_pressed = true
 theme_override_colors/font_color = Color(0.6, 0.8, 0.6, 1)
 theme_override_colors/font_pressed_color = Color(0.6, 0.8, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "LOG"
 
@@ -163,7 +162,6 @@ layout_mode = 2
 button_pressed = true
 theme_override_colors/font_color = Color(1, 0.85, 0.2, 1)
 theme_override_colors/font_pressed_color = Color(1, 0.85, 0.2, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "WARN"
 
@@ -173,7 +171,6 @@ layout_mode = 2
 button_pressed = true
 theme_override_colors/font_color = Color(1, 0.3, 0.3, 1)
 theme_override_colors/font_pressed_color = Color(1, 0.3, 0.3, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "ERROR"
 
@@ -183,7 +180,6 @@ layout_mode = 2
 button_pressed = true
 theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
 theme_override_colors/font_pressed_color = Color(0.5, 0.5, 0.55, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "DEBUG"
 
@@ -196,7 +192,6 @@ size_flags_horizontal = 3
 unique_name_in_owner = true
 custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 placeholder_text = "Search..."
 
@@ -204,14 +199,12 @@ placeholder_text = "Search..."
 unique_name_in_owner = true
 layout_mode = 2
 button_pressed = true
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "Auto"
 
 [node name="ClearBtn" type="Button" parent="Background/RootMargin/RootVBox/Tabs/Logs/Toolbar/ToolbarHBox"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "Clear"
 
@@ -219,7 +212,6 @@ text = "Clear"
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_fonts/normal_font = ExtResource("1_font")
 theme_override_font_sizes/normal_font_size = 12
 theme_override_styles/normal = SubResource("log_bg")
 scroll_following = true
@@ -239,7 +231,6 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_colors/font_color = Color(0.45, 0.45, 0.5, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "0 messages"
 
@@ -273,7 +264,6 @@ theme_override_constants/separation = 2
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.7, 0.3, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 14
 text = "FRAMERATE"
 
@@ -295,7 +285,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "FPS"
 
@@ -304,7 +293,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.3, 0.9, 0.4, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -322,7 +310,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Frame Time"
 
@@ -331,7 +318,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -349,7 +335,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Render Time"
 
@@ -358,7 +343,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -376,7 +360,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Physics Time"
 
@@ -385,7 +368,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -404,7 +386,6 @@ theme_override_constants/separation = 2
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.8, 1, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 14
 text = "WORLD"
 
@@ -426,7 +407,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "World"
 
@@ -435,7 +415,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -453,7 +432,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Slots"
 
@@ -462,7 +440,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -480,7 +457,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Components"
 
@@ -489,7 +465,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -507,7 +482,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Users"
 
@@ -516,7 +490,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -534,7 +507,6 @@ theme_override_constants/separation = 2
 [node name="MemoryHeader" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Performance/PerfVBox/MemorySection/MemoryVBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 1, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 14
 text = "MEMORY"
 
@@ -556,7 +528,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "GC Memory"
 
@@ -565,7 +536,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -583,7 +553,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Video Memory"
 
@@ -592,7 +561,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -610,7 +578,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Godot Objects"
 
@@ -619,7 +586,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -637,7 +603,6 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(160, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.55, 0.55, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "Godot Nodes"
 
@@ -646,7 +611,6 @@ unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 13
 text = "-"
 
@@ -657,51 +621,288 @@ text = "-"
 [node name="Memory Profiler" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_constants/separation = 4
+theme_override_constants/separation = 6
 
-[node name="MemoryHeader" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler"]
+[node name="ProfilerToolbar" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler"]
 layout_mode = 2
 theme_override_styles/panel = SubResource("toolbar_bg")
 
-[node name="MemoryHeaderHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemoryHeader"]
+[node name="ProfilerToolbarHBox" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/ProfilerToolbar"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="CaptureSnapshotBtn" type="Button" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/ProfilerToolbar/ProfilerToolbarHBox"]
 unique_name_in_owner = true
 layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Capture Snapshot"
 
-[node name="MemoryTitle" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemoryHeader/MemoryHeaderHBox"]
+[node name="ClearSnapshotsBtn" type="Button" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/ProfilerToolbar/ProfilerToolbarHBox"]
 unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Clear Snapshots"
+
+[node name="AutoSnapshotToggle" type="CheckButton" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/ProfilerToolbar/ProfilerToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Auto (5s)"
+
+[node name="MemoryLiveToggle" type="CheckButton" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/ProfilerToolbar/ProfilerToolbarHBox"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+theme_override_font_sizes/font_size = 11
+text = "Live"
+
+[node name="ToolbarSpacer" type="Control" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/ProfilerToolbar/ProfilerToolbarHBox"]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_colors/font_color = Color(1, 0.7, 0.3, 1)
-theme_override_fonts/font = ExtResource("1_font")
-theme_override_font_sizes/font_size = 14
-text = "Component Memory Breakdown"
 
-[node name="TotalMemLabel" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemoryHeader/MemoryHeaderHBox"]
+[node name="MemoryStatusLabel" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/ProfilerToolbar/ProfilerToolbarHBox"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.6, 0.85, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
-theme_override_font_sizes/font_size = 13
-text = "Total: -"
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "Waiting for memory packets..."
 
-[node name="MemoryDisplay" type="RichTextLabel" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler"]
+[node name="MemorySplit" type="HSplitContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler"]
+layout_mode = 2
+size_flags_vertical = 3
+split_offset = 220
+
+[node name="SnapshotPanel" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_bg")
+
+[node name="SnapshotVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/SnapshotPanel"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="SnapshotTitle" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/SnapshotPanel/SnapshotVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.75, 0.35, 1)
+theme_override_font_sizes/font_size = 13
+text = "Snapshots"
+
+[node name="SnapshotList" type="ItemList" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/SnapshotPanel/SnapshotVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_fonts/normal_font = ExtResource("1_font")
-theme_override_font_sizes/normal_font_size = 12
-theme_override_styles/normal = SubResource("log_bg")
-selection_enabled = true
+theme_override_font_sizes/font_size = 11
 
-[node name="GCInfo" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler"]
+[node name="MemoryRightVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 6
+
+[node name="MemorySummaryPanel" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_bg")
+
+[node name="SummaryVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="SummaryTitle" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.78, 1, 1)
+theme_override_font_sizes/font_size = 13
+text = "Memory Summary"
+
+[node name="SummaryGrid" type="GridContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox"]
+layout_mode = 2
+columns = 4
+
+[node name="CommittedKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "Committed"
+
+[node name="MemCommittedValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
 unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.95, 0.6, 0.95, 1)
+theme_override_font_sizes/font_size = 11
+text = "-"
+
+[node name="GcKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "GC Heap"
+
+[node name="MemGCValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45, 0.9, 0.52, 1)
+theme_override_font_sizes/font_size = 11
+text = "-"
+
+[node name="EstimatedKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "Estimated"
+
+[node name="MemEstimatedValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.72, 0.4, 1)
+theme_override_font_sizes/font_size = 11
+text = "-"
+
+[node name="WorkingSetKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "Working Set"
+
+[node name="MemWorkingSetValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.85, 0.9, 1)
+theme_override_font_sizes/font_size = 11
+text = "-"
+
+[node name="PrivateKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "Private"
+
+[node name="MemPrivateValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.85, 0.85, 0.9, 1)
+theme_override_font_sizes/font_size = 11
+text = "-"
+
+[node name="VideoKey" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "Video"
+
+[node name="MemVideoValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.4, 0.8, 1, 1)
+theme_override_font_sizes/font_size = 11
+text = "-"
+
+[node name="ObjectsKeyMem" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "Objects"
+
+[node name="MemObjectsValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_font_sizes/font_size = 11
+text = "-"
+
+[node name="NodesKeyMem" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.55, 0.55, 0.62, 1)
+theme_override_font_sizes/font_size = 11
+text = "Nodes"
+
+[node name="MemNodesValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox/SummaryGrid"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
+theme_override_font_sizes/font_size = 11
+text = "-"
+
+[node name="GCCountValue" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemorySummaryPanel/SummaryVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45, 0.45, 0.52, 1)
+theme_override_font_sizes/font_size = 10
+text = "GC Collections: Gen0 0 | Gen1 0 | Gen2 0"
+
+[node name="MemoryHistoryPanel" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox"]
+layout_mode = 2
+theme_override_styles/panel = SubResource("section_bg")
+
+[node name="HistoryVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemoryHistoryPanel"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="HistoryTitle" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemoryHistoryPanel/HistoryVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.78, 1, 1)
+theme_override_font_sizes/font_size = 13
+text = "Memory History"
+
+[node name="LegendLabel" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemoryHistoryPanel/HistoryVBox"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.45, 0.45, 0.52, 1)
+theme_override_font_sizes/font_size = 10
+text = "Magenta: Committed   Green: GC   Orange: Estimated   Blue: Video"
+
+[node name="MemoryGraph" type="Control" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/MemoryHistoryPanel/HistoryVBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 170)
+layout_mode = 2
+script = ExtResource("3_mem_graph")
+
+[node name="BreakdownPanel" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_styles/panel = SubResource("section_bg")
+
+[node name="BreakdownVBox" type="VBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/BreakdownPanel"]
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_constants/separation = 4
+
+[node name="BreakdownToolbar" type="HBoxContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/BreakdownPanel/BreakdownVBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="BreakdownTitle" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/BreakdownPanel/BreakdownVBox/BreakdownToolbar"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.75, 0.78, 1, 1)
+theme_override_font_sizes/font_size = 13
+text = "Component Breakdown"
+
+[node name="BreakdownSpacer" type="Control" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/BreakdownPanel/BreakdownVBox/BreakdownToolbar"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="MemorySearchBox" type="LineEdit" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/BreakdownPanel/BreakdownVBox/BreakdownToolbar"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+placeholder_text = "Filter components..."
+
+[node name="ComponentTree" type="Tree" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/BreakdownPanel/BreakdownVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_vertical = 3
+theme_override_font_sizes/font_size = 11
+columns = 4
+hide_root = true
+select_mode = 1
+
+[node name="ComponentDetailsPanel" type="PanelContainer" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox"]
 layout_mode = 2
 theme_override_styles/panel = SubResource("status_bg")
 
-[node name="GCLabel" type="Label" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/GCInfo"]
+[node name="ComponentDetails" type="RichTextLabel" parent="Background/RootMargin/RootVBox/Tabs/Memory Profiler/MemorySplit/MemoryRightVBox/ComponentDetailsPanel"]
 unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 86)
 layout_mode = 2
-theme_override_colors/font_color = Color(0.45, 0.45, 0.5, 1)
-theme_override_fonts/font = ExtResource("1_font")
-theme_override_font_sizes/font_size = 11
-text = "GC: -"
+theme_override_font_sizes/normal_font_size = 11
+bbcode_enabled = true
+fit_content = true
+selection_enabled = true
+scroll_active = false

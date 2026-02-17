@@ -61,15 +61,35 @@ public class DebugUdpSender : IDisposable
 
     /// <summary>
     /// Send memory breakdown to the debug console.
-    /// Format: MEM|totalBytes|gcBytes|gen0|gen1|gen2|name:count:bytes,name:count:bytes,...
+    /// Format:
+    /// MEM|committedBytes|gcBytes|gen0|gen1|gen2|estimatedBytes|workingSetBytes|privateBytes|videoBytes|godotObjects|godotNodes|name:count:bytes,name:count:bytes,...
     /// </summary>
-    public void SendMemory(long totalEstimated, long gcBytes,
+    public void SendMemory(
+        long committedBytes,
+        long gcBytes,
         int gen0, int gen1, int gen2,
+        long estimatedBytes,
+        long workingSetBytes,
+        long privateBytes,
+        long videoBytes,
+        int godotObjects,
+        int godotNodes,
         IEnumerable<(string name, int count, long bytes)> topComponents)
     {
         var components = string.Join(",",
-            topComponents.Select(c => $"{c.name}:{c.count}:{c.bytes}"));
-        Send($"MEM|{totalEstimated}|{gcBytes}|{gen0}|{gen1}|{gen2}|{components}");
+            topComponents.Select(c => $"{SanitizeField(c.name)}:{c.count}:{c.bytes}"));
+
+        Send(
+            $"MEM|{committedBytes}|{gcBytes}|{gen0}|{gen1}|{gen2}|{estimatedBytes}" +
+            $"|{workingSetBytes}|{privateBytes}|{videoBytes}|{godotObjects}|{godotNodes}|{components}");
+    }
+
+    private static string SanitizeField(string value)
+    {
+        return value
+            .Replace('|', '/')
+            .Replace(':', '_')
+            .Replace(',', ';');
     }
 
     private void Send(string message)

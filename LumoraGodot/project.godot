@@ -44,6 +44,7 @@ import/blender/enabled=false
 
 [gui]
 
+theme/custom="res://Assets/Themes/LumoraUITheme.tres"
 theme/default_font_multichannel_signed_distance_field=true
 
 [input]

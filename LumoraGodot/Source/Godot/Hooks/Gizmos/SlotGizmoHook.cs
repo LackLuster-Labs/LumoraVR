@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using Aquamarine.Godot.Hooks;
 using Godot;
 using Lumora.Core;
 using Lumora.Core.Components.Gizmos;
@@ -23,7 +25,9 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
 
     // Bounding box visuals
     private MeshInstance3D? _boundsMesh;
-    private BoxMesh? _boxMesh;
+    private ImmediateMesh? _boundsImmediateMesh;
+    private Vector3 _boundsCenter = Vector3.Zero;
+    private Vector3 _boundsSize = Vector3.One * 0.2f;
 
     // Axis lines for showing position relative to parent
     private MeshInstance3D? _xAxisLine;
@@ -49,7 +53,7 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
     private Area3D? _parentArea;
 
     // Colors
-    private static readonly Color BoundsColor = new(1f, 0f, 1f, 0.5f); // Magenta
+    private static readonly Color BoundsColor = new(0.72f, 0.67f, 1f, 0.95f); // Soft violet lines
     private static readonly Color XAxisColor = new(1f, 0f, 0f, 1f); // Red
     private static readonly Color YAxisColor = new(0f, 1f, 0f, 1f); // Green
     private static readonly Color ZAxisColor = new(0f, 0f, 1f, 1f); // Blue
@@ -100,13 +104,9 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
         _boundsMesh = new MeshInstance3D();
         _boundsMesh.Name = "BoundingBox";
 
-        _boxMesh = new BoxMesh();
-        _boxMesh.Size = Vector3.One; // Will be updated based on slot bounds
-        _boundsMesh.Mesh = _boxMesh;
+        _boundsImmediateMesh = new ImmediateMesh();
+        _boundsMesh.Mesh = _boundsImmediateMesh;
         _boundsMesh.MaterialOverride = _boundsMaterial;
-
-        // Make it wireframe-like by using a custom shader or thin box
-        // For now, use semi-transparent box
 
         attachedNode.AddChild(_boundsMesh);
     }
@@ -297,14 +297,18 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
 
         var target = Owner.TargetSlot;
 
-        // Update position to match target
+        // Keep gizmo anchored to target transform (local mode) or world axes (global mode)
         attachedNode.GlobalPosition = ToGodotVector(target.GlobalPosition);
+        attachedNode.GlobalRotation = Owner.IsLocalSpace.Value
+            ? ToGodotVector(target.GlobalRotation.ToEuler())
+            : Vector3.Zero;
+        attachedNode.Scale = Vector3.One;
 
-        // Update bounding box
+        // Update bounds around target geometry and draw wireframe box.
         UpdateBoundingBox(target);
 
-        // Update axis lines
-        UpdateAxisLines(target);
+        // Update axis triad centered on current bounds.
+        UpdateAxisLines();
 
         // Update name label
         if (_nameLabel != null)
@@ -312,8 +316,8 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
             _nameLabel.Text = target.Name.Value;
         }
 
-        // Update toolbar position (above bounding box)
-        UpdateToolbarPosition(target);
+        // Place orb controls above the object center/top.
+        UpdateToolbarPosition();
 
         // Update visibility
         bool visible = Owner.Active.Value && !Owner.IsFolded.Value;
@@ -330,69 +334,253 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
 
     private void UpdateBoundingBox(Slot target)
     {
-        if (_boxMesh == null || _boundsMesh == null)
+        if (_boundsImmediateMesh == null || _boundsMesh == null)
             return;
 
-        // Compute a simple bounding box based on the slot's children
-        // For now, use a default size
-        float size = 0.2f;
-        _boxMesh.Size = new Vector3(size, size, size);
+        if (!TryComputeBounds(target, out var bounds))
+        {
+            bounds = new Aabb(new Vector3(-0.1f, -0.1f, -0.1f), new Vector3(0.2f, 0.2f, 0.2f));
+        }
 
-        // Use rotation from target if in local space
-        if (Owner.IsLocalSpace.Value)
-        {
-            _boundsMesh.GlobalRotation = ToGodotVector(target.GlobalRotation.ToEuler());
-        }
-        else
-        {
-            _boundsMesh.Rotation = Vector3.Zero;
-        }
+        _boundsCenter = bounds.Position + (bounds.Size * 0.5f);
+        _boundsSize = new Vector3(
+            Mathf.Max(bounds.Size.X, 0.05f),
+            Mathf.Max(bounds.Size.Y, 0.05f),
+            Mathf.Max(bounds.Size.Z, 0.05f));
+
+        DrawWireBounds(_boundsCenter, _boundsSize);
     }
 
-    private void UpdateAxisLines(Slot target)
+    private void UpdateAxisLines()
     {
-        // Draw lines from slot position to parent-relative axes
-        var localPos = target.Position;
+        var maxDimension = Mathf.Max(Mathf.Max(_boundsSize.X, _boundsSize.Y), _boundsSize.Z);
+        var axisLength = Mathf.Max(maxDimension * 0.6f, 0.12f);
 
         if (_xAxisLine != null)
         {
-            float length = System.Math.Abs(localPos.x);
-            _xAxisLine.Position = new Vector3(-localPos.x / 2, 0, 0);
+            _xAxisLine.Position = _boundsCenter + new Vector3(axisLength * 0.5f, 0f, 0f);
             if (_xAxisLine.Mesh is CylinderMesh cyl)
-                cyl.Height = length > 0.001f ? length : 0.001f;
-            _xAxisLine.Visible = length > 0.001f && Owner.Active.Value;
+                cyl.Height = axisLength;
         }
 
         if (_yAxisLine != null)
         {
-            float length = System.Math.Abs(localPos.y);
-            _yAxisLine.Position = new Vector3(0, -localPos.y / 2, 0);
+            _yAxisLine.Position = _boundsCenter + new Vector3(0f, axisLength * 0.5f, 0f);
             if (_yAxisLine.Mesh is CylinderMesh cyl)
-                cyl.Height = length > 0.001f ? length : 0.001f;
-            _yAxisLine.Visible = length > 0.001f && Owner.Active.Value;
+                cyl.Height = axisLength;
         }
 
         if (_zAxisLine != null)
         {
-            float length = System.Math.Abs(localPos.z);
-            _zAxisLine.Position = new Vector3(0, 0, -localPos.z / 2);
+            _zAxisLine.Position = _boundsCenter + new Vector3(0f, 0f, -axisLength * 0.5f);
             if (_zAxisLine.Mesh is CylinderMesh cyl)
-                cyl.Height = length > 0.001f ? length : 0.001f;
-            _zAxisLine.Visible = length > 0.001f && Owner.Active.Value;
+                cyl.Height = axisLength;
         }
     }
 
-    private void UpdateToolbarPosition(Slot target)
+    private void UpdateToolbarPosition()
     {
         if (_toolbarRoot == null || _nameLabel == null)
             return;
 
-        // Position toolbar above the bounding box
-        float height = 0.15f; // Approximate bounding box top + offset
-        _toolbarRoot.Position = new Vector3(0, height + SlotGizmo.BUTTONS_OFFSET, 0);
+        // Position toolbar above center/top of bounds.
+        float topY = _boundsCenter.Y + (_boundsSize.Y * 0.5f);
+        _toolbarRoot.Position = new Vector3(
+            _boundsCenter.X,
+            topY + SlotGizmo.BUTTONS_OFFSET + 0.015f,
+            _boundsCenter.Z);
 
-        // Name label above toolbar
-        _nameLabel.Position = new Vector3(0, height + SlotGizmo.BUTTONS_OFFSET + SlotGizmo.BUTTON_SIZE + 0.02f, 0);
+        // Name label above toolbar.
+        _nameLabel.Position = _toolbarRoot.Position + new Vector3(0f, SlotGizmo.BUTTON_SIZE + 0.02f, 0f);
+    }
+
+    private bool TryComputeBounds(Slot target, out Aabb boundsInGizmoSpace)
+    {
+        boundsInGizmoSpace = default;
+
+        if (target.Hook is not SlotHook slotHook)
+            return false;
+
+        var targetNode = slotHook.ForceGetNode3D();
+        if (!GodotObject.IsInstanceValid(targetNode))
+            return false;
+
+        if (!TryComputeWorldBounds(targetNode, out var worldBounds))
+            return false;
+
+        var worldToGizmo = attachedNode.GlobalTransform.AffineInverse();
+        boundsInGizmoSpace = TransformAabb(worldToGizmo, worldBounds);
+        return true;
+    }
+
+    private static bool TryComputeWorldBounds(Node3D targetNode, out Aabb worldBounds)
+    {
+        worldBounds = default;
+        bool hasBounds = false;
+
+        var stack = new Stack<Node>();
+        stack.Push(targetNode);
+
+        while (stack.Count > 0)
+        {
+            var current = stack.Pop();
+            foreach (Node child in current.GetChildren())
+            {
+                stack.Push(child);
+            }
+
+            if (current is not Node3D node3D || !node3D.Visible)
+                continue;
+
+            if (TryGetLocalAabb(node3D, out var localBounds))
+            {
+                var transformed = TransformAabb(node3D.GlobalTransform, localBounds);
+                AddAabb(ref worldBounds, transformed, ref hasBounds);
+            }
+        }
+
+        return hasBounds;
+    }
+
+    private static bool TryGetLocalAabb(Node3D node, out Aabb localBounds)
+    {
+        switch (node)
+        {
+            case MeshInstance3D meshInstance when meshInstance.Mesh != null:
+                localBounds = meshInstance.GetAabb();
+                return localBounds.Size != Vector3.Zero;
+
+            case CollisionShape3D collisionShape when collisionShape.Shape != null:
+                return TryGetShapeLocalAabb(collisionShape.Shape, out localBounds);
+
+            default:
+                localBounds = default;
+                return false;
+        }
+    }
+
+    private static bool TryGetShapeLocalAabb(Shape3D shape, out Aabb localBounds)
+    {
+        switch (shape)
+        {
+            case BoxShape3D box:
+                localBounds = new Aabb(-box.Size * 0.5f, box.Size);
+                return true;
+
+            case SphereShape3D sphere:
+                var diameter = sphere.Radius * 2f;
+                localBounds = new Aabb(
+                    new Vector3(-sphere.Radius, -sphere.Radius, -sphere.Radius),
+                    new Vector3(diameter, diameter, diameter));
+                return true;
+
+            case CapsuleShape3D capsule:
+                var capsuleHalfHeight = (capsule.Height + (capsule.Radius * 2f)) * 0.5f;
+                var capsuleDiameter = capsule.Radius * 2f;
+                localBounds = new Aabb(
+                    new Vector3(-capsule.Radius, -capsuleHalfHeight, -capsule.Radius),
+                    new Vector3(capsuleDiameter, capsuleHalfHeight * 2f, capsuleDiameter));
+                return true;
+
+            case CylinderShape3D cylinder:
+                var cylinderHalfHeight = cylinder.Height * 0.5f;
+                var cylinderDiameter = cylinder.Radius * 2f;
+                localBounds = new Aabb(
+                    new Vector3(-cylinder.Radius, -cylinderHalfHeight, -cylinder.Radius),
+                    new Vector3(cylinderDiameter, cylinder.Height, cylinderDiameter));
+                return true;
+
+            default:
+                localBounds = default;
+                return false;
+        }
+    }
+
+    private static Aabb TransformAabb(Transform3D transform, Aabb source)
+    {
+        var corners = GetAabbCorners(source);
+        var transformedMin = transform * corners[0];
+        var transformedMax = transformedMin;
+
+        for (int i = 1; i < corners.Length; i++)
+        {
+            var p = transform * corners[i];
+            transformedMin = transformedMin.Min(p);
+            transformedMax = transformedMax.Max(p);
+        }
+
+        return new Aabb(transformedMin, transformedMax - transformedMin);
+    }
+
+    private static Vector3[] GetAabbCorners(Aabb bounds)
+    {
+        var min = bounds.Position;
+        var max = bounds.End;
+        return new[]
+        {
+            new Vector3(min.X, min.Y, min.Z),
+            new Vector3(max.X, min.Y, min.Z),
+            new Vector3(min.X, max.Y, min.Z),
+            new Vector3(max.X, max.Y, min.Z),
+            new Vector3(min.X, min.Y, max.Z),
+            new Vector3(max.X, min.Y, max.Z),
+            new Vector3(min.X, max.Y, max.Z),
+            new Vector3(max.X, max.Y, max.Z)
+        };
+    }
+
+    private static void AddAabb(ref Aabb aggregate, Aabb next, ref bool hasBounds)
+    {
+        if (!hasBounds)
+        {
+            aggregate = next;
+            hasBounds = true;
+            return;
+        }
+
+        var min = aggregate.Position.Min(next.Position);
+        var max = aggregate.End.Max(next.End);
+        aggregate = new Aabb(min, max - min);
+    }
+
+    private void DrawWireBounds(Vector3 center, Vector3 size)
+    {
+        if (_boundsImmediateMesh == null || _boundsMaterial == null)
+            return;
+
+        _boundsImmediateMesh.ClearSurfaces();
+
+        var half = size * 0.5f;
+        var p000 = center + new Vector3(-half.X, -half.Y, -half.Z);
+        var p100 = center + new Vector3(half.X, -half.Y, -half.Z);
+        var p010 = center + new Vector3(-half.X, half.Y, -half.Z);
+        var p110 = center + new Vector3(half.X, half.Y, -half.Z);
+        var p001 = center + new Vector3(-half.X, -half.Y, half.Z);
+        var p101 = center + new Vector3(half.X, -half.Y, half.Z);
+        var p011 = center + new Vector3(-half.X, half.Y, half.Z);
+        var p111 = center + new Vector3(half.X, half.Y, half.Z);
+
+        _boundsImmediateMesh.SurfaceBegin(Mesh.PrimitiveType.Lines, _boundsMaterial);
+
+        // Bottom
+        _boundsImmediateMesh.SurfaceAddVertex(p000); _boundsImmediateMesh.SurfaceAddVertex(p100);
+        _boundsImmediateMesh.SurfaceAddVertex(p100); _boundsImmediateMesh.SurfaceAddVertex(p101);
+        _boundsImmediateMesh.SurfaceAddVertex(p101); _boundsImmediateMesh.SurfaceAddVertex(p001);
+        _boundsImmediateMesh.SurfaceAddVertex(p001); _boundsImmediateMesh.SurfaceAddVertex(p000);
+
+        // Top
+        _boundsImmediateMesh.SurfaceAddVertex(p010); _boundsImmediateMesh.SurfaceAddVertex(p110);
+        _boundsImmediateMesh.SurfaceAddVertex(p110); _boundsImmediateMesh.SurfaceAddVertex(p111);
+        _boundsImmediateMesh.SurfaceAddVertex(p111); _boundsImmediateMesh.SurfaceAddVertex(p011);
+        _boundsImmediateMesh.SurfaceAddVertex(p011); _boundsImmediateMesh.SurfaceAddVertex(p010);
+
+        // Vertical
+        _boundsImmediateMesh.SurfaceAddVertex(p000); _boundsImmediateMesh.SurfaceAddVertex(p010);
+        _boundsImmediateMesh.SurfaceAddVertex(p100); _boundsImmediateMesh.SurfaceAddVertex(p110);
+        _boundsImmediateMesh.SurfaceAddVertex(p101); _boundsImmediateMesh.SurfaceAddVertex(p111);
+        _boundsImmediateMesh.SurfaceAddVertex(p001); _boundsImmediateMesh.SurfaceAddVertex(p011);
+
+        _boundsImmediateMesh.SurfaceEnd();
     }
 
     private void UpdateModeHighlight()
@@ -440,7 +628,6 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
     }
 
     private static Vector3 ToGodotVector(float3 v) => new(v.x, v.y, v.z);
-    private static Vector3 ToGodotVector(float3 v, float w) => new(v.x, v.y, v.z);
 
     public override void Destroy(bool destroyingWorld)
     {
@@ -458,7 +645,7 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
             _yAxisMaterial?.Dispose();
             _zAxisMaterial?.Dispose();
             _highlightMaterial?.Dispose();
-            _boxMesh?.Dispose();
+            _boundsImmediateMesh?.Dispose();
         }
 
         _boundsMesh = null;
@@ -472,7 +659,7 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
         _yAxisMaterial = null;
         _zAxisMaterial = null;
         _highlightMaterial = null;
-        _boxMesh = null;
+        _boundsImmediateMesh = null;
 
         base.Destroy(destroyingWorld);
     }

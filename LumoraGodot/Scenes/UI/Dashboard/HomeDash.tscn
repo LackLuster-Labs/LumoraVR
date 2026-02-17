@@ -14,6 +14,10 @@ corner_radius_top_left = 20
 corner_radius_top_right = 20
 corner_radius_bottom_right = 20
 corner_radius_bottom_left = 20
+content_margin_left = 24
+content_margin_top = 24
+content_margin_right = 24
+content_margin_bottom = 24
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_header"]
 bg_color = Color(0.12, 0.1, 0.18, 0.58)
@@ -151,19 +155,8 @@ corner_radius_top_right = 5
 corner_radius_bottom_right = 5
 corner_radius_bottom_left = 5
 
-[node name="HomeDash" type="Control"]
-unique_name_in_owner = true
+[node name="HomeDash" type="PanelContainer"]
 layout_mode = 3
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-script = ExtResource("2_script")
-
-[node name="Background" type="Panel" parent="."]
-unique_name_in_owner = true
-layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
@@ -171,143 +164,100 @@ grow_horizontal = 2
 grow_vertical = 2
 clip_contents = true
 theme_override_styles/panel = SubResource("StyleBoxFlat_background")
+script = ExtResource("2_script")
 
-[node name="MainContainer" type="MarginContainer" parent="."]
-unique_name_in_owner = true
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/margin_left = 24
-theme_override_constants/margin_top = 24
-theme_override_constants/margin_right = 24
-theme_override_constants/margin_bottom = 24
-
-[node name="VBox" type="VBoxContainer" parent="MainContainer"]
-unique_name_in_owner = true
+[node name="VBox" type="VBoxContainer" parent="."]
 layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
 theme_override_constants/separation = 18
 
-[node name="Header" type="Panel" parent="MainContainer/VBox"]
-unique_name_in_owner = true
+[node name="Header" type="PanelContainer" parent="VBox"]
 custom_minimum_size = Vector2(0, 66)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_header")
+theme_override_constants/content_margin_left = 16
+theme_override_constants/content_margin_top = 6
+theme_override_constants/content_margin_right = 16
+theme_override_constants/content_margin_bottom = 6
 
-[node name="HeaderMargin" type="MarginContainer" parent="MainContainer/VBox/Header"]
-unique_name_in_owner = true
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/margin_left = 16
-theme_override_constants/margin_top = 6
-theme_override_constants/margin_right = 16
-theme_override_constants/margin_bottom = 6
-
-[node name="HeaderContent" type="HBoxContainer" parent="MainContainer/VBox/Header/HeaderMargin"]
-unique_name_in_owner = true
+[node name="HeaderContent" type="HBoxContainer" parent="VBox/Header"]
 layout_mode = 2
 theme_override_constants/separation = 12
 
-[node name="HeaderLeftSpacer" type="Control" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent"]
+[node name="HeaderLeftSpacer" type="Control" parent="VBox/Header/HeaderContent"]
 custom_minimum_size = Vector2(20, 0)
 layout_mode = 2
-unique_name_in_owner = true
 
-[node name="TitleSection" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent"]
-unique_name_in_owner = true
+[node name="TitleSection" type="VBoxContainer" parent="VBox/Header/HeaderContent"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 1
 alignment = 1
 theme_override_constants/separation = 2
 
-[node name="Title" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/TitleSection"]
-unique_name_in_owner = true
+[node name="Title" type="Label" parent="VBox/Header/HeaderContent/TitleSection"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 24
 text = "Lumora"
 
-[node name="Subtitle" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/TitleSection"]
-unique_name_in_owner = true
+[node name="Subtitle" type="Label" parent="VBox/Header/HeaderContent/TitleSection"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.5, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 text = "Home Dashboard"
 
-[node name="UserSectionPanel" type="Panel" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent"]
+[node name="UserSectionPanel" type="PanelContainer" parent="VBox/Header/HeaderContent"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(224, 0)
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_user_section")
+theme_override_constants/content_margin_left = 12
+theme_override_constants/content_margin_top = 8
+theme_override_constants/content_margin_right = 12
+theme_override_constants/content_margin_bottom = 8
 
-[node name="UserSectionMargin" type="MarginContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/UserSectionPanel"]
-unique_name_in_owner = true
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/margin_left = 12
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 12
-theme_override_constants/margin_bottom = 8
-
-[node name="UserSection" type="HBoxContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/UserSectionPanel/UserSectionMargin"]
-unique_name_in_owner = true
+[node name="UserSection" type="HBoxContainer" parent="VBox/Header/HeaderContent/UserSectionPanel"]
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_constants/separation = 10
 
-[node name="UserInfoVBox" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection"]
-unique_name_in_owner = true
+[node name="UserInfoVBox" type="VBoxContainer" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 1
 alignment = 1
 theme_override_constants/separation = 1
 
-[node name="Username" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/UserInfoVBox"]
+[node name="Username" type="Label" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection/UserInfoVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 text = "Guest User"
 horizontal_alignment = 0
 
-[node name="PatreonRole" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/UserInfoVBox"]
+[node name="PatreonRole" type="Label" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection/UserInfoVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 0.9)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Supporter"
 horizontal_alignment = 0
 
-[node name="AvatarContainer" type="CenterContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection"]
-unique_name_in_owner = true
+[node name="AvatarContainer" type="CenterContainer" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection"]
 custom_minimum_size = Vector2(48, 48)
 layout_mode = 2
 size_flags_vertical = 1
 
-[node name="AvatarCircle" type="Panel" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/AvatarContainer"]
-unique_name_in_owner = true
+[node name="AvatarCircle" type="Panel" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection/AvatarContainer"]
 custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_avatar_circle")
 
-[node name="AvatarIcon" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/UserSectionPanel/UserSectionMargin/UserSection/AvatarContainer/AvatarCircle"]
+[node name="AvatarIcon" type="Label" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection/AvatarContainer/AvatarCircle"]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
@@ -316,139 +266,103 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_colors/font_color = Color(0.7, 0.65, 0.85, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 18
 text = "G"
 horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="StorageQuotaPanel" type="Panel" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent"]
+[node name="StorageQuotaPanel" type="PanelContainer" parent="VBox/Header/HeaderContent"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(176, 0)
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
+theme_override_constants/content_margin_left = 10
+theme_override_constants/content_margin_top = 8
+theme_override_constants/content_margin_right = 10
+theme_override_constants/content_margin_bottom = 8
 
-[node name="StorageQuotaMargin" type="MarginContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/StorageQuotaPanel"]
-unique_name_in_owner = true
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/margin_left = 10
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 10
-theme_override_constants/margin_bottom = 8
-
-[node name="StorageQuotaVBox" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/StorageQuotaPanel/StorageQuotaMargin"]
-unique_name_in_owner = true
+[node name="StorageQuotaVBox" type="VBoxContainer" parent="VBox/Header/HeaderContent/StorageQuotaPanel"]
 layout_mode = 2
 alignment = 1
 theme_override_constants/separation = 4
 
-[node name="StorageQuotaTitle" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/StorageQuotaPanel/StorageQuotaMargin/StorageQuotaVBox"]
-unique_name_in_owner = true
+[node name="StorageQuotaTitle" type="Label" parent="VBox/Header/HeaderContent/StorageQuotaPanel/StorageQuotaVBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.62, 0.62, 0.7, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 9
 text = "Storage Quota"
 
-[node name="StorageContainer" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/StorageQuotaPanel/StorageQuotaMargin/StorageQuotaVBox"]
+[node name="StorageContainer" type="VBoxContainer" parent="VBox/Header/HeaderContent/StorageQuotaPanel/StorageQuotaVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 2
 
-[node name="StorageLabel" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/StorageQuotaPanel/StorageQuotaMargin/StorageQuotaVBox/StorageContainer"]
+[node name="StorageLabel" type="Label" parent="VBox/Header/HeaderContent/StorageQuotaPanel/StorageQuotaVBox/StorageContainer"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Storage: -- / --"
 
-[node name="StorageBarBg" type="Panel" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/StorageQuotaPanel/StorageQuotaMargin/StorageQuotaVBox/StorageContainer"]
+[node name="StorageProgress" type="ProgressBar" parent="VBox/Header/HeaderContent/StorageQuotaPanel/StorageQuotaVBox/StorageContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 6)
+custom_minimum_size = Vector2(130, 8)
 layout_mode = 2
-size_flags_horizontal = 10
-theme_override_styles/panel = SubResource("StyleBoxFlat_storage_bg")
+size_flags_horizontal = 3
+show_percentage = false
+max_value = 1.0
+value = 0.0
+theme_override_styles/background = SubResource("StyleBoxFlat_storage_bg")
+theme_override_styles/fill = SubResource("StyleBoxFlat_storage_fill")
 
-[node name="StorageBarFill" type="Panel" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/StorageQuotaPanel/StorageQuotaMargin/StorageQuotaVBox/StorageContainer/StorageBarBg"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(24, 4)
-layout_mode = 0
-offset_left = 1.0
-offset_top = 1.0
-offset_right = 25.0
-offset_bottom = 5.0
-theme_override_styles/panel = SubResource("StyleBoxFlat_storage_fill")
-
-[node name="FPSPanel" type="Panel" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent"]
-unique_name_in_owner = true
+[node name="FPSPanel" type="PanelContainer" parent="VBox/Header/HeaderContent"]
 custom_minimum_size = Vector2(74, 0)
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
+theme_override_constants/content_margin_left = 10
+theme_override_constants/content_margin_top = 8
+theme_override_constants/content_margin_right = 10
+theme_override_constants/content_margin_bottom = 8
 
-[node name="FPSMargin" type="MarginContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/FPSPanel"]
-unique_name_in_owner = true
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/margin_left = 10
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 10
-theme_override_constants/margin_bottom = 8
-
-[node name="FPSVBox" type="VBoxContainer" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/FPSPanel/FPSMargin"]
-unique_name_in_owner = true
+[node name="FPSVBox" type="VBoxContainer" parent="VBox/Header/HeaderContent/FPSPanel"]
 layout_mode = 2
 alignment = 1
 theme_override_constants/separation = 0
 
-[node name="FPSValue" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/FPSPanel/FPSMargin/FPSVBox"]
+[node name="FPSValue" type="Label" parent="VBox/Header/HeaderContent/FPSPanel/FPSVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.3, 0.85, 0.5, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 16
 text = "60"
 horizontal_alignment = 1
 
-[node name="FPSLabel" type="Label" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent/FPSPanel/FPSMargin/FPSVBox"]
-unique_name_in_owner = true
+[node name="FPSLabel" type="Label" parent="VBox/Header/HeaderContent/FPSPanel/FPSVBox"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 9
 text = "FPS"
 horizontal_alignment = 1
 
-[node name="HeaderRightSpacer" type="Control" parent="MainContainer/VBox/Header/HeaderMargin/HeaderContent"]
+[node name="HeaderRightSpacer" type="Control" parent="VBox/Header/HeaderContent"]
 custom_minimum_size = Vector2(8, 0)
 layout_mode = 2
-unique_name_in_owner = true
 
-[node name="ContentArea" type="HBoxContainer" parent="MainContainer/VBox"]
-unique_name_in_owner = true
+[node name="ContentArea" type="HBoxContainer" parent="VBox"]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 20
 
-[node name="MainContent" type="Panel" parent="MainContainer/VBox/ContentArea"]
+[node name="MainContent" type="Panel" parent="VBox/ContentArea"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 clip_contents = true
 theme_override_styles/panel = SubResource("StyleBoxFlat_panel")
 
-[node name="ContentMargin" type="MarginContainer" parent="MainContainer/VBox/ContentArea/MainContent"]
+[node name="ContentMargin" type="MarginContainer" parent="VBox/ContentArea/MainContent"]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
@@ -461,46 +375,40 @@ theme_override_constants/margin_top = 20
 theme_override_constants/margin_right = 20
 theme_override_constants/margin_bottom = 20
 
-[node name="ContentVBox" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin"]
+[node name="ContentVBox" type="VBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_constants/separation = 20
 
-[node name="WelcomeSection" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
-unique_name_in_owner = true
+[node name="WelcomeSection" type="VBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="WelcomeTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/WelcomeSection"]
+[node name="WelcomeTitle" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/WelcomeSection"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 20
 text = "Welcome back!"
 
-[node name="WelcomeSubtitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/WelcomeSection"]
-unique_name_in_owner = true
+[node name="WelcomeSubtitle" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/WelcomeSection"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.5, 0.6, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 text = "Ready to explore new worlds and connect with friends?"
 
-[node name="QuickActions" type="HBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
-unique_name_in_owner = true
+[node name="QuickActions" type="HBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
 layout_mode = 2
 theme_override_constants/separation = 16
 
-[node name="JoinWorld" type="Panel" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
+[node name="JoinWorld" type="Panel" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(180, 100)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_card")
 
-[node name="JoinWorldCardContent" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld"]
-unique_name_in_owner = true
+[node name="JoinWorldCardContent" type="VBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -509,33 +417,28 @@ grow_horizontal = 2
 grow_vertical = 2
 alignment = 1
 
-[node name="JoinWorldCardTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld/JoinWorldCardContent"]
-unique_name_in_owner = true
+[node name="JoinWorldCardTitle" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld/JoinWorldCardContent"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 14
 text = "Join World"
 horizontal_alignment = 1
 
-[node name="JoinWorldCardDesc" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld/JoinWorldCardContent"]
-unique_name_in_owner = true
+[node name="JoinWorldCardDesc" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/JoinWorld/JoinWorldCardContent"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "Enter a session"
 horizontal_alignment = 1
 
-[node name="CreateWorld" type="Panel" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
+[node name="CreateWorld" type="Panel" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(180, 100)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_card")
 
-[node name="CreateWorldCardContent" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld"]
-unique_name_in_owner = true
+[node name="CreateWorldCardContent" type="VBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -544,33 +447,28 @@ grow_horizontal = 2
 grow_vertical = 2
 alignment = 1
 
-[node name="CreateWorldCardTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld/CreateWorldCardContent"]
-unique_name_in_owner = true
+[node name="CreateWorldCardTitle" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld/CreateWorldCardContent"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.3, 0.75, 0.55, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 14
 text = "Create World"
 horizontal_alignment = 1
 
-[node name="CreateWorldCardDesc" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld/CreateWorldCardContent"]
-unique_name_in_owner = true
+[node name="CreateWorldCardDesc" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/CreateWorld/CreateWorldCardContent"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "Start a new session"
 horizontal_alignment = 1
 
-[node name="BrowseAvatars" type="Panel" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
+[node name="BrowseAvatars" type="Panel" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(180, 100)
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_styles/panel = SubResource("StyleBoxFlat_card")
 
-[node name="BrowseAvatarsCardContent" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars"]
-unique_name_in_owner = true
+[node name="BrowseAvatarsCardContent" type="VBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -579,69 +477,56 @@ grow_horizontal = 2
 grow_vertical = 2
 alignment = 1
 
-[node name="BrowseAvatarsCardTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars/BrowseAvatarsCardContent"]
-unique_name_in_owner = true
+[node name="BrowseAvatarsCardTitle" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars/BrowseAvatarsCardContent"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.85, 0.55, 0.25, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 14
 text = "Avatars"
 horizontal_alignment = 1
 
-[node name="BrowseAvatarsCardDesc" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars/BrowseAvatarsCardContent"]
-unique_name_in_owner = true
+[node name="BrowseAvatarsCardDesc" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/QuickActions/BrowseAvatars/BrowseAvatarsCardContent"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "Change your look"
 horizontal_alignment = 1
 
-[node name="RecentSection" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
-unique_name_in_owner = true
+[node name="RecentSection" type="VBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox"]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 12
 
-[node name="RecentHeader" type="HBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection"]
-unique_name_in_owner = true
+[node name="RecentHeader" type="HBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection"]
 layout_mode = 2
 
-[node name="RecentTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentHeader"]
-unique_name_in_owner = true
+[node name="RecentTitle" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentHeader"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_colors/font_color = Color(0.8, 0.8, 0.85, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 14
 text = "Recent Activity"
 
-[node name="ViewAll" type="Button" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentHeader"]
-unique_name_in_owner = true
+[node name="ViewAll" type="Button" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentHeader"]
 custom_minimum_size = Vector2(80, 30)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
 theme_override_colors/font_hover_color = Color(0.6, 0.5, 1, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 text = "View All"
 
-[node name="RecentList" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection"]
-unique_name_in_owner = true
+[node name="RecentList" type="VBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection"]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 8
 
-[node name="RecentItem1" type="Panel" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList"]
-unique_name_in_owner = true
+[node name="RecentItem1" type="Panel" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList"]
 custom_minimum_size = Vector2(0, 50)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_card")
 
-[node name="ItemContent" type="HBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1"]
-unique_name_in_owner = true
+[node name="ItemContent" type="HBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -650,42 +535,34 @@ grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 12
 
-[node name="Margin" type="Control" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent"]
-unique_name_in_owner = true
+[node name="Margin" type="Control" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent"]
 custom_minimum_size = Vector2(16, 0)
 layout_mode = 2
 
-[node name="Info" type="VBoxContainer" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent"]
-unique_name_in_owner = true
+[node name="Info" type="VBoxContainer" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 1
 alignment = 1
 
-[node name="ItemTitle" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent/Info"]
-unique_name_in_owner = true
+[node name="ItemTitle" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent/Info"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.85, 0.85, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 text = "No recent activity"
 
-[node name="ItemDesc" type="Label" parent="MainContainer/VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent/Info"]
-unique_name_in_owner = true
+[node name="ItemDesc" type="Label" parent="VBox/ContentArea/MainContent/ContentMargin/ContentVBox/RecentSection/RecentList/RecentItem1/ItemContent/Info"]
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 10
 text = "Your recent worlds and sessions will appear here"
 
-[node name="StatusBar" type="Panel" parent="MainContainer/VBox"]
-unique_name_in_owner = true
+[node name="StatusBar" type="Panel" parent="VBox"]
 custom_minimum_size = Vector2(0, 74)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_bottom_bar")
 
-[node name="StatusMargin" type="MarginContainer" parent="MainContainer/VBox/StatusBar"]
-unique_name_in_owner = true
+[node name="StatusMargin" type="MarginContainer" parent="VBox/StatusBar"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -697,25 +574,21 @@ theme_override_constants/margin_top = 7
 theme_override_constants/margin_right = 10
 theme_override_constants/margin_bottom = 7
 
-[node name="StatusContent" type="HBoxContainer" parent="MainContainer/VBox/StatusBar/StatusMargin"]
-unique_name_in_owner = true
+[node name="StatusContent" type="HBoxContainer" parent="VBox/StatusBar/StatusMargin"]
 layout_mode = 2
 theme_override_constants/separation = 10
 
-[node name="StatusLeftSpacer" type="Control" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent"]
+[node name="StatusLeftSpacer" type="Control" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 custom_minimum_size = Vector2(6, 0)
 layout_mode = 2
-unique_name_in_owner = true
 
-[node name="ConnectionPanel" type="Panel" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent"]
-unique_name_in_owner = true
+[node name="ConnectionPanel" type="Panel" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 custom_minimum_size = Vector2(136, 0)
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
 
-[node name="ConnectionCenter" type="CenterContainer" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel"]
-unique_name_in_owner = true
+[node name="ConnectionCenter" type="CenterContainer" parent="VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -723,45 +596,38 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="ConnectionStatus" type="HBoxContainer" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter"]
-unique_name_in_owner = true
+[node name="ConnectionStatus" type="HBoxContainer" parent="VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="DotContainer" type="CenterContainer" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus"]
-unique_name_in_owner = true
+[node name="DotContainer" type="CenterContainer" parent="VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus"]
 custom_minimum_size = Vector2(10, 10)
 layout_mode = 2
 
-[node name="StatusDot" type="Panel" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus/DotContainer"]
-unique_name_in_owner = true
+[node name="StatusDot" type="Panel" parent="VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus/DotContainer"]
 custom_minimum_size = Vector2(10, 10)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_status_dot")
 
-[node name="StatusText" type="Label" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus"]
+[node name="StatusText" type="Label" parent="VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.6, 0.6, 0.65, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 text = "Connected"
 
-[node name="SpacerLeft" type="Control" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent"]
-unique_name_in_owner = true
+[node name="SpacerLeft" type="Control" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="NavBarPanel" type="Panel" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent"]
-unique_name_in_owner = true
+[node name="NavBarPanel" type="Panel" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 custom_minimum_size = Vector2(640, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
 
-[node name="NavBarMargin" type="MarginContainer" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel"]
-unique_name_in_owner = true
+[node name="NavBarMargin" type="MarginContainer" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -773,134 +639,122 @@ theme_override_constants/margin_top = 8
 theme_override_constants/margin_right = 8
 theme_override_constants/margin_bottom = 8
 
-[node name="NavBar" type="HBoxContainer" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin"]
-unique_name_in_owner = true
+[node name="NavBar" type="HBoxContainer" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin"]
 layout_mode = 2
 theme_override_constants/separation = 8
 
-[node name="BtnHome" type="Button" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
+[node name="BtnHome" type="Button" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
 custom_minimum_size = Vector2(82, 36)
 layout_mode = 2
 size_flags_horizontal = 0
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_pressed")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "Home"
 
-[node name="BtnWorlds" type="Button" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
+[node name="BtnWorlds" type="Button" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
 custom_minimum_size = Vector2(82, 36)
 layout_mode = 2
 size_flags_horizontal = 0
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "Worlds"
 
-[node name="BtnFriends" type="Button" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
+[node name="BtnFriends" type="Button" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
 custom_minimum_size = Vector2(82, 36)
 layout_mode = 2
 size_flags_horizontal = 0
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "Friends"
 
-[node name="BtnGroups" type="Button" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
+[node name="BtnGroups" type="Button" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
 custom_minimum_size = Vector2(82, 36)
 layout_mode = 2
 size_flags_horizontal = 0
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "Groups"
 
-[node name="BtnInventory" type="Button" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
+[node name="BtnInventory" type="Button" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
 custom_minimum_size = Vector2(82, 36)
 layout_mode = 2
 size_flags_horizontal = 0
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "Inventory"
 
-[node name="BtnSettings" type="Button" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
+[node name="BtnSettings" type="Button" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
 custom_minimum_size = Vector2(82, 36)
 layout_mode = 2
 size_flags_horizontal = 0
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "Settings"
 
-[node name="BtnExit" type="Button" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
+[node name="BtnExit" type="Button" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar"]
 custom_minimum_size = Vector2(82, 36)
 layout_mode = 2
 size_flags_horizontal = 0
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.95, 0.58, 0.58, 1)
 theme_override_colors/font_hover_color = Color(1, 0.7, 0.7, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_normal")
 theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "Exit"
 
-[node name="SpacerRight" type="Control" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent"]
-unique_name_in_owner = true
+[node name="SpacerRight" type="Control" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="VersionPanel" type="Panel" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent"]
-unique_name_in_owner = true
+[node name="VersionPanel" type="PanelContainer" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 custom_minimum_size = Vector2(150, 0)
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
+theme_override_constants/content_margin_left = 10
+theme_override_constants/content_margin_top = 8
+theme_override_constants/content_margin_right = 10
+theme_override_constants/content_margin_bottom = 8
 
-[node name="VersionCenter" type="CenterContainer" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/VersionPanel"]
-unique_name_in_owner = true
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-
-[node name="Version" type="Label" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent/VersionPanel/VersionCenter"]
+[node name="Version" type="Label" parent="VBox/StatusBar/StatusMargin/StatusContent/VersionPanel"]
 unique_name_in_owner = true
 layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
 theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
-theme_override_fonts/font = ExtResource("1_font")
 theme_override_font_sizes/font_size = 11
 text = "Lumora v0.1.0-dev"
+horizontal_alignment = 1
+vertical_alignment = 1
 
-[node name="StatusRightSpacer" type="Control" parent="MainContainer/VBox/StatusBar/StatusMargin/StatusContent"]
+[node name="StatusRightSpacer" type="Control" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 custom_minimum_size = Vector2(6, 0)
 layout_mode = 2
-unique_name_in_owner = true
+
 
