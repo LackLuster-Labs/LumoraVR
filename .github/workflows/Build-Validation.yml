@@ -3,9 +3,16 @@ on:
   pull_request:
     branches: 
       - main
+  workflow_dispatch:
 jobs:
   build-check:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+    env:
+      HAS_PAT: ${{ secrets.GH_PAT != '' }}
     
     steps:
     - name: Checkout repository
@@ -13,55 +20,58 @@ jobs:
       with:
         fetch-depth: 0
         submodules: 'false'
-        token: ${{ secrets.GH_PAT }}
-    
-    - name: Initialize submodules with PAT
-      run: |
-        git config --global url."https://${{ secrets.GH_PAT }}:x-oauth-basic@github.com/".insteadOf "https://github.com/"
-        git submodule update --init --recursive
+        token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
     
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
-        dotnet-version: '9.0.x'
+        dotnet-version: '10.0.x'
     
     - name: Restore dependencies
+      id: restore
       run: dotnet restore LumoraGodot/Aquamarine.sln
       continue-on-error: true
     
     - name: Build solution
+      if: steps.restore.outcome == 'success'
       id: build
       run: dotnet build LumoraGodot/Aquamarine.sln --no-restore --configuration ExportRelease
       continue-on-error: true
     
     - name: Add build-error label if build fails
-      if: steps.build.outcome == 'failure'
+      if: steps.build.outcome != 'success'
+      continue-on-error: true
       uses: actions/github-script@v7
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
-          github.rest.issues.addLabels({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            labels: ['build-error']
-          })
+          if (context.issue.number) {
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['build-error']
+            })
+          }
           
     - name: Add build-success label if build succeeds
       if: steps.build.outcome == 'success'
+      continue-on-error: true
       uses: actions/github-script@v7
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
         script: |
-          github.rest.issues.addLabels({
-            issue_number: context.issue.number,
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            labels: ['build-success']
-          })
+          if (context.issue.number) {
+            github.rest.issues.addLabels({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: ['build-success']
+            })
+          }
     
     - name: Fail if build errors found
-      if: steps.build.outcome == 'failure'
+      if: steps.build.outcome != 'success'
       run: |
         echo "::error::Build failed. Please fix the build errors before merging."
         exit 1
