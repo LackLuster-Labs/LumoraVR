@@ -144,6 +144,10 @@ public class RemoteAudioManager
         if (mixer is External.Audio.Godot.IAudioCaputreProvider mixerWithInput)
         {
             mixerWithInput.InitializeInput();
+            if (mixerWithInput.TryGetCapureEffect(out var effect))
+            {
+                MicCapture = effect;
+            }
         }
     }
 
