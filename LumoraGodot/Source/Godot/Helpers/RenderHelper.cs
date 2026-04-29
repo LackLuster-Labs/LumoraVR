@@ -18,16 +18,16 @@ public static class RenderHelper
     /// </summary>
     public static Action<Camera3D> RegisterCamera;
 
-    // Layer names (Godot render layer system, but we can use these as constants)
-    public const string PRIVATE_LAYER = "Private";
-    public const string TEMP_LAYER = "Temp";
-    public const string HIDDEN_LAYER = "Hidden";
-    public const string OVERLAY_LAYER = "Overlay";
+    // Render layer bit assignments. Bit 0 (layer 1) is the default "public" layer.
+    // Cameras can mask layers via VisualInstance3D.Layers / Camera3D.CullMask.
+    public const int PUBLIC_LAYER = 1 << 0;
+    public const int PRIVATE_LAYER = 1 << 1;
+    public const int TEMP_LAYER = 1 << 2;
+    public const int HIDDEN_LAYER = 1 << 3;
+    public const int OVERLAY_LAYER = 1 << 4;
 
-    // TODO: Godot uses VisualServer render layers (1-20)
-    // These would need to be configured in project settings
-    // public static int PUBLIC_RENDER_MASK => ~GetLayerMask("Private", "Temp", "Overlay", "Hidden");
-    // public static int PRIVATE_RENDER_MASK => ~GetLayerMask("Temp", "Overlay", "Hidden");
+    public const int PUBLIC_RENDER_MASK = ~(PRIVATE_LAYER | TEMP_LAYER | HIDDEN_LAYER | OVERLAY_LAYER);
+    public const int PRIVATE_RENDER_MASK = ~(TEMP_LAYER | HIDDEN_LAYER | OVERLAY_LAYER);
 
     /// <summary>
     /// Set render layer for slot hierarchy.
@@ -78,18 +78,15 @@ public static class RenderHelper
     /// </summary>
     public static void SetHierarchyLayer(Node3D root, int layer, Dictionary<Node3D, int> previous)
     {
-        // TODO: Godot layer system implementation
-        // In Godot, layers are set via VisualInstance3D.Layers property
-        // if (root is VisualInstance3D visual)
-        // {
-        //     if (!previous.ContainsKey(root) && visual.Layers != layer)
-        //     {
-        //         previous.Add(root, (int)visual.Layers);
-        //         visual.Layers = (uint)layer;
-        //     }
-        // }
+        if (root is VisualInstance3D visual && visual.Layers != (uint)layer)
+        {
+            if (!previous.ContainsKey(root))
+            {
+                previous.Add(root, (int)visual.Layers);
+            }
+            visual.Layers = (uint)layer;
+        }
 
-        // Recurse to children
         foreach (Node child in root.GetChildren())
         {
             if (child is Node3D child3D)
@@ -104,17 +101,11 @@ public static class RenderHelper
     /// </summary>
     public static void RestoreHierarchyLayer(Node3D root, Dictionary<Node3D, int> previous)
     {
-        // TODO: Godot layer system implementation
-        // if (previous.TryGetValue(root, out int previousLayer))
-        // {
-        //     if (root is VisualInstance3D visual && visual.Layers == previousLayer)
-        //         return;
-        //
-        //     if (root is VisualInstance3D vis)
-        //         vis.Layers = (uint)previousLayer;
-        // }
+        if (root is VisualInstance3D visual && previous.TryGetValue(root, out int previousLayer))
+        {
+            visual.Layers = (uint)previousLayer;
+        }
 
-        // Recurse to children
         foreach (Node child in root.GetChildren())
         {
             if (child is Node3D child3D)
@@ -131,9 +122,10 @@ public static class RenderHelper
     {
         foreach (var pair in previous)
         {
-            // TODO: Godot layer system implementation
-            // if (pair.Key is VisualInstance3D visual)
-            //     visual.Layers = (uint)pair.Value;
+            if (pair.Key != null && GodotObject.IsInstanceValid(pair.Key) && pair.Key is VisualInstance3D visual)
+            {
+                visual.Layers = (uint)pair.Value;
+            }
         }
     }
 }
