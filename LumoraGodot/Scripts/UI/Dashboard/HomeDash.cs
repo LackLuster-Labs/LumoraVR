@@ -61,6 +61,7 @@ public partial class HomeDash : PanelContainer
     private Label? _avatarIconLabel;
     private Label? _welcomeTitle;
     private Label? _statusText;
+    private Panel? _statusDot;
     private Label? _versionLabel;
     private Label? _fpsValueLabel;
 
@@ -102,6 +103,7 @@ public partial class HomeDash : PanelContainer
         // Get other labels
         _welcomeTitle = GetNodeOrNull<Label>("VBox/ContentArea/MainContent/ContentMargin/ContentVBox/WelcomeSection/WelcomeTitle");
         _statusText = GetNodeOrNull<Label>("VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus/StatusText");
+        _statusDot = GetNodeOrNull<Panel>("VBox/StatusBar/StatusMargin/StatusContent/ConnectionPanel/ConnectionCenter/ConnectionStatus/DotContainer/StatusDot");
         _versionLabel = GetNodeOrNull<Label>("VBox/StatusBar/StatusMargin/StatusContent/VersionPanel/Version");
         _fpsValueLabel = GetNodeOrNull<Label>("VBox/Header/HeaderContent/FPSPanel/FPSVBox/FPSValue");
 
@@ -325,14 +327,12 @@ public partial class HomeDash : PanelContainer
         switch (cardType)
         {
             case "JoinWorld":
-                // TODO: Show world browser
                 OnNavButtonPressed("Worlds");
                 break;
             case "CreateWorld":
                 // TODO: Show create world dialog
                 break;
             case "Avatars":
-                // TODO: Show avatar selector
                 OnNavButtonPressed("Inventory");
                 break;
         }
@@ -571,7 +571,12 @@ public partial class HomeDash : PanelContainer
         if (_statusText != null)
         {
             _statusText.Text = status;
-            // TODO: Update status dot color based on isConnected
+        }
+        if (_statusDot != null)
+        {
+            _statusDot.SelfModulate = isConnected
+                ? new Color(0.3f, 0.85f, 0.5f)
+                : new Color(0.85f, 0.3f, 0.3f);
         }
     }
 

@@ -103,8 +103,7 @@ public class BoxMesh : ProceduralMesh
     /// </summary>
     public void CreateBoxCollider()
     {
-        // TODO: Implement when BoxCollider component exists
-        // var collider = Slot.AttachComponent<BoxCollider>();
-        // collider.Size.DriveFrom(Size);
+        var collider = Slot.AttachComponent<BoxCollider>();
+        collider.Size.CreateDrive(() => Size.Value);
     }
 }
