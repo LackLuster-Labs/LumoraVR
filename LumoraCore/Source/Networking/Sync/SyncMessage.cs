@@ -61,6 +61,7 @@ public abstract class SyncMessage : IDisposable
             MessageType.Confirmation => BinaryMessageBatch.Decode(raw.Data) as ConfirmationMessage,
             MessageType.Control => ControlMessage.Decode(reader),
             MessageType.Stream => StreamMessage.Decode(reader),
+            MessageType.RawFrame => RawFrameMessage.Decode(reader),
             _ => throw new InvalidOperationException($"Unknown message type: {messageType}")
         };
 

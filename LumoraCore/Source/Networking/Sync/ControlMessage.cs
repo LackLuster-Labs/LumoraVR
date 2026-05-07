@@ -74,12 +74,8 @@ public class ControlMessage : SyncMessage
         var type = (Message)reader.ReadByte();
         var msg = new ControlMessage(type);
 
-        var payloadLength = (int)reader.Read7BitEncodedUInt64();
-        if (payloadLength > 0)
-        {
-            msg.Payload = reader.ReadBytes(payloadLength);
-        }
-
+        // Bounded read: peer-declared payload length is capped before allocation.
+        msg.Payload = reader.ReadBoundedBytes7Bit(NetworkLimits.MaxControlMessagePayload);
         return msg;
     }
 }

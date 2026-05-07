@@ -733,7 +733,7 @@ layout_mode = 2
 size_flags_horizontal = 3
 
 [node name="VersionPanel" type="PanelContainer" parent="VBox/StatusBar/StatusMargin/StatusContent"]
-custom_minimum_size = Vector2(136, 0)
+custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
@@ -749,13 +749,12 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 theme_override_colors/font_color = Color(0.5, 0.5, 0.55, 1)
 theme_override_font_sizes/font_size = 10
-text = "Lumora v0.1.0-dev"
+text = "Lumora v0.0.0-dev"
 horizontal_alignment = 1
 vertical_alignment = 1
 
 [node name="StatusRightSpacer" type="Control" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 custom_minimum_size = Vector2(6, 0)
 layout_mode = 2
-
 
 

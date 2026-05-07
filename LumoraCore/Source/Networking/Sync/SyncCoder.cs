@@ -59,7 +59,16 @@ public static class SyncCoder
         [typeof(float)] = r => r.ReadSingle(),
         [typeof(double)] = r => r.ReadDouble(),
         [typeof(string)] = r => r.ReadString(),
-        [typeof(Uri)] = r => { var s = r.ReadString(); return string.IsNullOrEmpty(s) ? null : new Uri(s); },
+        [typeof(Uri)] = r =>
+        {
+            // Bound the string before alloc, then use TryCreate so a malformed peer
+            // URI returns null instead of throwing. The outer Decode<T> catch tries
+            // to "resync" by reading a bool, which would actually desync the stream
+            // for Uri (its wire format is length-prefixed text, not a marker).
+            var s = r.ReadBoundedString(NetworkLimits.MaxAssetUriBytes);
+            if (string.IsNullOrEmpty(s)) return null!;
+            return Uri.TryCreate(s, UriKind.RelativeOrAbsolute, out var u) ? u : null!;
+        },
         [typeof(float2)] = r => new float2(r.ReadSingle(), r.ReadSingle()),
         [typeof(float3)] = r => new float3(r.ReadSingle(), r.ReadSingle(), r.ReadSingle()),
         [typeof(float4)] = r => new float4(r.ReadSingle(), r.ReadSingle(), r.ReadSingle(), r.ReadSingle()),

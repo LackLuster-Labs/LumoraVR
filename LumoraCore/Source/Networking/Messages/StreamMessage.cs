@@ -3,6 +3,7 @@
 
 using System.Collections.Generic;
 using System.IO;
+using Lumora.Core.Networking;
 
 namespace Lumora.Core.Networking.Messages;
 
@@ -42,6 +43,11 @@ public class StreamMessage
     {
         var message = new StreamMessage();
         int count = reader.ReadInt32();
+
+        // Cap entry count: an attacker could otherwise send count=int.MaxValue
+        // and walk us off the end of the stream while allocating a giant List.
+        if (count < 0 || count > NetworkLimits.MaxStreamEntriesPerMessage)
+            throw new InvalidDataException($"StreamMessage entry count {count} out of bounds (cap {NetworkLimits.MaxStreamEntriesPerMessage}).");
 
         for (int i = 0; i < count; i++)
         {
@@ -86,7 +92,9 @@ public struct StreamEntry
         {
             UserID = reader.ReadUInt64(),
             StreamID = reader.ReadInt32(),
-            Data = reader.ReadBytes(reader.ReadInt32())
+            // Bounded: stream entries are high-frequency tracking/audio payloads;
+            // anything past MaxStreamEntryData is malicious or a bug.
+            Data = reader.ReadBoundedBytesInt32(NetworkLimits.MaxStreamEntryData)
         };
     }
 }

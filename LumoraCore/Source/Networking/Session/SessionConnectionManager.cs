@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
 using Lumora.Core;
+using Lumora.Core.Networking;
 using Lumora.Core.Networking.LNL;
 using Lumora.Core.Networking.Sync;
 using LegacyJoinGrantData = Lumora.Core.Networking.Messages.JoinGrantData;
@@ -25,6 +26,7 @@ public class SessionConnectionManager : IDisposable
     private readonly Dictionary<IConnection, User> _connectionToUser = new();
     private readonly Dictionary<User, IConnection> _userToConnection = new();
     private readonly HashSet<IConnection> _pendingConnections = new(); // Connections waiting for JoinRequest
+    private readonly Dictionary<string, int> _pendingByIp = new();     // IP → count of pending connections
 
     public Session Session { get; private set; }
     public World World => Session?.World;
@@ -171,15 +173,39 @@ public class SessionConnectionManager : IDisposable
 
     private void OnPeerConnected(LNLPeer peer)
     {
-        LumoraLogger.Log($"Peer connected: {peer.Identifier}");
+        var ip = GetIpKey(peer);
 
-        peer.DataReceived += (data, length) => OnConnectionDataReceived(peer, data, length);
-
-        // Add to pending connections - will send JoinGrant when JoinRequest is received
+        // Cap both total pending connections and pending per source IP. Without
+        // this, a single attacker can open thousands of LNL connections that sit
+        // forever before sending JoinRequest and exhaust host memory/sockets.
+        bool admit;
         lock (_lock)
         {
-            _pendingConnections.Add(peer);
+            if (_pendingConnections.Count >= NetworkLimits.MaxPendingConnections)
+            {
+                admit = false;
+            }
+            else if (_pendingByIp.TryGetValue(ip, out var perIp) && perIp >= NetworkLimits.MaxPendingPerIP)
+            {
+                admit = false;
+            }
+            else
+            {
+                admit = true;
+                _pendingConnections.Add(peer);
+                _pendingByIp[ip] = _pendingByIp.TryGetValue(ip, out var n) ? n + 1 : 1;
+            }
         }
+
+        if (!admit)
+        {
+            LumoraLogger.Warn($"Peer {peer.Identifier} from {ip} rejected: pending-connection limit reached.");
+            peer.Close();
+            return;
+        }
+
+        LumoraLogger.Log($"Peer connected: {peer.Identifier}");
+        peer.DataReceived += (data, length) => OnConnectionDataReceived(peer, data, length);
         LumoraLogger.Log($"Peer {peer.Identifier} added to pending - waiting for JoinRequest");
     }
 
@@ -191,7 +217,7 @@ public class SessionConnectionManager : IDisposable
 
         lock (_lock)
         {
-            _pendingConnections.Remove(peer);
+            RemovePendingLocked(peer);
             if (_connectionToUser.TryGetValue(peer, out var user))
             {
                 _connectionToUser.Remove(peer);
@@ -201,6 +227,24 @@ public class SessionConnectionManager : IDisposable
         }
     }
 
+    /// <summary>Remove a connection from the pending set and decrement its per-IP count. Caller must hold _lock.</summary>
+    private bool RemovePendingLocked(IConnection connection)
+    {
+        if (!_pendingConnections.Remove(connection))
+            return false;
+
+        var ip = GetIpKey(connection);
+        if (_pendingByIp.TryGetValue(ip, out var n))
+        {
+            if (n <= 1) _pendingByIp.Remove(ip);
+            else _pendingByIp[ip] = n - 1;
+        }
+        return true;
+    }
+
+    private static string GetIpKey(IConnection connection)
+        => connection?.IP?.ToString() ?? connection?.Identifier ?? "<unknown>";
+
     /// <summary>
     /// Handle incoming JoinRequest from client.
     /// </summary>
@@ -209,7 +253,7 @@ public class SessionConnectionManager : IDisposable
         bool isPending;
         lock (_lock)
         {
-            isPending = _pendingConnections.Remove(connection);
+            isPending = RemovePendingLocked(connection);
         }
 
         if (!isPending)
@@ -455,6 +499,7 @@ public class SessionConnectionManager : IDisposable
         lock (_lock)
         {
             _pendingConnections.Clear();
+            _pendingByIp.Clear();
             _connectionToUser.Clear();
             _userToConnection.Clear();
         }

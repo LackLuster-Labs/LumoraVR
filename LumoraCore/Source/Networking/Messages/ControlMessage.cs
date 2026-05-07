@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System.IO;
+using Lumora.Core.Networking;
 
 namespace Lumora.Core.Networking.Messages;
 
@@ -86,12 +87,9 @@ public class ControlMessage
             SubType = (ControlMessageType)reader.ReadByte()
         };
 
-        int dataLength = reader.ReadInt32();
-        if (dataLength > 0)
-        {
-            message.Data = reader.ReadBytes(dataLength);
-        }
-
+        // Bounded read: a peer cannot make us allocate >MaxControlMessagePayload
+        // by declaring a huge length. Empty payloads are allowed (length == 0).
+        message.Data = reader.ReadBoundedBytesInt32(NetworkLimits.MaxControlMessagePayload);
         return message;
     }
 }

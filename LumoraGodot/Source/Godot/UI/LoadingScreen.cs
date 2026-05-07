@@ -3,6 +3,7 @@
 
 ﻿using Godot;
 using System;
+using Lumora.Core;
 
 namespace Lumora.Source.Godot.UI;
 
@@ -18,6 +19,7 @@ public partial class LoadingScreen : Control
 	private ProgressBar _progressBar;
 	private AnimationPlayer _animationPlayer;
 	private Control _loadingSpinner;
+	private Label _versionLabel;
 
 	// ===== STATE =====
 	private float _targetProgress = 0f;
@@ -41,9 +43,9 @@ public partial class LoadingScreen : Control
 		_statusLabel = GetNode<Label>("CenterContainer/VBoxContainer/ProgressContainer/StatusLabel");
 		_percentageLabel = GetNode<Label>("CenterContainer/VBoxContainer/ProgressContainer/PercentageLabel");
 		_progressBar = GetNode<ProgressBar>("CenterContainer/VBoxContainer/ProgressContainer/ProgressBarContainer/ProgressBar");
+		_versionLabel = GetNode<Label>("VersionLabel");
 
-
-
+		_versionLabel.Text = $"Lumora v{BuildInfo.Version}";
 		// Initialize progress
 		UpdateProgressDisplay(0f);
 	}

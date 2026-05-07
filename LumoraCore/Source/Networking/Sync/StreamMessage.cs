@@ -67,8 +67,8 @@ public class StreamMessage : SyncMessage
         msg.StreamTime = reader.ReadDouble();
         msg.StreamGroup = reader.ReadUInt16();
 
-        var length = (int)reader.Read7BitEncodedUInt64();
-        var data = reader.ReadBytes(length);
+        // Bounded: peer-declared payload size is capped before allocation.
+        var data = reader.ReadBoundedBytes7Bit(NetworkLimits.MaxStreamMessageData);
         msg._memoryStream = new MemoryStream(data);
 
         return msg;

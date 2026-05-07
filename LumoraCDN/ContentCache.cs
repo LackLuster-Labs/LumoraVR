@@ -81,8 +81,16 @@ public sealed class ContentCache : IDisposable
         if (File.Exists(diskPath))
         {
             var bytes = await File.ReadAllBytesAsync(diskPath, ct);
-            Store(hash, bytes, persisted: true);
-            return bytes;
+            // Re-verify on read: on-disk files can be tampered with externally or
+            // left half-written by older versions of Persist. A mismatch means the
+            // entry is poisoned; drop it and fall through to a fresh fetch.
+            if (string.Equals(ContentHash.FromBytes(bytes), hash, StringComparison.OrdinalIgnoreCase))
+            {
+                Store(hash, bytes, persisted: true);
+                return bytes;
+            }
+
+            try { File.Delete(diskPath); } catch { }
         }
 
         // dedupe concurrent requests
@@ -174,6 +182,12 @@ public sealed class ContentCache : IDisposable
         if (!result.Success || result.Data == null)
             return null;
 
+        // The lumora:// scheme is content-addressed: bytes whose SHA does not match
+        // the requested hash are tampered or corrupt and must never enter the cache.
+        var actualHash = ContentHash.FromBytes(result.Data);
+        if (!string.Equals(actualHash, hash, StringComparison.OrdinalIgnoreCase))
+            return null;
+
         Store(hash, result.Data, persisted: false);
         await Persist(hash, result.Data);
 
@@ -253,7 +267,20 @@ public sealed class ContentCache : IDisposable
         if (dir != null)
             Directory.CreateDirectory(dir);
 
-        await File.WriteAllBytesAsync(path, bytes);
+        // Atomic write: a crash mid-WriteAllBytesAsync would leave a half-written
+        // file that later loads as silently-corrupt bytes. Write to a temp sibling
+        // and rename so the target either has the full payload or doesn't exist.
+        var tempPath = path + ".tmp." + Guid.NewGuid().ToString("N");
+        try
+        {
+            await File.WriteAllBytesAsync(tempPath, bytes);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { }
+            throw;
+        }
     }
 
     // shard into subdirs using first 2 chars

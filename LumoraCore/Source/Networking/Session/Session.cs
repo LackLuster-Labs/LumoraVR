@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Lumora.Core;
 using Lumora.Core.Networking.Discovery;
 using Lumora.Core.Networking.LNL;
+using Lumora.Core.Networking.Streams;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
 namespace Lumora.Core.Networking.Session;
@@ -37,6 +38,21 @@ public class Session : IDisposable
     /// Event triggered when session is disconnected.
     /// </summary>
     public event Action OnDisconnected;
+
+    /// <summary>
+    /// Callback fired when a <see cref="RawFrameMessage"/> arrives, after sender
+    /// validation and authority-side relay. Runs on the sync thread — keep the
+    /// callback fast (push to a lock-free queue and return). The
+    /// <paramref name="payload"/> memory is only valid for the duration of the
+    /// invocation; copy bytes out if you need to retain them.
+    /// </summary>
+    public delegate void RawFrameHandler(User sender, RefID streamRefID, ushort sequence, ReadOnlyMemory<byte> payload);
+
+    /// <summary>
+    /// Subscribe to receive raw frames bound for any stream this peer can see.
+    /// Audio / voice consumers typically filter by <c>streamRefID</c>.
+    /// </summary>
+    public event RawFrameHandler? RawFrameReceived;
 
     /// <summary>
     /// Gets the LAN announcer ID for filtering out own broadcasts during discovery.
@@ -320,6 +336,29 @@ public class Session : IDisposable
     public void Poll()
     {
         Connections.Poll();
+    }
+
+    /// <summary>
+    /// Send a raw frame on a stream owned by the local user (e.g. an Opus voice
+    /// frame). The frame is routed through the same authority/relay path as
+    /// <see cref="StreamMessage"/>, so spoof protection still applies. Sequence
+    /// is opaque to the framework; use it for jitter buffering downstream.
+    /// Returns false if the stream is not local, the payload is over the cap,
+    /// or there are no eligible targets.
+    /// </summary>
+    public bool SendRawFrame(Stream stream, ushort sequence, ReadOnlySpan<byte> payload)
+    {
+        if (Sync == null || IsDisposed) return false;
+        return Sync.EnqueueRawFrame(stream, sequence, payload);
+    }
+
+    /// <summary>
+    /// Invoked by <see cref="SessionSyncManager"/> on the sync thread when a
+    /// validated raw frame is ready to dispatch. Fires <see cref="RawFrameReceived"/>.
+    /// </summary>
+    internal void HandleIncomingRawFrame(User sender, RefID streamRefID, ushort sequence, ReadOnlyMemory<byte> payload)
+    {
+        RawFrameReceived?.Invoke(sender, streamRefID, sequence, payload);
     }
 
     /// <summary>

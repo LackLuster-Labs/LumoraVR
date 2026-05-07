@@ -1,8 +1,10 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using Godot;
+﻿using System.Collections.Generic;
+using Godot;
 using Lumora.Core;
+using Lumora.Godot.Helpers;
 
 namespace Lumora.Godot.Hooks;
 
@@ -15,6 +17,8 @@ public class WorldHook : IWorldHook
     public World Owner { get; private set; }
 
     public Node3D WorldRoot { get; private set; }
+
+    private readonly Dictionary<Node3D, int> _layerSnapshot = new();
 
     public static WorldHook Constructor()
     {
@@ -130,36 +134,23 @@ public class WorldHook : IWorldHook
             case World.WorldFocus.Focused:
             case World.WorldFocus.Overlay:
                 WorldRoot.Visible = true;
-                // Re-enable all processing (physics, input, colliders) for focused worlds
                 WorldRoot.ProcessMode = Node.ProcessModeEnum.Inherit;
+                RenderHelper.RestoreHierarchyLayer(WorldRoot, _layerSnapshot);
+                _layerSnapshot.Clear();
                 break;
 
             case World.WorldFocus.PrivateOverlay:
                 WorldRoot.Visible = true;
                 WorldRoot.ProcessMode = Node.ProcessModeEnum.Inherit;
-                // TODO: Set layer recursively for private rendering
-                // SetLayerRecursively(WorldRoot, RenderHelper.PRIVATE_LAYER);
+                RenderHelper.SetHierarchyLayer(WorldRoot, RenderHelper.PRIVATE_LAYER, _layerSnapshot);
                 break;
 
             case World.WorldFocus.Background:
                 WorldRoot.Visible = false;
-                // Disable all processing (physics, input, colliders) for background worlds
-                // This prevents interaction with unfocused world's colliders/UI
                 WorldRoot.ProcessMode = Node.ProcessModeEnum.Disabled;
                 break;
         }
     }
-
-    // TODO: Implement layer system when needed
-    // private static void SetLayerRecursively(Node3D node, int layer)
-    // {
-    //     node.SetLayer(layer);
-    //     foreach (Node child in node.GetChildren())
-    //     {
-    //         if (child is Node3D node3D)
-    //             SetLayerRecursively(node3D, layer);
-    //     }
-    // }
 
     public void Destroy()
     {

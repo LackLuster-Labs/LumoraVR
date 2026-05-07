@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Lumora.Core.Assets;
+using Lumora.Core.Networking;
 using Lumora.Core.Networking.Sync;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
@@ -114,8 +115,15 @@ public class SessionAssetTransferer : IDisposable
         {
             Source = source;
             ID = reader.ReadInt32();
-            AssetUri = new Uri(reader.ReadString());
+            // Bound the URI string before constructing Uri (which itself has work to do).
+            AssetUri = new Uri(reader.ReadBoundedString(NetworkLimits.MaxAssetUriBytes));
             _totalSize = reader.ReadInt32();
+
+            // A peer cannot make us pre-allocate a multi-GB buffer just by declaring
+            // a fake transfer size. Reject negative or out-of-bounds totals before alloc.
+            if (_totalSize < 0 || _totalSize > NetworkLimits.MaxAssetTransferTotalBytes)
+                throw new InvalidDataException($"Asset transfer total size {_totalSize} out of bounds (cap {NetworkLimits.MaxAssetTransferTotalBytes}).");
+
             _buffer = new byte[_totalSize];
             _tempPath = tempPath;
         }
@@ -124,7 +132,16 @@ public class SessionAssetTransferer : IDisposable
         {
             int offset = reader.ReadInt32();
             int size = reader.ReadInt32();
-            var data = reader.ReadBytes(size);
+
+            // Bound the chunk size, reject negative offsets, and ensure the chunk lands
+            // inside the pre-declared buffer — the latter prevents an OOB write via
+            // a peer crafting offset+size > _totalSize after a legitimate Initialize.
+            if (size < 0 || size > NetworkLimits.MaxAssetChunkBytes)
+                throw new InvalidDataException($"Asset chunk size {size} out of bounds (cap {NetworkLimits.MaxAssetChunkBytes}).");
+            if (offset < 0 || offset > _totalSize - size)
+                throw new InvalidDataException($"Asset chunk offset {offset} + size {size} exceeds buffer length {_totalSize}.");
+
+            var data = reader.ReadBoundedBytes(size, NetworkLimits.MaxAssetChunkBytes);
             Buffer.BlockCopy(data, 0, _buffer, offset, size);
             _received += size;
         }
@@ -224,13 +241,23 @@ public class SessionAssetTransferer : IDisposable
     {
         lock (_lock)
         {
-            switch (message.ControlMessageType)
+            // Per-message try/catch so a malformed payload from one peer doesn't take
+            // down the asset transfer system for everyone. Bounds-check failures from
+            // the decoders surface here as InvalidDataException.
+            try
             {
-                case ControlMessage.Message.AssetRequest:       HandleAssetRequest(message);       break;
-                case ControlMessage.Message.AssetTransmissionStart: HandleTransmissionStart(message); break;
-                case ControlMessage.Message.AssetChunk:         HandleChunk(message);              break;
-                case ControlMessage.Message.AssetNextChunkRequest: HandleNextChunkRequest(message); break;
-                case ControlMessage.Message.AssetNotAvailable:  HandleNotAvailable(message);       break;
+                switch (message.ControlMessageType)
+                {
+                    case ControlMessage.Message.AssetRequest:       HandleAssetRequest(message);       break;
+                    case ControlMessage.Message.AssetTransmissionStart: HandleTransmissionStart(message); break;
+                    case ControlMessage.Message.AssetChunk:         HandleChunk(message);              break;
+                    case ControlMessage.Message.AssetNextChunkRequest: HandleNextChunkRequest(message); break;
+                    case ControlMessage.Message.AssetNotAvailable:  HandleNotAvailable(message);       break;
+                }
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Warn($"AssetTransferer: dropped malformed {message.ControlMessageType} from {message.Sender?.Identifier}: {ex.Message}");
             }
             RefreshJobs();
         }
@@ -270,7 +297,7 @@ public class SessionAssetTransferer : IDisposable
         string uriStr;
         using (var ms = new MemoryStream(message.Payload))
         using (var r = new BinaryReader(ms))
-            uriStr = r.ReadString();
+            uriStr = r.ReadBoundedString(NetworkLimits.MaxAssetUriBytes);
 
         var assetUri = new Uri(uriStr);
 
@@ -374,7 +401,7 @@ public class SessionAssetTransferer : IDisposable
         string uriStr;
         using (var ms = new MemoryStream(message.Payload))
         using (var r = new BinaryReader(ms))
-            uriStr = r.ReadString();
+            uriStr = r.ReadBoundedString(NetworkLimits.MaxAssetUriBytes);
 
         LumoraLogger.Warn($"AssetTransferer: peer reported AssetNotAvailable for {uriStr}");
         if (_assetRequests.TryGetValue(uriStr, out var cb))

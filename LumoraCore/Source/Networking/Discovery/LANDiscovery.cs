@@ -218,7 +218,20 @@ public class LANDiscovery : IDisposable
         using var input = new MemoryStream(data);
         using var gzip = new GZipStream(input, CompressionMode.Decompress);
         using var output = new MemoryStream();
-        gzip.CopyTo(output);
+
+        // Bound the decompressed size so a tiny crafted GZip payload cannot expand
+        // into a multi-GB allocation (zip-bomb DoS). Anyone broadcasting on the LAN
+        // discovery port can otherwise OOM every listener with one packet.
+        var buffer = new byte[8192];
+        int read;
+        long total = 0;
+        while ((read = gzip.Read(buffer, 0, buffer.Length)) > 0)
+        {
+            total += read;
+            if (total > NetworkLimits.MaxLanAnnouncementBytes)
+                throw new InvalidDataException($"LAN announcement decompressed past cap {NetworkLimits.MaxLanAnnouncementBytes} bytes.");
+            output.Write(buffer, 0, read);
+        }
         return output.ToArray();
     }
 

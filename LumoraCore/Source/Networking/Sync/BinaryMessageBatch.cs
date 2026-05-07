@@ -330,5 +330,10 @@ public enum MessageType : byte
     Stream = 5,
     AsyncStream = 6,
     Ping = 7,
-    Disconnect = 8
+    Disconnect = 8,
+    /// <summary>
+    /// Lightweight per-user payload for tight latency loops (voice etc).
+    /// See <c>RawFrameMessage</c>.
+    /// </summary>
+    RawFrame = 9
 }

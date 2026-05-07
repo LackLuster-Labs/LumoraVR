@@ -229,7 +229,14 @@ public class PhosMesh
     /// </summary>
     public void RemovePoints(Collections.PhosPointCollection points)
     {
-        // TODO: Implement when point submesh is added
+        if (points.Count == 0) return;
+
+        var bySubmesh = points.GroupBy(p => p.Submesh);
+
+        foreach (var group in bySubmesh)
+        {
+            group.Key.Remove(new Collections.PhosPointCollection(group.ToList()));
+        }
     }
 
     /// <summary>

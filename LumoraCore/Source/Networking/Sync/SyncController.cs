@@ -406,6 +406,16 @@ public class SyncController
 				var streamElement = Owner?.ReferenceController?.GetObjectOrNull(streamRefID);
 				if (streamElement is IStream stream && stream.Active)
 				{
+					// Defense in depth: every stream's actual Owner must equal the user the
+					// message claims to be from. A peer could otherwise embed RefIDs of
+					// streams owned by a different user — even if the sender check upstream
+					// passes for *their own* UserID — and inject data attributed to others.
+					if (stream.Owner != user)
+					{
+						LumoraLogger.Warn($"ApplyStreams: stream {streamRefID} is owned by {stream.Owner?.UserName?.Value} but message claims user {user.UserName?.Value} ({message.UserID}); dropping rest of message.");
+						break;
+					}
+
 					stream.Decode(reader, message);
 					streamCount++;
 				}

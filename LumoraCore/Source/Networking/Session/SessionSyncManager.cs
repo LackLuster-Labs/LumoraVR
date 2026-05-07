@@ -6,6 +6,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
 using Lumora.Core;
+using Lumora.Core.Networking.Streams;
 using Lumora.Core.Networking.Sync;
 using LegacyJoinGrantData = Lumora.Core.Networking.Messages.JoinGrantData;
 using LegacyJoinRequestData = Lumora.Core.Networking.Messages.JoinRequestData;
@@ -102,6 +103,8 @@ public class SessionSyncManager : IDisposable
     public int TotalSentDeltas { get; private set; }
     public int TotalSentFulls { get; private set; }
     public int TotalSentStreams { get; private set; }
+    public int TotalReceivedRawFrames { get; private set; }
+    public int TotalSentRawFrames { get; private set; }
     public int TotalCorrections { get; private set; }
     public int LastGeneratedDeltaChanges { get; private set; }
 
@@ -249,6 +252,7 @@ public class SessionSyncManager : IDisposable
                         case DeltaBatch: TotalReceivedDeltas++; break;
                         case FullBatch: TotalReceivedFulls++; break;
                         case StreamMessage: TotalReceivedStreams++; break;
+                        case RawFrameMessage: TotalReceivedRawFrames++; break;
                     }
 
                     EnqueueForProcessing(syncMessage);
@@ -291,6 +295,7 @@ public class SessionSyncManager : IDisposable
                         case DeltaBatch: TotalSentDeltas++; break;
                         case FullBatch: TotalSentFulls++; break;
                         case StreamMessage: TotalSentStreams++; break;
+                        case RawFrameMessage: TotalSentRawFrames++; break;
                     }
 
                     // Encode and transmit
@@ -668,6 +673,18 @@ public class SessionSyncManager : IDisposable
                 case StreamMessage streamMessage:
                     if (World.IsAuthority)
                     {
+                        // Authority sees the original sender connection (no relay). A peer
+                        // can put any UserID in the StreamMessage, so we must reject the
+                        // message — and refuse to relay it — when the claimed UserID does
+                        // not belong to the connection it actually arrived on. Otherwise a
+                        // malicious peer can spoof another user's identity and we will
+                        // forward the spoofed stream data to everyone else in the session.
+                        if (!ValidateUserSender(streamMessage.Sender, streamMessage.UserID, "StreamMessage"))
+                        {
+                            streamMessage.Dispose();
+                            break;
+                        }
+
                         var forwarded = CloneStreamMessage(streamMessage);
                         AddStreamTargets(forwarded, excludeSender: true);
                         if (forwarded.Targets.Count > 0)
@@ -685,6 +702,33 @@ public class SessionSyncManager : IDisposable
                         break;
                     }
                     ApplyStreamMessage(streamMessage);
+                    break;
+
+                case RawFrameMessage rawFrame:
+                    if (World.IsAuthority)
+                    {
+                        // Same spoof check as StreamMessage: a peer cannot claim
+                        // another user's UserID and have us relay it to everyone.
+                        if (!ValidateUserSender(rawFrame.Sender, rawFrame.UserID, "RawFrameMessage"))
+                        {
+                            rawFrame.Dispose();
+                            break;
+                        }
+
+                        var forwarded = rawFrame.CloneForRelay();
+                        AddStreamTargets(forwarded, excludeSender: true);
+                        if (forwarded.Targets.Count > 0)
+                        {
+                            EnqueueForTransmission(forwarded);
+                        }
+                        else
+                        {
+                            forwarded.Dispose();
+                        }
+                    }
+
+                    DispatchRawFrame(rawFrame);
+                    rawFrame.Dispose();
                     break;
 
                 case ControlMessage controlMessage:
@@ -838,7 +882,96 @@ public class SessionSyncManager : IDisposable
         }
     }
 
-    private void AddStreamTargets(StreamMessage stream, bool excludeSender)
+    /// <summary>
+    /// Build and enqueue a <see cref="RawFrameMessage"/> for a stream the local
+    /// user owns. Routes to the host on clients, fans out to all peers (including
+    /// loopback to local handlers) on the authority. Returns false if the payload
+    /// is over the cap or the stream isn't owned by the local user.
+    /// </summary>
+    public bool EnqueueRawFrame(Stream stream, ushort sequence, ReadOnlySpan<byte> payload)
+    {
+        if (stream == null) return false;
+        if (payload.Length > NetworkLimits.MaxRawFrameBytes) return false;
+        if (World == null) return false;
+
+        var owner = stream.Owner;
+        if (owner == null || !owner.IsLocal) return false;
+
+        var msg = new RawFrameMessage(World.StateVersion, World.SyncTick)
+        {
+            UserID = (ulong)owner.ReferenceID,
+            StreamRefID = stream.ReferenceID,
+            Sequence = sequence,
+        };
+        msg.SetPayload(payload);
+
+        AddStreamTargets(msg, excludeSender: false);
+        if (msg.Targets.Count == 0)
+        {
+            msg.Dispose();
+            return false;
+        }
+
+        EnqueueForTransmission(msg);
+        return true;
+    }
+
+    /// <summary>
+    /// Resolve the claimed user from a received <see cref="RawFrameMessage"/> and
+    /// invoke the Session-level handler. Runs on the sync thread; subscribers
+    /// must not block (push to a lock-free queue and return).
+    /// </summary>
+    private void DispatchRawFrame(RawFrameMessage rawFrame)
+    {
+        if (rawFrame == null || World == null) return;
+
+        var userElement = World.ReferenceController?.GetObjectOrNull(new RefID(rawFrame.UserID));
+        if (userElement is not User sender)
+        {
+            LumoraLogger.Warn($"RawFrame: user {rawFrame.UserID} not found; dropping.");
+            return;
+        }
+
+        Session.HandleIncomingRawFrame(sender, rawFrame.StreamRefID, rawFrame.Sequence, rawFrame.Payload);
+    }
+
+    /// <summary>
+    /// Verify a user-attributed message's claimed UserID matches the user mapped
+    /// to the sender connection. Authority-side use only — clients receive
+    /// messages relayed via the host, whose Sender is the host connection rather
+    /// than the original peer.
+    /// </summary>
+    private bool ValidateUserSender(IConnection sender, ulong claimedUserID, string typeName)
+    {
+        if (sender == null)
+        {
+            LumoraLogger.Warn($"{typeName} with no Sender; dropping.");
+            return false;
+        }
+
+        if (!Session.Connections.TryGetUser(sender, out var senderUser) || senderUser == null)
+        {
+            LumoraLogger.Warn($"{typeName} from {sender.Identifier}: no user mapping; dropping.");
+            return false;
+        }
+
+        if ((ulong)senderUser.ReferenceID != claimedUserID)
+        {
+            LumoraLogger.Warn($"{typeName} spoof: connection {sender.Identifier} is user {senderUser.UserName?.Value} ({(ulong)senderUser.ReferenceID}) but claimed UserID {claimedUserID}; dropping.");
+            return false;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Populate <paramref name="message"/>.Targets with the appropriate fan-out for
+    /// stream-class messages: on the authority, every other connection (optionally
+    /// excluding the sender of a relayed message and any users still initializing);
+    /// on a client, just the host. Used for both <see cref="StreamMessage"/> and
+    /// <see cref="RawFrameMessage"/>.
+    /// </summary>
+    private void AddStreamTargets(SyncMessage message, bool excludeSender)
     {
         if (World.IsAuthority)
         {
@@ -855,7 +988,7 @@ public class SessionSyncManager : IDisposable
 
             foreach (var connection in connections)
             {
-                if (excludeSender && connection == stream.Sender)
+                if (excludeSender && connection == message.Sender)
                 {
                     continue;
                 }
@@ -867,7 +1000,7 @@ public class SessionSyncManager : IDisposable
                     continue;
                 }
 
-                stream.Targets.Add(connection);
+                message.Targets.Add(connection);
             }
         }
         else
@@ -875,7 +1008,7 @@ public class SessionSyncManager : IDisposable
             var hostConnection = Session.Connections.HostConnection;
             if (hostConnection != null)
             {
-                stream.Targets.Add(hostConnection);
+                message.Targets.Add(hostConnection);
             }
         }
     }

@@ -71,4 +71,66 @@ public static class BinaryExtensions
     {
         return new RefID(reader.ReadUInt64());
     }
+
+    /// <summary>
+    /// Read a length-prefixed byte array (Int32 prefix) from peer-controlled input.
+    /// Throws InvalidDataException if the declared length is negative or exceeds
+    /// <paramref name="maxBytes"/>. Use this on every untrusted ReadInt32-then-ReadBytes
+    /// pattern in network decoders to prevent OOM-via-huge-length DoS.
+    /// </summary>
+    public static byte[] ReadBoundedBytesInt32(this BinaryReader reader, int maxBytes)
+    {
+        int length = reader.ReadInt32();
+        return ReadBoundedBytesCore(reader, length, maxBytes);
+    }
+
+    /// <summary>
+    /// Read a length-prefixed byte array (7-bit-encoded prefix) from peer-controlled input.
+    /// Throws InvalidDataException if the declared length is negative or exceeds
+    /// <paramref name="maxBytes"/>.
+    /// </summary>
+    public static byte[] ReadBoundedBytes7Bit(this BinaryReader reader, int maxBytes)
+    {
+        ulong length = reader.Read7BitEncoded();
+        if (length > (ulong)int.MaxValue)
+            throw new InvalidDataException($"Declared length {length} overflows Int32.");
+        return ReadBoundedBytesCore(reader, (int)length, maxBytes);
+    }
+
+    /// <summary>
+    /// Read exactly <paramref name="length"/> bytes after validating against <paramref name="maxBytes"/>.
+    /// Use this when the length has already been read from the stream. Throws on bound
+    /// violations and on short reads (peer claimed N bytes but stream had fewer).
+    /// </summary>
+    public static byte[] ReadBoundedBytes(this BinaryReader reader, int length, int maxBytes)
+    {
+        return ReadBoundedBytesCore(reader, length, maxBytes);
+    }
+
+    private static byte[] ReadBoundedBytesCore(BinaryReader reader, int length, int maxBytes)
+    {
+        if (length < 0)
+            throw new InvalidDataException($"Declared length {length} is negative.");
+        if (length > maxBytes)
+            throw new InvalidDataException($"Declared length {length} exceeds cap {maxBytes}.");
+        if (length == 0)
+            return System.Array.Empty<byte>();
+
+        var buffer = reader.ReadBytes(length);
+        if (buffer.Length != length)
+            throw new EndOfStreamException($"Expected {length} bytes, got {buffer.Length}.");
+        return buffer;
+    }
+
+    /// <summary>
+    /// Read a length-prefixed string written by <see cref="BinaryWriter.Write(string)"/>
+    /// with a hard byte-length cap. The wire format is a 7-bit-encoded byte count
+    /// followed by UTF-8 bytes; this matches what BinaryReader.ReadString consumes
+    /// but refuses to allocate when the peer declares more than <paramref name="maxBytes"/>.
+    /// </summary>
+    public static string ReadBoundedString(this BinaryReader reader, int maxBytes)
+    {
+        var bytes = reader.ReadBoundedBytes7Bit(maxBytes);
+        return System.Text.Encoding.UTF8.GetString(bytes);
+    }
 }
