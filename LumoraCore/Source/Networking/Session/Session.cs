@@ -22,6 +22,8 @@ public class Session : IDisposable
     public SessionSyncManager Sync { get; private set; }
     public SessionAssetTransferer AssetTransferer { get; private set; }
 
+    public SessionRawStreamManager RawStreamManager { get; private set;}
+
     /// <summary>
     /// Session metadata describing identity, settings, and state.
     /// </summary>
@@ -84,6 +86,7 @@ public class Session : IDisposable
     {
         World = world;
         Connections = new SessionConnectionManager(this);
+        RawStreamManager = new SessionRawStreamManager(this);
     }
 
     /// <summary>
