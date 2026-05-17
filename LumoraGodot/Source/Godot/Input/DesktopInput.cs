@@ -7,6 +7,7 @@ using Lumora.Core.Logging;
 using Lumora.Core.Components;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 using Lumora.Source.UI;
+using Lumora.Source.Godot.UI;
 
 namespace Lumora.Source.Input;
 
@@ -16,11 +17,6 @@ namespace Lumora.Source.Input;
 /// </summary>
 public partial class DesktopInput : Node3D, IInputProvider
 {
-    // Cursor settings
-    private const float CursorSize = 12f;
-    private const float CursorThickness = 2f;
-    private static readonly Color CursorColor = new(1f, 1f, 1f, 0.5f);
-    private static readonly Color CursorHoverColor = new(0.4f, 1f, 0.4f, 0.7f);
 
     // Interaction raycast settings
     private const float MaxRayDistance = 100f;
@@ -94,30 +90,39 @@ public partial class DesktopInput : Node3D, IInputProvider
 
     private void CreateCursorUI()
     {
-        // Create a CanvasLayer for the cursor (always on top, above dashboard at 100)
         var canvasLayer = new CanvasLayer();
         canvasLayer.Name = "DesktopCursorLayer";
         canvasLayer.Layer = 101; // Above dashboard layer (100)
         AddChild(canvasLayer);
 
-        // Create Control container for cursor
         _cursorUI = new Control();
         _cursorUI.Name = "CursorContainer";
         _cursorUI.SetAnchorsPreset(Control.LayoutPreset.FullRect);
         _cursorUI.MouseFilter = Control.MouseFilterEnum.Ignore;
         canvasLayer.AddChild(_cursorUI);
 
-        // Create the cursor circle
         _cursorDot = new CircleCursor();
         _cursorDot.Name = "CursorDot";
-        _cursorDot.CursorColor = CursorColor;
-        _cursorDot.Radius = CursorSize;
-        _cursorDot.Thickness = CursorThickness;
-        _cursorDot.CustomMinimumSize = new Vector2(CursorSize * 2 + 4, CursorSize * 2 + 4);
         _cursorDot.MouseFilter = Control.MouseFilterEnum.Ignore;
         _cursorUI.AddChild(_cursorDot);
 
+        ApplyCursorSettings();
+        InterfaceSettings.Changed += ApplyCursorSettings;
+
         LumoraLogger.Log("Desktop cursor UI created");
+    }
+
+    private void ApplyCursorSettings()
+    {
+        if (_cursorDot == null) return;
+
+        float size = InterfaceSettings.ReticleSize;
+        _cursorDot.Radius = size;
+        _cursorDot.Thickness = InterfaceSettings.ReticleThickness;
+        _cursorDot.Style = InterfaceSettings.Style;
+        _cursorDot.CursorColor = InterfaceSettings.ReticleColor;
+        _cursorDot.CustomMinimumSize = new Vector2(size * 2 + 4, size * 2 + 4);
+        _cursorDot.QueueRedraw();
     }
 
     private void CreateInteractionRay()
@@ -167,26 +172,27 @@ public partial class DesktopInput : Node3D, IInputProvider
         if (_cursorDot == null)
             return;
 
-        // Always keep cursor visible
-        _cursorDot.Visible = true;
+        _cursorDot.Visible = InterfaceSettings.Style != InterfaceSettings.ReticleStyle.Off;
+        if (!_cursorDot.Visible)
+            return;
 
-        // Get viewport size
         var viewportSize = GetViewport()?.GetVisibleRect().Size ?? new Vector2(1920, 1080);
 
         if (DashboardToggle.IsDashboardVisible)
         {
-            // Dashboard mode: position cursor at actual mouse position
             var mousePos = GetViewport()?.GetMousePosition() ?? viewportSize / 2f;
             _cursorDot.Position = mousePos - _cursorDot.CustomMinimumSize / 2f;
-            _cursorDot.CursorColor = CursorColor;
+            _cursorDot.CursorColor = InterfaceSettings.ReticleColor;
         }
         else
         {
-            // Normal mode: center the cursor
             var centerPos = viewportSize / 2f - _cursorDot.CustomMinimumSize / 2f;
             _cursorDot.Position = centerPos;
-            // Update cursor color based on hover state
-            _cursorDot.CursorColor = _isHoveringUI ? CursorHoverColor : CursorColor;
+            // hovering UI or anything grabbable both warrant the hover tint - xlinka
+            bool hovering = _isHoveringUI || (_grabManager?.IsHoveringGrabbable ?? false);
+            _cursorDot.CursorColor = hovering
+                ? InterfaceSettings.ReticleHoverColor
+                : InterfaceSettings.ReticleColor;
         }
 
         _cursorDot.QueueRedraw();
@@ -340,17 +346,40 @@ public partial class DesktopInput : Node3D, IInputProvider
 }
 
 /// <summary>
-/// Custom control that draws a circle cursor.
+/// Custom control that draws the desktop reticle. Supports a few visual styles
+/// chosen via <see cref="InterfaceSettings.Style"/>.
 /// </summary>
 public partial class CircleCursor : Control
 {
     public Color CursorColor { get; set; } = new Color(1f, 1f, 1f, 0.5f);
     public float Radius { get; set; } = 12f;
     public float Thickness { get; set; } = 2f;
+    public Lumora.Source.Godot.UI.InterfaceSettings.ReticleStyle Style { get; set; }
+        = Lumora.Source.Godot.UI.InterfaceSettings.ReticleStyle.Ring;
 
     public override void _Draw()
     {
         var center = Size / 2f;
-        DrawArc(center, Radius, 0, Mathf.Tau, 32, CursorColor, Thickness, true);
+
+        switch (Style)
+        {
+            case Lumora.Source.Godot.UI.InterfaceSettings.ReticleStyle.Off:
+                return;
+
+            case Lumora.Source.Godot.UI.InterfaceSettings.ReticleStyle.Dot:
+                DrawCircle(center, Mathf.Max(Thickness, Radius * 0.25f), CursorColor);
+                break;
+
+            case Lumora.Source.Godot.UI.InterfaceSettings.ReticleStyle.Crosshair:
+                float arm = Radius;
+                DrawLine(center + new Vector2(-arm, 0f), center + new Vector2(arm, 0f), CursorColor, Thickness, true);
+                DrawLine(center + new Vector2(0f, -arm), center + new Vector2(0f, arm), CursorColor, Thickness, true);
+                break;
+
+            case Lumora.Source.Godot.UI.InterfaceSettings.ReticleStyle.Ring:
+            default:
+                DrawArc(center, Radius, 0, Mathf.Tau, 32, CursorColor, Thickness, true);
+                break;
+        }
     }
 }

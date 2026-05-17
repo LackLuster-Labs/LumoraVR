@@ -28,6 +28,7 @@ public partial class ImportDialog
         (ImportType.ImageTexture, "Image / Texture",   new[] { ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tga" }),
         (ImportType.Model3D,      "3D Model",          ModelImportExtensions),
         (ImportType.Avatar,       "Avatar",            AvatarImportExtensions),
+        (ImportType.Shader,       "Custom Shader",     new[] { ".gdshader" }),
         (ImportType.RawFile,      "Raw File",          Array.Empty<string>()),
     };
 

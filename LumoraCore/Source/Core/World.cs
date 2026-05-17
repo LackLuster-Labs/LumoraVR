@@ -1949,6 +1949,9 @@ public class World
 		try
 		{
 			RootSlot?.Destroy();
+			// Destroy queues component OnDestroy callbacks; flush them before managers
+			// and the ReferenceController are cleared so components can unregister cleanly.
+			_updateManager?.RunDestructions();
 			RootSlot = null;
 		}
 		catch (Exception ex)

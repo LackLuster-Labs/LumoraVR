@@ -4,6 +4,7 @@
 ﻿using Godot;
 using Lumora.Godot.Hooks;
 using Lumora.Source.UI;
+using Lumora.Source.Godot.UI;
 using Lumora.Core.Components;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
@@ -34,10 +35,10 @@ public partial class DesktopCameraController : Node
     // ===== FREE-CAM SETTINGS =====
     private const float FreeCamBaseSpeed   = 5f;
     private const float FreeCamFastMult    = 4f;
-    private const float FreeCamSensitivity = Mathf.Pi / 1080f;
+    private const float LookReferenceHeight = 1080f;
+    private const uint FreeCamIndicatorLayer = 1u << 19;
 
-    // Third-person uses same mouse feel as freecam
-    private const float TpSensitivity = Mathf.Pi / 1080f;
+    private static float LookSensitivity => (Mathf.Pi / LookReferenceHeight) * InterfaceSettings.MouseSensitivity;
 
     // ===== REFERENCES =====
     private Lumora.Core.Engine _engine;
@@ -80,7 +81,9 @@ public partial class DesktopCameraController : Node
             Fov  = 90f,
             Near = 0.05f,
             Far  = 1000f,
+            PhysicsInterpolationMode = Node.PhysicsInterpolationModeEnum.Off,
         };
+        _overrideCamera.CullMask &= ~FreeCamIndicatorLayer;
         AddChild(_overrideCamera);
 
         CreateFreeCamIndicator();
@@ -93,6 +96,7 @@ public partial class DesktopCameraController : Node
 
         // Glowing sphere
         var mesh = new MeshInstance3D();
+        mesh.Layers = FreeCamIndicatorLayer;
         mesh.Mesh = new SphereMesh { Radius = 0.18f, Height = 0.36f };
         var mat = new StandardMaterial3D
         {
@@ -112,6 +116,7 @@ public partial class DesktopCameraController : Node
             NoDepthTest = true,
             PixelSize   = 0.004f,
             FontSize    = 28,
+            Layers      = FreeCamIndicatorLayer,
             Position    = new Vector3(0f, 0.38f, 0f),
         };
         _freeCamIndicator.AddChild(_freeCamLabel);
@@ -225,8 +230,9 @@ public partial class DesktopCameraController : Node
         var mouse       = _pendingTpMouse;
         _pendingTpMouse = Vector2.Zero;
 
-        _tpOrbitYaw   -= mouse.X * TpSensitivity;
-        _tpOrbitPitch -= mouse.Y * TpSensitivity;
+        float sensitivity = LookSensitivity;
+        _tpOrbitYaw   -= mouse.X * sensitivity;
+        _tpOrbitPitch -= mouse.Y * sensitivity;
         _tpOrbitPitch  = Mathf.Clamp(_tpOrbitPitch, TpMinPitch, TpMaxPitch);
 
         // Character world position
@@ -291,8 +297,9 @@ public partial class DesktopCameraController : Node
         var mouse            = _pendingFreeCamMouse;
         _pendingFreeCamMouse = Vector2.Zero;
 
-        _freeCamYaw   -= mouse.X * FreeCamSensitivity;
-        _freeCamPitch -= mouse.Y * FreeCamSensitivity;
+        float sensitivity = LookSensitivity;
+        _freeCamYaw   -= mouse.X * sensitivity;
+        _freeCamPitch -= mouse.Y * sensitivity;
         _freeCamPitch  = Mathf.Clamp(_freeCamPitch, -Mathf.Pi * 0.499f, Mathf.Pi * 0.499f);
 
         var yawQ   = Quaternion.FromEuler(new Vector3(0f, _freeCamYaw,   0f));

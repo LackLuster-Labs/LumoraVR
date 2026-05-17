@@ -27,7 +27,7 @@ public static class LumAssets
         public static string SceneInspector => "res://Scenes/UI/Inspectors/SceneInspector.tscn";
         public static string ComponentAttacher => "res://Scenes/UI/Inspectors/ComponentAttacher.tscn";
         public static string ListEditor => "res://Scenes/UI/Inspectors/ListEditor.tscn";
-        public static string ColorPickerPanel => "res://Scenes/UI/Inspectors/ColorPickerPanel.tscn";
+        public static string ColorPickerPanel => MaterialColorPicker;
 
         // Debug
         public static string EngineDebug => "res://Scenes/UI/Debug/EngineDebug.tscn";

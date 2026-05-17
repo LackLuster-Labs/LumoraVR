@@ -2,11 +2,11 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using Lumora.Core;
+using Lumora.Core.Assets;
 using Lumora.Core.Components;
 using Lumora.Core.Components.Meshes;
 using Lumora.Core.Math;
 using Lumora.Core.Physics;
-using Lumora.Core.Logging;
 
 namespace Lumora.Core.Templates;
 
@@ -30,29 +30,135 @@ internal sealed class LocalHomeWorldTemplate : WorldTemplateDefinition
         dirLight.Intensity.Value = 1.2f;
         dirLight.Shadows.Value = ShadowType.Soft;
 
-        // Circular ground floor - 50 meter diameter
+        var skySlot = world.RootSlot.AddSlot("GradientSkybox");
+        var skybox = skySlot.AttachComponent<GradientSkybox>();
+        skybox.TopColor.Value = new color(0.070f, 0.060f, 0.150f, 1f);
+        skybox.HorizonColor.Value = new color(0.46f, 0.38f, 0.58f, 1f);
+        skybox.BottomColor.Value = new color(0.040f, 0.032f, 0.065f, 1f);
+        skybox.SunColor.Value = new color(1.0f, 0.72f, 0.54f, 1f);
+        skybox.SunDirection.Value = new float3(-0.38f, 0.58f, -0.72f);
+        skybox.SunSize.Value = 0.034f;
+        skybox.SunIntensity.Value = 2.4f;
+        skybox.AmbientEnergy.Value = 0.48f;
+
+        const float groundRadius = 25f;
         var groundSlot = world.RootSlot.AddSlot("Ground");
         groundSlot.LocalPosition.Value = new float3(0f, 0f, 0f);
         groundSlot.Tag.Value = "floor";
 
         var groundMesh = groundSlot.AttachComponent<CylinderMesh>();
-        groundMesh.Radius.Value = 25f;  // 50m diameter
-        float groundHeight = 1.0f;
+        groundMesh.Radius.Value = groundRadius;
+        float groundHeight = 0.04f;
         groundMesh.Height.Value = groundHeight;
         groundMesh.Segments.Value = 64;
         groundMesh.UVScale.Value = new float2(25f, 25f);
 
-        // Move the mesh down so the top surface sits at y=0
+        // Sink the cylinder so its top face lands exactly at y=0 (otherwise spawned
+        // users sink half-height into the floor). - xlinka
         groundSlot.LocalPosition.Value = new float3(0f, -groundHeight * 0.5f, 0f);
+
+        var groundMaterial = groundSlot.AttachComponent<MetaballMaterial>();
+        groundMaterial.BlendMode.Value = BlendMode.Transparent;
+        groundMaterial.Culling.Value = Culling.Back;
+        groundMaterial.TintA.Value = new colorHDR(0.90f, 1.00f, 0.94f, 1f);
+        groundMaterial.TintB.Value = new colorHDR(1.00f, 0.58f, 0.88f, 1f);
+        groundMaterial.WaterDeepColor.Value = new colorHDR(0.040f, 0.030f, 0.060f, 1f);
+        groundMaterial.WaterSurfaceColor.Value = new colorHDR(0.10f, 0.085f, 0.13f, 1f);
+        groundMaterial.RippleColor.Value = new colorHDR(0.72f, 1.00f, 0.92f, 1f);
+        groundMaterial.BlobRadius.Value = 0.12f;
+        groundMaterial.BlobSmoothness.Value = 0.075f;
+        groundMaterial.BlobCount.Value = 72;
+        groundMaterial.RiseSpeed.Value = 0.34f;
+        // Match risingDiskRadius below so the ripple shader places its centers at
+        // the same xz as the rising orbs. Off-by-half-a-meter is enough to make
+        // ripples drift visibly from the bubbles. - xlinka
+        groundMaterial.VolumeExtents.Value = new float2(24.0f, 24.0f);
+        groundMaterial.VolumeHeight.Value = 3.4f;
+        groundMaterial.VolumeOffset.Value = new float3(0f, groundHeight * 0.5f, 0f);
+        groundMaterial.RimStrength.Value = 1.55f;
+        groundMaterial.RimFalloff.Value = 2.8f;
+        groundMaterial.FresnelPower.Value = 3.0f;
+        groundMaterial.EmissionStrength.Value = 0.82f;
+        groundMaterial.WaveStrength.Value = 0.28f;
+        groundMaterial.RippleStrength.Value = 0.62f;
+        groundMaterial.RippleRadius.Value = 0.58f;
+        groundMaterial.RippleWidth.Value = 0.032f;
+        groundMaterial.LineStrength.Value = 0.34f;
+        groundMaterial.RenderQueue.Value = 10;
+
+        var groundRenderer = groundSlot.AttachComponent<MeshRenderer>();
+        groundRenderer.Mesh.Target = groundMesh;
+        groundRenderer.Material.Target = groundMaterial;
+        groundRenderer.ShadowCastMode.Value = ShadowCastMode.Off;
+
+        // Decoupled from groundMaterial.VolumeHeight: that one positions the floor's
+        // ripple-emitter blobs (invisible), this one is how high the visible orbs
+        // actually float. Bumping VolumeHeight here without touching the ground
+        // shader keeps the floor ripple cadence the same. - xlinka
+        const float risingVolumeHeight = 7.0f;
+        const float risingVolumeLift = 0.035f;
+        // Stay inside groundRadius so polar-distributed blob centers never punch
+        // past the cylinder rim. - xlinka
+        const float risingDiskRadius = 24.0f;
+
+        var risingBallsSlot = groundSlot.AddSlot("RisingBalls");
+        risingBallsSlot.LocalPosition.Value = new float3(0f, groundHeight * 0.5f + risingVolumeHeight * 0.5f + risingVolumeLift, 0f);
+
+        var risingBallsMesh = risingBallsSlot.AttachComponent<BoxMesh>();
+        risingBallsMesh.Size.Value = new float3(risingDiskRadius * 2f, risingVolumeHeight, risingDiskRadius * 2f);
+
+        var risingBallsMaterial = risingBallsSlot.AttachComponent<LocalHomeRisingMaterial>();
+        risingBallsMaterial.TintA.Value = groundMaterial.TintA.Value;
+        risingBallsMaterial.TintB.Value = groundMaterial.TintB.Value;
+        risingBallsMaterial.BlobRadius.Value = groundMaterial.BlobRadius.Value;
+        risingBallsMaterial.BlobSmoothness.Value = groundMaterial.BlobSmoothness.Value;
+        risingBallsMaterial.BlobCount.Value = groundMaterial.BlobCount.Value;
+        risingBallsMaterial.RiseSpeed.Value = groundMaterial.RiseSpeed.Value;
+        risingBallsMaterial.VolumeExtents.Value = new float2(risingDiskRadius, risingDiskRadius);
+        risingBallsMaterial.VolumeHeight.Value = risingVolumeHeight;
+        risingBallsMaterial.VolumeOffset.Value = new float3(0f, -risingVolumeHeight * 0.5f - risingVolumeLift, 0f);
+        risingBallsMaterial.RimStrength.Value = groundMaterial.RimStrength.Value;
+        risingBallsMaterial.RimFalloff.Value = groundMaterial.RimFalloff.Value;
+        risingBallsMaterial.FresnelPower.Value = groundMaterial.FresnelPower.Value;
+        risingBallsMaterial.AlphaScale.Value = 0.92f;
+        risingBallsMaterial.EmissionStrength.Value = 1.05f;
+        risingBallsMaterial.TimeScale.Value = groundMaterial.TimeScale.Value;
+        risingBallsMaterial.RenderQueue.Value = 35;
+
+        var risingBallsRenderer = risingBallsSlot.AttachComponent<MeshRenderer>();
+        risingBallsRenderer.Mesh.Target = risingBallsMesh;
+        risingBallsRenderer.Material.Target = risingBallsMaterial;
+        risingBallsRenderer.ShadowCastMode.Value = ShadowCastMode.Off;
+        risingBallsRenderer.SortingOrder.Value = 8;
+
+        var dropletParticlesSlot = groundSlot.AddSlot("DropletParticles");
+        dropletParticlesSlot.LocalPosition.Value = new float3(0f, groundHeight * 0.5f + 0.01f, 0f);
+        var dropletParticles = dropletParticlesSlot.AttachComponent<ParticleSystem>();
+        dropletParticles.MaxParticles.Value = 420;
+        dropletParticles.EmissionRate.Value = 20f;
+        dropletParticles.BurstCount.Value = 7;
+        dropletParticles.BurstInterval.Value = 0.38f;
+        dropletParticles.EmitterExtents.Value = new float3(24.2f, 0f, 24.2f);
+        dropletParticles.SpawnHeight.Value = 0.035f;
+        dropletParticles.Lifetime.Value = 0.74f;
+        dropletParticles.LifetimeVariance.Value = 0.20f;
+        dropletParticles.StartSize.Value = 0.070f;
+        dropletParticles.EndSize.Value = 0.014f;
+        dropletParticles.InitialSpeed.Value = 1.35f;
+        dropletParticles.SpeedVariance.Value = 0.48f;
+        dropletParticles.Spread.Value = 0.30f;
+        dropletParticles.Gravity.Value = -1.18f;
+        dropletParticles.StartColor.Value = new colorHDR(0.90f, 1.00f, 0.94f, 0.90f);
+        dropletParticles.EndColor.Value = new colorHDR(1.00f, 0.58f, 0.88f, 0.0f);
+        dropletParticles.EmissionStrength.Value = 1.65f;
+        dropletParticles.RenderQueue.Value = 60;
+        dropletParticles.Seed.Value = 1771;
 
         var groundCollider = groundSlot.AttachComponent<CylinderCollider>();
         groundCollider.Type.Value = ColliderType.Static;
         groundCollider.Radius.Value = groundMesh.Radius.Value;
         groundCollider.Height.Value = groundMesh.Height.Value;
         groundCollider.Offset.Value = float3.Zero;
-
-        // Create box playground area
-        CreateBoxPlayground(world);
 
         var ambientLightSlot = world.RootSlot.AddSlot("AmbientLight");
         ambientLightSlot.LocalPosition.Value = new float3(0f, 5f, 0f);
@@ -63,136 +169,18 @@ internal sealed class LocalHomeWorldTemplate : WorldTemplateDefinition
         ambientLight.Range.Value = 100f;
         ambientLight.Shadows.Value = ShadowType.None;
 
-        // Add ClipboardImporter for paste functionality
         var clipboardSlot = world.RootSlot.AddSlot("ClipboardImporter");
         clipboardSlot.AttachComponent<ClipboardImporter>();
-        Logger.Log("WorldTemplates: Added ClipboardImporter for paste functionality");
 
-        // Add respawn plane below the world (larger than ground which is 50m diameter)
+        // Catch-all under the world. Bigger than ground so a user yeeted off-edge
+        // still triggers respawn instead of falling forever. - xlinka
         var respawnSlot = world.RootSlot.AddSlot("RespawnPlane");
-
         var respawnPlane = respawnSlot.AttachComponent<RespawnPlane>();
-        respawnPlane.Size.Value = new float2(100f, 100f); // 100m x 100m (bigger than 50m ground)
-        respawnPlane.Height.Value = -20f; // 20 meters below ground
+        respawnPlane.Size.Value = new float2(100f, 100f);
+        respawnPlane.Height.Value = -20f;
         respawnPlane.UseBounds.Value = false;
-        respawnPlane.VisualColor.Value = new color(1f, 0.3f, 0.3f, 0.25f);
-        respawnPlane.DebugColor.Value = new color(0.9f, 0.2f, 1f, 1f);
-        respawnPlane.ShowVisual.Value = true;
-        respawnPlane.ShowDebug.Value = true;
-        respawnPlane.UserRespawnPosition.Value = new float3(0f, 1f, 0f); // Above spawn
-        Logger.Log("WorldTemplates: Added respawn plane at y=-20 with 100m visual");
-    }
-
-    private static void CreateBoxPlayground(World world)
-    {
-        var playgroundSlot = world.RootSlot.AddSlot("BoxPlayground");
-        playgroundSlot.LocalPosition.Value = new float3(8f, 0f, 8f);
-
-        // Staircase of boxes
-        for (int i = 0; i < 5; i++)
-        {
-            CreateBox(world, playgroundSlot, $"Stair_{i}",
-                new float3(i * 0.6f, i * 0.3f + 0.15f, 0f),
-                new float3(0.5f, 0.3f, 1.5f));
-        }
-
-        // Platform at top
-        CreateBox(world, playgroundSlot, "Platform",
-            new float3(3f, 1.65f, 0f),
-            new float3(2f, 0.3f, 2f));
-
-        // Tall column to jump on
-        CreateBox(world, playgroundSlot, "Column1",
-            new float3(-2f, 0.5f, 0f),
-            new float3(1f, 1f, 1f));
-
-        CreateBox(world, playgroundSlot, "Column2",
-            new float3(-2f, 1.5f, 2f),
-            new float3(0.8f, 0.8f, 0.8f));
-
-        // Scattered boxes around
-        CreateBox(world, playgroundSlot, "Box1", new float3(0f, 0.25f, 3f), new float3(0.5f, 0.5f, 0.5f));
-        CreateBox(world, playgroundSlot, "Box2", new float3(1.5f, 0.25f, 4f), new float3(0.5f, 0.5f, 0.5f));
-        CreateBox(world, playgroundSlot, "Box3", new float3(-1f, 0.25f, 5f), new float3(0.5f, 0.5f, 0.5f));
-        CreateBox(world, playgroundSlot, "Box4", new float3(2f, 0.5f, 5.5f), new float3(1f, 1f, 1f));
-
-        // Wall of boxes (dynamic - can be knocked over)
-        // Stack tightly so gravity settles them naturally
-        float boxSize = 0.5f;
-        for (int x = 0; x < 4; x++)
-        {
-            for (int y = 0; y < 3; y++)
-            {
-                CreateDynamicBox(playgroundSlot, $"Wall_{x}_{y}",
-                    new float3(-4f + x * boxSize, y * boxSize + boxSize * 0.5f, -2f),
-                    new float3(boxSize, boxSize, boxSize), 1f);
-            }
-        }
-
-        // Nearby cylinder for close-up mesh inspection
-        CreateStaticCylinder(playgroundSlot, "DebugCylinder",
-            new float3(2.5f, 0.5f, -1.5f),
-            0.5f, 1.0f, 48);
-
-        Logger.Log("WorldTemplates: Created box playground area");
-    }
-
-    private static void CreateStaticCylinder(Slot parent, string name, float3 position, float radius, float height, int segments)
-    {
-        var cylSlot = parent.AddSlot(name);
-        cylSlot.LocalPosition.Value = position;
-
-        var cylMesh = cylSlot.AttachComponent<CylinderMesh>();
-        cylMesh.Radius.Value = radius;
-        cylMesh.Height.Value = height;
-        cylMesh.Segments.Value = segments;
-        cylMesh.UVScale.Value = new float2(1f, 1f);
-
-        var collider = cylSlot.AttachComponent<CylinderCollider>();
-        collider.Type.Value = ColliderType.Static;
-        collider.Radius.Value = radius;
-        collider.Height.Value = height;
-    }
-
-    private static void CreateBox(World world, Slot parent, string name, float3 position, float3 size)
-    {
-        var boxSlot = parent.AddSlot(name);
-        boxSlot.LocalPosition.Value = position;
-
-        var boxMesh = boxSlot.AttachComponent<BoxMesh>();
-        boxMesh.Size.Value = size;
-        boxMesh.UVScale.Value = new float3(1f, 1f, 1f);
-
-        var collider = boxSlot.AttachComponent<BoxCollider>();
-        collider.Type.Value = ColliderType.Static;
-        collider.Size.Value = size;
-    }
-
-    private static void CreateDynamicBox(Slot parent, string name, float3 position, float3 size, float mass)
-    {
-        var boxSlot = parent.AddSlot(name);
-        boxSlot.LocalPosition.Value = position;
-
-        var boxMesh = boxSlot.AttachComponent<BoxMesh>();
-        boxMesh.Size.Value = size;
-        boxMesh.UVScale.Value = new float3(1f, 1f, 1f);
-
-        // Collider defines the shape (RigidBodyHook will use it)
-        var collider = boxSlot.AttachComponent<BoxCollider>();
-        collider.Type.Value = ColliderType.NoCollision; // RigidBody handles collision
-        collider.Size.Value = size;
-
-        // RigidBody enables physics simulation
-        var rigidBody = boxSlot.AttachComponent<Components.RigidBody>();
-        rigidBody.Mass.Value = mass;
-        rigidBody.UseGravity.Value = true;
-
-        // Make it grabbable
-        boxSlot.AttachComponent<Grabbable>();
-
-        // Store original position for respawning
-        var respawnData = boxSlot.GetOrAttachComponent<RespawnData>();
-        respawnData.OriginalPosition.Value = boxSlot.GlobalPosition;
-        respawnData.OriginalRotation.Value = boxSlot.GlobalRotation;
+        respawnPlane.ShowVisual.Value = false;
+        respawnPlane.ShowDebug.Value = false;
+        respawnPlane.UserRespawnPosition.Value = new float3(0f, 1f, 0f);
     }
 }

@@ -78,7 +78,14 @@ namespace Lumora.Godot.Hooks
 
             // Enable/disable collision
             _bodyNode.Visible = Owner.Enabled;
-            if (_bodyNode is CollisionObject3D co)
+            if (_bodyNode is Area3D)
+            {
+                // sensor only. on physics layer so GrabManager hits it, but mask=0 so nothing pushes against it - xlinka
+                var co = (CollisionObject3D)_bodyNode;
+                co.CollisionLayer = Owner.Enabled ? 1u : 0u;
+                co.CollisionMask = 0u;
+            }
+            else if (_bodyNode is CollisionObject3D co)
             {
                 co.CollisionLayer = Owner.Enabled ? 1u : 0u;
                 co.CollisionMask = Owner.Enabled ? 1u : 0u;
@@ -89,7 +96,18 @@ namespace Lumora.Godot.Hooks
         {
             _isDynamic = Owner.Mass.Value > 0.0001f && Owner.Type.Value != ColliderType.Static;
 
-            if (_isDynamic)
+            if (ShouldBeSensor())
+            {
+                // images and grabbable objects shouldn't act like walls. Area3D = sensor that raycasts still hit but physics never contacts - xlinka
+                _isDynamic = false;
+                _bodyNode = new Area3D
+                {
+                    Name = "GrabbableSensor",
+                    Monitoring = false,
+                    Monitorable = true,
+                };
+            }
+            else if (_isDynamic)
             {
                 _material = new PhysicsMaterial { Friction = 1f, Bounce = 0f };
                 var rigid = new RigidBody3D
@@ -290,7 +308,7 @@ namespace Lumora.Godot.Hooks
 
         private bool ShouldShowDebugForCollider()
         {
-            return _showDebugColliders || IsImageCollider();
+            return _showDebugColliders;
         }
 
         private bool IsImageCollider()
@@ -299,6 +317,23 @@ namespace Lumora.Godot.Hooks
                 return false;
 
             return Owner.Slot.GetComponent<ImageProvider>() != null;
+        }
+
+        // any grabbable slot without its own RigidBody should also act as a sensor so the player
+        // can walk through it / grab it without getting bounced. covers shader orbs and similar - xlinka
+        private bool ShouldBeSensor()
+        {
+            if (IsImageCollider())
+                return true;
+
+            var slot = Owner?.Slot;
+            if (slot == null)
+                return false;
+
+            if (slot.GetComponent<Grabbable>() == null)
+                return false;
+
+            return slot.GetComponent<Lumora.Core.Components.RigidBody>() == null;
         }
 
         private static ArrayMesh BuildBoxWireMesh(Vector3 size)

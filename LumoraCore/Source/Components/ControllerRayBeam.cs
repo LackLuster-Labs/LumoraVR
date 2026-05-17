@@ -156,9 +156,10 @@ public sealed class ControllerRayBeam : Component
             return;
         }
 
-        // In desktop mode the left hand has no meaningful aim; hide its beam.
+        // In desktop the reticle is the cursor, so hide the world-space beam entirely so
+        // it can't appear to diverge from the reticle (origin is the hand, not the camera).
         var inputCheck = Engine.Current?.InputInterface;
-        if (inputCheck != null && !inputCheck.IsVRActive && ControllerSide.Value == Chirality.Left)
+        if (inputCheck != null && !inputCheck.IsVRActive)
         {
             _beamSlot.ActiveSelf.Value = false;
             return;
@@ -285,25 +286,25 @@ public sealed class ControllerRayBeam : Component
         // beam follows where the user is looking, while the hand visual stays at the side.
         if (input != null && !input.IsVRActive)
         {
-            // Find head slot by walking parent hierarchy.
-            // If not found, fall back to world-forward (never to the hand's downward pose).
+            // Desktop: aim from the head/camera so the ray passes through the reticle.
+            // Origin is the head position so visuals (when shown) align with the cursor dot.
             var headSlot = FindHeadSlot();
             floatQ headRot = headSlot != null ? headSlot.GlobalRotation : floatQ.Identity;
+            float3 headPos = headSlot != null ? headSlot.GlobalPosition : Slot.GlobalPosition;
 
-            // Head -Z is forward in Godot/Lumora convention
             direction = headRot * new float3(0f, 0f, -1f);
             float dLen = direction.Length;
             if (dLen > 0.0001f) direction /= dLen;
             else direction = float3.Backward;
 
             origin = new float3(
-                Slot.GlobalPosition.x + direction.x * startOffset,
-                Slot.GlobalPosition.y + direction.y * startOffset,
-                Slot.GlobalPosition.z + direction.z * startOffset);
+                headPos.x + direction.x * startOffset,
+                headPos.y + direction.y * startOffset,
+                headPos.z + direction.z * startOffset);
             return;
         }
 
-        // VR mode: controller slot rotation is driven by hardware tracking — use it directly.
+        // VR mode: controller slot rotation is driven by hardware tracking, use it directly.
         direction = -Slot.Forward; // controller faces -Z local → world forward when tracked
         float dirLen = direction.Length;
         if (dirLen < 0.0001f)

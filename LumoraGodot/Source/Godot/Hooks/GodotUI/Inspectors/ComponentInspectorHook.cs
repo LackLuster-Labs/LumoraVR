@@ -2,9 +2,12 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 ﻿using System.Collections.Generic;
+using System;
 using Godot;
 using Lumora.Core;
+using Lumora.Core.GodotUI.Wizards;
 using Lumora.Core.GodotUI.Inspectors;
+using Lumora.Core.Networking.Sync;
 using Lumora.Godot.UI;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
@@ -169,7 +172,10 @@ public class ComponentInspectorHook : ComponentHook<ComponentInspector>
                     continue;
             }
 
-            var row = SyncMemberEditorBuilder.CreateEditorRow(member, name);
+            var row = SyncMemberEditorBuilder.CreateEditorRow(
+                member,
+                name,
+                openColorPicker: OpenColorPickerPanel);
             if (row != null)
             {
                 _propertyContainer.AddChild(row);
@@ -183,6 +189,59 @@ public class ComponentInspectorHook : ComponentHook<ComponentInspector>
         }
 
         LumoraLogger.Log($"ComponentInspectorHook: Built {_propertyRows.Count} property editors for {component.GetType().Name}");
+    }
+
+    private void OpenColorPickerPanel(ISyncMember syncMember, string memberName, bool hdr)
+    {
+        if (syncMember is not IField field || !field.CanWrite)
+        {
+            return;
+        }
+
+        var parentSlot = Owner.Slot.Parent ?? Owner.Slot;
+        var slotName = $"ColorPicker_{SanitizeSlotName(memberName)}_{syncMember.ReferenceID}";
+
+        var pickerSlot = parentSlot.FindChild(slotName, recursive: false);
+        var picker = pickerSlot?.GetComponent<ColorPickerPanel>();
+        if (picker == null)
+        {
+            pickerSlot = parentSlot.AddSlot(slotName);
+            picker = pickerSlot.AttachComponent<ColorPickerPanel>();
+        }
+
+        picker.SetTargetDirect(syncMember, memberName);
+        picker.ShowAlpha.Value = true;
+        picker.AllowHDR.Value = hdr;
+        picker.PixelsPerUnit.Value = Owner.PixelsPerUnit.Value;
+
+        if (pickerSlot != null)
+        {
+            PanelPlacement.PlaceBesidePanel(pickerSlot, Owner.Slot, 0.48f, 0.06f, 0.03f);
+        }
+    }
+
+    private static string SanitizeSlotName(string raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return "Color";
+        }
+
+        Span<char> chars = stackalloc char[raw.Length];
+        var len = 0;
+        foreach (var c in raw)
+        {
+            if (char.IsLetterOrDigit(c) || c == '_')
+            {
+                chars[len++] = c;
+            }
+            else if (len == 0 || chars[len - 1] != '_')
+            {
+                chars[len++] = '_';
+            }
+        }
+
+        return len == 0 ? "Color" : new string(chars[..len]);
     }
 
     public override void Destroy(bool destroyingWorld)

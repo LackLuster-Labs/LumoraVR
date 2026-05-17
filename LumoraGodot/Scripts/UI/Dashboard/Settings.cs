@@ -6,6 +6,7 @@ using System;
 using System.Collections.Generic;
 using Lumora.CDN;
 using Lumora.Core.Components.Avatar;
+using Lumora.Source.Godot.UI;
 
 namespace Lumora.Godot.UI;
 
@@ -19,12 +20,22 @@ public partial class Settings : Control
     private Button? _tabSecurity;
     private Button? _tabAudio;
     private Button? _tabVideo;
+    private Button? _tabInterface;
 
     // Tab content
     private Control? _profileTab;
     private Control? _securityTab;
     private Control? _audioTab;
     private Control? _videoTab;
+    private Control? _interfaceTab;
+
+    // Interface tab dynamic controls
+    private HSlider? _reticleSizeSlider;
+    private Label? _reticleSizeValue;
+    private HSlider? _mouseSensitivitySlider;
+    private Label? _mouseSensitivityValue;
+    private HSlider? _mouseSmoothingSlider;
+    private Label? _mouseSmoothingValue;
 
     // Profile tab elements
     private Label? _avatarLabel;
@@ -86,6 +97,7 @@ public partial class Settings : Control
     private const string TAB_SECURITY = "Security";
     private const string TAB_AUDIO = "Audio";
     private const string TAB_VIDEO = "Video";
+    private const string TAB_INTERFACE = "Interface";
 
     public override void _Ready()
     {
@@ -135,6 +147,12 @@ public partial class Settings : Control
         _fullscreenToggle = GetNodeOrNull<CheckButton>($"{gfx}/FullscreenHBox/FullscreenToggle");
 
         BuildAudioDeviceRows();
+        BuildInterfaceTab();
+        ApplyToggleTheme(_aoToggle);
+        ApplyToggleTheme(_ssrToggle);
+        ApplyToggleTheme(_fpsLimitToggle);
+        ApplyToggleTheme(_vsyncToggle);
+        ApplyToggleTheme(_fullscreenToggle);
 
         // Get styles for tab switching
         _tabActiveStyle = _tabProfile?.GetThemeStylebox("normal");
@@ -160,6 +178,7 @@ public partial class Settings : Control
         _tabSecurity?.Connect("pressed", Callable.From(() => SwitchTab(TAB_SECURITY)));
         _tabAudio?.Connect("pressed", Callable.From(() => SwitchTab(TAB_AUDIO)));
         _tabVideo?.Connect("pressed", Callable.From(() => SwitchTab(TAB_VIDEO)));
+        _tabInterface?.Connect("pressed", Callable.From(() => SwitchTab(TAB_INTERFACE)));
 
         // Profile actions
         _btnChangeAvatar?.Connect("pressed", Callable.From(OnChangeAvatarPressed));
@@ -195,6 +214,7 @@ public partial class Settings : Control
         if (_securityTab != null) _securityTab.Visible = tab == TAB_SECURITY;
         if (_audioTab != null) _audioTab.Visible = tab == TAB_AUDIO;
         if (_videoTab != null) _videoTab.Visible = tab == TAB_VIDEO;
+        if (_interfaceTab != null) _interfaceTab.Visible = tab == TAB_INTERFACE;
 
         UpdateTabVisuals();
     }
@@ -205,6 +225,145 @@ public partial class Settings : Control
         UpdateTabButton(_tabSecurity, _currentTab == TAB_SECURITY);
         UpdateTabButton(_tabAudio, _currentTab == TAB_AUDIO);
         UpdateTabButton(_tabVideo, _currentTab == TAB_VIDEO);
+        UpdateTabButton(_tabInterface, _currentTab == TAB_INTERFACE);
+    }
+
+    /// <summary>
+    /// Builds the Interface tab at runtime so we can expose the new
+    /// reticle / mouse settings without editing the .tscn structure.
+    /// The tab is added as a sibling of the existing tabs and a header
+    /// button is added next to TabVideo.
+    /// </summary>
+    private void BuildInterfaceTab()
+    {
+        var header = GetNodeOrNull<HBoxContainer>("VBox/Header");
+        var tabContainer = GetNodeOrNull<Control>("VBox/ContentPanel/Margin/TabContainer");
+        if (header == null || tabContainer == null || _tabVideo == null)
+            return;
+
+        // ----- header button -----
+        _tabInterface = new Button();
+        _tabInterface.Name = "TabInterface";
+        _tabInterface.Text = "Interface";
+        _tabInterface.CustomMinimumSize = _tabVideo.CustomMinimumSize;
+        _tabInterface.SizeFlagsHorizontal = _tabVideo.SizeFlagsHorizontal;
+        var videoFontSize = _tabVideo.GetThemeFontSize("font_size");
+        if (videoFontSize > 0) _tabInterface.AddThemeFontSizeOverride("font_size", videoFontSize);
+        header.AddChild(_tabInterface);
+
+        // ----- tab content -----
+        var scroll = new ScrollContainer();
+        scroll.Name = "InterfaceTab";
+        scroll.HorizontalScrollMode = ScrollContainer.ScrollMode.Disabled;
+        scroll.SetAnchorsPreset(Control.LayoutPreset.FullRect);
+        scroll.Visible = false;
+        tabContainer.AddChild(scroll);
+        _interfaceTab = scroll;
+
+        var content = new VBoxContainer();
+        content.Name = "InterfaceContent";
+        content.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        content.AddThemeConstantOverride("separation", 16);
+        scroll.AddChild(content);
+
+        // Reticle section
+        var reticleSection = CreateInterfaceSection(content, "Reticle");
+
+        _reticleSizeSlider = new HSlider { MinValue = 4, MaxValue = 32, Step = 1, Value = InterfaceSettings.ReticleSize };
+        _reticleSizeValue = new Label { Text = $"{InterfaceSettings.ReticleSize:F0} px" };
+        AddInterfaceRow(reticleSection, "Reticle Size", _reticleSizeSlider, _reticleSizeValue);
+        _reticleSizeSlider.Connect("value_changed", Callable.From<double>(OnReticleSizeChanged));
+
+        // Mouse section
+        var mouseSection = CreateInterfaceSection(content, "Mouse");
+
+        _mouseSensitivitySlider = new HSlider { MinValue = 0.1, MaxValue = 4.0, Step = 0.05, Value = InterfaceSettings.MouseSensitivity };
+        _mouseSensitivityValue = new Label { Text = $"{InterfaceSettings.MouseSensitivity:F2}x" };
+        AddInterfaceRow(mouseSection, "Sensitivity", _mouseSensitivitySlider, _mouseSensitivityValue);
+        _mouseSensitivitySlider.Connect("value_changed", Callable.From<double>(OnMouseSensitivityChanged));
+
+        _mouseSmoothingSlider = new HSlider { MinValue = 0.0, MaxValue = 0.9, Step = 0.05, Value = InterfaceSettings.MouseSmoothing };
+        _mouseSmoothingValue = new Label { Text = InterfaceSettings.MouseSmoothing <= 0.001f ? "Off" : $"{InterfaceSettings.MouseSmoothing:F2}" };
+        AddInterfaceRow(mouseSection, "Smoothing", _mouseSmoothingSlider, _mouseSmoothingValue);
+        _mouseSmoothingSlider.Connect("value_changed", Callable.From<double>(OnMouseSmoothingChanged));
+    }
+
+    private VBoxContainer CreateInterfaceSection(Control parent, string title)
+    {
+        var section = new VBoxContainer();
+        section.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        section.AddThemeConstantOverride("separation", 8);
+        parent.AddChild(section);
+
+        var titleLabel = new Label();
+        titleLabel.Text = title;
+        titleLabel.AddThemeFontSizeOverride("font_size", 14);
+        titleLabel.AddThemeColorOverride("font_color", new Color(0.7f, 0.65f, 0.95f));
+        section.AddChild(titleLabel);
+
+        return section;
+    }
+
+    private void AddInterfaceRow(Control section, string label, Control control, Label? valueLabel)
+    {
+        var row = new HBoxContainer();
+        row.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        row.AddThemeConstantOverride("separation", 12);
+        section.AddChild(row);
+
+        var l = new Label { Text = label, CustomMinimumSize = new Vector2(140, 0) };
+        l.VerticalAlignment = VerticalAlignment.Center;
+        row.AddChild(l);
+
+        control.SizeFlagsHorizontal = SizeFlags.ExpandFill;
+        control.CustomMinimumSize = new Vector2(0, 28);
+        row.AddChild(control);
+
+        if (valueLabel != null)
+        {
+            valueLabel.CustomMinimumSize = new Vector2(80, 0);
+            valueLabel.HorizontalAlignment = HorizontalAlignment.Right;
+            valueLabel.VerticalAlignment = VerticalAlignment.Center;
+            row.AddChild(valueLabel);
+        }
+    }
+
+    private void OnReticleSizeChanged(double value)
+    {
+        InterfaceSettings.ReticleSize = (float)value;
+        if (_reticleSizeValue != null)
+            _reticleSizeValue.Text = $"{value:F0} px";
+    }
+
+    private void OnMouseSensitivityChanged(double value)
+    {
+        InterfaceSettings.MouseSensitivity = (float)value;
+        if (_mouseSensitivityValue != null)
+            _mouseSensitivityValue.Text = $"{value:F2}x";
+    }
+
+    private void OnMouseSmoothingChanged(double value)
+    {
+        InterfaceSettings.MouseSmoothing = (float)value;
+        if (_mouseSmoothingValue != null)
+            _mouseSmoothingValue.Text = value <= 0.001 ? "Off" : $"{value:F2}";
+    }
+
+    /// <summary>
+    /// Reviewer flagged the default Godot CheckButton as "double-indicator": the
+    /// background tints AND the knob slides. We apply a flat transparent background
+    /// so only the knob conveys state, matching modern OS toggles.
+    /// </summary>
+    private static void ApplyToggleTheme(CheckButton? toggle)
+    {
+        if (toggle == null) return;
+
+        var transparent = new StyleBoxEmpty();
+        toggle.AddThemeStyleboxOverride("normal", transparent);
+        toggle.AddThemeStyleboxOverride("hover", transparent);
+        toggle.AddThemeStyleboxOverride("pressed", transparent);
+        toggle.AddThemeStyleboxOverride("focus", transparent);
+        toggle.AddThemeStyleboxOverride("disabled", transparent);
     }
 
     private void UpdateTabButton(Button? button, bool isActive)
@@ -479,7 +638,7 @@ public partial class Settings : Control
         // Shadow atlas size controls shadow resolution globally
         int atlasSize = index switch
         {
-            0 => 0,     // Off — disable shadow atlas
+            0 => 0,     // Off, disable shadow atlas
             1 => 1024,  // Low
             2 => 2048,  // Medium
             3 => 4096,  // High

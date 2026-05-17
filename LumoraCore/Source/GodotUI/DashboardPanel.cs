@@ -31,7 +31,7 @@ public class DashboardPanel : GodotUIPanel
     protected override string DefaultScenePath => "res://Scenes/UI/Dashboard/HomeDash.tscn";
     protected override float2 DefaultSize => new float2(900, 700);
     protected override float DefaultPixelsPerUnit => 800f;
-    protected override int DefaultResolutionScale => 2;
+    protected override int DefaultResolutionScale => 3;
 
     public override void OnAwake()
     {

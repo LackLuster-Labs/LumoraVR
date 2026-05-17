@@ -31,16 +31,12 @@ settings/3d/volumetric_defaults/thickness=0.0
 
 window/stretch/mode="canvas_items"
 window/stretch/aspect="expand"
-window/vsync/vsync_mode="disabled"
+window/vsync/vsync_mode="enabled"
 window/size/always_on_top.editor=false
 
 [dotnet]
 
 project/assembly_name="Lumora"
-
-[editor]
-
-run/main_run_args="--xr-mode off --vr "
 
 [filesystem]
 
@@ -204,12 +200,15 @@ menu_button={
 3d_physics/layer_2="Player"
 3d_physics/layer_3="Props"
 
+[physics]
+
+common/physics_interpolation=true
+
 [rendering]
 
 renderer/rendering_method.mobile="forward_plus"
 
 [xr]
 
-openxr/enabled=true
 shaders/enabled=true
 openxr/action_map="res://openxr_action_map.tres"

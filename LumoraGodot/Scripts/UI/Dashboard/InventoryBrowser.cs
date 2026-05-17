@@ -348,7 +348,7 @@ public partial class InventoryBrowser : Control
 
             if (inventoryResult.Status == System.Net.HttpStatusCode.Unauthorized)
             {
-                SetStatus("Log in to view your inventory");
+                SetStatus("Log in to view inventory");
                 UpdateInteractionState(false);
             }
             else

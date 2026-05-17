@@ -4,20 +4,20 @@
 [ext_resource type="Script" path="res://Scripts/UI/Dashboard/HomeDash.cs" id="2_script"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_background"]
-bg_color = Color(0.05, 0.04, 0.1, 0.36)
-border_width_left = 1
-border_width_top = 1
-border_width_right = 1
-border_width_bottom = 1
+bg_color = Color(0.05, 0.04, 0.1, 0.88)
+border_width_left = 0
+border_width_top = 0
+border_width_right = 0
+border_width_bottom = 0
 border_color = Color(0.2, 0.18, 0.3, 0.5)
-corner_radius_top_left = 20
-corner_radius_top_right = 20
-corner_radius_bottom_right = 20
-corner_radius_bottom_left = 20
-content_margin_left = 24
-content_margin_top = 24
-content_margin_right = 24
-content_margin_bottom = 24
+corner_radius_top_left = 0
+corner_radius_top_right = 0
+corner_radius_bottom_right = 0
+corner_radius_bottom_left = 0
+content_margin_left = 18
+content_margin_top = 18
+content_margin_right = 18
+content_margin_bottom = 18
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_header"]
 bg_color = Color(0.12, 0.1, 0.18, 0.58)
@@ -27,7 +27,7 @@ corner_radius_bottom_right = 12
 corner_radius_bottom_left = 12
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_bottom_bar"]
-bg_color = Color(0.11, 0.09, 0.17, 0.56)
+bg_color = Color(0.11, 0.09, 0.17, 0.74)
 corner_radius_top_left = 12
 corner_radius_top_right = 12
 corner_radius_bottom_right = 12
@@ -56,6 +56,10 @@ corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
+content_margin_left = 14
+content_margin_top = 8
+content_margin_right = 14
+content_margin_bottom = 8
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_hover"]
 bg_color = Color(0.25, 0.2, 0.4, 0.78)
@@ -68,18 +72,26 @@ corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
+content_margin_left = 14
+content_margin_top = 8
+content_margin_right = 14
+content_margin_bottom = 8
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_pressed"]
-bg_color = Color(0.35, 0.28, 0.55, 0.82)
+bg_color = Color(0.55, 0.42, 0.92, 1.0)
 border_width_left = 1
 border_width_top = 1
 border_width_right = 1
 border_width_bottom = 1
-border_color = Color(0.47, 0.37, 0.94, 0.8)
+border_color = Color(0.85, 0.78, 1.0, 1.0)
 corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
+content_margin_left = 14
+content_margin_top = 8
+content_margin_right = 14
+content_margin_bottom = 8
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_separator"]
 bg_color = Color(0.25, 0.22, 0.35, 0.4)
@@ -173,13 +185,13 @@ size_flags_vertical = 3
 theme_override_constants/separation = 12
 
 [node name="Header" type="PanelContainer" parent="VBox"]
-custom_minimum_size = Vector2(0, 52)
+custom_minimum_size = Vector2(0, 68)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_header")
-theme_override_constants/content_margin_left = 14
-theme_override_constants/content_margin_top = 4
-theme_override_constants/content_margin_right = 14
-theme_override_constants/content_margin_bottom = 4
+theme_override_constants/content_margin_left = 16
+theme_override_constants/content_margin_top = 14
+theme_override_constants/content_margin_right = 16
+theme_override_constants/content_margin_bottom = 14
 
 [node name="HeaderContent" type="HBoxContainer" parent="VBox/Header"]
 layout_mode = 2
@@ -210,19 +222,19 @@ text = "Home Dashboard"
 
 [node name="UserSectionPanel" type="PanelContainer" parent="VBox/Header/HeaderContent"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(208, 0)
+custom_minimum_size = Vector2(220, 0)
 layout_mode = 2
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_user_section")
-theme_override_constants/content_margin_left = 10
-theme_override_constants/content_margin_top = 6
-theme_override_constants/content_margin_right = 10
-theme_override_constants/content_margin_bottom = 6
+theme_override_constants/content_margin_left = 14
+theme_override_constants/content_margin_top = 8
+theme_override_constants/content_margin_right = 14
+theme_override_constants/content_margin_bottom = 8
 
 [node name="UserSection" type="HBoxContainer" parent="VBox/Header/HeaderContent/UserSectionPanel"]
 layout_mode = 2
 size_flags_vertical = 1
-theme_override_constants/separation = 8
+theme_override_constants/separation = 12
 
 [node name="UserInfoVBox" type="VBoxContainer" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection"]
 layout_mode = 2
@@ -255,6 +267,8 @@ size_flags_vertical = 1
 [node name="AvatarCircle" type="Panel" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection/AvatarContainer"]
 custom_minimum_size = Vector2(34, 34)
 layout_mode = 2
+size_flags_horizontal = 4
+size_flags_vertical = 4
 theme_override_styles/panel = SubResource("StyleBoxFlat_avatar_circle")
 
 [node name="AvatarIcon" type="Label" parent="VBox/Header/HeaderContent/UserSectionPanel/UserSection/AvatarContainer/AvatarCircle"]
@@ -266,8 +280,8 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_colors/font_color = Color(0.7, 0.65, 0.85, 1)
-theme_override_font_sizes/font_size = 15
-text = "G"
+theme_override_font_sizes/font_size = 16
+text = "—"
 horizontal_alignment = 1
 vertical_alignment = 1
 
@@ -558,7 +572,7 @@ theme_override_font_sizes/font_size = 9
 text = "Your recent worlds and sessions will appear here"
 
 [node name="StatusBar" type="Panel" parent="VBox"]
-custom_minimum_size = Vector2(0, 56)
+custom_minimum_size = Vector2(0, 68)
 layout_mode = 2
 theme_override_styles/panel = SubResource("StyleBoxFlat_bottom_bar")
 
@@ -569,10 +583,10 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/margin_left = 8
-theme_override_constants/margin_top = 5
-theme_override_constants/margin_right = 8
-theme_override_constants/margin_bottom = 5
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
 
 [node name="StatusContent" type="HBoxContainer" parent="VBox/StatusBar/StatusMargin"]
 layout_mode = 2
@@ -620,24 +634,18 @@ text = "Connected"
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="NavBarPanel" type="Panel" parent="VBox/StatusBar/StatusMargin/StatusContent"]
-custom_minimum_size = Vector2(592, 0)
+[node name="NavBarPanel" type="PanelContainer" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 layout_mode = 2
-size_flags_horizontal = 3
+size_flags_horizontal = 4
 size_flags_vertical = 1
 theme_override_styles/panel = SubResource("StyleBoxFlat_fps_box")
 
 [node name="NavBarMargin" type="MarginContainer" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/margin_left = 6
-theme_override_constants/margin_top = 6
-theme_override_constants/margin_right = 6
-theme_override_constants/margin_bottom = 6
+layout_mode = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
 
 [node name="NavBar" type="HBoxContainer" parent="VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin"]
 layout_mode = 2
@@ -647,11 +655,13 @@ theme_override_constants/separation = 6
 custom_minimum_size = Vector2(76, 30)
 layout_mode = 2
 size_flags_horizontal = 0
+size_flags_vertical = 4
 unique_name_in_owner = true
-theme_override_colors/font_color = Color(0.95, 0.95, 1, 1)
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_hover_color = Color(1, 1, 1, 1)
 theme_override_font_sizes/font_size = 11
 theme_override_styles/normal = SubResource("StyleBoxFlat_button_pressed")
-theme_override_styles/hover = SubResource("StyleBoxFlat_button_hover")
+theme_override_styles/hover = SubResource("StyleBoxFlat_button_pressed")
 theme_override_styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 text = "Home"
 
@@ -659,6 +669,7 @@ text = "Home"
 custom_minimum_size = Vector2(76, 30)
 layout_mode = 2
 size_flags_horizontal = 0
+size_flags_vertical = 4
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
 theme_override_font_sizes/font_size = 11
@@ -671,6 +682,7 @@ text = "Worlds"
 custom_minimum_size = Vector2(76, 30)
 layout_mode = 2
 size_flags_horizontal = 0
+size_flags_vertical = 4
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
 theme_override_font_sizes/font_size = 11
@@ -683,6 +695,7 @@ text = "Friends"
 custom_minimum_size = Vector2(76, 30)
 layout_mode = 2
 size_flags_horizontal = 0
+size_flags_vertical = 4
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
 theme_override_font_sizes/font_size = 11
@@ -695,6 +708,7 @@ text = "Groups"
 custom_minimum_size = Vector2(82, 30)
 layout_mode = 2
 size_flags_horizontal = 0
+size_flags_vertical = 4
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
 theme_override_font_sizes/font_size = 11
@@ -707,6 +721,7 @@ text = "Inventory"
 custom_minimum_size = Vector2(82, 30)
 layout_mode = 2
 size_flags_horizontal = 0
+size_flags_vertical = 4
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.82, 0.82, 0.9, 1)
 theme_override_font_sizes/font_size = 11
@@ -719,6 +734,7 @@ text = "Settings"
 custom_minimum_size = Vector2(76, 30)
 layout_mode = 2
 size_flags_horizontal = 0
+size_flags_vertical = 4
 unique_name_in_owner = true
 theme_override_colors/font_color = Color(0.95, 0.58, 0.58, 1)
 theme_override_colors/font_hover_color = Color(1, 0.7, 0.7, 1)
@@ -756,5 +772,3 @@ vertical_alignment = 1
 [node name="StatusRightSpacer" type="Control" parent="VBox/StatusBar/StatusMargin/StatusContent"]
 custom_minimum_size = Vector2(6, 0)
 layout_mode = 2
-
-

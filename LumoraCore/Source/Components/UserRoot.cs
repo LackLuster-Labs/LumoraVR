@@ -461,8 +461,9 @@ public class UserRoot : Component
     {
         LumoraLogger.Log($"UserRoot: Destroying UserRoot for user '{ActiveUser?.UserName.Value ?? "Unknown"}'");
 
-        // Unregister from user
-        if (_isRegistered && World?.LocalUser?.Root == this)
+        // During world disposal users are disposed before slots/components.
+        // Their Root setter is no longer valid, and the user object is going away anyway.
+        if (World?.IsDisposed != true && _isRegistered && World?.LocalUser?.Root == this)
         {
             World.LocalUser.Root = null;
         }

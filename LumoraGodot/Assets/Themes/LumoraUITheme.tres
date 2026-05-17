@@ -3,6 +3,10 @@
 [ext_resource type="FontFile" uid="uid://dne06dcdmx5hj" path="res://Assets/Fonts/FiraCode/FiraCode-SemiBold.ttf" id="1_font"]
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_disabled"]
+content_margin_left = 14.0
+content_margin_top = 8.0
+content_margin_right = 14.0
+content_margin_bottom = 8.0
 bg_color = Color(0.13, 0.12, 0.19, 0.55)
 border_width_left = 1
 border_width_top = 1
@@ -15,6 +19,10 @@ corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_hover"]
+content_margin_left = 14.0
+content_margin_top = 8.0
+content_margin_right = 14.0
+content_margin_bottom = 8.0
 bg_color = Color(0.23, 0.19, 0.37, 0.8)
 border_width_left = 1
 border_width_top = 1
@@ -27,6 +35,10 @@ corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_normal"]
+content_margin_left = 14.0
+content_margin_top = 8.0
+content_margin_right = 14.0
+content_margin_bottom = 8.0
 bg_color = Color(0.15, 0.13, 0.24, 0.72)
 border_width_left = 1
 border_width_top = 1
@@ -39,6 +51,10 @@ corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_button_pressed"]
+content_margin_left = 14.0
+content_margin_top = 8.0
+content_margin_right = 14.0
+content_margin_bottom = 8.0
 bg_color = Color(0.33, 0.27, 0.54, 0.86)
 border_width_left = 1
 border_width_top = 1
@@ -134,6 +150,8 @@ border_color = Color(0.28, 0.24, 0.44, 0.72)
 corner_radius_top_left = 7
 corner_radius_top_right = 7
 
+[sub_resource type="StyleBoxEmpty" id="StyleBoxEmpty_checkbox"]
+
 [resource]
 default_font = ExtResource("1_font")
 default_font_size = 13
@@ -141,17 +159,35 @@ Button/colors/font_color = Color(0.9, 0.9, 0.96, 1)
 Button/colors/font_disabled_color = Color(0.58, 0.58, 0.64, 1)
 Button/colors/font_hover_color = Color(1, 1, 1, 1)
 Button/colors/font_pressed_color = Color(1, 1, 1, 1)
-Button/font_sizes/font_size = 12
+Button/font_sizes/font_size = 14
 Button/styles/disabled = SubResource("StyleBoxFlat_button_disabled")
 Button/styles/hover = SubResource("StyleBoxFlat_button_hover")
 Button/styles/normal = SubResource("StyleBoxFlat_button_normal")
 Button/styles/pressed = SubResource("StyleBoxFlat_button_pressed")
 CheckBox/colors/font_color = Color(0.84, 0.84, 0.9, 1)
+CheckBox/colors/font_hover_color = Color(1, 1, 1, 1)
+CheckBox/colors/font_pressed_color = Color(1, 1, 1, 1)
+CheckBox/colors/font_disabled_color = Color(0.55, 0.55, 0.6, 1)
+CheckBox/constants/h_separation = 10
+CheckBox/styles/normal = SubResource("StyleBoxEmpty_checkbox")
+CheckBox/styles/hover = SubResource("StyleBoxEmpty_checkbox")
+CheckBox/styles/pressed = SubResource("StyleBoxEmpty_checkbox")
+CheckBox/styles/focus = SubResource("StyleBoxEmpty_checkbox")
+CheckBox/styles/disabled = SubResource("StyleBoxEmpty_checkbox")
 CheckButton/colors/font_color = Color(0.84, 0.84, 0.9, 1)
+CheckButton/colors/font_hover_color = Color(1, 1, 1, 1)
+CheckButton/colors/font_pressed_color = Color(1, 1, 1, 1)
+CheckButton/colors/font_disabled_color = Color(0.55, 0.55, 0.6, 1)
+CheckButton/constants/h_separation = 10
+CheckButton/styles/normal = SubResource("StyleBoxEmpty_checkbox")
+CheckButton/styles/hover = SubResource("StyleBoxEmpty_checkbox")
+CheckButton/styles/pressed = SubResource("StyleBoxEmpty_checkbox")
+CheckButton/styles/focus = SubResource("StyleBoxEmpty_checkbox")
+CheckButton/styles/disabled = SubResource("StyleBoxEmpty_checkbox")
 Label/colors/font_color = Color(0.86, 0.86, 0.93, 1)
 LineEdit/colors/caret_color = Color(0.47, 0.37, 0.94, 1)
 LineEdit/colors/font_color = Color(0.92, 0.92, 0.98, 1)
-LineEdit/font_sizes/font_size = 13
+LineEdit/font_sizes/font_size = 14
 LineEdit/styles/focus = SubResource("StyleBoxFlat_input_focus")
 LineEdit/styles/normal = SubResource("StyleBoxFlat_input_normal")
 LineEdit/styles/read_only = SubResource("StyleBoxFlat_input_normal")
@@ -160,7 +196,7 @@ MarginContainer/constants/margin_left = 0
 MarginContainer/constants/margin_right = 0
 MarginContainer/constants/margin_top = 0
 OptionButton/colors/font_color = Color(0.9, 0.9, 0.96, 1)
-OptionButton/font_sizes/font_size = 12
+OptionButton/font_sizes/font_size = 14
 OptionButton/styles/hover = SubResource("StyleBoxFlat_input_focus")
 OptionButton/styles/normal = SubResource("StyleBoxFlat_input_normal")
 OptionButton/styles/pressed = SubResource("StyleBoxFlat_input_focus")
@@ -175,9 +211,9 @@ TabBar/styles/tab_selected = SubResource("StyleBoxFlat_tab_selected")
 TabBar/styles/tab_unselected = SubResource("StyleBoxFlat_tab_unselected")
 TabContainer/styles/panel = SubResource("StyleBoxFlat_panel")
 TextEdit/colors/font_color = Color(0.9, 0.9, 0.96, 1)
-TextEdit/font_sizes/font_size = 12
+TextEdit/font_sizes/font_size = 14
 TextEdit/styles/focus = SubResource("StyleBoxFlat_input_focus")
 TextEdit/styles/normal = SubResource("StyleBoxFlat_input_normal")
 TextEdit/styles/read_only = SubResource("StyleBoxFlat_input_normal")
 Tree/colors/font_color = Color(0.84, 0.84, 0.92, 1)
-Tree/font_sizes/font_size = 12
+Tree/font_sizes/font_size = 13

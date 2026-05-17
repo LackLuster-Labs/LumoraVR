@@ -518,15 +518,15 @@ public partial class ClipboardImporter : Node
         var meshRenderer = imageSlot.AttachComponent<MeshRenderer>();
         meshRenderer.Mesh.Target = quadMesh;
 
+        // ImageProvider before BoxCollider so PhysicsColliderHook spawns a sensor not a wall - xlinka
+        var imageProvider = imageSlot.AttachComponent<ImageProvider>();
+        var imageUri = new Uri(localUri ?? filePath);
+        imageProvider.URL.Value = imageUri;
+
         var collider = imageSlot.AttachComponent<BoxCollider>();
         collider.Size.Value = new float3(1f, 1f, 0.02f);
 
         imageSlot.AttachComponent<Grabbable>();
-
-        // Add ImageProvider with URL
-        var imageProvider = imageSlot.AttachComponent<ImageProvider>();
-        var imageUri = new Uri(localUri ?? filePath);
-        imageProvider.URL.Value = imageUri;
 
         var sizeDriver = imageSlot.AttachComponent<TextureSizeDriver>();
         sizeDriver.Source.Target = imageProvider;
@@ -768,6 +768,11 @@ public partial class ClipboardImporter : Node
         var meshRenderer = sphereSlot.AttachComponent<MeshRenderer>();
         meshRenderer.Mesh.Target = sphereMesh;
         meshRenderer.Material.Target = material;
+
+        // Grabbable + collider, in that order so PhysicsColliderHook makes it a sensor not a wall - xlinka
+        sphereSlot.AttachComponent<Grabbable>();
+        var sphereCollider = sphereSlot.AttachComponent<SphereCollider>();
+        sphereCollider.Radius.Value = 0.3f;
 
         var inspectorSlot = rootSlot.AddSlot("MaterialInspector");
         inspectorSlot.LocalPosition.Value = new float3(0.45f, 0f, 0f);

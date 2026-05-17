@@ -23,6 +23,6 @@ public sealed class Grabbable : Component
     {
         base.OnInit();
         AllowGrab.Value      = true;
-        FollowRotation.Value = true;
+        FollowRotation.Value = false;
     }
 }

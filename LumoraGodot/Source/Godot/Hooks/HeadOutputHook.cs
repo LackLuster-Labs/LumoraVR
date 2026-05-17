@@ -74,7 +74,8 @@ public class HeadOutputHook : ComponentHook<HeadOutput>
             Current = true,
             Fov = 90f,
             Near = 0.05f,
-            Far = 1000f
+            Far = 1000f,
+            PhysicsInterpolationMode = Node.PhysicsInterpolationModeEnum.Off
         };
 
         Node3D targetNode = attachedNode;

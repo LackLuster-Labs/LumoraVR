@@ -163,6 +163,11 @@ public class MaterialAsset : DynamicImplementableAsset<IMaterialAssetHook>
     public object GodotMaterial => Hook?.GodotMaterial;
 
     /// <summary>
+    /// Renderer queue requested by this material (-1 = default queue).
+    /// </summary>
+    public int RenderQueue => Hook?.RenderQueue ?? -1;
+
+    /// <summary>
     /// Whether the material is valid and ready for use.
     /// </summary>
     public bool IsValid => Hook?.IsValid ?? false;

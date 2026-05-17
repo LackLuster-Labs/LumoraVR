@@ -23,8 +23,11 @@ public sealed class ComponentAttacherHook : ComponentHook<ComponentAttacher>
     // Viewport and rendering
     private SubViewport? _viewport;
     private MeshInstance3D? _meshInstance;
+    private MeshInstance3D? _backingInstance;
     private QuadMesh? _quadMesh;
+    private QuadMesh? _backingQuadMesh;
     private StandardMaterial3D? _material;
+    private StandardMaterial3D? _backingMaterial;
     private Node? _loadedScene;
 
     // UI elements
@@ -72,8 +75,11 @@ public sealed class ComponentAttacherHook : ComponentHook<ComponentAttacher>
         // Create mesh for 3D display
         _meshInstance = new MeshInstance3D { Name = "ComponentAttacherQuad" };
         _quadMesh = new QuadMesh();
+        _backingQuadMesh = new QuadMesh();
         UpdateQuadSize();
         _meshInstance.Mesh = _quadMesh;
+        _backingMaterial = WorldPanelBacking.CreateBackingMaterial();
+        _backingInstance = WorldPanelBacking.CreateBackingMesh("ComponentAttacherBacking", _backingQuadMesh, _backingMaterial);
 
         // Create material
         _material = new StandardMaterial3D
@@ -83,10 +89,12 @@ public sealed class ComponentAttacherHook : ComponentHook<ComponentAttacher>
             CullMode = BaseMaterial3D.CullModeEnum.Disabled,
             TextureFilter = BaseMaterial3D.TextureFilterEnum.Linear
         };
+        WorldPanelBacking.ConfigureSurfaceMaterial(_material);
         _material.AlbedoTexture = _viewport.GetTexture();
         _meshInstance.MaterialOverride = _material;
 
         attachedNode.AddChild(_viewport);
+        attachedNode.AddChild(_backingInstance);
         attachedNode.AddChild(_meshInstance);
 
         CreateCollisionArea();
@@ -442,7 +450,12 @@ public sealed class ComponentAttacherHook : ComponentHook<ComponentAttacher>
         var size = Owner.Size.Value;
         var ppu = Owner.PixelsPerUnit.Value;
 
-        _quadMesh.Size = new Vector2(size.x / ppu, size.y / ppu);
+        var panelSize = new Vector2(size.x / ppu, size.y / ppu);
+        _quadMesh.Size = panelSize;
+        if (_backingQuadMesh != null)
+        {
+            _backingQuadMesh.Size = WorldPanelBacking.GetBackingSize(panelSize);
+        }
         UpdateCollisionSize();
     }
 
@@ -486,8 +499,11 @@ public sealed class ComponentAttacherHook : ComponentHook<ComponentAttacher>
             _loadedScene?.QueueFree();
             _collisionArea?.QueueFree();
             _viewport?.QueueFree();
+            _backingInstance?.QueueFree();
             _meshInstance?.QueueFree();
+            _backingMaterial?.Dispose();
             _material?.Dispose();
+            _backingQuadMesh?.Dispose();
             _quadMesh?.Dispose();
             _boxShape?.Dispose();
         }
@@ -503,8 +519,11 @@ public sealed class ComponentAttacherHook : ComponentHook<ComponentAttacher>
         _collisionShape = null;
         _boxShape = null;
         _viewport = null;
+        _backingInstance = null;
         _meshInstance = null;
+        _backingMaterial = null;
         _material = null;
+        _backingQuadMesh = null;
         _quadMesh = null;
         _buttonToType.Clear();
 

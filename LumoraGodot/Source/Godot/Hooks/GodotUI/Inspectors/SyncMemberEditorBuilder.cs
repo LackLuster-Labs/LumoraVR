@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Godot;
@@ -22,19 +22,24 @@ namespace Lumora.Godot.Hooks.GodotUI.Inspectors;
 /// </summary>
 public static class SyncMemberEditorBuilder
 {
-    private const int LabelMinWidth = 128;
-    private const int EditorMinWidth = 210;
-    private const int IndentWidth = 16;
-    private const int RowMinHeight = 34;
-    private const int EditorFontSize = 14;
-    private const int HeaderFontSize = 16;
-    private const int SmallButtonSize = 30;
-    private const int ComponentSpinMinWidth = 82;
+    private const int LabelMinWidth = 190;
+    private const int EditorDefaultWidth = 260;
+    private const int IndentWidth = 20;
+    private const int RowMinHeight = 44;
+    private const int EditorFontSize = 18;
+    private const int HeaderFontSize = 20;
+    private const int SmallButtonSize = 36;
+    private const int ComponentSpinMinWidth = 78;
 
     /// <summary>
     /// Create a property row with label and appropriate editor for a sync member.
     /// </summary>
-    public static Control? CreateEditorRow(ISyncMember syncMember, string name, FieldInfo? fieldInfo = null, int depth = 0)
+    public static Control? CreateEditorRow(
+        ISyncMember syncMember,
+        string name,
+        FieldInfo? fieldInfo = null,
+        int depth = 0,
+        Action<ISyncMember, string, bool>? openColorPicker = null)
     {
         if (syncMember == null) return null;
 
@@ -71,7 +76,7 @@ public static class SyncMemberEditorBuilder
         // Handle SyncList
         if (syncMember is ISyncList syncList)
         {
-            var listEditor = CreateListEditor(syncList, name, depth);
+            var listEditor = CreateListEditor(syncList, name, depth, openColorPicker);
             container.AddChild(listEditor);
             return container;
         }
@@ -80,7 +85,8 @@ public static class SyncMemberEditorBuilder
         var row = new HBoxContainer();
         row.Name = $"Row_{name}";
         row.CustomMinimumSize = new Vector2(0, RowMinHeight);
-        row.AddThemeConstantOverride("separation", 8);
+        row.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        row.AddThemeConstantOverride("separation", 10);
 
         // Add indentation
         if (depth > 0)
@@ -90,11 +96,15 @@ public static class SyncMemberEditorBuilder
             row.AddChild(indent);
         }
 
-        // Label
+        // Label, top-aligned so multi-line/component rows read consistently from
+        // the top-left of each row. Reviewer noted labels drifted to the middle. - xlinka
         var label = new Label();
         label.Text = name;
         label.CustomMinimumSize = new Vector2(Mathf.Max(80, LabelMinWidth - (IndentWidth * depth)), RowMinHeight);
         label.SizeFlagsHorizontal = Control.SizeFlags.Fill;
+        label.SizeFlagsVertical = Control.SizeFlags.Fill;
+        label.VerticalAlignment = VerticalAlignment.Center;
+        label.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
         label.AddThemeFontSizeOverride("font_size", EditorFontSize);
         if (tooltipAttr != null)
         {
@@ -102,17 +112,25 @@ public static class SyncMemberEditorBuilder
         }
         row.AddChild(label);
 
-        // Editor control
-        var editor = CreateEditor(syncMember, fieldInfo, readOnlyAttr != null);
+        // Editor control. wrap in a fixed-width container so primitive fields don't stretch across the panel - xlinka
+        var editor = CreateEditor(syncMember, fieldInfo, readOnlyAttr != null, name, openColorPicker);
         if (editor != null)
         {
-            editor.CustomMinimumSize = new Vector2(EditorMinWidth, RowMinHeight);
+            var editorWidth = GetPreferredEditorWidth(syncMember);
+            editor.CustomMinimumSize = new Vector2(editorWidth, RowMinHeight);
             editor.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+            editor.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
             if (tooltipAttr != null)
             {
                 editor.TooltipText = tooltipAttr.Text;
             }
-            row.AddChild(editor);
+
+            var editorSlot = new MarginContainer();
+            editorSlot.Name = $"EditorSlot_{name}";
+            editorSlot.CustomMinimumSize = new Vector2(editorWidth, RowMinHeight);
+            editorSlot.SizeFlagsHorizontal = Control.SizeFlags.Fill;
+            editorSlot.AddChild(editor);
+            row.AddChild(editorSlot);
         }
         else
         {
@@ -120,19 +138,55 @@ public static class SyncMemberEditorBuilder
             var valueLabel = new Label();
             valueLabel.Text = syncMember.GetValueAsObject()?.ToString() ?? "null";
             valueLabel.AddThemeFontSizeOverride("font_size", EditorFontSize);
-            valueLabel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+            valueLabel.CustomMinimumSize = new Vector2(EditorDefaultWidth, RowMinHeight);
+            valueLabel.SizeFlagsHorizontal = Control.SizeFlags.Fill;
+            valueLabel.VerticalAlignment = VerticalAlignment.Center;
+            valueLabel.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
             row.AddChild(valueLabel);
         }
+
+        // trailing filler eats remaining width so editors stay aligned at a sensible cap instead of stretching - xlinka
+        var rowFiller = new Control { SizeFlagsHorizontal = Control.SizeFlags.ExpandFill };
+        row.AddChild(rowFiller);
 
         container.AddChild(row);
         UIReadability.ApplyToTree(container);
         return container;
     }
 
+    private static float GetPreferredEditorWidth(ISyncMember syncMember)
+    {
+        if (syncMember is ISyncRef) return 420;
+        if (syncMember is not IField field) return EditorDefaultWidth;
+
+        var valueType = Nullable.GetUnderlyingType(field.ValueType) ?? field.ValueType;
+
+        if (valueType == typeof(bool)) return 64;
+        if (valueType == typeof(float2)) return 180;
+        if (valueType == typeof(float3) || valueType == typeof(floatQ)) return 270;
+        if (valueType == typeof(float4)) return 430;
+        if (valueType == typeof(color) || valueType == typeof(colorHDR)) return 500;
+        if (valueType == typeof(string) || valueType == typeof(Uri)) return 360;
+        if (valueType == typeof(Type) || valueType.IsEnum) return 340;
+        if (valueType == typeof(int) || valueType == typeof(long) ||
+            valueType == typeof(short) || valueType == typeof(byte) ||
+            valueType == typeof(float) || valueType == typeof(double))
+        {
+            return 220;
+        }
+
+        return EditorDefaultWidth;
+    }
+
     /// <summary>
     /// Create the appropriate editor control for a sync member.
     /// </summary>
-    public static Control? CreateEditor(ISyncMember syncMember, FieldInfo? fieldInfo = null, bool readOnly = false)
+    public static Control? CreateEditor(
+        ISyncMember syncMember,
+        FieldInfo? fieldInfo = null,
+        bool readOnly = false,
+        string? memberName = null,
+        Action<ISyncMember, string, bool>? openColorPicker = null)
     {
         if (syncMember == null) return null;
 
@@ -224,7 +278,11 @@ public static class SyncMemberEditorBuilder
         // Color
         if (valueType == typeof(color))
         {
-            return CreateColorEditor(field, readOnly);
+            return CreateColorEditor(field, syncMember, memberName ?? syncMember.Name ?? "Color", readOnly, hdr: false, openColorPicker);
+        }
+        if (valueType == typeof(colorHDR))
+        {
+            return CreateColorEditor(field, syncMember, memberName ?? syncMember.Name ?? "Color", readOnly, hdr: true, openColorPicker);
         }
 
         // Enum
@@ -242,6 +300,7 @@ public static class SyncMemberEditorBuilder
     private static HBoxContainer CreateSliderEditor(IField field, RangeAttribute range, bool isInteger, bool readOnly)
     {
         var container = new HBoxContainer();
+        container.AddThemeConstantOverride("separation", 8);
 
         var slider = new HSlider();
         slider.MinValue = range.Min;
@@ -252,8 +311,9 @@ public static class SyncMemberEditorBuilder
         slider.Editable = !readOnly && field.CanWrite;
 
         var valueLabel = new Label();
-        valueLabel.CustomMinimumSize = new Vector2(64, RowMinHeight);
+        valueLabel.CustomMinimumSize = new Vector2(70, RowMinHeight);
         valueLabel.HorizontalAlignment = HorizontalAlignment.Right;
+        valueLabel.VerticalAlignment = VerticalAlignment.Center;
         valueLabel.AddThemeFontSizeOverride("font_size", EditorFontSize);
         UpdateSliderLabel(valueLabel, slider.Value, range.TextFormat);
 
@@ -307,7 +367,11 @@ public static class SyncMemberEditorBuilder
     /// <summary>
     /// Create a list editor for ISyncList.
     /// </summary>
-    private static VBoxContainer CreateListEditor(ISyncList syncList, string name, int depth)
+    private static VBoxContainer CreateListEditor(
+        ISyncList syncList,
+        string name,
+        int depth,
+        Action<ISyncMember, string, bool>? openColorPicker)
     {
         var container = new VBoxContainer();
         container.Name = $"List_{name}";
@@ -334,7 +398,7 @@ public static class SyncMemberEditorBuilder
         addBtn.Pressed += () =>
         {
             syncList.AddElement();
-            RebuildListElements(container, syncList, name, depth);
+            RebuildListElements(container, syncList, name, depth, openColorPicker);
         };
         headerRow.AddChild(addBtn);
 
@@ -346,31 +410,36 @@ public static class SyncMemberEditorBuilder
         container.AddChild(elementsContainer);
 
         // Build initial elements
-        RebuildListElements(container, syncList, name, depth);
+        RebuildListElements(container, syncList, name, depth, openColorPicker);
 
         // Listen for changes
         syncList.ElementsAdded += (list, idx, count) =>
         {
             if (IsInstanceValid(container))
-                RebuildListElements(container, syncList, name, depth);
+                RebuildListElements(container, syncList, name, depth, openColorPicker);
         };
 
         syncList.ElementsRemoved += (list, idx, count) =>
         {
             if (IsInstanceValid(container))
-                RebuildListElements(container, syncList, name, depth);
+                RebuildListElements(container, syncList, name, depth, openColorPicker);
         };
 
         syncList.ListCleared += (list) =>
         {
             if (IsInstanceValid(container))
-                RebuildListElements(container, syncList, name, depth);
+                RebuildListElements(container, syncList, name, depth, openColorPicker);
         };
 
         return container;
     }
 
-    private static void RebuildListElements(VBoxContainer container, ISyncList syncList, string name, int depth)
+    private static void RebuildListElements(
+        VBoxContainer container,
+        ISyncList syncList,
+        string name,
+        int depth,
+        Action<ISyncMember, string, bool>? openColorPicker)
     {
         var elementsContainer = container.GetNodeOrNull<VBoxContainer>("Elements");
         if (elementsContainer == null) return;
@@ -395,7 +464,7 @@ public static class SyncMemberEditorBuilder
             elementRow.AddChild(indent);
 
             // Element editor
-            var editor = CreateEditorRow(element, $"[{i}]", null, 0);
+            var editor = CreateEditorRow(element, $"[{i}]", null, 0, openColorPicker);
             if (editor != null)
             {
                 editor.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
@@ -424,9 +493,11 @@ public static class SyncMemberEditorBuilder
     {
         var lineEdit = new LineEdit();
         lineEdit.PlaceholderText = "Enter URI...";
+        lineEdit.CustomMinimumSize = new Vector2(360, RowMinHeight);
         var uri = field.BoxedValue as Uri;
         lineEdit.Text = uri?.ToString() ?? "";
         lineEdit.Editable = !readOnly && field.CanWrite;
+        ApplyEditorFont(lineEdit);
 
         lineEdit.TextSubmitted += (text) =>
         {
@@ -470,11 +541,13 @@ public static class SyncMemberEditorBuilder
         var type = field.BoxedValue as Type;
         label.Text = type?.Name ?? "(none)";
         label.TooltipText = type?.FullName ?? "";
+        label.VerticalAlignment = VerticalAlignment.Center;
+        label.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
 
         var clearBtn = new Button();
         clearBtn.Text = "X";
         clearBtn.TooltipText = "Clear type";
-        clearBtn.CustomMinimumSize = new Vector2(SmallButtonSize, SmallButtonSize);
+        clearBtn.CustomMinimumSize = new Vector2(SmallButtonSize, RowMinHeight);
         clearBtn.Disabled = readOnly || !field.CanWrite;
         clearBtn.Pressed += () =>
         {
@@ -501,11 +574,27 @@ public static class SyncMemberEditorBuilder
         return container;
     }
 
-    private static CheckBox CreateBoolEditor(IField field, bool readOnly)
+    private static HBoxContainer CreateBoolEditor(IField field, bool readOnly)
     {
+        var container = new HBoxContainer();
+        container.AddThemeConstantOverride("separation", 0);
+
         var checkBox = new CheckBox();
         checkBox.ButtonPressed = (bool)(field.BoxedValue ?? false);
         checkBox.Disabled = readOnly || !field.CanWrite;
+        checkBox.CustomMinimumSize = new Vector2(RowMinHeight, RowMinHeight);
+        checkBox.SizeFlagsHorizontal = Control.SizeFlags.ShrinkBegin;
+        checkBox.SizeFlagsVertical = Control.SizeFlags.ShrinkCenter;
+        checkBox.AddThemeFontSizeOverride("font_size", EditorFontSize);
+        // Strip the default Godot CheckBox text padding so the indicator sits flush.
+        checkBox.AddThemeConstantOverride("h_separation", 0);
+        container.AddChild(checkBox);
+
+        var spacer = new Control();
+        spacer.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        // MouseFilter = Ignore so the spacer doesn't eat clicks the row may want.
+        spacer.MouseFilter = Control.MouseFilterEnum.Ignore;
+        container.AddChild(spacer);
 
         checkBox.Toggled += (pressed) =>
         {
@@ -526,7 +615,24 @@ public static class SyncMemberEditorBuilder
             };
         }
 
-        return checkBox;
+        return container;
+    }
+
+    // bumps the inner LineEdit font of a SpinBox so VR users can read it. plain font_size override on SpinBox doesn't propagate - xlinka
+    private static void ApplyEditorFont(SpinBox spinBox)
+    {
+        spinBox.AddThemeFontSizeOverride("font_size", EditorFontSize);
+        var lineEdit = spinBox.GetLineEdit();
+        if (lineEdit != null)
+        {
+            lineEdit.AddThemeFontSizeOverride("font_size", EditorFontSize);
+            lineEdit.Alignment = HorizontalAlignment.Right;
+        }
+    }
+
+    private static void ApplyEditorFont(LineEdit lineEdit)
+    {
+        lineEdit.AddThemeFontSizeOverride("font_size", EditorFontSize);
     }
 
     private static SpinBox CreateIntEditor(IField field, bool readOnly)
@@ -537,6 +643,8 @@ public static class SyncMemberEditorBuilder
         spinBox.AllowLesser = true;
         spinBox.Value = Convert.ToDouble(field.BoxedValue ?? 0);
         spinBox.Editable = !readOnly && field.CanWrite;
+        spinBox.CustomMinimumSize = new Vector2(220, RowMinHeight);
+        ApplyEditorFont(spinBox);
 
         spinBox.ValueChanged += (value) =>
         {
@@ -568,6 +676,8 @@ public static class SyncMemberEditorBuilder
         spinBox.AllowLesser = true;
         spinBox.Value = Convert.ToDouble(field.BoxedValue ?? 0.0);
         spinBox.Editable = !readOnly && field.CanWrite;
+        spinBox.CustomMinimumSize = new Vector2(220, RowMinHeight);
+        ApplyEditorFont(spinBox);
 
         spinBox.ValueChanged += (value) =>
         {
@@ -601,6 +711,8 @@ public static class SyncMemberEditorBuilder
         var lineEdit = new LineEdit();
         lineEdit.Text = field.BoxedValue?.ToString() ?? "";
         lineEdit.Editable = !readOnly && field.CanWrite;
+        lineEdit.CustomMinimumSize = new Vector2(360, RowMinHeight);
+        ApplyEditorFont(lineEdit);
 
         lineEdit.TextSubmitted += (text) =>
         {
@@ -631,6 +743,7 @@ public static class SyncMemberEditorBuilder
     private static HBoxContainer CreateFloat2Editor(IField field, bool readOnly)
     {
         var container = new HBoxContainer();
+        container.AddThemeConstantOverride("separation", 6);
         var value = (float2)(field.BoxedValue ?? float2.Zero);
 
         var xSpin = CreateComponentSpinBox("X", value.x, readOnly);
@@ -671,6 +784,7 @@ public static class SyncMemberEditorBuilder
     private static HBoxContainer CreateFloat3Editor(IField field, bool readOnly)
     {
         var container = new HBoxContainer();
+        container.AddThemeConstantOverride("separation", 6);
         var value = (float3)(field.BoxedValue ?? float3.Zero);
 
         var xSpin = CreateComponentSpinBox("X", value.x, readOnly);
@@ -717,6 +831,7 @@ public static class SyncMemberEditorBuilder
     private static HBoxContainer CreateFloat4Editor(IField field, bool readOnly)
     {
         var container = new HBoxContainer();
+        container.AddThemeConstantOverride("separation", 6);
         var value = (float4)(field.BoxedValue ?? float4.Zero);
 
         var xSpin = CreateComponentSpinBox("X", value.x, readOnly);
@@ -769,6 +884,7 @@ public static class SyncMemberEditorBuilder
     private static HBoxContainer CreateQuaternionEditor(IField field, bool readOnly)
     {
         var container = new HBoxContainer();
+        container.AddThemeConstantOverride("separation", 6);
         var value = (floatQ)(field.BoxedValue ?? floatQ.Identity);
 
         var euler = value.ToEuler();
@@ -822,47 +938,77 @@ public static class SyncMemberEditorBuilder
         return container;
     }
 
-    // TODO(xlinka): placeholder color editor - RGBA spinboxes work but this needs a proper
-    // in-world color picker (hue wheel, saturation/value square, hex input).
-    // The swatch-only preview is ugly and the spinboxes are fiddly in VR/desktop.
-    private static HBoxContainer CreateColorEditor(IField field, bool readOnly)
+    private static HBoxContainer CreateColorEditor(
+        IField field,
+        ISyncMember syncMember,
+        string memberName,
+        bool readOnly,
+        bool hdr,
+        Action<ISyncMember, string, bool>? openColorPicker)
     {
         var container = new HBoxContainer();
-        container.AddThemeConstantOverride("separation", 4);
+        container.AddThemeConstantOverride("separation", 6);
 
-        var value = (color)(field.BoxedValue ?? new color(1, 1, 1, 1));
+        var value = GetFieldColor(field, hdr);
         bool canWrite = !readOnly && field.CanWrite;
 
-        // Color swatch preview
-        var swatch = new ColorRect();
-        swatch.Color = new Color(value.r, value.g, value.b, value.a);
-        swatch.CustomMinimumSize = new Vector2(28, 28);
+        var swatch = new ColorRect
+        {
+            Color = value,
+            CustomMinimumSize = new Vector2(44, RowMinHeight),
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+        };
         container.AddChild(swatch);
 
+        var pickerButton = new Button
+        {
+            Text = "Pick",
+            Disabled = !canWrite || openColorPicker == null,
+            CustomMinimumSize = new Vector2(60, RowMinHeight),
+            SizeFlagsVertical = Control.SizeFlags.ShrinkCenter,
+            TooltipText = hdr ? "Open HDR color panel" : "Open color panel"
+        };
+        pickerButton.AddThemeFontSizeOverride("font_size", 14);
+        pickerButton.Pressed += () => openColorPicker?.Invoke(syncMember, memberName, hdr);
+        container.AddChild(pickerButton);
+
         // Channel spinboxes: R G B A
-        static SpinBox MakeSpin(float v, bool enabled)
+        static SpinBox MakeSpin(float v, bool enabled, bool hdr, bool alpha)
         {
             var s = new SpinBox();
             s.MinValue = 0.0;
-            s.MaxValue = 1.0;
+            s.MaxValue = alpha ? 1.0 : (hdr ? 16.0 : 1.0);
             s.Step = 0.001;
+            s.AllowGreater = hdr && !alpha;
+            s.AllowLesser = false;
             s.Value = v;
             s.Editable = enabled;
-            s.CustomMinimumSize = new Vector2(70, 0);
-            s.AddThemeFontSizeOverride("font_size", 12);
+            s.CustomMinimumSize = new Vector2(68, RowMinHeight);
+            s.AddThemeFontSizeOverride("font_size", 14);
+            s.GetLineEdit()?.AddThemeFontSizeOverride("font_size", 14);
+            if (s.GetLineEdit() != null)
+            {
+                s.GetLineEdit()!.Alignment = HorizontalAlignment.Right;
+            }
             return s;
         }
 
-        var rSpin = MakeSpin(value.r, canWrite);
-        var gSpin = MakeSpin(value.g, canWrite);
-        var bSpin = MakeSpin(value.b, canWrite);
-        var aSpin = MakeSpin(value.a, canWrite);
+        var rSpin = MakeSpin(value.R, canWrite, hdr, alpha: false);
+        var gSpin = MakeSpin(value.G, canWrite, hdr, alpha: false);
+        var bSpin = MakeSpin(value.B, canWrite, hdr, alpha: false);
+        var aSpin = MakeSpin(value.A, canWrite, hdr, alpha: true);
 
         // Channel labels
         static Label MakeLbl(string t)
         {
-            var l = new Label { Text = t };
-            l.AddThemeFontSizeOverride("font_size", 11);
+            var l = new Label
+            {
+                Text = t,
+                CustomMinimumSize = new Vector2(14, RowMinHeight),
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+            l.AddThemeFontSizeOverride("font_size", 13);
             return l;
         }
 
@@ -871,13 +1017,35 @@ public static class SyncMemberEditorBuilder
         container.AddChild(MakeLbl("B")); container.AddChild(bSpin);
         container.AddChild(MakeLbl("A")); container.AddChild(aSpin);
 
+        void SetSpinValue(SpinBox spin, float spinValue)
+        {
+            spin.SetBlockSignals(true);
+            spin.Value = spinValue;
+            spin.SetBlockSignals(false);
+        }
+
+        void SetSwatchColor(Color colorValue)
+        {
+            if (IsInstanceValid(swatch))
+            {
+                swatch.Color = colorValue;
+            }
+        }
+
+        void UpdateSpins(Color colorValue)
+        {
+            SetSpinValue(rSpin, colorValue.R);
+            SetSpinValue(gSpin, colorValue.G);
+            SetSpinValue(bSpin, colorValue.B);
+            SetSpinValue(aSpin, colorValue.A);
+        }
+
         void ApplyFromSpins()
         {
             if (!canWrite) return;
-            var c = new color((float)rSpin.Value, (float)gSpin.Value, (float)bSpin.Value, (float)aSpin.Value);
-            field.BoxedValue = c;
-            if (IsInstanceValid(swatch))
-                swatch.Color = new Color(c.r, c.g, c.b, c.a);
+            var c = new Color((float)rSpin.Value, (float)gSpin.Value, (float)bSpin.Value, (float)aSpin.Value);
+            SetFieldColor(field, c, hdr);
+            SetSwatchColor(c);
         }
 
         rSpin.ValueChanged += (_) => ApplyFromSpins();
@@ -890,17 +1058,30 @@ public static class SyncMemberEditorBuilder
             changeable.Changed += (_) =>
             {
                 if (!IsInstanceValid(container)) return;
-                var c = (color)(field.BoxedValue ?? new color(1, 1, 1, 1));
-                rSpin.SetBlockSignals(true); rSpin.Value = c.r; rSpin.SetBlockSignals(false);
-                gSpin.SetBlockSignals(true); gSpin.Value = c.g; gSpin.SetBlockSignals(false);
-                bSpin.SetBlockSignals(true); bSpin.Value = c.b; bSpin.SetBlockSignals(false);
-                aSpin.SetBlockSignals(true); aSpin.Value = c.a; aSpin.SetBlockSignals(false);
-                if (IsInstanceValid(swatch))
-                    swatch.Color = new Color(c.r, c.g, c.b, c.a);
+                var c = GetFieldColor(field, hdr);
+                UpdateSpins(c);
+                SetSwatchColor(c);
             };
         }
 
         return container;
+    }
+
+    private static Color GetFieldColor(IField field, bool hdr)
+    {
+        var raw = field.BoxedValue;
+        if (raw is color c)
+            return new Color(c.r, c.g, c.b, c.a);
+        if (raw is colorHDR h)
+            return new Color(h.r, h.g, h.b, h.a);
+        return new Color(1, 1, 1, 1);
+    }
+
+    private static void SetFieldColor(IField field, Color value, bool hdr)
+    {
+        field.BoxedValue = hdr
+            ? new colorHDR(value.R, value.G, value.B, value.A)
+            : new color(value.R, value.G, value.B, value.A);
     }
 
     // TODO(xlinka): placeholder enum editor - << >> cycling is functional but terrible UX
@@ -909,7 +1090,7 @@ public static class SyncMemberEditorBuilder
     private static HBoxContainer CreateEnumEditor(IField field, Type enumType, bool readOnly)
     {
         var container = new HBoxContainer();
-        container.AddThemeConstantOverride("separation", 4);
+        container.AddThemeConstantOverride("separation", 8);
 
         var names = Enum.GetNames(enumType);
         var values = Enum.GetValues(enumType);
@@ -925,8 +1106,11 @@ public static class SyncMemberEditorBuilder
 
         var valueLabel = new Label();
         valueLabel.Text = names[currentIndex];
-        valueLabel.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        valueLabel.CustomMinimumSize = new Vector2(210, RowMinHeight);
+        valueLabel.SizeFlagsHorizontal = Control.SizeFlags.Fill;
         valueLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        valueLabel.VerticalAlignment = VerticalAlignment.Center;
+        valueLabel.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
         valueLabel.AddThemeFontSizeOverride("font_size", EditorFontSize);
 
         void ShiftEnum(int delta)
@@ -940,13 +1124,13 @@ public static class SyncMemberEditorBuilder
                 valueLabel.Text = names[idx];
         }
 
-        var prevBtn = new Button { Text = "<<" };
-        prevBtn.CustomMinimumSize = new Vector2(SmallButtonSize + 8, SmallButtonSize);
+        var prevBtn = new Button { Text = "<" };
+        prevBtn.CustomMinimumSize = new Vector2(SmallButtonSize, RowMinHeight);
         prevBtn.Disabled = !canWrite;
         prevBtn.Pressed += () => ShiftEnum(-1);
 
-        var nextBtn = new Button { Text = ">>" };
-        nextBtn.CustomMinimumSize = new Vector2(SmallButtonSize + 8, SmallButtonSize);
+        var nextBtn = new Button { Text = ">" };
+        nextBtn.CustomMinimumSize = new Vector2(SmallButtonSize, RowMinHeight);
         nextBtn.Disabled = !canWrite;
         nextBtn.Pressed += () => ShiftEnum(+1);
 
@@ -977,12 +1161,14 @@ public static class SyncMemberEditorBuilder
 
         var label = new Label();
         label.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        label.VerticalAlignment = VerticalAlignment.Center;
+        label.TextOverrunBehavior = TextServer.OverrunBehavior.TrimEllipsis;
         UpdateRefLabel(label, syncRef);
 
         var clearBtn = new Button();
         clearBtn.Text = "X";
         clearBtn.TooltipText = "Clear reference";
-        clearBtn.CustomMinimumSize = new Vector2(SmallButtonSize, SmallButtonSize);
+        clearBtn.CustomMinimumSize = new Vector2(SmallButtonSize, RowMinHeight);
         clearBtn.Disabled = readOnly;
         clearBtn.Pressed += () =>
         {
@@ -1041,8 +1227,9 @@ public static class SyncMemberEditorBuilder
         spinBox.Value = initialValue;
         spinBox.TooltipText = tooltip;
         spinBox.CustomMinimumSize = new Vector2(ComponentSpinMinWidth, RowMinHeight);
-        spinBox.SizeFlagsHorizontal = Control.SizeFlags.ExpandFill;
+        spinBox.SizeFlagsHorizontal = Control.SizeFlags.Fill;
         spinBox.Editable = !readOnly;
+        ApplyEditorFont(spinBox);
         return spinBox;
     }
 

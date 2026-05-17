@@ -144,6 +144,11 @@ public interface IMaterialAssetHook : IAssetHook
     object GodotMaterial { get; }
 
     /// <summary>
+    /// Renderer queue requested by the material provider (-1 = default queue).
+    /// </summary>
+    int RenderQueue { get; }
+
+    /// <summary>
     /// Whether the material is valid and ready for use.
     /// </summary>
     bool IsValid { get; }

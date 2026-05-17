@@ -7,6 +7,7 @@ using Godot;
 using RuntimeEngine = Lumora.Core.Engine;
 using LocomotionController = Lumora.Core.Components.LocomotionController;
 using Lumora.Source.UI;
+using Lumora.Source.Godot.UI;
 
 namespace Lumora.Source.Input;
 
@@ -35,7 +36,8 @@ public partial class InputManager : Node
                                             (global::Godot.Input.GetVector("CameraRight", "CameraLeft", "CameraDown",
                                                 "CameraUp") * Mathf.Pi);
     public static Vector2 MouseMovement { get; private set; }
-    public static float MouseSensitivity = 3f;
+    // Effective sensitivity is the legacy 3.0 baseline scaled by the user setting.
+    public static float MouseSensitivity => 3f * InterfaceSettings.MouseSensitivity;
     private static Vector2 _accumulatedMouseMotion;
     private Window _window;
 
@@ -133,9 +135,13 @@ public partial class InputManager : Node
         // Don't process mouse movement when dashboard is visible
         if (DashboardToggle.IsDashboardVisible) return;
 
-        // Accumulate normalized mouse motion (ScreenRelative is in pixels, normalize by window height)
-        // Note: Mouse events are also forwarded to GodotMouseDriver by LumoraEngineRunner._Input()
+        // Use Relative (viewport-space, sub-pixel float) rather than ScreenRelative.
+        // ScreenRelative comes from raw OS messages which deliver integer mouse
+        // counts, and at 4K/high-DPI that produces visible "grid" snapping when
+        // looking around. The F6 freecam uses Relative and feels smooth, so we
+        // match that. Mouse events are also forwarded to GodotMouseDriver by
+        // LumoraEngineRunner._Input().
         if (@event is InputEventMouseMotion motion)
-            _accumulatedMouseMotion += -(motion.ScreenRelative / _window.Size.Y);
+            _accumulatedMouseMotion += -(motion.Relative / _window.Size.Y);
     }
 }

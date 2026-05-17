@@ -117,7 +117,7 @@ public partial class WorldBrowser : Control
     {
         // Get node references
         _searchBox = GetNodeOrNull<LineEdit>("MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox/SearchBox");
-        _currentWorldLabel = GetNodeOrNull<Label>("MainHBox/Sidebar/SidebarMargin/SidebarVBox/CurrentWorld");
+        _currentWorldLabel = GetNodeOrNull<Label>("MainHBox/Sidebar/SidebarMargin/SidebarVBox/CurrentWorldPanel/CurrentWorldVBox/CurrentWorld");
         _resultCountLabel = GetNodeOrNull<Label>("MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox/ResultCount");
         _refreshButton = GetNodeOrNull<Button>("MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox/RefreshButton");
         _categoriesList = GetNodeOrNull<VBoxContainer>("MainHBox/Sidebar/SidebarMargin/SidebarVBox/CategoriesScroll/CategoriesList");
@@ -617,7 +617,7 @@ public partial class WorldBrowser : Control
         _detailCloseButton = new Button();
         _detailCloseButton.Text = "Close";
         _detailCloseButton.CustomMinimumSize = new Vector2(150, 50);
-        _detailCloseButton.Connect("pressed", Callable.From(HideWorldDetailPanel));
+        _detailCloseButton.Connect("pressed", Callable.From(OnDetailClosePressed));
         buttonHBox.AddChild(_detailCloseButton);
 
         _detailJoinButton = new Button();
@@ -705,6 +705,63 @@ public partial class WorldBrowser : Control
         var worldToJoin = _selectedWorldInfo;
         HideWorldDetailPanel();
         WorldSelected?.Invoke(worldToJoin);
+    }
+
+    // X dismisses the panel only; Close shuts the world down and refocuses to
+    // the previous world (or LocalHome / any other running world as fallback). - xlinka
+    private void OnDetailClosePressed()
+    {
+        var worldInfo = _selectedWorldInfo;
+        HideWorldDetailPanel();
+        if (worldInfo == null) return;
+
+        var engine = Lumora.Core.Engine.Current;
+        var wm = engine?.WorldManager;
+        var fm = engine?.FocusManager;
+        if (wm == null) return;
+
+        Lumora.Core.World target = null;
+        foreach (var w in wm.Worlds)
+        {
+            if (w?.Session?.Metadata?.SessionId == worldInfo.Id)
+            {
+                target = w;
+                break;
+            }
+        }
+        if (target == null) return;
+
+        if (fm?.FocusedWorld == target)
+        {
+            var fallback = PickFallbackWorld(wm, target, fm?.PreviousFocusedWorld);
+            if (fallback != null)
+            {
+                wm.FocusWorld(fallback);
+            }
+        }
+
+        wm.DestroyWorld(target);
+    }
+
+    private static Lumora.Core.World PickFallbackWorld(
+        Lumora.Core.Management.WorldManager wm,
+        Lumora.Core.World closing,
+        Lumora.Core.World preferred)
+    {
+        bool IsUsable(Lumora.Core.World w) =>
+            w != null && w != closing && !w.IsDestroyed && w.State == Lumora.Core.World.WorldState.Running;
+
+        if (IsUsable(preferred)) return preferred;
+
+        Lumora.Core.World localHome = null;
+        Lumora.Core.World anyOther = null;
+        foreach (var w in wm.Worlds)
+        {
+            if (!IsUsable(w)) continue;
+            if (w.WorldName.Value == "LocalHome") { localHome = w; break; }
+            anyOther ??= w;
+        }
+        return localHome ?? anyOther;
     }
 
     #endregion

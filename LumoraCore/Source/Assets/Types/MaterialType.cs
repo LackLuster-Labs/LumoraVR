@@ -24,7 +24,22 @@ public enum MaterialType
     /// <summary>
     /// Custom shader material - uses user-provided .gdshader file.
     /// </summary>
-    Custom
+    Custom,
+
+    /// <summary>
+    /// Ray-marched metaball blobs rising from a surface. Vibrant gradient with rim/fresnel.
+    /// </summary>
+    Metaball,
+
+    /// <summary>
+    /// Built-in grid ground material.
+    /// </summary>
+    GridSpaceGround,
+
+    /// <summary>
+    /// LocalHome-specific rising orb volume material. Not a generic shader.
+    /// </summary>
+    LocalHomeRising
 }
 
 /// <summary>

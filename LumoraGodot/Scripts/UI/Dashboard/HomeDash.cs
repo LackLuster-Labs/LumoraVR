@@ -59,6 +59,7 @@ public partial class HomeDash : PanelContainer
     private Label? _storageLabel;
     private ProgressBar? _storageProgress;
     private Label? _avatarIconLabel;
+    private CenterContainer? _avatarContainer;
     private Label? _welcomeTitle;
     private Label? _statusText;
     private Panel? _statusDot;
@@ -67,6 +68,14 @@ public partial class HomeDash : PanelContainer
 
     // Current active tab
     private string _currentTab = "Home";
+
+    // Cached nav-button styleboxes captured before any selection swap. We can't
+    // re-read from the live button each call because UpdateActiveButton mutates
+    // these in place. After a couple of tab switches the "pressed" reference
+    // would point at the plain style and selection state visually disappears.
+    private StyleBox? _navStyleActive;
+    private StyleBox? _navStyleInactive;
+    private StyleBox? _navStyleHover;
 
     public override void _Ready()
     {
@@ -78,6 +87,14 @@ public partial class HomeDash : PanelContainer
         _btnInventory = GetNodeOrNull<Button>("VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar/BtnInventory");
         _btnSettings = GetNodeOrNull<Button>("VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar/BtnSettings");
         _btnExit = GetNodeOrNull<Button>("VBox/StatusBar/StatusMargin/StatusContent/NavBarPanel/NavBarMargin/NavBar/BtnExit");
+
+        // Capture the active/inactive/hover nav button styleboxes BEFORE any
+        // selection swap mutates them. BtnHome's .tscn normal style is the
+        // "selected" look; BtnWorlds carries the regular look. Hover is the
+        // same on every nav button.
+        _navStyleActive = _btnHome?.GetThemeStylebox("normal");
+        _navStyleInactive = _btnWorlds?.GetThemeStylebox("normal");
+        _navStyleHover = _btnWorlds?.GetThemeStylebox("hover");
 
         // Get content containers
         _header = GetNodeOrNull<Control>("VBox/Header");
@@ -99,6 +116,7 @@ public partial class HomeDash : PanelContainer
         _storageLabel = GetNodeOrNull<Label>("VBox/Header/HeaderContent/StorageQuotaPanel/StorageQuotaVBox/StorageContainer/StorageLabel");
         _storageProgress = GetNodeOrNull<ProgressBar>("VBox/Header/HeaderContent/StorageQuotaPanel/StorageQuotaVBox/StorageContainer/StorageProgress");
         _avatarIconLabel = GetNodeOrNull<Label>("VBox/Header/HeaderContent/UserSectionPanel/UserSection/AvatarContainer/AvatarCircle/AvatarIcon");
+        _avatarContainer = GetNodeOrNull<CenterContainer>("VBox/Header/HeaderContent/UserSectionPanel/UserSection/AvatarContainer");
 
         // Get other labels
         _welcomeTitle = GetNodeOrNull<Label>("VBox/ContentArea/MainContent/ContentMargin/ContentVBox/WelcomeSection/WelcomeTitle");
@@ -288,30 +306,39 @@ public partial class HomeDash : PanelContainer
 
     private void UpdateActiveButton()
     {
-        // Update button visual states based on current tab
         Button?[] buttons = { _btnHome, _btnWorlds, _btnFriends, _btnGroups, _btnInventory, _btnSettings };
         string[] tabs = { "Home", "Worlds", "Friends", "Groups", "Inventory", "Settings" };
 
-        // Get style references from _btnHome (which has the pressed style as default)
-        var pressedStyle = _btnHome?.GetThemeStylebox("normal");
-        var normalStyle = _btnWorlds?.GetThemeStylebox("normal");
+        if (_navStyleActive == null || _navStyleInactive == null)
+            return;
 
         for (int i = 0; i < buttons.Length; i++)
         {
-            if (buttons[i] == null) continue;
+            var btn = buttons[i];
+            if (btn == null) continue;
 
             bool isActive = tabs[i] == _currentTab;
 
-            // Swap the normal style to show active state
-            if (isActive && pressedStyle != null)
+            if (isActive)
             {
-                buttons[i]!.AddThemeStyleboxOverride("normal", pressedStyle);
-                buttons[i]!.Modulate = new Color(1, 1, 1, 1);
+                // Active tab: use the bright "pressed" style for normal AND hover so
+                // hovering the already-selected tab doesn't visually unselect it.
+                btn.AddThemeStyleboxOverride("normal", _navStyleActive);
+                btn.AddThemeStyleboxOverride("hover", _navStyleActive);
+                btn.AddThemeStyleboxOverride("pressed", _navStyleActive);
+                btn.AddThemeColorOverride("font_color", new Color(1, 1, 1, 1));
+                btn.AddThemeColorOverride("font_hover_color", new Color(1, 1, 1, 1));
+                btn.Modulate = new Color(1, 1, 1, 1);
             }
-            else if (normalStyle != null)
+            else
             {
-                buttons[i]!.AddThemeStyleboxOverride("normal", normalStyle);
-                buttons[i]!.Modulate = new Color(0.85f, 0.85f, 0.85f, 1);
+                btn.AddThemeStyleboxOverride("normal", _navStyleInactive);
+                if (_navStyleHover != null)
+                    btn.AddThemeStyleboxOverride("hover", _navStyleHover);
+                btn.AddThemeStyleboxOverride("pressed", _navStyleActive);
+                btn.AddThemeColorOverride("font_color", new Color(0.82f, 0.82f, 0.9f, 1));
+                btn.AddThemeColorOverride("font_hover_color", new Color(1, 1, 1, 1));
+                btn.Modulate = new Color(1, 1, 1, 1);
             }
         }
     }
@@ -398,11 +425,27 @@ public partial class HomeDash : PanelContainer
     {
         _isLoggedIn = false;
 
+        // Logged-out: hide avatar and reframe the panel as a clear "Sign In" CTA
+        // so the empty state doesn't look like a broken profile card.
+        if (_avatarContainer != null)
+            _avatarContainer.Visible = false;
+
         if (_usernameLabel != null)
-            _usernameLabel.Text = "Not logged in";
+        {
+            _usernameLabel.Text = "Sign In";
+            _usernameLabel.AddThemeColorOverride("font_color", new Color(0.78f, 0.72f, 1f, 1f));
+            _usernameLabel.AddThemeFontSizeOverride("font_size", 14);
+            _usernameLabel.HorizontalAlignment = HorizontalAlignment.Center;
+        }
 
         if (_patreonRoleLabel != null)
-            _patreonRoleLabel.Visible = false;
+        {
+            _patreonRoleLabel.Text = "Click to log in to your account";
+            _patreonRoleLabel.AddThemeColorOverride("font_color", new Color(0.55f, 0.55f, 0.65f, 1f));
+            _patreonRoleLabel.AddThemeFontSizeOverride("font_size", 9);
+            _patreonRoleLabel.HorizontalAlignment = HorizontalAlignment.Center;
+            _patreonRoleLabel.Visible = true;
+        }
 
         if (_storageContainer != null)
             _storageContainer.Visible = false;
@@ -410,9 +453,6 @@ public partial class HomeDash : PanelContainer
             _storageQuotaPanel.Visible = false;
         if (_storageProgress != null)
             _storageProgress.Value = 0.0f;
-
-        if (_avatarIconLabel != null)
-            _avatarIconLabel.Text = "?";
 
         if (_welcomeTitle != null)
             _welcomeTitle.Text = "Welcome!";
@@ -520,9 +560,23 @@ public partial class HomeDash : PanelContainer
     /// </summary>
     public void SetUsername(string username)
     {
+        if (_avatarContainer != null)
+            _avatarContainer.Visible = true;
+
         if (_usernameLabel != null)
         {
             _usernameLabel.Text = username;
+            // Clear any sign-in-state overrides applied by SetLoggedOutState.
+            _usernameLabel.RemoveThemeColorOverride("font_color");
+            _usernameLabel.AddThemeColorOverride("font_color", new Color(0.9f, 0.9f, 0.95f, 1f));
+            _usernameLabel.AddThemeFontSizeOverride("font_size", 11);
+            _usernameLabel.HorizontalAlignment = HorizontalAlignment.Left;
+        }
+        if (_patreonRoleLabel != null)
+        {
+            _patreonRoleLabel.AddThemeFontSizeOverride("font_size", 9);
+            _patreonRoleLabel.AddThemeColorOverride("font_color", new Color(0.47f, 0.37f, 0.94f, 0.9f));
+            _patreonRoleLabel.HorizontalAlignment = HorizontalAlignment.Left;
         }
         if (_welcomeTitle != null)
         {
@@ -530,7 +584,6 @@ public partial class HomeDash : PanelContainer
         }
         if (_avatarIconLabel != null)
         {
-            // Set first letter of username as avatar placeholder
             _avatarIconLabel.Text = string.IsNullOrEmpty(username) ? "?" : username[0].ToString().ToUpper();
         }
     }

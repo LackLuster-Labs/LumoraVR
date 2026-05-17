@@ -23,6 +23,7 @@ public class CameraHook : ComponentHook<Camera>
 
         _camera = new Camera3D();
         _camera.Name = "Camera";
+        _camera.PhysicsInterpolationMode = Node.PhysicsInterpolationModeEnum.Off;
         attachedNode.AddChild(_camera);
 
         _camera.Environment = null;

@@ -97,8 +97,7 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
         mat.ShadingMode = BaseMaterial3D.ShadingModeEnum.Unshaded;
         mat.Transparency = BaseMaterial3D.TransparencyEnum.Alpha;
         mat.AlbedoColor = color;
-        mat.NoDepthTest = true; // Always visible (overlay)
-        mat.RenderPriority = 100;
+        mat.NoDepthTest = false;
         return mat;
     }
 
@@ -163,7 +162,7 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
         _nameLabel.Text = Owner.TargetSlot?.Name.Value ?? "Unknown";
         _nameLabel.FontSize = 32;
         _nameLabel.Billboard = BaseMaterial3D.BillboardModeEnum.Enabled;
-        _nameLabel.NoDepthTest = true;
+        _nameLabel.NoDepthTest = false;
         _nameLabel.Modulate = new Color(1f, 1f, 1f, 1f);
         _nameLabel.OutlineModulate = new Color(0.2f, 0f, 0.2f, 1f);
         _nameLabel.OutlineSize = 4;

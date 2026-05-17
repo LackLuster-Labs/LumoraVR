@@ -7,6 +7,11 @@ using System.IO;
 using System.Threading.Tasks;
 using Lumora.Core;
 using Lumora.Core.Assets;
+using Lumora.Core.Components;
+using Lumora.Core.Components.Assets;
+using Lumora.Core.GodotUI.Wizards;
+using Lumora.Core.Math;
+using LumoraMeshes = Lumora.Core.Components.Meshes;
 
 namespace Lumora.Godot.UI;
 
@@ -41,6 +46,12 @@ public partial class ImportDialog
 
                 case ImportType.Avatar:
                     await ImportModel(filePath, isAvatar: true, progress);
+                    break;
+
+                case ImportType.Shader:
+                    ReportProgress(0.1f, "Importing custom shader...");
+                    await ImportShader(filePath);
+                    ReportProgress(1.0f, "Shader workbench ready");
                     break;
 
                 case ImportType.RawFile:
@@ -78,7 +89,39 @@ public partial class ImportDialog
         if (_localDB != null)
             localUri = await _localDB.ImportLocalAssetAsync(filePath, LocalDB.ImportLocation.Copy);
 
-        _targetSlot.AddSlot(Path.GetFileNameWithoutExtension(filePath));
+        var imageSlot = _targetSlot.AddSlot(Path.GetFileNameWithoutExtension(filePath));
+        PositionImportedSlot(imageSlot);
+
+        // build the visual quad. without this the slot is invisible. - xlinka
+        var quadMesh = imageSlot.AttachComponent<LumoraMeshes.QuadMesh>();
+        quadMesh.Size.Value = new float2(1.0f, 1.0f);
+        quadMesh.DualSided.Value = true;
+
+        var meshRenderer = imageSlot.AttachComponent<MeshRenderer>();
+        meshRenderer.Mesh.Target = quadMesh;
+
+        // ImageProvider must exist before BoxCollider so PhysicsColliderHook detects it as an image and builds a sensor instead of a wall - xlinka
+        var imageProvider = imageSlot.AttachComponent<ImageProvider>();
+        imageProvider.URL.Value = new Uri(localUri ?? filePath);
+
+        var collider = imageSlot.AttachComponent<BoxCollider>();
+        collider.Size.Value = new float3(1f, 1f, 0.02f);
+
+        imageSlot.AttachComponent<Grabbable>();
+
+        var sizeDriver = imageSlot.AttachComponent<TextureSizeDriver>();
+        sizeDriver.Source.Target = imageProvider;
+        sizeDriver.Target.Target = quadMesh;
+        sizeDriver.ColliderTarget.Target = collider;
+
+        var material = imageSlot.AttachComponent<UnlitMaterial>();
+        material.Texture.Target = imageProvider;
+        // flipped X uv. PNGs come in mirrored otherwise. - xlinka
+        material.TextureScale.Value = new float2(-1f, 1f);
+        material.TextureOffset.Value = new float2(1f, 0f);
+        material.BlendMode.Value = BlendMode.Transparent;
+        meshRenderer.Material.Target = material;
+
         GD.Print($"ImportDialog: Image imported to {localUri ?? filePath}");
     }
 
@@ -145,5 +188,55 @@ public partial class ImportDialog
             var localUri = await _localDB.ImportLocalAssetAsync(filePath, LocalDB.ImportLocation.Copy);
             GD.Print($"ImportDialog: Raw file imported to {localUri}");
         }
+    }
+
+    // spawns the shader workbench: source + material + preview sphere + inspector orb.
+    // mirrors ClipboardImporter.ImportShader so paste and file-pick produce the same setup - xlinka
+    private async Task ImportShader(string filePath)
+    {
+        string localUri = null;
+        if (_localDB != null)
+            localUri = await _localDB.ImportLocalAssetAsync(filePath, LocalDB.ImportLocation.Copy);
+
+        var shaderName = Path.GetFileNameWithoutExtension(filePath);
+        if (string.IsNullOrWhiteSpace(shaderName))
+            shaderName = "CustomShader";
+
+        var rootSlot = _targetSlot.AddSlot($"{shaderName}_ShaderWorkbench");
+        PositionImportedSlot(rootSlot);
+
+        var sourceSlot = rootSlot.AddSlot("ShaderSource");
+        var shaderProvider = sourceSlot.AttachComponent<ShaderSourceProvider>();
+        shaderProvider.URL.Value = new Uri(localUri ?? filePath);
+
+        var materialSlot = rootSlot.AddSlot("Material");
+        var material = materialSlot.AttachComponent<CustomShaderMaterial>();
+        material.Shader.Target = shaderProvider;
+
+        var sphereSlot = rootSlot.AddSlot("PreviewSphere");
+        sphereSlot.LocalPosition.Value = new float3(-0.35f, 0f, 0f);
+
+        var sphereMesh = sphereSlot.AttachComponent<LumoraMeshes.SphereMesh>();
+        sphereMesh.Radius.Value = 0.3f;
+        sphereMesh.Segments.Value = 32;
+        sphereMesh.Rings.Value = 16;
+
+        var meshRenderer = sphereSlot.AttachComponent<MeshRenderer>();
+        meshRenderer.Mesh.Target = sphereMesh;
+        meshRenderer.Material.Target = material;
+
+        // Grabbable + collider so users can pick the orb up. Grabbable attached first so the
+        // SphereCollider hook sees it and builds a sensor instead of a wall - xlinka
+        sphereSlot.AttachComponent<Grabbable>();
+        var sphereCollider = sphereSlot.AttachComponent<SphereCollider>();
+        sphereCollider.Radius.Value = 0.3f;
+
+        var inspectorSlot = rootSlot.AddSlot("MaterialInspector");
+        inspectorSlot.LocalPosition.Value = new float3(0.45f, 0f, 0f);
+
+        var inspector = inspectorSlot.AttachComponent<GodotMaterialInspector>();
+        inspector.Material.Target = material;
+
+        GD.Print($"ImportDialog: Shader workbench built for {localUri ?? filePath}");
     }
 }

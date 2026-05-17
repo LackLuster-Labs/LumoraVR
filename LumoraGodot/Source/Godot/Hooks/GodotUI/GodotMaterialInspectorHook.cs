@@ -30,8 +30,11 @@ public sealed class GodotMaterialInspectorHook : ComponentHook<GodotMaterialInsp
 
     private SubViewport? _viewport;
     private MeshInstance3D? _meshInstance;
+    private MeshInstance3D? _backingInstance;
     private QuadMesh? _quadMesh;
+    private QuadMesh? _backingQuadMesh;
     private StandardMaterial3D? _material;
+    private StandardMaterial3D? _backingMaterial;
     private Node? _loadedScene;
     private Vector2I _lastViewportSize = Vector2I.Zero;
 
@@ -79,8 +82,11 @@ public sealed class GodotMaterialInspectorHook : ComponentHook<GodotMaterialInsp
 
         _meshInstance = new MeshInstance3D { Name = "MaterialInspectorQuad" };
         _quadMesh = new QuadMesh();
+        _backingQuadMesh = new QuadMesh();
         UpdateQuadSize();
         _meshInstance.Mesh = _quadMesh;
+        _backingMaterial = WorldPanelBacking.CreateBackingMaterial();
+        _backingInstance = WorldPanelBacking.CreateBackingMesh("MaterialInspectorBacking", _backingQuadMesh, _backingMaterial);
 
         _material = new StandardMaterial3D
         {
@@ -89,10 +95,12 @@ public sealed class GodotMaterialInspectorHook : ComponentHook<GodotMaterialInsp
             CullMode = BaseMaterial3D.CullModeEnum.Disabled,
             TextureFilter = BaseMaterial3D.TextureFilterEnum.Linear
         };
+        WorldPanelBacking.ConfigureSurfaceMaterial(_material);
         _material.AlbedoTexture = _viewport.GetTexture();
         _meshInstance.MaterialOverride = _material;
 
         attachedNode.AddChild(_viewport);
+        attachedNode.AddChild(_backingInstance);
         attachedNode.AddChild(_meshInstance);
         CreateCollisionArea();
 
@@ -677,7 +685,12 @@ public sealed class GodotMaterialInspectorHook : ComponentHook<GodotMaterialInsp
 
         var size = Owner.Size.Value;
         var ppu = Owner.PixelsPerUnit.Value;
-        _quadMesh.Size = new Vector2(size.x / ppu, size.y / ppu);
+        var panelSize = new Vector2(size.x / ppu, size.y / ppu);
+        _quadMesh.Size = panelSize;
+        if (_backingQuadMesh != null)
+        {
+            _backingQuadMesh.Size = WorldPanelBacking.GetBackingSize(panelSize);
+        }
         UpdateCollisionSize();
     }
 
@@ -845,8 +858,11 @@ public sealed class GodotMaterialInspectorHook : ComponentHook<GodotMaterialInsp
             _loadedScene?.QueueFree();
             _collisionArea?.QueueFree();
             _viewport?.QueueFree();
+            _backingInstance?.QueueFree();
             _meshInstance?.QueueFree();
+            _backingMaterial?.Dispose();
             _material?.Dispose();
+            _backingQuadMesh?.Dispose();
             _quadMesh?.Dispose();
             _boxShape?.Dispose();
         }
@@ -856,8 +872,11 @@ public sealed class GodotMaterialInspectorHook : ComponentHook<GodotMaterialInsp
         _collisionShape = null;
         _boxShape = null;
         _viewport = null;
+        _backingInstance = null;
         _meshInstance = null;
+        _backingMaterial = null;
         _material = null;
+        _backingQuadMesh = null;
         _quadMesh = null;
         _lastViewportSize = Vector2I.Zero;
         _paramContainer = null;

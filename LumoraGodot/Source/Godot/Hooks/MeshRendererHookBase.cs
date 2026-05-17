@@ -125,7 +125,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>
 
             if (Owner.SortingOrder.GetWasChangedAndClear())
             {
-                ApplySortingOrder(Owner.SortingOrder.Value);
+                ApplyRenderQueue();
             }
 
             if (Owner.ShadowCastMode.GetWasChangedAndClear())
@@ -137,6 +137,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>
             if (Owner.Material.GetWasChangedAndClear() || meshWasChanged)
             {
                 ApplyMaterial();
+                ApplyRenderQueue();
             }
         }
         else
@@ -214,12 +215,23 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>
 
     protected virtual void ApplySortingOrder(int sortingOrder)
     {
-        if (meshInstance != null)
+        ApplyRenderQueue();
+    }
+
+    protected virtual void ApplyRenderQueue()
+    {
+        if (meshInstance == null)
         {
-            // Use sorting offset for depth sorting of transparent objects
-            // Higher values render later (on top)
-            meshInstance.SortingOffset = sortingOrder;
+            return;
         }
+
+        var materialQueue = Owner.Material.Asset?.RenderQueue ?? -1;
+        var effectiveQueue = (materialQueue >= 0 ? materialQueue : 0) + Owner.SortingOrder.Value;
+
+        // Godot uses SortingOffset for transparent object ordering, while Material.RenderPriority
+        // applies per-material. Keep them in sync so Lumora's material RenderQueue affects the
+        // renderer as well as the material resource.
+        meshInstance.SortingOffset = effectiveQueue;
     }
 
     protected virtual void ApplyShadowCastMode(ShadowCastMode shadowCastMode)

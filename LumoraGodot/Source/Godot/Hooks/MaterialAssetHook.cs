@@ -21,6 +21,7 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
     private MaterialType _materialType;
     private bool _usesShaderMaterial;
     private string _customShaderPath;
+    private int _renderQueue = -1;
 
     // Pending properties to apply
     private readonly Dictionary<string, object> _pendingProperties = new();
@@ -31,6 +32,11 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
     public object GodotMaterial => _usesShaderMaterial
         ? (object)_shaderMaterial
         : (object)_standardMaterial;
+
+    /// <summary>
+    /// Renderer queue requested by the owning material provider.
+    /// </summary>
+    public int RenderQueue => _renderQueue;
 
     /// <summary>
     /// Whether the material is valid and ready for use.
@@ -70,60 +76,43 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
                 // Custom shader will be set via SetCustomShader
                 break;
 
+            case MaterialType.Metaball:
+                _usesShaderMaterial = true;
+                _shaderMaterial = new ShaderMaterial();
+                const string metaballShaderPath = "res://Shaders/Metaball.gdshader";
+                if (ResourceLoader.Exists(metaballShaderPath))
+                    _shaderMaterial.Shader = GD.Load<Shader>(metaballShaderPath);
+                else
+                    LumoraLogger.Warn($"MaterialAssetHook: Metaball shader not found at {metaballShaderPath}");
+                break;
+
+            case MaterialType.GridSpaceGround:
+                _usesShaderMaterial = true;
+                _shaderMaterial = new ShaderMaterial();
+                const string gridGroundShaderPath = "res://Shaders/GridSpaceGround.gdshader";
+                if (ResourceLoader.Exists(gridGroundShaderPath))
+                    _shaderMaterial.Shader = GD.Load<Shader>(gridGroundShaderPath);
+                else
+                    LumoraLogger.Warn($"MaterialAssetHook: Grid ground shader not found at {gridGroundShaderPath}");
+                break;
+
+            case MaterialType.LocalHomeRising:
+                _usesShaderMaterial = true;
+                _shaderMaterial = new ShaderMaterial();
+                const string localHomeRisingShaderPath = "res://Shaders/LocalHomeRising.gdshader";
+                if (ResourceLoader.Exists(localHomeRisingShaderPath))
+                    _shaderMaterial.Shader = GD.Load<Shader>(localHomeRisingShaderPath);
+                else
+                    LumoraLogger.Warn($"MaterialAssetHook: LocalHomeRising shader not found at {localHomeRisingShaderPath}");
+                break;
+
             default:
                 _usesShaderMaterial = false;
                 _standardMaterial = new StandardMaterial3D();
                 break;
         }
-    }
 
-    /// <summary>
-    /// Create an unlit shader material.
-    /// </summary>
-    private ShaderMaterial CreateUnlitShaderMaterial()
-    {
-        var material = new ShaderMaterial();
-
-        // Try to load unlit shader
-        string shaderPath = "res://Shaders/Unlit.gdshader";
-        if (ResourceLoader.Exists(shaderPath))
-        {
-            material.Shader = GD.Load<Shader>(shaderPath);
-        }
-        else
-        {
-            // Create inline unlit shader if file doesn't exist
-            var shader = new Shader();
-            shader.Code = @"
-shader_type spatial;
-render_mode unshaded;
-
-uniform vec4 albedo_color : source_color = vec4(1.0, 1.0, 1.0, 1.0);
-uniform sampler2D albedo_texture : source_color, filter_linear_mipmap, repeat_enable;
-uniform bool use_albedo_texture = false;
-uniform vec2 uv_scale = vec2(1.0, 1.0);
-uniform vec2 uv_offset = vec2(0.0, 0.0);
-uniform float alpha_scissor_threshold = 0.5;
-uniform bool use_alpha_scissor = false;
-
-void vertex() {
-    UV = UV * uv_scale + uv_offset;
-}
-
-void fragment() {
-    vec4 albedo_tex = use_albedo_texture ? texture(albedo_texture, UV) : vec4(1.0);
-    vec4 final_color = albedo_color * albedo_tex;
-    if (use_alpha_scissor && final_color.a < alpha_scissor_threshold) {
-        discard;
-    }
-    ALBEDO = final_color.rgb;
-    ALPHA = final_color.a;
-}
-";
-            material.Shader = shader;
-        }
-
-        return material;
+        ApplyRenderPriority(_renderQueue);
     }
 
     /// <summary>
@@ -147,7 +136,7 @@ void fragment() {
     }
 
     /// <summary>
-    /// Set a custom shader from source code.
+    /// Set a custom shader from loaded gdshader source text.
     /// </summary>
     public void SetCustomShaderSource(string shaderSource)
     {
@@ -242,6 +231,11 @@ void fragment() {
     /// </summary>
     public void SetFloat(string property, float value)
     {
+        if (property == "RenderQueue")
+        {
+            _renderQueue = (int)value;
+        }
+
         _pendingProperties[property] = value;
     }
 
@@ -250,6 +244,11 @@ void fragment() {
     /// </summary>
     public void SetInt(string property, int value)
     {
+        if (property == "RenderQueue")
+        {
+            _renderQueue = value;
+        }
+
         _pendingProperties[property] = value;
     }
 
@@ -318,6 +317,7 @@ void fragment() {
     public void Clear()
     {
         _pendingProperties.Clear();
+        ApplyRenderPriority(-1);
     }
 
     /// <summary>
@@ -431,8 +431,7 @@ void fragment() {
                 if (value is float ac) _standardMaterial.AlphaScissorThreshold = ac;
                 break;
             case "RenderQueue":
-                if (value is float rqf) _standardMaterial.RenderPriority = System.Math.Clamp((int)rqf, -128, 127);
-                if (value is int rqi) _standardMaterial.RenderPriority = System.Math.Clamp(rqi, -128, 127);
+                ApplyRenderPriority(value);
                 break;
 
             // Texture transform
@@ -461,8 +460,7 @@ void fragment() {
 
         if (property == "RenderQueue")
         {
-            if (value is float rqf) _shaderMaterial.RenderPriority = System.Math.Clamp((int)rqf, -128, 127);
-            if (value is int rqi) _shaderMaterial.RenderPriority = System.Math.Clamp(rqi, -128, 127);
+            ApplyRenderPriority(value);
             return;
         }
 
@@ -471,6 +469,7 @@ void fragment() {
 
         // Map common property names to shader uniform names
         bool isUnlit = _materialType == MaterialType.Unlit;
+        bool isMetaball = _materialType == MaterialType.Metaball;
         string mappedParam = property switch
         {
             "TintColor" => isUnlit ? "albedo_color" : "tint_color",
@@ -480,6 +479,22 @@ void fragment() {
             "TextureScale" => isUnlit ? "uv_scale" : "texture_scale",
             "TextureOffset" => isUnlit ? "uv_offset" : "texture_offset",
             "AlphaCutoff" => isUnlit ? "alpha_scissor_threshold" : "alpha_cutoff",
+            // Metaball uniforms. explicit map so refactors of the C# field names don't break the shader binding - xlinka
+            "TintA" when isMetaball => "tint_a",
+            "TintB" when isMetaball => "tint_b",
+            "BlobRadius" when isMetaball => "blob_radius",
+            "BlobSmoothness" when isMetaball => "blob_smoothness",
+            "BlobCount" when isMetaball => "blob_count",
+            "RiseSpeed" when isMetaball => "rise_speed",
+            "VolumeExtents" when isMetaball => "volume_extents",
+            "VolumeHeight" when isMetaball => "volume_height",
+            "VolumeOffset" when isMetaball => "volume_offset",
+            "RimStrength" when isMetaball => "rim_strength",
+            "RimFalloff" when isMetaball => "rim_falloff",
+            "FresnelPower" when isMetaball => "fresnel_power",
+            "AlphaScale" when isMetaball => "alpha_scale",
+            "EmissionStrength" when isMetaball => "emission_strength",
+            "TimeScale" when isMetaball => "time_scale",
             _ => shaderParam
         };
 
@@ -550,6 +565,40 @@ void fragment() {
         }
 
         return result.ToString();
+    }
+
+    private void ApplyRenderPriority(object value)
+    {
+        switch (value)
+        {
+            case float rqf:
+                ApplyRenderPriority((int)rqf);
+                break;
+            case int rqi:
+                ApplyRenderPriority(rqi);
+                break;
+        }
+    }
+
+    private void ApplyRenderPriority(int renderQueue)
+    {
+        _renderQueue = renderQueue;
+        int priority = NormalizeRenderQueue(renderQueue);
+
+        if (_standardMaterial != null)
+        {
+            _standardMaterial.RenderPriority = priority;
+        }
+
+        if (_shaderMaterial != null)
+        {
+            _shaderMaterial.RenderPriority = priority;
+        }
+    }
+
+    private static int NormalizeRenderQueue(int renderQueue)
+    {
+        return renderQueue < 0 ? 0 : System.Math.Clamp(renderQueue, -128, 127);
     }
 
     /// <summary>

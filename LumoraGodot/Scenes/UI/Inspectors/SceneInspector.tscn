@@ -9,30 +9,97 @@ border_width_top = 2
 border_width_right = 2
 border_width_bottom = 2
 border_color = Color(0.2, 0.18, 0.35, 0.8)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+
+[sub_resource type="StyleBoxFlat" id="title_bg"]
+bg_color = Color(0.10, 0.09, 0.16, 1)
 corner_radius_top_left = 12
 corner_radius_top_right = 12
-corner_radius_bottom_right = 12
-corner_radius_bottom_left = 12
-
-[sub_resource type="StyleBoxFlat" id="header_bg"]
-bg_color = Color(0.12, 0.1, 0.18, 1)
-corner_radius_top_left = 10
-corner_radius_top_right = 10
-
-[sub_resource type="StyleBoxFlat" id="toolbar_bg"]
-bg_color = Color(0.1, 0.09, 0.14, 1)
 
 [sub_resource type="StyleBoxFlat" id="hierarchy_panel_bg"]
-bg_color = Color(0.1, 0.1, 0.12, 1)
-corner_radius_bottom_left = 10
+bg_color = Color(0.10, 0.10, 0.12, 1)
+corner_radius_bottom_left = 12
 
 [sub_resource type="StyleBoxFlat" id="component_panel_bg"]
 bg_color = Color(0.06, 0.06, 0.08, 1)
-corner_radius_bottom_right = 10
+corner_radius_bottom_right = 12
+
+[sub_resource type="StyleBoxFlat" id="header_strip_bg"]
+bg_color = Color(0.13, 0.11, 0.20, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="icon_btn_normal"]
+bg_color = Color(0.18, 0.16, 0.28, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="icon_btn_hover"]
+bg_color = Color(0.30, 0.26, 0.46, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="destroy_btn_normal"]
+bg_color = Color(0.55, 0.18, 0.18, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="destroy_btn_hover"]
+bg_color = Color(0.78, 0.28, 0.28, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="dup_btn_normal"]
+bg_color = Color(0.16, 0.42, 0.22, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="dup_btn_hover"]
+bg_color = Color(0.24, 0.62, 0.32, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_left = 8
+corner_radius_bottom_right = 8
+
+[sub_resource type="StyleBoxFlat" id="attach_btn_normal"]
+bg_color = Color(0.32, 0.24, 0.62, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_left = 12
+corner_radius_bottom_right = 12
+
+[sub_resource type="StyleBoxFlat" id="attach_btn_hover"]
+bg_color = Color(0.46, 0.36, 0.86, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_left = 12
+corner_radius_bottom_right = 12
+
+[sub_resource type="StyleBoxFlat" id="attach_btn_pressed"]
+bg_color = Color(0.24, 0.18, 0.48, 1)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_left = 12
+corner_radius_bottom_right = 12
 
 [node name="SceneInspector" type="Control"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(800, 600)
+custom_minimum_size = Vector2(660, 500)
 layout_mode = 3
 anchors_preset = 15
 anchor_right = 1.0
@@ -61,7 +128,7 @@ offset_right = -8.0
 offset_bottom = -8.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/separation = 0
+theme_override_constants/separation = 6
 
 [node name="Header" type="VBoxContainer" parent="MainPanel/VBox"]
 unique_name_in_owner = true
@@ -70,16 +137,16 @@ theme_override_constants/separation = 0
 
 [node name="TitleRow" type="Panel" parent="MainPanel/VBox/Header"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 40)
+custom_minimum_size = Vector2(0, 60)
 layout_mode = 2
-theme_override_styles/panel = SubResource("header_bg")
+theme_override_styles/panel = SubResource("title_bg")
 
 [node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/Header/TitleRow"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 12.0
+offset_left = 14.0
 offset_right = -8.0
 grow_horizontal = 2
 grow_vertical = 2
@@ -89,126 +156,29 @@ theme_override_constants/separation = 8
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
-theme_override_font_sizes/font_size = 16
+theme_override_colors/font_color = Color(0.85, 0.78, 1, 1)
+theme_override_font_sizes/font_size = 24
 text = "Scene Inspector"
 vertical_alignment = 1
 
 [node name="CloseButton" type="Button" parent="MainPanel/VBox/Header/TitleRow/HBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(30, 30)
-layout_mode = 2
-theme_override_colors/font_color = Color(1, 0.3, 0.3, 1)
-theme_override_font_sizes/font_size = 14
-text = "✕"
-
-[node name="RootRow" type="HBoxContainer" parent="MainPanel/VBox/Header"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 32)
-layout_mode = 2
-theme_override_constants/separation = 4
-
-[node name="RootUpButton" type="Button" parent="MainPanel/VBox/Header/RootRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(30, 28)
-layout_mode = 2
-theme_override_font_sizes/font_size = 14
-text = "▲"
-tooltip_text = "Navigate to parent"
-
-[node name="RootLabel" type="Label" parent="MainPanel/VBox/Header/RootRow"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_override_colors/font_color = Color(0.7, 0.7, 0.8, 1)
-theme_override_font_sizes/font_size = 12
-text = "Root: (none)"
-vertical_alignment = 1
-
-[node name="SetRootButton" type="Button" parent="MainPanel/VBox/Header/RootRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(70, 28)
-layout_mode = 2
-theme_override_font_sizes/font_size = 11
-text = "Set Root"
-tooltip_text = "Set selection as hierarchy root"
-
-[node name="Toolbar" type="Panel" parent="MainPanel/VBox/Header"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 34)
-layout_mode = 2
-theme_override_styles/panel = SubResource("toolbar_bg")
-
-[node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/Header/Toolbar"]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = 4.0
-offset_right = -4.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_constants/separation = 4
-
-[node name="AddChildButton" type="Button" parent="MainPanel/VBox/Header/Toolbar/HBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 28)
-layout_mode = 2
-theme_override_font_sizes/font_size = 11
-text = "+ Child"
-tooltip_text = "Add child slot"
-
-[node name="DuplicateButton" type="Button" parent="MainPanel/VBox/Header/Toolbar/HBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 28)
-layout_mode = 2
-theme_override_font_sizes/font_size = 11
-text = "Dup"
-tooltip_text = "Duplicate selection"
-
-[node name="DestroyButton" type="Button" parent="MainPanel/VBox/Header/Toolbar/HBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 28)
+custom_minimum_size = Vector2(48, 48)
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 0.4, 0.4, 1)
-theme_override_font_sizes/font_size = 11
-text = "Del"
-tooltip_text = "Destroy selection"
-
-[node name="Spacer" type="Control" parent="MainPanel/VBox/Header/Toolbar/HBox"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-
-[node name="AttachComponentButton" type="Button" parent="MainPanel/VBox/Header/Toolbar/HBox"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 28)
-layout_mode = 2
-theme_override_font_sizes/font_size = 11
-text = "+ Component"
-tooltip_text = "Attach component"
-
-[node name="InheritedToggle" type="CheckButton" parent="MainPanel/VBox/Header/Toolbar/HBox"]
-unique_name_in_owner = true
-layout_mode = 2
-theme_override_font_sizes/font_size = 11
-text = "Inherited"
-tooltip_text = "Show inherited members"
-
-[node name="Separator" type="HSeparator" parent="MainPanel/VBox/Header"]
-unique_name_in_owner = true
-layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "✕"
 
 [node name="SplitContainer" type="HSplitContainer" parent="MainPanel/VBox"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_constants/separation = 4
-split_offset = 320
+theme_override_constants/separation = 6
+split_offset = 290
 
 [node name="HierarchyPanel" type="Panel" parent="MainPanel/VBox/SplitContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(200, 0)
+custom_minimum_size = Vector2(280, 0)
 layout_mode = 2
 theme_override_styles/panel = SubResource("hierarchy_panel_bg")
 
@@ -217,26 +187,71 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 4.0
-offset_top = 4.0
-offset_right = -4.0
-offset_bottom = -4.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -6.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/separation = 4
+theme_override_constants/separation = 8
 
-[node name="HierarchyLabel" type="Label" parent="MainPanel/VBox/SplitContainer/HierarchyPanel/VBox"]
+[node name="HierarchyHeader" type="Panel" parent="MainPanel/VBox/SplitContainer/HierarchyPanel/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 60)
+layout_mode = 2
+theme_override_styles/panel = SubResource("header_strip_bg")
+
+[node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/SplitContainer/HierarchyPanel/VBox/HierarchyHeader"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 10.0
+offset_right = -6.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 6
+
+[node name="RootLabel" type="Label" parent="MainPanel/VBox/SplitContainer/HierarchyPanel/VBox/HierarchyHeader/HBox"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.6, 0.6, 0.7, 1)
-theme_override_font_sizes/font_size = 12
-text = "HIERARCHY"
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.92, 0.88, 1, 1)
+theme_override_font_sizes/font_size = 20
+text = "Root: (none)"
+vertical_alignment = 1
+text_overrun_behavior = 3
+
+[node name="RootGoToTopButton" type="Button" parent="MainPanel/VBox/SplitContainer/HierarchyPanel/VBox/HierarchyHeader/HBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+theme_override_styles/normal = SubResource("icon_btn_normal")
+theme_override_styles/hover = SubResource("icon_btn_hover")
+text = "⇈"
+tooltip_text = "Go to world root"
+
+[node name="RootUpButton" type="Button" parent="MainPanel/VBox/SplitContainer/HierarchyPanel/VBox/HierarchyHeader/HBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(44, 44)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+theme_override_styles/normal = SubResource("icon_btn_normal")
+theme_override_styles/hover = SubResource("icon_btn_hover")
+text = "▲"
+tooltip_text = "Navigate one level up"
 
 [node name="HierarchyTree" type="Tree" parent="MainPanel/VBox/SplitContainer/HierarchyPanel/VBox"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+theme_override_font_sizes/font_size = 19
+theme_override_constants/v_separation = 14
+theme_override_constants/inner_item_margin_left = 8
+theme_override_constants/inner_item_margin_right = 8
+theme_override_constants/item_margin = 20
 focus_mode = 2
 mouse_filter = 0
 allow_rmb_select = true
@@ -254,20 +269,99 @@ layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_left = 4.0
-offset_top = 4.0
-offset_right = -4.0
-offset_bottom = -4.0
+offset_left = 6.0
+offset_top = 6.0
+offset_right = -6.0
+offset_bottom = -6.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/separation = 4
+theme_override_constants/separation = 8
 
-[node name="ComponentLabel" type="Label" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox"]
+[node name="SlotHeader" type="Panel" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+theme_override_styles/panel = SubResource("header_strip_bg")
+
+[node name="HBox" type="HBoxContainer" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox/SlotHeader"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 12.0
+offset_right = -10.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 6
+
+[node name="SlotTitle" type="Label" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox/SlotHeader/HBox"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.6, 0.6, 0.7, 1)
-theme_override_font_sizes/font_size = 12
-text = "COMPONENTS"
+size_flags_horizontal = 3
+theme_override_colors/font_color = Color(0.92, 0.88, 1, 1)
+theme_override_font_sizes/font_size = 24
+text = "Slot: (none)"
+vertical_alignment = 1
+text_overrun_behavior = 3
+
+[node name="DestroyButton" type="Button" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox/SlotHeader/HBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(50, 50)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_colors/font_color = Color(1, 0.95, 0.95, 1)
+theme_override_font_sizes/font_size = 26
+theme_override_styles/normal = SubResource("destroy_btn_normal")
+theme_override_styles/hover = SubResource("destroy_btn_hover")
+text = "🗑"
+tooltip_text = "Destroy slot permanently"
+
+[node name="AddChildButton" type="Button" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox/SlotHeader/HBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(50, 50)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_font_sizes/font_size = 26
+theme_override_styles/normal = SubResource("icon_btn_normal")
+theme_override_styles/hover = SubResource("icon_btn_hover")
+text = "⤵"
+tooltip_text = "Add child slot"
+
+[node name="DuplicateButton" type="Button" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox/SlotHeader/HBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(50, 50)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_colors/font_color = Color(0.95, 1, 0.95, 1)
+theme_override_font_sizes/font_size = 26
+theme_override_styles/normal = SubResource("dup_btn_normal")
+theme_override_styles/hover = SubResource("dup_btn_hover")
+text = "⎘"
+tooltip_text = "Duplicate slot"
+
+[node name="SetRootButton" type="Button" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox/SlotHeader/HBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(50, 50)
+layout_mode = 2
+size_flags_vertical = 4
+theme_override_font_sizes/font_size = 26
+theme_override_styles/normal = SubResource("icon_btn_normal")
+theme_override_styles/hover = SubResource("icon_btn_hover")
+text = "★"
+tooltip_text = "Set as hierarchy root"
+
+[node name="OptionsRow" type="HBoxContainer" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="InheritedToggle" type="CheckButton" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox/OptionsRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
+layout_mode = 2
+theme_override_font_sizes/font_size = 19
+text = "Show inherited"
+tooltip_text = "Show inherited members on each component"
 
 [node name="ComponentScroll" type="ScrollContainer" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox"]
 unique_name_in_owner = true
@@ -279,4 +373,17 @@ horizontal_scroll_mode = 0
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 2
+theme_override_constants/separation = 8
+
+[node name="AttachComponentButton" type="Button" parent="MainPanel/VBox/SplitContainer/ComponentPanel/VBox"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_font_sizes/font_size = 22
+theme_override_styles/normal = SubResource("attach_btn_normal")
+theme_override_styles/hover = SubResource("attach_btn_hover")
+theme_override_styles/pressed = SubResource("attach_btn_pressed")
+theme_override_styles/focus = SubResource("attach_btn_hover")
+text = "+ Attach Component"
+tooltip_text = "Attach a new component to the selected slot"

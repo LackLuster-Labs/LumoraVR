@@ -442,16 +442,52 @@ public class InputInterface : IDisposable
         UpdateBodyNodeAssignments();
 
         // Call BeforeInputUpdate on all receivers (TrackedDevicePositioner updates slots here)
-        foreach (var receiver in _inputReceivers)
-        {
-            InvokeInputReceiver(receiver, before: true);
-        }
+        DispatchInputReceivers(before: true);
 
         // Call AfterInputUpdate on all receivers
-        foreach (var receiver in _inputReceivers)
+        DispatchInputReceivers(before: false);
+    }
+
+    private void DispatchInputReceivers(bool before)
+    {
+        // Receivers can unregister or be destroyed as part of world teardown.
+        // Iterate a snapshot and prune stale world elements before invoking them.
+        foreach (var receiver in _inputReceivers.ToArray())
         {
-            InvokeInputReceiver(receiver, before: false);
+            if (!_inputReceivers.Contains(receiver))
+                continue;
+
+            if (ShouldPruneInputReceiver(receiver))
+            {
+                _inputReceivers.Remove(receiver);
+                continue;
+            }
+
+            InvokeInputReceiver(receiver, before);
+
+            if (ShouldPruneInputReceiver(receiver))
+            {
+                _inputReceivers.Remove(receiver);
+            }
         }
+    }
+
+    private static bool ShouldPruneInputReceiver(IInputUpdateReceiver receiver)
+    {
+        if (receiver == null)
+            return true;
+
+        if (receiver is IWorldElement worldElement)
+        {
+            var world = worldElement.World;
+            return worldElement.IsDestroyed ||
+                   world == null ||
+                   world.IsDisposed ||
+                   world.IsDestroyed ||
+                   world.ReferenceController == null;
+        }
+
+        return false;
     }
 
     private static void InvokeInputReceiver(IInputUpdateReceiver receiver, bool before)

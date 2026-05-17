@@ -27,6 +27,7 @@ public partial class ImportDialog : Control
         ImageTexture,
         Model3D,
         Avatar,
+        Shader,
         RawFile
     }
 
@@ -55,6 +56,7 @@ public partial class ImportDialog : Control
     private float3 _importSpawnPosition;
     private Slot _lastImportedAvatarSlot;
     private AvatarCreatorSession? _activeAvatarCreatorSession;
+    private Control _infoTooltip;
 
     public event Action<ImportType, string> ImportRequested;
     public event Action DialogClosed;
@@ -203,10 +205,108 @@ public partial class ImportDialog : Control
 
     private void OnInfoPressed()
     {
-        GD.Print("ImportDialog: Info - Supported formats:");
-        GD.Print("  Images: PNG, JPG, JPEG, WebP, BMP, TGA");
-        GD.Print("  3D Models: GLB, GLTF, FBX, OBJ, DAE, 3DS, BLEND, STL, PLY, X, ASE");
-        GD.Print("  Avatars: VRM, GLB, GLTF, FBX, DAE");
+        // toggle off if already up so spam-clicking dismisses it - xlinka
+        if (_infoTooltip != null && IsInstanceValid(_infoTooltip))
+        {
+            _infoTooltip.QueueFree();
+            _infoTooltip = null;
+            return;
+        }
+
+        ShowInfoTooltip();
+    }
+
+    private async void ShowInfoTooltip()
+    {
+        if (_btnInfo == null)
+            return;
+
+        var style = new StyleBoxFlat
+        {
+            BgColor = new Color(0.12f, 0.10f, 0.18f, 0.96f),
+            BorderColor = new Color(0.47f, 0.37f, 0.94f, 0.85f),
+            BorderWidthLeft = 1,
+            BorderWidthTop = 1,
+            BorderWidthRight = 1,
+            BorderWidthBottom = 1,
+            CornerRadiusTopLeft = 8,
+            CornerRadiusTopRight = 8,
+            CornerRadiusBottomLeft = 8,
+            CornerRadiusBottomRight = 8,
+            ContentMarginLeft = 10,
+            ContentMarginTop = 8,
+            ContentMarginRight = 10,
+            ContentMarginBottom = 8,
+        };
+
+        // PanelContainer auto-shrinks to its child. plain Panel does not, which is why the old version was a giant black box - xlinka
+        var panel = new PanelContainer
+        {
+            MouseFilter = MouseFilterEnum.Ignore,
+            ZIndex = 100,
+        };
+        panel.AddThemeStyleboxOverride("panel", style);
+
+        var vbox = new VBoxContainer
+        {
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        vbox.AddThemeConstantOverride("separation", 4);
+        panel.AddChild(vbox);
+
+        AddTooltipLabel(vbox, "Supported formats", header: true);
+        AddTooltipLabel(vbox, "Images: PNG, JPG, JPEG, WebP, BMP, TGA", header: false);
+        AddTooltipLabel(vbox, "3D: GLB, GLTF, FBX, OBJ, DAE, 3DS, BLEND, STL, PLY, X, ASE", header: false);
+        AddTooltipLabel(vbox, "Avatars: VRM, GLB, GLTF, FBX, DAE", header: false);
+
+        AddChild(panel);
+        _infoTooltip = panel;
+
+        // wait one frame so the container actually has a laid out size before we read it - xlinka
+        await ToSignal(GetTree(), SceneTree.SignalName.ProcessFrame);
+        if (!IsInstanceValid(panel))
+            return;
+
+        var btnPos = _btnInfo.GetGlobalPosition() - GetGlobalPosition();
+        var btnSize = _btnInfo.Size;
+        var panelSize = panel.Size;
+
+        float x = btnPos.X + btnSize.X * 0.5f - panelSize.X * 0.5f;
+        float y = btnPos.Y - panelSize.Y - 6f;
+
+        // not enough room above. drop it below instead - xlinka
+        if (y < 4f)
+            y = btnPos.Y + btnSize.Y + 6f;
+
+        x = Mathf.Clamp(x, 8f, Mathf.Max(8f, Size.X - panelSize.X - 8f));
+        panel.Position = new Vector2(x, y);
+
+        var tooltipRef = panel;
+        var timer = GetTree().CreateTimer(4.0);
+        timer.Timeout += () =>
+        {
+            if (tooltipRef != null && IsInstanceValid(tooltipRef))
+            {
+                tooltipRef.QueueFree();
+                if (_infoTooltip == tooltipRef)
+                    _infoTooltip = null;
+            }
+        };
+    }
+
+    private static void AddTooltipLabel(VBoxContainer parent, string text, bool header)
+    {
+        var label = new Label
+        {
+            Text = text,
+            AutowrapMode = TextServer.AutowrapMode.WordSmart,
+            MouseFilter = MouseFilterEnum.Ignore,
+        };
+        label.AddThemeFontSizeOverride("font_size", header ? 13 : 11);
+        label.AddThemeColorOverride(
+            "font_color",
+            header ? new Color(0.47f, 0.37f, 0.94f, 1f) : new Color(0.85f, 0.85f, 0.92f, 1f));
+        parent.AddChild(label);
     }
 
     private async void OnOptionSelected(ImportType type)
@@ -229,8 +329,32 @@ public partial class ImportDialog : Control
         if (!string.IsNullOrEmpty(_filePath) && _targetSlot != null)
             success = await PerformImport(type, _filePath);
 
-        if (success)
-            SetSubtitle("Import finished. Close when done.");
+        if (!success)
+            return;
+
+        // avatars need the dialog open so the user can hit the Avatar Creator button - xlinka
+        if (type == ImportType.Avatar)
+        {
+            SetSubtitle("Avatar imported as draft");
+            return;
+        }
+
+        SetSubtitle("Import finished");
+        ScheduleAutoClose(0.6);
+    }
+
+    private void ScheduleAutoClose(double delaySeconds)
+    {
+        var timer = GetTree().CreateTimer(delaySeconds);
+        timer.Timeout += () =>
+        {
+            if (!IsInstanceValid(this) || _isImporting)
+                return;
+
+            ResetAvatarCreatorState();
+            DialogClosed?.Invoke();
+            Hide();
+        };
     }
 
     private void ResetAvatarCreatorState()

@@ -110,6 +110,7 @@ public sealed class ColorPickerPanel : GodotUIPanel
     {
         _boundMember = member;
         Label.Value  = label ?? member.Name ?? "Color";
+        ConfigureForBoundMember();
         SyncColorFromMember();
     }
 
@@ -127,8 +128,15 @@ public sealed class ColorPickerPanel : GodotUIPanel
         if (field is ISyncMember m)
         {
             _boundMember = m;
+            ConfigureForBoundMember();
             SyncColorFromMember();
         }
+    }
+
+    private void ConfigureForBoundMember()
+    {
+        ShowAlpha.Value = true;
+        AllowHDR.Value = _boundMember is IField field && field.ValueType == typeof(colorHDR);
     }
 
     private void SyncColorFromMember()
@@ -142,12 +150,28 @@ public sealed class ColorPickerPanel : GodotUIPanel
             CurrentColor.Value = c;
             CurrentColor.OnChanged += ApplyToTarget;
         }
+        else if (raw is colorHDR h)
+        {
+            // color stores floats too; keeping HDR values here lets the Godot picker intensity edit them.
+            CurrentColor.OnChanged -= ApplyToTarget;
+            CurrentColor.Value = new color(h.r, h.g, h.b, h.a);
+            CurrentColor.OnChanged += ApplyToTarget;
+        }
     }
 
     private void ApplyToTarget(color newColor)
     {
         if (_boundMember != null)
-            SyncMemberEditorBuilder.SetColor(_boundMember, newColor);
+        {
+            if (_boundMember is IField field && field.ValueType == typeof(colorHDR))
+            {
+                SyncMemberEditorBuilder.SetColorHDR(_boundMember, new colorHDR(newColor.r, newColor.g, newColor.b, newColor.a));
+            }
+            else
+            {
+                SyncMemberEditorBuilder.SetColor(_boundMember, newColor);
+            }
+        }
 
         OnColorChanged?.Invoke(newColor);
     }

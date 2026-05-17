@@ -19,7 +19,9 @@ namespace Lumora.Core.GodotUI.Inspectors;
 public class SceneInspector : GodotUIPanel
 {
     protected override string DefaultScenePath => LumAssets.UI.SceneInspector;
-    protected override float2 DefaultSize => new float2(800, 600);
+    protected override float2 DefaultSize => new float2(660, 500);
+    // shorter panel kills the empty gap under components. 660 fits wide hierarchy + chunky buttons + title - xlinka
+    protected override float DefaultPixelsPerUnit => 700f;
 
     /// <summary>
     /// The root slot for the hierarchy view.

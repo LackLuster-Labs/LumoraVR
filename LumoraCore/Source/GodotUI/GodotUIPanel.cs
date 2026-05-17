@@ -87,7 +87,8 @@ public class GodotUIPanel : ImplementableComponent
     /// <summary>
     /// Default resolution scale.
     /// </summary>
-    protected virtual int DefaultResolutionScale => 2;
+    // bumped from 2 to 3. at 2 the SubViewport pixel pitch was so coarse that mouse hover targeting felt like a grid - xlinka
+    protected virtual int DefaultResolutionScale => 3;
 
     public override void OnAwake()
     {

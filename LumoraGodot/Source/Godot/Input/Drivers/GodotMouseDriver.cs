@@ -5,6 +5,7 @@
 using Lumora.Core.Math;
 using Godot;
 using Lumora.Source.UI;
+using Lumora.Source.Godot.UI;
 
 namespace Lumora.Source.Godot.Input.Drivers;
 
@@ -17,6 +18,7 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
     public int UpdateOrder => 0;
     private float _pendingScrollDelta = 0f;
     private double _lastFrameTime = 0;
+    private const float LookReferenceHeight = 1080f;
 
     // Accumulated motion - only cleared when consumed
     private Vector2 _pendingMotion = Vector2.Zero;
@@ -27,9 +29,10 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
     private const float MaxReasonableMotionPerFrame = 2500f;
     private const float MaxReasonableMotionSq = MaxReasonableMotionPerFrame * MaxReasonableMotionPerFrame;
 
-    // Light smoothing to reduce jitter from high-poll mice without adding noticeable latency
+    // Smoothing factor is read from InterfaceSettings.MouseSmoothing each frame so
+    // the settings slider takes effect immediately. 0 = raw input (recommended at
+    // high refresh rates).
     private float2 _smoothedDelta = float2.Zero;
-    private const float SmoothFactor = 0.3f; // 0 = raw (no smoothing), higher = smoother but laggier
 
     public GodotMouseDriver()
     {
@@ -101,16 +104,21 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
             motion = motion.Normalized() * MaxReasonableMotionPerFrame;
         }
 
-        // Normalize by screen height so delta is resolution/DPI-independent.
-        // A full screen-height swipe = 1.0 regardless of resolution.
-        float screenHeight = DisplayServer.WindowGetSize().Y;
-        if (screenHeight < 1f) screenHeight = 1080f;
-        float2 normalizedDelta = new float2(motion.X / screenHeight, motion.Y / screenHeight);
+        float sensitivity = InterfaceSettings.MouseSensitivity;
+        float2 normalizedDelta = new float2(
+            motion.X / LookReferenceHeight,
+            motion.Y / LookReferenceHeight) * sensitivity;
 
-        // Apply light smoothing (lerp between previous and current)
-        _smoothedDelta = float2.Lerp(_smoothedDelta, normalizedDelta, 1f - SmoothFactor);
+        float smoothFactor = InterfaceSettings.MouseSmoothing;
+        if (smoothFactor > 0f)
+        {
+            _smoothedDelta = float2.Lerp(_smoothedDelta, normalizedDelta, 1f - smoothFactor);
+        }
+        else
+        {
+            _smoothedDelta = normalizedDelta;
+        }
 
-        // Don't send mouse delta to locomotion when dashboard is visible
         float2 delta = DashboardToggle.IsDashboardVisible ? float2.Zero : _smoothedDelta;
 
         mouse.DirectDelta.UpdateValue(delta, deltaTime);

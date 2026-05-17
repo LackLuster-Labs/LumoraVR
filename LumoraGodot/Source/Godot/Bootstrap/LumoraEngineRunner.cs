@@ -72,7 +72,11 @@ public partial class LumoraEngineRunner : Node
 	private double _debugPerfTimer;
 	private double _debugMemoryTimer;
 	private InitializationPhase _currentPhase = InitializationPhase.EnvironmentSetup;
-	private XrLaunchMode _xrLaunchMode = XrLaunchMode.Desktop;
+	// Auto: try to detect a headset on every launch; falls back to Desktop gracefully.
+	private XrLaunchMode _xrLaunchMode = XrLaunchMode.Auto;
+
+	// XRModeManager handles F8 runtime switching between Desktop and VR.
+	private XRModeManager _xrModeManager;
 	private ThreadingMutex? _debugConsoleInstanceMutex;
 	private bool _ownsDebugConsoleLock;
 	private static readonly Dictionary<Type, long> ComponentMemoryEstimateCache = new();
@@ -202,7 +206,9 @@ public partial class LumoraEngineRunner : Node
 
 	private static XrLaunchMode ResolveXrLaunchMode()
 	{
-		var mode = XrLaunchMode.Desktop;
+		// Default to Auto so a headset is detected automatically unless the user
+		// explicitly passes --desktop / --xr-mode=off on the command line.
+		var mode = XrLaunchMode.Auto;
 		var args = GetAllCommandLineArgs().ToArray();
 
 		for (int i = 0; i < args.Length; i++)
@@ -639,14 +645,23 @@ public partial class LumoraEngineRunner : Node
 			return FileAccess.GetFileAsBytes(resPath);
 		};
 
-		// Register input drivers
+		// Register low-level input drivers (keyboard, mouse, VR tracking layer)
 		RegisterInputDrivers();
+
+		// Create the XR Mode Manager – owns Desktop/VR provider nodes and handles F8 hot-swap
+		bool isVRActive = XRServer.PrimaryInterface != null && GetViewport().UseXR;
+		_xrModeManager = new XRModeManager();
+		_xrModeManager.Name = "XRModeManager";
+		AddChild(_xrModeManager);
+		_xrModeManager.Initialize(_engine, _headOutput, _inputInterface, _mainCamera, _vrDriver, isVRActive);
 
 		await Task.Delay(150); // Artificial delay to show phase message
 	}
 
 	/// <summary>
-	/// Register all input drivers with InputInterface.
+	/// Register low-level input drivers (keyboard, mouse, VR tracking).
+	/// Mode-specific input providers (DesktopInput / VRInputProvider) are
+	/// created by XRModeManager after this call.
 	/// </summary>
 	private void RegisterInputDrivers()
 	{
@@ -654,57 +669,21 @@ public partial class LumoraEngineRunner : Node
 		var inputManager = new InputManager();
 		AddChild(inputManager);
 
-		// Keyboard driver - must use RegisterKeyboardDriver
+		// Keyboard driver
 		_keyboardDriver = new GodotKeyboardDriver();
 		_inputInterface.RegisterKeyboardDriver(_keyboardDriver);
 
-		// Mouse driver - must use RegisterMouseDriver to create Mouse device
+		// Mouse driver
 		_mouseDriver = new GodotMouseDriver();
 		_inputInterface.RegisterMouseDriver(_mouseDriver);
 
-		// VR driver - handles head and controller tracking
+		// VR driver – handles head and controller tracking at the low level
 		_vrDriver = new GodotVRDriver();
 		_inputInterface.RegisterVRDriver(_vrDriver);
 		_vrDriver.InitializeVR();
 
-		// Find XR nodes in scene tree for proper Godot 4.x VR tracking
+		// Find any XR nodes that already exist in the scene (created during PhaseXRDetection)
 		_vrDriver.FindXRNodes(GetTree().Root);
-
-		// Create desktop input provider if not in VR mode
-		// This provides the center-screen cursor and hand simulation for desktop
-		bool isVRActive = XRServer.PrimaryInterface != null && GetViewport().UseXR;
-		if (!isVRActive)
-		{
-			var desktopInput = new DesktopInput();
-			desktopInput.Name = "DesktopInput";
-			AddChild(desktopInput);
-			desktopInput.SetCamera(_mainCamera);
-			LumoraLogger.Log("DesktopInput: Created for non-VR mode");
-
-			var desktopCamera = new Lumora.Source.Godot.Input.DesktopCameraController();
-			desktopCamera.Name = "DesktopCameraController";
-			AddChild(desktopCamera);
-			desktopCamera.Initialize(_engine);
-			LumoraLogger.Log("DesktopCameraController: Created (F5=third-person, F6=free-cam)");
-		}
-		else
-		{
-			var vrInputProvider = new EngineVRInputProvider();
-			vrInputProvider.Name = "VRInputProvider";
-			AddChild(vrInputProvider);
-			vrInputProvider.Initialize(_inputInterface);
-			LumoraLogger.Log("VRInputProvider: Created for VR mode");
-
-			var laserManager = new LaserInteractionManager();
-			laserManager.Name = "LaserInteraction";
-			AddChild(laserManager);
-
-			var grabManager = new GrabManager();
-			grabManager.Name = "GrabManager";
-			AddChild(grabManager);
-
-			LumoraLogger.Log("VR interaction managers: LaserInteraction + GrabManager created");
-		}
 
 		// Initialize LocalDB for asset storage
 		_localDB = new LocalDB();

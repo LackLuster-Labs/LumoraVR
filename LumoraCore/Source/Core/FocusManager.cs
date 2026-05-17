@@ -12,6 +12,7 @@ namespace Lumora.Core;
 public class FocusManager
 {
     private World _focusedWorld;
+    private World _previousFocusedWorld;
     private World _userspaceWorld;
 
     /// <summary>
@@ -25,12 +26,24 @@ public class FocusManager
             if (_focusedWorld == value) return;
 
             var oldWorld = _focusedWorld;
+            // Only record real worlds as "previous"; null transitions don't count
+            // so closing the current focused world can still find a sensible target. - xlinka
+            if (oldWorld != null)
+            {
+                _previousFocusedWorld = oldWorld;
+            }
             _focusedWorld = value;
 
             OnFocusedWorldChanged?.Invoke(oldWorld, value);
             LumoraLogger.Log($"FocusManager: Focused world changed from '{oldWorld?.WorldName.Value ?? "none"}' to '{value?.WorldName.Value ?? "none"}'");
         }
     }
+
+    /// <summary>
+    /// The world that was focused immediately before the current one. Used as a
+    /// natural "back" target when closing the focused world.
+    /// </summary>
+    public World PreviousFocusedWorld => _previousFocusedWorld;
 
     /// <summary>
     /// The userspace world (overlay UI, dashboard, settings).

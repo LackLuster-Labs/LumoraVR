@@ -33,9 +33,9 @@ public sealed class CustomShaderMaterial : MaterialProvider
     public readonly AssetRef<ShaderSourceAsset> Shader;
 
     /// <summary>
-    /// Optional inline shader source. Used when Shader asset is not assigned.
+    /// Optional engine shader resource path, for built-in res:// .gdshader files.
     /// </summary>
-    public readonly Sync<string> InlineShaderSource;
+    public readonly Sync<string> ShaderPath;
 
     /// <summary>
     /// Shader uniform parameters (synced).
@@ -66,7 +66,7 @@ public sealed class CustomShaderMaterial : MaterialProvider
     public CustomShaderMaterial()
     {
         Shader = new AssetRef<ShaderSourceAsset>(this);
-        InlineShaderSource = new Sync<string>(this, string.Empty);
+        ShaderPath = new Sync<string>(this, string.Empty);
         Parameters = new SyncList<ShaderUniformParam>();
         BlendMode = new Sync<BlendMode>(this, global::Lumora.Core.Assets.BlendMode.Opaque);
         Culling = new Sync<Culling>(this, global::Lumora.Core.Assets.Culling.Back);
@@ -85,15 +85,20 @@ public sealed class CustomShaderMaterial : MaterialProvider
             asset.SetCulling(Culling.Value);
             asset.SetFloat("RenderQueue", RenderQueue.Value);
 
+            var shaderPath = ShaderPath.Value;
+            if (!string.IsNullOrWhiteSpace(shaderPath))
+            {
+                asset.SetCustomShader(shaderPath);
+            }
+
             var shaderAsset = Shader.Asset;
             var shaderSource = shaderAsset?.Source;
-            if (string.IsNullOrWhiteSpace(shaderSource))
-            {
-                shaderSource = InlineShaderSource.Value;
-            }
             if (!string.IsNullOrWhiteSpace(shaderSource))
             {
-                asset.SetCustomShaderSource(shaderSource);
+                if (string.IsNullOrWhiteSpace(shaderPath))
+                {
+                    asset.SetCustomShaderSource(shaderSource);
+                }
                 EnsureUniforms(shaderSource);
             }
 

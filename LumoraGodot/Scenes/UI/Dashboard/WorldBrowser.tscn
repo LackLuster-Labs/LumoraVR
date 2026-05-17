@@ -38,6 +38,10 @@ corner_radius_top_left = 6
 corner_radius_top_right = 6
 corner_radius_bottom_right = 6
 corner_radius_bottom_left = 6
+content_margin_left = 12
+content_margin_top = 6
+content_margin_right = 12
+content_margin_bottom = 6
 
 [sub_resource type="StyleBoxFlat" id="StyleBoxFlat_header"]
 bg_color = Color(0.1, 0.09, 0.15, 0.48)
@@ -50,6 +54,22 @@ corner_radius_top_left = 10
 corner_radius_top_right = 10
 corner_radius_bottom_right = 10
 corner_radius_bottom_left = 10
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_currentworld"]
+bg_color = Color(0.16, 0.14, 0.24, 0.85)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.5, 0.42, 0.85, 0.9)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+content_margin_left = 12
+content_margin_top = 10
+content_margin_right = 12
+content_margin_bottom = 10
 
 [node name="WorldBrowser" type="Control"]
 unique_name_in_owner = true
@@ -80,7 +100,7 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/separation = 0
+theme_override_constants/separation = 12
 
 [node name="Sidebar" type="PanelContainer" parent="MainHBox"]
 unique_name_in_owner = true
@@ -122,17 +142,26 @@ text = "Worlds"
 
 [node name="Spacer1" type="Control" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 8)
+custom_minimum_size = Vector2(0, 14)
 layout_mode = 2
 
-[node name="CurrentWorldLabel" type="Label" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+[node name="CurrentWorldPanel" type="PanelContainer" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_styles/panel = SubResource("StyleBoxFlat_currentworld")
+
+[node name="CurrentWorldVBox" type="VBoxContainer" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox/CurrentWorldPanel"]
+layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="CurrentWorldLabel" type="Label" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox/CurrentWorldPanel/CurrentWorldVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.5, 0.48, 0.6, 1)
 theme_override_font_sizes/font_size = 9
 text = "CURRENT WORLD"
 
-[node name="CurrentWorld" type="Label" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox"]
+[node name="CurrentWorld" type="Label" parent="MainHBox/Sidebar/SidebarMargin/SidebarVBox/CurrentWorldPanel/CurrentWorldVBox"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_override_colors/font_color = Color(0.47, 0.37, 0.94, 1)
@@ -172,10 +201,10 @@ theme_override_styles/panel = SubResource("StyleBoxFlat_header")
 [node name="HeaderMargin" type="MarginContainer" parent="MainHBox/ContentArea/Header"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_constants/margin_left = 16
-theme_override_constants/margin_top = 12
+theme_override_constants/margin_left = 20
+theme_override_constants/margin_top = 14
 theme_override_constants/margin_right = 16
-theme_override_constants/margin_bottom = 12
+theme_override_constants/margin_bottom = 14
 
 [node name="HeaderHBox" type="HBoxContainer" parent="MainHBox/ContentArea/Header/HeaderMargin"]
 unique_name_in_owner = true
@@ -184,12 +213,14 @@ theme_override_constants/separation = 16
 
 [node name="SearchBox" type="LineEdit" parent="MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(300, 0)
+custom_minimum_size = Vector2(300, 32)
 layout_mode = 2
+size_flags_vertical = 4
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
 theme_override_colors/font_placeholder_color = Color(0.5, 0.48, 0.6, 1)
 theme_override_font_sizes/font_size = 12
 theme_override_styles/normal = SubResource("StyleBoxFlat_search")
+theme_override_styles/focus = SubResource("StyleBoxFlat_search")
 placeholder_text = "🔍 Search worlds..."
 
 [node name="Spacer" type="Control" parent="MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox"]
@@ -206,10 +237,11 @@ text = "0 - 24"
 
 [node name="RefreshButton" type="Button" parent="MainHBox/ContentArea/Header/HeaderMargin/HeaderHBox"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(32, 32)
+custom_minimum_size = Vector2(36, 32)
 layout_mode = 2
+size_flags_vertical = 4
 theme_override_colors/font_color = Color(0.9, 0.9, 0.95, 1)
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 16
 text = "↻"
 
 [node name="ContentMargin" type="MarginContainer" parent="MainHBox/ContentArea"]

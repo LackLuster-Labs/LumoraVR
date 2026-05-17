@@ -30,6 +30,9 @@ public partial class GrabManager : Node3D
     private RayCast3D _rightRaycast;
     private Camera3D _camera;
 
+    // Snap rotation to 15 degrees per step when Shift is held while following rotation.
+    private const float SnapRotationStepRadians = 0.2617993878f;
+
     private Slot _grabbedSlot;
     private Lumora.Core.Components.RigidBody _grabbedRigidBody;
     private Vector3 _offsetLocal;
@@ -38,6 +41,7 @@ public partial class GrabManager : Node3D
     private GrabHand _activeHand = GrabHand.None;
     private bool _wasLeftGrabPressed;
     private bool _wasRightGrabPressed;
+    private bool _wasFollowToggleHeld;
 
     public override void _Ready()
     {
@@ -45,6 +49,28 @@ public partial class GrabManager : Node3D
         _rightRaycast = CreateRaycast("GrabRaycastRight");
         AddChild(_leftRaycast);
         AddChild(_rightRaycast);
+    }
+
+    /// <summary>
+    /// True when either grab raycast is currently aimed at a slot with an enabled Grabbable.
+    /// Drives cursor color / reticle hover state without needing a second physics query.
+    /// </summary>
+    public bool IsHoveringGrabbable => HasGrabbableTarget(_rightRaycast) || HasGrabbableTarget(_leftRaycast);
+
+    private static bool HasGrabbableTarget(RayCast3D raycast)
+    {
+        if (raycast == null || !raycast.IsColliding())
+            return false;
+
+        if (raycast.GetCollider() is not Node collider)
+            return false;
+
+        var slot = ResolveSlotFromCollider(collider);
+        if (slot == null)
+            return false;
+
+        var grabbable = slot.GetComponent<Grabbable>();
+        return grabbable != null && grabbable.Enabled.Value && grabbable.AllowGrab.Value;
     }
 
     private static RayCast3D CreateRaycast(string name)
@@ -99,6 +125,22 @@ public partial class GrabManager : Node3D
             }
             else
             {
+                // R toggles "follow rotation" mid-grab so users can switch behaviour
+                // without having to drop and re-grab the object.
+                bool followToggleHeld = global::Godot.Input.IsKeyPressed(Key.R);
+                if (followToggleHeld && !_wasFollowToggleHeld)
+                {
+                    _followRotation = !_followRotation;
+                    if (_followRotation && TryGetGrabTransform(input, _activeHand, out _, out var grabRot))
+                    {
+                        var slotRot = _grabbedSlot.GlobalRotation;
+                        var slotQuat = new Quaternion(slotRot.x, slotRot.y, slotRot.z, slotRot.w);
+                        _rotationOffset = grabRot.Inverse() * slotQuat;
+                    }
+                    LumoraLogger.Log($"GrabManager: FollowRotation toggled -> {_followRotation}");
+                }
+                _wasFollowToggleHeld = followToggleHeld;
+
                 UpdateGrabbedTransform(input, _activeHand);
             }
         }
@@ -216,11 +258,28 @@ public partial class GrabManager : Node3D
 
         var worldPos = grabPos + (grabRot * _offsetLocal);
         var newPos = new float3(worldPos.X, worldPos.Y, worldPos.Z);
-        var newRot = _followRotation ? new floatQ((grabRot * _rotationOffset).X, (grabRot * _rotationOffset).Y, (grabRot * _rotationOffset).Z, (grabRot * _rotationOffset).W) : (floatQ?)null;
+
+        floatQ? newRot = null;
+        if (_followRotation)
+        {
+            var combined = grabRot * _rotationOffset;
+            // Hold Shift while following to snap rotation to 15-degree increments.
+            // Useful for desktop builders who want axis-aligned placement. - xlinka
+            if (global::Godot.Input.IsKeyPressed(Key.Shift))
+            {
+                var euler = combined.GetEuler();
+                euler = new Vector3(
+                    Mathf.Round(euler.X / SnapRotationStepRadians) * SnapRotationStepRadians,
+                    Mathf.Round(euler.Y / SnapRotationStepRadians) * SnapRotationStepRadians,
+                    Mathf.Round(euler.Z / SnapRotationStepRadians) * SnapRotationStepRadians);
+                combined = Quaternion.FromEuler(euler);
+            }
+            newRot = new floatQ(combined.X, combined.Y, combined.Z, combined.W);
+        }
+
         var slot = _grabbedSlot;
         var followRot = _followRotation;
 
-        // Queue modifications to run during world update with proper locking
         slot.World?.RunSynchronously(() =>
         {
             if (slot.IsDestroyed) return;
@@ -274,5 +333,6 @@ public partial class GrabManager : Node3D
         _offsetLocal = Vector3.Zero;
         _followRotation = false;
         _activeHand = GrabHand.None;
+        _wasFollowToggleHeld = false;
     }
 }
