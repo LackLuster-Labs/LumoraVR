@@ -409,7 +409,7 @@ public class Engine : IDisposable
 
             // Initialize AudioSystem
             AudioManager = new();
-            foreach (string name in new string[] { "Music", "Effects", "Voice" })
+            foreach (string name in Enum.GetNames<AudioCategory>())
             {
                 if (AudioManager.Mixer.TryCreateAudioBus(name, out var bus) && AudioManager.Mixer.TryGetAudioBusByName("Master", out var master))
                     bus.Target = master;

@@ -1,4 +1,6 @@
+using System;
 using Godot;
+using Lumora.Core;
 using Lumora.Core.Components;
 using Lumora.Core.Components.Audio;
 using Lumora.Core.External.Audio.Godot;
@@ -17,6 +19,7 @@ public class AudioPlayer3DHook : ComponentHook<AudioPlayer3D>
     {
         if(Owner.Steam is null) return;
         if(audioPlayer3D is null) return;
+        audioPlayer3D.Bus = Enum.GetName(Owner.target.Value);
         if(Owner is GodotAudioPlayer3D godotAudioPlayer3D)
         {
             audioPlayer3D.AttenuationModel = (AudioStreamPlayer3D.AttenuationModelEnum)godotAudioPlayer3D.AttenuationMode.Value;

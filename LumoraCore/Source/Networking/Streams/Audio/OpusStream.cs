@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Concurrent;
 using System.ComponentModel.DataAnnotations;
+using System.Threading.Tasks;
 using Concentus;
 using Concentus.Enums;
 using Concentus.Structs;
+using Lumora.Core.Math;
 using Lumora.Core.Networking.Streams;
 using Lumora.Core.Networking.Sync;
 
@@ -35,9 +37,22 @@ public class OpusStream : Stream,IAudioStream
             opusDecoder = OpusCodecFactory.CreateDecoder(48000,2);
             packetQueue = new();
         }
+        _pollingrate = PollingRate.Value;
+        World.Session.RawStreamManager.StartPolling(this);
+        PollingRate.OnChanged += (newrate) =>
+        {
+            ChangeSampleRate(newrate);
+        };
+    }
+    private void ChangeSampleRate(uint rate)
+    {
+        World.Session.RawStreamManager.StopPolling(this);
+        _pollingrate = rate;
+        World.Session.RawStreamManager.StartPolling(this);
     }
     private ConcurrentQueue<packet> packetQueue = null!;
     public readonly Sync<int> framesize = new(480);
+    public readonly Sync<uint> PollingRate = new(20);
     private IOpusDecoder opusDecoder = null!;
     private IOpusEncoder opusEncoder = null!;
     private ushort _sequenceIn = 0;
@@ -47,7 +62,8 @@ public class OpusStream : Stream,IAudioStream
     public override uint Period => 0;
 
     public override uint Phase => 0;
-
+    private uint _pollingrate;
+    uint IRawStream.PollingRate => _pollingrate;
     public override bool IsExplicitUpdatePoint(ulong timePoint) => false;
 
     public void EnqueueRawFrame(ushort sequence, ReadOnlyMemory<byte> payload)
@@ -63,4 +79,17 @@ public class OpusStream : Stream,IAudioStream
     {
     }
 
+    public int GetFramesAvailable()
+    {
+        throw new NotImplementedException();
+    }
+
+    public float2[]? GetFrames(int count)
+    {
+        throw new NotImplementedException();
+    }
+
+    public async Task Poll()
+    {
+    }
 }

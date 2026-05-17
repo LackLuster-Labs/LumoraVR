@@ -464,6 +464,7 @@ public class Session : IDisposable
 
         Sync?.Dispose();
         Connections?.Dispose();
+        RawStreamManager?.Dispose();
 
         World = null;
         Metadata = null;
