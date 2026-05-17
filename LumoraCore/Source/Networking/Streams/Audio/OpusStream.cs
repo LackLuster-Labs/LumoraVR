@@ -11,30 +11,31 @@ using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core.Networking.Streams.Audio;
 
-public class OpusStream : Stream,IAudioStream
+public class OpusStream : Stream, IAudioStream
 {
     private struct packet
     {
-        private packet(ushort seq,byte[] data)
+        private packet(ushort seq, byte[] data)
         {
-            _sequence=seq;
-            _data=data;
+            _sequence = seq;
+            _data = data;
         }
         ushort _sequence;
         byte[] _data;
         public static implicit operator byte[](packet p) => p._data;
-        public static implicit operator packet((ushort seq,byte[] d) i)=> new packet(i.seq,i.d);
-        
+        public static implicit operator packet((ushort seq, byte[] d) i) => new packet(i.seq, i.d);
+
     }
     protected override void OnInit()
     {
         base.OnInit();
         if (this.IsLocal)
         {
-            opusEncoder = OpusCodecFactory.CreateEncoder(48000,2);
-        }else
+            opusEncoder = OpusCodecFactory.CreateEncoder(48000, 2);
+        }
+        else
         {
-            opusDecoder = OpusCodecFactory.CreateDecoder(48000,2);
+            opusDecoder = OpusCodecFactory.CreateDecoder(48000, 2);
             packetQueue = new();
         }
         _pollingrate = PollingRate.Value;
@@ -68,7 +69,7 @@ public class OpusStream : Stream,IAudioStream
 
     public void EnqueueRawFrame(ushort sequence, ReadOnlyMemory<byte> payload)
     {
-        packetQueue.Enqueue((sequence,payload.ToArray()));
+        packetQueue.Enqueue((sequence, payload.ToArray()));
     }
 
     public override void Encode(System.IO.BinaryWriter writer)

@@ -13,21 +13,22 @@ public class AsyncDisposibleLockedTimer : IDisposable
     private readonly List<Func<Task>> users = new();
     private readonly CancellationTokenSource cancellationToken = new();
     private readonly Object _lock = new();
-    public Task currentPoll {get; private set;} = Task.CompletedTask;
-    public AsyncDisposibleLockedTimer(TimeSpan defaulttime,CancellationToken token)
+    public Task currentPoll { get; private set; } = Task.CompletedTask;
+    public AsyncDisposibleLockedTimer(TimeSpan defaulttime, CancellationToken token)
     {
         _timer = new(defaulttime);
         Task.Run(Run);
     }
     private async void Run()
     {
-        while(true){
+        while (true)
+        {
             var res = await _timer.WaitForNextTickAsync(cancellationToken.Token);
-            if(!res)break;
+            if (!res) break;
             List<Task> tasks = new();
             lock (_lock)
             {
-                foreach(Func<Task> task in users)
+                foreach (Func<Task> task in users)
                 {
                     tasks.Add(task());
                 }
@@ -37,18 +38,18 @@ public class AsyncDisposibleLockedTimer : IDisposable
     }
     public void Add(Func<Task> act)
     {
-        lock(_lock)
-        users.Add(act);
+        lock (_lock)
+            users.Add(act);
     }
     public void Remove(Func<Task> act)
     {
-        lock(_lock)
-        users.Remove(act);
+        lock (_lock)
+            users.Remove(act);
     }
     public int GetRefCount()
     {
-        lock(_lock)
-        return users.Count;
+        lock (_lock)
+            return users.Count;
     }
     public void Dispose()
     {

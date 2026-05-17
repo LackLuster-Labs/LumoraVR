@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lumora.Core;
@@ -22,7 +22,7 @@ public class Session : IDisposable
     public SessionSyncManager Sync { get; private set; }
     public SessionAssetTransferer AssetTransferer { get; private set; }
 
-    public SessionRawStreamManager RawStreamManager { get; private set;}
+    public SessionRawStreamManager RawStreamManager { get; private set; }
 
     /// <summary>
     /// Session metadata describing identity, settings, and state.

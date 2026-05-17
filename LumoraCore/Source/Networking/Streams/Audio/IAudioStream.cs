@@ -1,6 +1,7 @@
 using Lumora.Core.Math;
 
 namespace Lumora.Core.Networking.Streams.Audio;
+
 public interface IAudioStream : IRawStream
 {
 
