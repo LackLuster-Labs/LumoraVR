@@ -10,7 +10,6 @@ public class SessionRawStreamManager : IDisposable
 {
     private readonly List<IRawStream> activestreams = new();
     private readonly Dictionary<uint, AsyncDisposibleLockedTimer> timers = new();
-    private readonly CancellationTokenSource _cancellation = new();
     private readonly Session _session;
     public SessionRawStreamManager(Session parent)
     {
@@ -32,7 +31,7 @@ public class SessionRawStreamManager : IDisposable
         AsyncDisposibleLockedTimer thistimer;
         if (!timers.TryGetValue(rate, out thistimer))
         {
-            thistimer = new(TimeSpan.FromMilliseconds(stream.PollingRate), _cancellation.Token);
+            thistimer = new(TimeSpan.FromMilliseconds(stream.PollingRate));
             timers.Add(rate, thistimer);
         }
         thistimer.Add(stream.Poll);

@@ -14,8 +14,9 @@ public class AsyncDisposibleLockedTimer : IDisposable
     private readonly CancellationTokenSource cancellationToken = new();
     private readonly Object _lock = new();
     public Task currentPoll { get; private set; } = Task.CompletedTask;
-    public AsyncDisposibleLockedTimer(TimeSpan defaulttime, CancellationToken token)
+    public AsyncDisposibleLockedTimer(TimeSpan defaulttime)
     {
+        
         _timer = new(defaulttime);
         Task.Run(Run);
     }
