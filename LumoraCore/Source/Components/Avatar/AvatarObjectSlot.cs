@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Lumora.Core;
 using Lumora.Core.Input;
@@ -281,8 +281,8 @@ public class AvatarObjectSlot : Component
         // Convert this slot's world transform into UserRoot-local space.
         // Using global→local conversion handles any depth of nesting under UserRoot
         // (e.g. UserRoot > Body Nodes > Head > BodyNode) correctly.
-        position   = space.GlobalPointToLocal(Slot.GlobalPosition);
-        rotation   = space.GlobalRotation.Inverse * Slot.GlobalRotation;
+        position = space.GlobalPointToLocal(Slot.GlobalPosition);
+        rotation = space.GlobalRotation.Inverse * Slot.GlobalRotation;
         isTracking = IsTracking.Value;
 
         // Apply all filters

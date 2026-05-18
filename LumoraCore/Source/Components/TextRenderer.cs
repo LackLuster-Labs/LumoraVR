@@ -41,10 +41,10 @@ public class TextRenderer : ImplementableComponent
     {
         base.OnInit();
 
-        Text.Value      = "Hello World";
-        Size.Value      = 1.0f;
-        Color.Value     = new float4(1, 1, 1, 1); // White
-        Font.Value      = "Arial";
+        Text.Value = "Hello World";
+        Size.Value = 1.0f;
+        Color.Value = new float4(1, 1, 1, 1); // White
+        Font.Value = "Arial";
         Billboard.Value = true;
     }
 

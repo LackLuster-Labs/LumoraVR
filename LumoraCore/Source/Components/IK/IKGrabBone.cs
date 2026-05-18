@@ -27,8 +27,8 @@ public class IKGrabBone : Component
     public override void OnInit()
     {
         base.OnInit();
-        GrabChildren.Value  = true;
-        MaximumForce.Value  = 100.0f;
-        Rigidity.Value      = 1.0f;
+        GrabChildren.Value = true;
+        MaximumForce.Value = 100.0f;
+        Rigidity.Value = 1.0f;
     }
 }

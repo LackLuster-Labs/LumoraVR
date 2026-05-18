@@ -1159,16 +1159,16 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         }
     }
 
-	/// <summary>
-	/// Initialize this Slot with a World context.
-	/// </summary>
-	public void Initialize(World world)
-	{
-		if (world == null)
-			throw new ArgumentNullException(nameof(world));
+    /// <summary>
+    /// Initialize this Slot with a World context.
+    /// </summary>
+    public void Initialize(World world)
+    {
+        if (world == null)
+            throw new ArgumentNullException(nameof(world));
 
         IsInInitPhase = true;
-		base.Initialize(world, _parent);
+        base.Initialize(world, _parent);
         EndInitializationStageForMembers();
 
         // CRITICAL: Mark sync members dirty AFTER registration
@@ -1196,7 +1196,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         RegisterExistingComponents();
         InitializeHook();
         EndInitPhase();
-	}
+    }
 
     /// <summary>
     /// Initialize this Slot from network replication with a pre-assigned RefID.
@@ -1205,9 +1205,9 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     /// Hook initialization is deferred to the main thread.
     /// </summary>
 	internal void InitializeFromReplicator(World world, RefID assignedId)
-	{
-		if (world == null)
-			throw new ArgumentNullException(nameof(world));
+    {
+        if (world == null)
+            throw new ArgumentNullException(nameof(world));
 
         var refController = world.ReferenceController;
         if (refController == null)
@@ -1398,7 +1398,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     /// Attach a new Component to this Slot.
     /// </summary>
 	public T AttachComponent<T>() where T : Component, new()
-	{
+    {
         if (World == null)
         {
             var component = new T();
@@ -1416,9 +1416,9 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     /// Attach a Component by type.
     /// </summary>
 	public Component AttachComponent(Type componentType)
-	{
-		if (!typeof(Component).IsAssignableFrom(componentType))
-			throw new ArgumentException("Type must derive from Component", nameof(componentType));
+    {
+        if (!typeof(Component).IsAssignableFrom(componentType))
+            throw new ArgumentException("Type must derive from Component", nameof(componentType));
 
         if (World == null)
         {
@@ -1431,7 +1431,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         }
 
         return base.AttachComponent(componentType);
-	}
+    }
 
     /// <summary>
     /// Get or attach a component.
@@ -1576,16 +1576,16 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         }
     }
 
-	/// <summary>
-	/// Remove a Component from this Slot.
-	/// </summary>
-	public void RemoveComponent(Component component)
-	{
+    /// <summary>
+    /// Remove a Component from this Slot.
+    /// </summary>
+    public void RemoveComponent(Component component)
+    {
         if (component == null)
             return;
 
         base.RemoveComponent(component);
-	}
+    }
 
     /// <summary>
     /// Remove all Components of a type.
@@ -2229,14 +2229,14 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         foreach (var child in _localChildren.ToArray())
             child.Destroy();
 
-		// Destroy all components
-			foreach (var component in _components.ToArray())
-			{
-				RemoveComponent(component);
-			}
+        // Destroy all components
+        foreach (var component in _components.ToArray())
+        {
+            RemoveComponent(component);
+        }
 
-		_children.Clear();
-		_localChildren.Clear();
+        _children.Clear();
+        _localChildren.Clear();
 
         // Remove from parent
         _parent?.DetachChildInternal(this);

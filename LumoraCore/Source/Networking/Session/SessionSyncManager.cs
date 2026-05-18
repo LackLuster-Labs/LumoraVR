@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Threading;
@@ -1036,20 +1036,20 @@ public class SessionSyncManager : IDisposable
     {
         var copy = new DeltaBatch(World.StateVersion, World.SyncTick);
 
-		for (int i = 0; i < source.DataRecordCount; i++)
-		{
-			var record = source.GetDataRecord(i);
-			var length = record.EndOffset - record.StartOffset;
-			var reader = source.SeekDataRecord(i);
-			var buffer = length > 0 ? reader.ReadBytes(length) : Array.Empty<byte>();
+        for (int i = 0; i < source.DataRecordCount; i++)
+        {
+            var record = source.GetDataRecord(i);
+            var length = record.EndOffset - record.StartOffset;
+            var reader = source.SeekDataRecord(i);
+            var buffer = length > 0 ? reader.ReadBytes(length) : Array.Empty<byte>();
 
-			var writer = copy.BeginNewDataRecord(record.TargetID);
-			if (buffer.Length > 0)
-			{
-				writer.Write(buffer);
-			}
-			copy.FinishDataRecord(record.TargetID);
-		}
+            var writer = copy.BeginNewDataRecord(record.TargetID);
+            if (buffer.Length > 0)
+            {
+                writer.Write(buffer);
+            }
+            copy.FinishDataRecord(record.TargetID);
+        }
 
         return copy;
     }
@@ -1461,14 +1461,14 @@ public class SessionSyncManager : IDisposable
 
             case ControlMessage.Message.RequestFullState:
                 LumoraLogger.Log("ProcessControlMessage: RequestFullState received from client");
-                
+
                 if (World.IsAuthority && Session.Connections.TryGetUser(message.Sender, out var requestingUser))
                 {
                     LumoraLogger.Log($"ProcessControlMessage: Sending full world state to user {requestingUser.UserName.Value}");
                     var fullBatch = World.SyncController.EncodeFullBatch();
                     fullBatch.Targets.Add(message.Sender);
                     EnqueueForTransmission(fullBatch);
-                    
+
                     // Send JoinStartDelta to indicate they can now receive delta updates
                     var startDeltaMessage = new ControlMessage(ControlMessage.Message.JoinStartDelta);
                     startDeltaMessage.Targets.Add(message.Sender);

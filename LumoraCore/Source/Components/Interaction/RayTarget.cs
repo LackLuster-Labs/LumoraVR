@@ -50,7 +50,7 @@ public sealed class RayTarget : Component
     public override void OnInit()
     {
         base.OnInit();
-        HoverRadius.Value     = 0.05f;
+        HoverRadius.Value = 0.05f;
         AllowActivation.Value = true;
         // IsHovered = false (C# default, skip)
     }

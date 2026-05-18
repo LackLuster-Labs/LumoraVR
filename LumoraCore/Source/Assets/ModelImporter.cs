@@ -243,6 +243,6 @@ public class ModelData : ImplementableComponent
     {
         base.OnInit();
         SourcePath.Value = "";
-        LocalUri.Value   = "";
+        LocalUri.Value = "";
     }
 }

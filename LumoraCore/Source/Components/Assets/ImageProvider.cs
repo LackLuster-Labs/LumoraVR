@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
@@ -85,7 +85,7 @@ public class ImageProvider : UrlAssetProvider<TextureAsset, ImageMetadata>
         {
             using var stream = File.OpenRead(url.LocalPath);
             var buffer = new byte[System.Math.Min(headerSize, stream.Length)];
-            await stream.ReadAsync(buffer, 0, buffer.Length, token);
+            await stream.ReadExactlyAsync(buffer, token);
             return buffer;
         }
 

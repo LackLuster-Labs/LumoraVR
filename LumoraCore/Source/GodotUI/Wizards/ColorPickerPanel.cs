@@ -68,8 +68,8 @@ public sealed class ColorPickerPanel : GodotUIPanel
         base.OnAwake();
 
         TargetMemberOwner.OnTargetChange += _ => RebindTarget();
-        TargetMemberName.OnChanged       += _ => RebindTarget();
-        CurrentColor.OnChanged           += ApplyToTarget;
+        TargetMemberName.OnChanged += _ => RebindTarget();
+        CurrentColor.OnChanged += ApplyToTarget;
     }
 
     public override void OnInit()
@@ -99,8 +99,8 @@ public sealed class ColorPickerPanel : GodotUIPanel
     public void SetTarget(Component owner, string memberName, string? label = null)
     {
         TargetMemberOwner.Target = owner;
-        TargetMemberName.Value   = memberName;
-        Label.Value              = label ?? memberName;
+        TargetMemberName.Value = memberName;
+        Label.Value = label ?? memberName;
     }
 
     /// <summary>
@@ -109,7 +109,7 @@ public sealed class ColorPickerPanel : GodotUIPanel
     public void SetTargetDirect(ISyncMember member, string? label = null)
     {
         _boundMember = member;
-        Label.Value  = label ?? member.Name ?? "Color";
+        Label.Value = label ?? member.Name ?? "Color";
         ConfigureForBoundMember();
         SyncColorFromMember();
     }
@@ -183,14 +183,14 @@ public sealed class ColorPickerPanel : GodotUIPanel
         var c = CurrentColor.Value;
         return new Dictionary<string, string>
         {
-            ["Label"]     = Label.Value,
-            ["HexValue"]  = $"#{F2X(c.r)}{F2X(c.g)}{F2X(c.b)}{F2X(c.a)}",
-            ["R"]         = c.r.ToString("F4"),
-            ["G"]         = c.g.ToString("F4"),
-            ["B"]         = c.b.ToString("F4"),
-            ["A"]         = c.a.ToString("F4"),
+            ["Label"] = Label.Value,
+            ["HexValue"] = $"#{F2X(c.r)}{F2X(c.g)}{F2X(c.b)}{F2X(c.a)}",
+            ["R"] = c.r.ToString("F4"),
+            ["G"] = c.g.ToString("F4"),
+            ["B"] = c.b.ToString("F4"),
+            ["A"] = c.a.ToString("F4"),
             ["ShowAlpha"] = ShowAlpha.Value ? "1" : "0",
-            ["AllowHDR"]  = AllowHDR.Value  ? "1" : "0",
+            ["AllowHDR"] = AllowHDR.Value ? "1" : "0",
         };
     }
 
@@ -225,11 +225,11 @@ public sealed class ColorPickerPanel : GodotUIPanel
         var c = CurrentColor.Value;
         CurrentColor.Value = channel switch
         {
-            "R" => new color(value,  c.g,   c.b,   c.a),
-            "G" => new color(c.r,   value,  c.b,   c.a),
-            "B" => new color(c.r,   c.g,   value,  c.a),
-            "A" => new color(c.r,   c.g,   c.b,   value),
-            _   => c,
+            "R" => new color(value, c.g, c.b, c.a),
+            "G" => new color(c.r, value, c.b, c.a),
+            "B" => new color(c.r, c.g, value, c.a),
+            "A" => new color(c.r, c.g, c.b, value),
+            _ => c,
         };
     }
 

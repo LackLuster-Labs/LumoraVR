@@ -311,14 +311,14 @@ public class WorldManager : IDisposable
             lock (_worldsLock)
             {
                 // Prefer LocalHome world
-                fallbackWorld = _worlds.Find(w => !w.IsDestroyed && 
-                                                  w.State == World.WorldState.Running && 
+                fallbackWorld = _worlds.Find(w => !w.IsDestroyed &&
+                                                  w.State == World.WorldState.Running &&
                                                   w.WorldName.Value == "LocalHome");
 
                 // If no LocalHome, use any available running world
                 if (fallbackWorld == null)
                 {
-                    fallbackWorld = _worlds.Find(w => !w.IsDestroyed && 
+                    fallbackWorld = _worlds.Find(w => !w.IsDestroyed &&
                                                       w.State == World.WorldState.Running &&
                                                       w != disconnectedWorld);
                 }

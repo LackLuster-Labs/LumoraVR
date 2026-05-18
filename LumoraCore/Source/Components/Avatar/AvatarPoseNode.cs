@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Lumora.Core;
 using Lumora.Core.Input;
@@ -195,7 +195,7 @@ public class AvatarPoseNode : Component, IAvatarObject, IInputUpdateReceiver
     public void Equip(AvatarObjectSlot slot)
     {
         _objectSlot.Target = slot;
-        _source.Target     = slot.Slot;
+        _source.Target = slot.Slot;
 
         LumoraLogger.Log($"AvatarPoseNode: Equipped {Node.Value} to '{Slot.SlotName.Value}'");
     }

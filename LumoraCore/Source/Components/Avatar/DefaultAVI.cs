@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using Lumora.Core;
 using Lumora.Core.Components;
 using Lumora.Core.Components.Meshes;
@@ -99,9 +99,9 @@ public static class DefaultAVI
         // Hide head sphere from the local user's own camera (shadow is preserved).
         var localViewOverride = headVisual.GetComponent<LocalViewOverride>()
                              ?? headVisual.AttachComponent<LocalViewOverride>();
-        localViewOverride.Context.Value          = RenderingContext.UserView;
+        localViewOverride.Context.Value = RenderingContext.UserView;
         localViewOverride.HasScaleOverride.Value = true;
-        localViewOverride.ScaleOverride.Value    = float3.Zero;
+        localViewOverride.ScaleOverride.Value = float3.Zero;
     }
 
     private static void CreateHandVisual(Slot handSlot, string name, colorHDR tint)

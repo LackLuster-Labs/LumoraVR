@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using Lumora.Core;
@@ -12,445 +12,445 @@ namespace Lumora.Core.Networking.Sync;
 
 public class SyncController
 {
-	private Dictionary<RefID, SyncElement> syncElements;
-	private List<SyncElement> dirtySyncElements;
-	private readonly object _dirtyLock = new object();
+    private Dictionary<RefID, SyncElement> syncElements;
+    private List<SyncElement> dirtySyncElements;
+    private readonly object _dirtyLock = new object();
 
-	public World Owner { get; private set; }
+    public World Owner { get; private set; }
 
-	public SyncController(World owner)
-	{
-		Owner = owner;
-		syncElements = new Dictionary<RefID, SyncElement>();
-		dirtySyncElements = new List<SyncElement>();
-	}
+    public SyncController(World owner)
+    {
+        Owner = owner;
+        syncElements = new Dictionary<RefID, SyncElement>();
+        dirtySyncElements = new List<SyncElement>();
+    }
 
-	public void RegisterSyncElement(SyncElement element)
-	{
-		syncElements.Add(element.ReferenceID, element);
+    public void RegisterSyncElement(SyncElement element)
+    {
+        syncElements.Add(element.ReferenceID, element);
 
-		// Log slot name registrations for debugging
-		if (element.Parent is Slot parentSlot && element is SyncField<string> sf)
-		{
-			var memberName = ((ISyncMember)sf).Name;
-			if (memberName == "Name")
-			{
-				LumoraLogger.Log($"SyncController.RegisterSyncElement: Slot.Name RefID={element.ReferenceID}, Value='{sf.Value}', ParentSlot={parentSlot.ReferenceID}");
-			}
-		}
-	}
+        // Log slot name registrations for debugging
+        if (element.Parent is Slot parentSlot && element is SyncField<string> sf)
+        {
+            var memberName = ((ISyncMember)sf).Name;
+            if (memberName == "Name")
+            {
+                LumoraLogger.Log($"SyncController.RegisterSyncElement: Slot.Name RefID={element.ReferenceID}, Value='{sf.Value}', ParentSlot={parentSlot.ReferenceID}");
+            }
+        }
+    }
 
-	public void UnregisterSyncElement(SyncElement element)
-	{
-		syncElements.Remove(element.ReferenceID);
-	}
+    public void UnregisterSyncElement(SyncElement element)
+    {
+        syncElements.Remove(element.ReferenceID);
+    }
 
-	public void AddDirtySyncElement(SyncElement element)
-	{
-		if (Owner.State != World.WorldState.Running && !Owner.IsAuthority)
-		{
-			throw new Exception("Cannot Process Dirty Elements when not Running");
-		}
-		lock (_dirtyLock)
-		{
-			dirtySyncElements.Add(element);
-		}
-	}
+    public void AddDirtySyncElement(SyncElement element)
+    {
+        if (Owner.State != World.WorldState.Running && !Owner.IsAuthority)
+        {
+            throw new Exception("Cannot Process Dirty Elements when not Running");
+        }
+        lock (_dirtyLock)
+        {
+            dirtySyncElements.Add(element);
+        }
+    }
 
-	public DeltaBatch CollectDeltaMessages()
-	{
-		DeltaBatch deltaBatch = new DeltaBatch(Owner.StateVersion, Owner.SyncTick);
-		List<SyncElement> elementsToSend;
-		lock (_dirtyLock)
-		{
-			if (dirtySyncElements.Count == 0)
-			{
-				return deltaBatch;
-			}
+    public DeltaBatch CollectDeltaMessages()
+    {
+        DeltaBatch deltaBatch = new DeltaBatch(Owner.StateVersion, Owner.SyncTick);
+        List<SyncElement> elementsToSend;
+        lock (_dirtyLock)
+        {
+            if (dirtySyncElements.Count == 0)
+            {
+                return deltaBatch;
+            }
 
-			elementsToSend = new List<SyncElement>(dirtySyncElements);
-			dirtySyncElements.Clear();
-		}
+            elementsToSend = new List<SyncElement>(dirtySyncElements);
+            dirtySyncElements.Clear();
+        }
 
-		elementsToSend.Sort((SyncElement a, SyncElement b) => a.ReferenceID.CompareTo(b.ReferenceID));
-		foreach (SyncElement dirtySyncElement in elementsToSend)
-		{
-			// Skip invalid or disposed elements - they'll be retried once valid
-			if (!dirtySyncElement.IsValid || dirtySyncElement.IsDisposed)
-			{
-				// Re-add to dirty list to retry later
-				if (!dirtySyncElement.IsDisposed)
-				{
-					AddDirtySyncElement(dirtySyncElement);
-				}
-				continue;
-			}
+        elementsToSend.Sort((SyncElement a, SyncElement b) => a.ReferenceID.CompareTo(b.ReferenceID));
+        foreach (SyncElement dirtySyncElement in elementsToSend)
+        {
+            // Skip invalid or disposed elements - they'll be retried once valid
+            if (!dirtySyncElement.IsValid || dirtySyncElement.IsDisposed)
+            {
+                // Re-add to dirty list to retry later
+                if (!dirtySyncElement.IsDisposed)
+                {
+                    AddDirtySyncElement(dirtySyncElement);
+                }
+                continue;
+            }
 
-			BinaryWriter writer = deltaBatch.BeginNewDataRecord(dirtySyncElement.ReferenceID);
-			dirtySyncElement.EncodeDelta(writer, deltaBatch);
-			deltaBatch.FinishDataRecord(dirtySyncElement.ReferenceID);
-		}
+            BinaryWriter writer = deltaBatch.BeginNewDataRecord(dirtySyncElement.ReferenceID);
+            dirtySyncElement.EncodeDelta(writer, deltaBatch);
+            deltaBatch.FinishDataRecord(dirtySyncElement.ReferenceID);
+        }
 
-		return deltaBatch;
-	}
+        return deltaBatch;
+    }
 
-	public FullBatch EncodeFullBatch()
-	{
-		return EncodeFullBatch(syncElements.Values);
-	}
+    public FullBatch EncodeFullBatch()
+    {
+        return EncodeFullBatch(syncElements.Values);
+    }
 
-	public FullBatch EncodeFullBatch(IEnumerable<SyncElement> elements)
-	{
-		FullBatch fullBatch = new FullBatch(Owner.StateVersion, Owner.SyncTick);
-		var list = new List<SyncElement>(elements);
-		list.Sort((SyncElement a, SyncElement b) => a.ReferenceID.CompareTo(b.ReferenceID));
+    public FullBatch EncodeFullBatch(IEnumerable<SyncElement> elements)
+    {
+        FullBatch fullBatch = new FullBatch(Owner.StateVersion, Owner.SyncTick);
+        var list = new List<SyncElement>(elements);
+        list.Sort((SyncElement a, SyncElement b) => a.ReferenceID.CompareTo(b.ReferenceID));
 
-		LumoraLogger.Log($"SyncController.EncodeFullBatch: Encoding {list.Count} sync elements");
-		int slotFieldCount = 0, componentFieldCount = 0, otherCount = 0;
+        LumoraLogger.Log($"SyncController.EncodeFullBatch: Encoding {list.Count} sync elements");
+        int slotFieldCount = 0, componentFieldCount = 0, otherCount = 0;
 
-		foreach (SyncElement element in list)
-		{
-			// Count by parent type for summary
-			if (element.Parent is Slot parentSlot)
-			{
-				slotFieldCount++;
-				// Log slot name fields specifically
-				if (element is SyncField<string> sf)
-				{
-					var memberName = ((ISyncMember)sf).Name;
-					if (memberName == "Name")
-					{
-						LumoraLogger.Log($"  Encoding Slot.Name: RefID={element.ReferenceID}, Value='{sf.Value}', ParentSlot={parentSlot.ReferenceID}");
-					}
-				}
-			}
-			else if (element.Parent is Component) componentFieldCount++;
-			else otherCount++;
+        foreach (SyncElement element in list)
+        {
+            // Count by parent type for summary
+            if (element.Parent is Slot parentSlot)
+            {
+                slotFieldCount++;
+                // Log slot name fields specifically
+                if (element is SyncField<string> sf)
+                {
+                    var memberName = ((ISyncMember)sf).Name;
+                    if (memberName == "Name")
+                    {
+                        LumoraLogger.Log($"  Encoding Slot.Name: RefID={element.ReferenceID}, Value='{sf.Value}', ParentSlot={parentSlot.ReferenceID}");
+                    }
+                }
+            }
+            else if (element.Parent is Component) componentFieldCount++;
+            else otherCount++;
 
-			BinaryWriter writer = fullBatch.BeginNewDataRecord(element.ReferenceID);
-			element.EncodeFull(writer, fullBatch, forFullBatch: true);
-			fullBatch.FinishDataRecord(element.ReferenceID);
-		}
+            BinaryWriter writer = fullBatch.BeginNewDataRecord(element.ReferenceID);
+            element.EncodeFull(writer, fullBatch, forFullBatch: true);
+            fullBatch.FinishDataRecord(element.ReferenceID);
+        }
 
-		LumoraLogger.Log($"SyncController.EncodeFullBatch: Summary - SlotFields={slotFieldCount}, ComponentFields={componentFieldCount}, Other={otherCount}");
+        LumoraLogger.Log($"SyncController.EncodeFullBatch: Summary - SlotFields={slotFieldCount}, ComponentFields={componentFieldCount}, Other={otherCount}");
 
-		return fullBatch;
-	}
+        return fullBatch;
+    }
 
-	public void EncodeFull(RefID id, BinaryMessageBatch syncMessage)
-	{
-		BinaryWriter writer = syncMessage.BeginNewDataRecord(id);
-		// Use forFullBatch: true to allow encoding dirty elements when sending corrections.
-		// The authority's current state (even if dirty) is the correct state to send.
-		syncElements[id].EncodeFull(writer, syncMessage, forFullBatch: true);
-		syncMessage.FinishDataRecord(id);
-	}
+    public void EncodeFull(RefID id, BinaryMessageBatch syncMessage)
+    {
+        BinaryWriter writer = syncMessage.BeginNewDataRecord(id);
+        // Use forFullBatch: true to allow encoding dirty elements when sending corrections.
+        // The authority's current state (even if dirty) is the correct state to send.
+        syncElements[id].EncodeFull(writer, syncMessage, forFullBatch: true);
+        syncMessage.FinishDataRecord(id);
+    }
 
-	public void ValidateDeltaMessages(DeltaBatch batch)
-	{
-		List<ValidationGroup.Rule> list = new List<ValidationGroup.Rule>();
-		List<ValidationGroup> list2 = new List<ValidationGroup>();
-		for (int i = 0; i < batch.DataRecordCount; i++)
-		{
-			DataRecord dataRecord = batch.GetDataRecord(i);
-			if (syncElements.TryGetValue(dataRecord.TargetID, out var value))
-			{
-				BinaryReader reader = batch.SeekDataRecord(i);
-				MessageValidity messageValidity = value.Validate(batch, reader, list);
-				if (messageValidity != MessageValidity.Valid)
-				{
-					batch.InvalidateDataRecord(i, messageValidity == MessageValidity.Conflict);
-				}
-				if (list.Count > 0)
-				{
-					ValidationGroup item = new ValidationGroup();
-					item.Set(i, value, list, batch, Owner);
-					list2.Add(item);
-					list = new List<ValidationGroup.Rule>();
-				}
-			}
-		}
-		Dictionary<RefID, int> dictionary = new Dictionary<RefID, int>();
-		foreach (ValidationGroup item2 in list2)
-		{
-			foreach (ValidationGroup.Rule validationRule in item2.ValidationRules)
-			{
-				RefID otherMessage = validationRule.OtherMessage;
-				if (!dictionary.ContainsKey(otherMessage))
-				{
-					dictionary.Add(otherMessage, batch.FindDataRecordIndex(otherMessage));
-				}
-			}
-		}
-		foreach (ValidationGroup item3 in list2)
-		{
-			bool flag = batch.GetDataRecord(item3.RequestingRecordIndex).Validity == MessageValidity.Conflict;
-			List<int> list3 = new List<int>();
-			foreach (ValidationGroup.Rule validationRule2 in item3.ValidationRules)
-			{
-				int num = dictionary[validationRule2.OtherMessage];
-				if (num < 0)
-				{
-					if (validationRule2.MustExist)
-					{
-						flag = true;
-					}
-					continue;
-				}
-				DataRecord dataRecord2 = batch.GetDataRecord(num);
-				list3.Add(num);
-				if (dataRecord2.Validity == MessageValidity.Conflict)
-				{
-					flag = true;
-				}
-				if (validationRule2.CustomValidation != null)
-				{
-					BinaryReader arg = batch.SeekDataRecord(num);
-					if (!validationRule2.CustomValidation(arg))
-					{
-						flag = true;
-					}
-				}
-			}
-			if (!flag)
-			{
-				continue;
-			}
-			batch.InvalidateDataRecord(item3.RequestingRecordIndex, conflict: true);
-			item3.RequestingSyncElement.Invalidate();
-			foreach (int item4 in list3)
-			{
-				batch.InvalidateDataRecord(item4, conflict: true);
-				DataRecord dataRecord3 = batch.GetDataRecord(item4);
-				if (syncElements.TryGetValue(dataRecord3.TargetID, out var value2))
-				{
-					value2.Invalidate();
-				}
-			}
-		}
-	}
+    public void ValidateDeltaMessages(DeltaBatch batch)
+    {
+        List<ValidationGroup.Rule> list = new List<ValidationGroup.Rule>();
+        List<ValidationGroup> list2 = new List<ValidationGroup>();
+        for (int i = 0; i < batch.DataRecordCount; i++)
+        {
+            DataRecord dataRecord = batch.GetDataRecord(i);
+            if (syncElements.TryGetValue(dataRecord.TargetID, out var value))
+            {
+                BinaryReader reader = batch.SeekDataRecord(i);
+                MessageValidity messageValidity = value.Validate(batch, reader, list);
+                if (messageValidity != MessageValidity.Valid)
+                {
+                    batch.InvalidateDataRecord(i, messageValidity == MessageValidity.Conflict);
+                }
+                if (list.Count > 0)
+                {
+                    ValidationGroup item = new ValidationGroup();
+                    item.Set(i, value, list, batch, Owner);
+                    list2.Add(item);
+                    list = new List<ValidationGroup.Rule>();
+                }
+            }
+        }
+        Dictionary<RefID, int> dictionary = new Dictionary<RefID, int>();
+        foreach (ValidationGroup item2 in list2)
+        {
+            foreach (ValidationGroup.Rule validationRule in item2.ValidationRules)
+            {
+                RefID otherMessage = validationRule.OtherMessage;
+                if (!dictionary.ContainsKey(otherMessage))
+                {
+                    dictionary.Add(otherMessage, batch.FindDataRecordIndex(otherMessage));
+                }
+            }
+        }
+        foreach (ValidationGroup item3 in list2)
+        {
+            bool flag = batch.GetDataRecord(item3.RequestingRecordIndex).Validity == MessageValidity.Conflict;
+            List<int> list3 = new List<int>();
+            foreach (ValidationGroup.Rule validationRule2 in item3.ValidationRules)
+            {
+                int num = dictionary[validationRule2.OtherMessage];
+                if (num < 0)
+                {
+                    if (validationRule2.MustExist)
+                    {
+                        flag = true;
+                    }
+                    continue;
+                }
+                DataRecord dataRecord2 = batch.GetDataRecord(num);
+                list3.Add(num);
+                if (dataRecord2.Validity == MessageValidity.Conflict)
+                {
+                    flag = true;
+                }
+                if (validationRule2.CustomValidation != null)
+                {
+                    BinaryReader arg = batch.SeekDataRecord(num);
+                    if (!validationRule2.CustomValidation(arg))
+                    {
+                        flag = true;
+                    }
+                }
+            }
+            if (!flag)
+            {
+                continue;
+            }
+            batch.InvalidateDataRecord(item3.RequestingRecordIndex, conflict: true);
+            item3.RequestingSyncElement.Invalidate();
+            foreach (int item4 in list3)
+            {
+                batch.InvalidateDataRecord(item4, conflict: true);
+                DataRecord dataRecord3 = batch.GetDataRecord(item4);
+                if (syncElements.TryGetValue(dataRecord3.TargetID, out var value2))
+                {
+                    value2.Invalidate();
+                }
+            }
+        }
+    }
 
-	public void ApplyConfirmations(IEnumerable<RefID> ids, ulong confirmTime)
-	{
-		foreach (RefID id in ids)
-		{
-			if (syncElements.TryGetValue(id, out var value))
-			{
-				value.Confirm(confirmTime);
-			}
-		}
-	}
+    public void ApplyConfirmations(IEnumerable<RefID> ids, ulong confirmTime)
+    {
+        foreach (RefID id in ids)
+        {
+            if (syncElements.TryGetValue(id, out var value))
+            {
+                value.Confirm(confirmTime);
+            }
+        }
+    }
 
-	public bool DecodeDeltaMessage(int recordIndex, DeltaBatch batch)
-	{
-		return DecodeBinaryMessage(recordIndex, batch, isFull: false);
-	}
+    public bool DecodeDeltaMessage(int recordIndex, DeltaBatch batch)
+    {
+        return DecodeBinaryMessage(recordIndex, batch, isFull: false);
+    }
 
-	public bool DecodeFullMessage(int recordIndex, FullBatch batch)
-	{
-		return DecodeBinaryMessage(recordIndex, batch, isFull: true);
-	}
+    public bool DecodeFullMessage(int recordIndex, FullBatch batch)
+    {
+        return DecodeBinaryMessage(recordIndex, batch, isFull: true);
+    }
 
-	public bool DecodeCorrection(int recordIndex, ConfirmationMessage batch)
-	{
-		return DecodeBinaryMessage(recordIndex, batch, isFull: true);
-	}
+    public bool DecodeCorrection(int recordIndex, ConfirmationMessage batch)
+    {
+        return DecodeBinaryMessage(recordIndex, batch, isFull: true);
+    }
 
-	private bool DecodeBinaryMessage(int recordIndex, BinaryMessageBatch message, bool isFull)
-	{
-		DataRecord dataRecord = message.GetDataRecord(recordIndex);
-		if (syncElements.TryGetValue(dataRecord.TargetID, out var value))
-		{
-			BinaryReader reader = message.SeekDataRecord(recordIndex);
-			if (!isFull)
-			{
-				value.DecodeDelta(reader, message);
-			}
-			else
-			{
-				value.DecodeFull(reader, message);
+    private bool DecodeBinaryMessage(int recordIndex, BinaryMessageBatch message, bool isFull)
+    {
+        DataRecord dataRecord = message.GetDataRecord(recordIndex);
+        if (syncElements.TryGetValue(dataRecord.TargetID, out var value))
+        {
+            BinaryReader reader = message.SeekDataRecord(recordIndex);
+            if (!isFull)
+            {
+                value.DecodeDelta(reader, message);
+            }
+            else
+            {
+                value.DecodeFull(reader, message);
 
-				// Log slot name decode for debugging
-				if (value.Parent is Slot parentSlot && value is SyncField<string> sf)
-				{
-					var memberName = ((ISyncMember)sf).Name;
-					if (memberName == "Name")
-					{
-						LumoraLogger.Log($"SyncController.DecodeFullMessage: Decoded Slot.Name RefID={value.ReferenceID}, Value='{sf.Value}', ParentSlot={parentSlot.ReferenceID}");
-					}
-				}
-			}
-			return true;
-		}
+                // Log slot name decode for debugging
+                if (value.Parent is Slot parentSlot && value is SyncField<string> sf)
+                {
+                    var memberName = ((ISyncMember)sf).Name;
+                    if (memberName == "Name")
+                    {
+                        LumoraLogger.Log($"SyncController.DecodeFullMessage: Decoded Slot.Name RefID={value.ReferenceID}, Value='{sf.Value}', ParentSlot={parentSlot.ReferenceID}");
+                    }
+                }
+            }
+            return true;
+        }
 
-		LumoraLogger.Warn($"SyncController.DecodeBinaryMessage: Element not found for RefID={dataRecord.TargetID}");
-		return false;
-	}
+        LumoraLogger.Warn($"SyncController.DecodeBinaryMessage: Element not found for RefID={dataRecord.TargetID}");
+        return false;
+    }
 
-	/// <summary>
-	/// Gather stream data from local user's streams into messages.
-	/// Called by SessionSyncManager during the sync loop.
-	/// </summary>
-	public void GatherStreams(List<StreamMessage> messages)
-	{
-		if (Owner == null)
-			return;
+    /// <summary>
+    /// Gather stream data from local user's streams into messages.
+    /// Called by SessionSyncManager during the sync loop.
+    /// </summary>
+    public void GatherStreams(List<StreamMessage> messages)
+    {
+        if (Owner == null)
+            return;
 
-		var localUser = Owner.LocalUser;
-		if (localUser == null || !localUser.IsLocal)
-			return;
+        var localUser = Owner.LocalUser;
+        if (localUser == null || !localUser.IsLocal)
+            return;
 
-		var syncTick = Owner.SyncTick;
+        var syncTick = Owner.SyncTick;
 
-		foreach (var stream in localUser.Streams)
-		{
-			if (stream.Active && !localUser.StreamGroupManager.ContainsStream(stream))
-			{
-				localUser.StreamGroupManager.AssignToGroup(stream, null);
-			}
-		}
+        foreach (var stream in localUser.Streams)
+        {
+            if (stream.Active && !localUser.StreamGroupManager.ContainsStream(stream))
+            {
+                localUser.StreamGroupManager.AssignToGroup(stream, null);
+            }
+        }
 
-		// Iterate through all stream groups
-		foreach (var group in localUser.StreamGroupManager.Groups)
-		{
-			bool hasData = false;
-			using var dataStream = new MemoryStream();
-			using var writer = new BinaryWriter(dataStream);
+        // Iterate through all stream groups
+        foreach (var group in localUser.StreamGroupManager.Groups)
+        {
+            bool hasData = false;
+            using var dataStream = new MemoryStream();
+            using var writer = new BinaryWriter(dataStream);
 
-			// Check each stream in the group
-			foreach (var stream in group.Streams)
-			{
-				if (!stream.Active)
-					continue;
+            // Check each stream in the group
+            foreach (var stream in group.Streams)
+            {
+                if (!stream.Active)
+                    continue;
 
-				// Check if this stream should send data
-				bool shouldSend = stream.IsImplicitUpdatePoint(syncTick) ||
-				                  stream.IsExplicitUpdatePoint(syncTick);
+                // Check if this stream should send data
+                bool shouldSend = stream.IsImplicitUpdatePoint(syncTick) ||
+                                  stream.IsExplicitUpdatePoint(syncTick);
 
-				// For local streams (sending), we always send if shouldSend is true.
-				// HasValidData is for RECEIVING to filter out invalid remote data.
-				// Local streams should send their current value regardless.
-				if (shouldSend)
-				{
-					// Write stream RefID and encode data
-					writer.Write((ulong)stream.ReferenceID);
-					stream.Encode(writer);
-					hasData = true;
-				}
-			}
+                // For local streams (sending), we always send if shouldSend is true.
+                // HasValidData is for RECEIVING to filter out invalid remote data.
+                // Local streams should send their current value regardless.
+                if (shouldSend)
+                {
+                    // Write stream RefID and encode data
+                    writer.Write((ulong)stream.ReferenceID);
+                    stream.Encode(writer);
+                    hasData = true;
+                }
+            }
 
-			// Create message if we have data
-			if (hasData)
-			{
-				var message = new StreamMessage(Owner.StateVersion, syncTick)
-				{
-					UserID = (ulong)localUser.ReferenceID,
-					StreamStateVersion = localUser.StreamConfigurationVersion,
-					StreamTime = Owner.TotalTime,
-					StreamGroup = group.GroupIndex
-				};
+            // Create message if we have data
+            if (hasData)
+            {
+                var message = new StreamMessage(Owner.StateVersion, syncTick)
+                {
+                    UserID = (ulong)localUser.ReferenceID,
+                    StreamStateVersion = localUser.StreamConfigurationVersion,
+                    StreamTime = Owner.TotalTime,
+                    StreamGroup = group.GroupIndex
+                };
 
-				// Copy the data to the message
-				dataStream.Position = 0;
-				var msgData = message.GetData();
-				dataStream.CopyTo(msgData);
+                // Copy the data to the message
+                dataStream.Position = 0;
+                var msgData = message.GetData();
+                dataStream.CopyTo(msgData);
 
-				messages.Add(message);
-			}
-		}
-	}
+                messages.Add(message);
+            }
+        }
+    }
 
-	// Counter for periodic stream receive logging
-	private int _appliedStreamCount;
+    // Counter for periodic stream receive logging
+    private int _appliedStreamCount;
 
-	/// <summary>
-	/// Apply received stream data to remote user's streams.
-	/// Called by SessionSyncManager when a StreamMessage is received.
-	/// </summary>
-	public void ApplyStreams(StreamMessage message)
-	{
-		if (message == null || message.IsOutdated)
-			return;
+    /// <summary>
+    /// Apply received stream data to remote user's streams.
+    /// Called by SessionSyncManager when a StreamMessage is received.
+    /// </summary>
+    public void ApplyStreams(StreamMessage message)
+    {
+        if (message == null || message.IsOutdated)
+            return;
 
-		// Find the user that owns these streams
-		var userElement = Owner?.ReferenceController?.GetObjectOrNull(new RefID(message.UserID));
-		if (userElement is not User user)
-		{
-			LumoraLogger.Warn($"ApplyStreams: User not found for ID {message.UserID}");
-			return;
-		}
+        // Find the user that owns these streams
+        var userElement = Owner?.ReferenceController?.GetObjectOrNull(new RefID(message.UserID));
+        if (userElement is not User user)
+        {
+            LumoraLogger.Warn($"ApplyStreams: User not found for ID {message.UserID}");
+            return;
+        }
 
-		// Don't apply streams to local user
-		if (user.IsLocal)
-			return;
+        // Don't apply streams to local user
+        if (user.IsLocal)
+            return;
 
-		// Check stream configuration version
-		if (message.StreamStateVersion < user.StreamConfigurationVersion)
-		{
-			return;
-		}
+        // Check stream configuration version
+        if (message.StreamStateVersion < user.StreamConfigurationVersion)
+        {
+            return;
+        }
 
-		// Read and apply stream data
-		var data = message.GetData();
-		using var reader = new BinaryReader(data);
-		int streamCount = 0;
+        // Read and apply stream data
+        var data = message.GetData();
+        using var reader = new BinaryReader(data);
+        int streamCount = 0;
 
-		while (data.Position < data.Length)
-		{
-			try
-			{
-				// Read stream RefID
-				var streamRefID = new RefID(reader.ReadUInt64());
+        while (data.Position < data.Length)
+        {
+            try
+            {
+                // Read stream RefID
+                var streamRefID = new RefID(reader.ReadUInt64());
 
-				// Find the stream
-				var streamElement = Owner?.ReferenceController?.GetObjectOrNull(streamRefID);
-				if (streamElement is IStream stream && stream.Active)
-				{
-					// Defense in depth: every stream's actual Owner must equal the user the
-					// message claims to be from. A peer could otherwise embed RefIDs of
-					// streams owned by a different user — even if the sender check upstream
-					// passes for *their own* UserID — and inject data attributed to others.
-					if (stream.Owner != user)
-					{
-						LumoraLogger.Warn($"ApplyStreams: stream {streamRefID} is owned by {stream.Owner?.UserName?.Value} but message claims user {user.UserName?.Value} ({message.UserID}); dropping rest of message.");
-						break;
-					}
+                // Find the stream
+                var streamElement = Owner?.ReferenceController?.GetObjectOrNull(streamRefID);
+                if (streamElement is IStream stream && stream.Active)
+                {
+                    // Defense in depth: every stream's actual Owner must equal the user the
+                    // message claims to be from. A peer could otherwise embed RefIDs of
+                    // streams owned by a different user — even if the sender check upstream
+                    // passes for *their own* UserID — and inject data attributed to others.
+                    if (stream.Owner != user)
+                    {
+                        LumoraLogger.Warn($"ApplyStreams: stream {streamRefID} is owned by {stream.Owner?.UserName?.Value} but message claims user {user.UserName?.Value} ({message.UserID}); dropping rest of message.");
+                        break;
+                    }
 
-					stream.Decode(reader, message);
-					streamCount++;
-				}
-				else
-				{
-					LumoraLogger.Warn($"ApplyStreams: Stream {streamRefID} not found or inactive");
-					break; // Can't continue if we don't know the stream's data format
-				}
-			}
-			catch (EndOfStreamException)
-			{
-				break; // End of data
-			}
-			catch (Exception ex)
-			{
-				LumoraLogger.Error($"ApplyStreams: Error decoding stream data: {ex.Message}");
-				break;
-			}
-		}
+                    stream.Decode(reader, message);
+                    streamCount++;
+                }
+                else
+                {
+                    LumoraLogger.Warn($"ApplyStreams: Stream {streamRefID} not found or inactive");
+                    break; // Can't continue if we don't know the stream's data format
+                }
+            }
+            catch (EndOfStreamException)
+            {
+                break; // End of data
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Error($"ApplyStreams: Error decoding stream data: {ex.Message}");
+                break;
+            }
+        }
 
-		_appliedStreamCount += streamCount;
+        _appliedStreamCount += streamCount;
 
-		// Log stream receive summary periodically (every 60 messages)
-		// if (_appliedStreamCount > 0 && _appliedStreamCount % 60 == 0)
-		// {
-		// 	LumoraLogger.Log($"[Stream] Applied {_appliedStreamCount} streams from remote users");
-		// }
-	}
+        // Log stream receive summary periodically (every 60 messages)
+        // if (_appliedStreamCount > 0 && _appliedStreamCount % 60 == 0)
+        // {
+        // 	LumoraLogger.Log($"[Stream] Applied {_appliedStreamCount} streams from remote users");
+        // }
+    }
 
-	public void Dispose()
-	{
-		syncElements.Clear();
-		lock (_dirtyLock)
-		{
-			dirtySyncElements.Clear();
-		}
-	}
+    public void Dispose()
+    {
+        syncElements.Clear();
+        lock (_dirtyLock)
+        {
+            dirtySyncElements.Clear();
+        }
+    }
 }

@@ -19,5 +19,5 @@ public interface IAudioBus
     //null audio bus is master
     public IAudioBus? Target { get; set; }
     public string Name { get; set; }
-    public bool Mute { get;  set; }
+    public bool Mute { get; set; }
 }

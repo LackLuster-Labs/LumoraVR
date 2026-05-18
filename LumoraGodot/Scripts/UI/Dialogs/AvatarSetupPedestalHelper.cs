@@ -25,8 +25,8 @@ internal static class AvatarSetupPedestalHelper
         slot.LocalRotation.Value = floatQ.Identity;
 
         var mesh = slot.AttachComponent<LumoraMeshes.CylinderMesh>();
-        mesh.Radius.Value   = radius;
-        mesh.Height.Value   = height;
+        mesh.Radius.Value = radius;
+        mesh.Height.Value = height;
         mesh.Segments.Value = 32;
 
         var renderer = slot.AttachComponent<MeshRenderer>();
@@ -53,15 +53,15 @@ internal static class AvatarSetupPedestalHelper
         collider.Radius.Value = 0.065f;
 
         var sphere = marker.AttachComponent<LumoraMeshes.SphereMesh>();
-        sphere.Radius.Value   = 0.055f;
+        sphere.Radius.Value = 0.055f;
         sphere.Segments.Value = 24;
-        sphere.Rings.Value    = 16;
+        sphere.Rings.Value = 16;
 
         var renderer = marker.AttachComponent<MeshRenderer>();
         renderer.Mesh.Target = sphere;
 
         var material = marker.AttachComponent<UnlitMaterial>();
-        material.Color           = color;
+        material.Color = color;
         material.BlendMode.Value = BlendMode.Transparent;
         renderer.Material.Target = material;
 
@@ -82,8 +82,8 @@ internal static class AvatarSetupPedestalHelper
         shaft.LocalRotation.Value = floatQ.FromEuler(new float3(MathF.PI * 0.5f, 0f, 0f));
 
         var shaftMesh = shaft.AttachComponent<LumoraMeshes.CylinderMesh>();
-        shaftMesh.Radius.Value   = 0.012f;
-        shaftMesh.Height.Value   = 0.16f;
+        shaftMesh.Radius.Value = 0.012f;
+        shaftMesh.Height.Value = 0.16f;
         shaftMesh.Segments.Value = 16;
 
         var shaftRenderer = shaft.AttachComponent<MeshRenderer>();

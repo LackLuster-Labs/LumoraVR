@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Lumora.Core;
 using Lumora.Core.Math;
@@ -63,7 +63,7 @@ public class SessionJoinIndicator : Component
 
         // Create visual hierarchy
         Visual.Target = Slot.AddSlot("SessionJoinVisual");
-        
+
         // Main status text slot
         var statusSlot = Visual.Target.AddSlot("StatusText");
         var statusRenderer = statusSlot.AttachComponent<TextRenderer>();
@@ -160,7 +160,7 @@ public class SessionJoinIndicator : Component
                 {
                     var progressPercent = (int)(progress * 100f);
                     var progressText = $"{status}";
-                    
+
                     if (progress > 0f && TargetWorld.InitState == World.InitializationState.InitializingDataModel)
                     {
                         progressText = $"Loading world components... {progressPercent}%\n{status}";

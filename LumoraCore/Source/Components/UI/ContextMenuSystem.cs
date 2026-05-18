@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using LumoraLogger = Lumora.Core.Logging.Logger;
@@ -76,7 +76,7 @@ public class ContextMenuSystem : ImplementableComponent<IHook>
     public void Toggle()
     {
         if (IsOpen.Value) Close();
-        else              Open();
+        else Open();
     }
 
     /// <summary>
@@ -97,7 +97,7 @@ public class ContextMenuSystem : ImplementableComponent<IHook>
         if (page == null) return;
 
         _pageStack.Clear();
-        CurrentPage  = page;
+        CurrentPage = page;
         IsOpen.Value = true;
 
         MenuOpened?.Invoke(page);
@@ -134,7 +134,7 @@ public class ContextMenuSystem : ImplementableComponent<IHook>
         if (!IsOpen.Value) return;
 
         _pageStack.Clear();
-        CurrentPage  = null;
+        CurrentPage = null;
         IsOpen.Value = false;
 
         MenuClosed?.Invoke();

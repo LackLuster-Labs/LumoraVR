@@ -248,11 +248,11 @@ public class SessionAssetTransferer : IDisposable
             {
                 switch (message.ControlMessageType)
                 {
-                    case ControlMessage.Message.AssetRequest:       HandleAssetRequest(message);       break;
+                    case ControlMessage.Message.AssetRequest: HandleAssetRequest(message); break;
                     case ControlMessage.Message.AssetTransmissionStart: HandleTransmissionStart(message); break;
-                    case ControlMessage.Message.AssetChunk:         HandleChunk(message);              break;
+                    case ControlMessage.Message.AssetChunk: HandleChunk(message); break;
                     case ControlMessage.Message.AssetNextChunkRequest: HandleNextChunkRequest(message); break;
-                    case ControlMessage.Message.AssetNotAvailable:  HandleNotAvailable(message);       break;
+                    case ControlMessage.Message.AssetNotAvailable: HandleNotAvailable(message); break;
                 }
             }
             catch (Exception ex)

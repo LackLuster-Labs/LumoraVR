@@ -168,11 +168,11 @@ public abstract class ProceduralMesh : ImplementableComponent
 
     // ===== Helper: Subscribe to Property Changes =====
 
-	/// <summary>
-	/// Subscribe a Sync field to trigger mesh regeneration on change.
-	/// </summary>
-	protected void SubscribeToChanges<T>(SyncField<T> sync)
-	{
-		sync.OnChanged += (newVal) => RegenerateMesh();
-	}
+    /// <summary>
+    /// Subscribe a Sync field to trigger mesh regeneration on change.
+    /// </summary>
+    protected void SubscribeToChanges<T>(SyncField<T> sync)
+    {
+        sync.OnChanged += (newVal) => RegenerateMesh();
+    }
 }

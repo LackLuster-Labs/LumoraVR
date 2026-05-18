@@ -24,30 +24,30 @@ public class LocalViewOverride : ImplementableComponent<IHook>
     public readonly Sync<RenderingContext> Context = new();
 
     /// <summary>When true, PositionOverride replaces the slot's normal position.</summary>
-    public readonly Sync<bool>   HasPositionOverride = new();
-    public readonly Sync<float3> PositionOverride    = new();
+    public readonly Sync<bool> HasPositionOverride = new();
+    public readonly Sync<float3> PositionOverride = new();
 
     /// <summary>When true, RotationOverride replaces the slot's normal rotation.</summary>
-    public readonly Sync<bool>   HasRotationOverride = new();
-    public readonly Sync<floatQ> RotationOverride    = new();
+    public readonly Sync<bool> HasRotationOverride = new();
+    public readonly Sync<floatQ> RotationOverride = new();
 
     /// <summary>
     /// When true, ScaleOverride replaces the slot's normal scale.
     /// Set to float3.Zero to make the slot invisible in the target context
     /// while keeping shadow casting intact.
     /// </summary>
-    public readonly Sync<bool>   HasScaleOverride = new();
-    public readonly Sync<float3> ScaleOverride    = new();
+    public readonly Sync<bool> HasScaleOverride = new();
+    public readonly Sync<float3> ScaleOverride = new();
 
     public override void OnInit()
     {
         base.OnInit();
-        Context.Value          = RenderingContext.UserView;
+        Context.Value = RenderingContext.UserView;
         // HasPositionOverride = false (C# default, skip)
         // PositionOverride = float3.Zero (C# default, skip)
         // HasRotationOverride = false (C# default, skip)
         RotationOverride.Value = floatQ.Identity;
         // HasScaleOverride = false (C# default, skip)
-        ScaleOverride.Value    = float3.One;
+        ScaleOverride.Value = float3.One;
     }
 }

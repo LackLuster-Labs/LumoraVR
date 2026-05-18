@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using Lumora.Core.Math;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
@@ -16,24 +16,24 @@ public class GodotIKAvatar : ImplementableComponent
 {
     // ===== TRACKING TARGETS =====
 
-    public readonly SyncRef<Slot> HeadTarget       = new();
-    public readonly SyncRef<Slot> LeftHandTarget   = new();
-    public readonly SyncRef<Slot> RightHandTarget  = new();
-    public readonly SyncRef<Slot> LeftFootTarget   = new();
-    public readonly SyncRef<Slot> RightFootTarget  = new();
+    public readonly SyncRef<Slot> HeadTarget = new();
+    public readonly SyncRef<Slot> LeftHandTarget = new();
+    public readonly SyncRef<Slot> RightHandTarget = new();
+    public readonly SyncRef<Slot> LeftFootTarget = new();
+    public readonly SyncRef<Slot> RightFootTarget = new();
 
     // ===== SKELETON =====
 
     public readonly SyncRef<SkeletonBuilder> Skeleton = new();
-    public readonly SyncRef<UserRoot>        UserRoot  = new();
+    public readonly SyncRef<UserRoot> UserRoot = new();
 
     // ===== BODY POSITIONING SETTINGS =====
 
-    public readonly Sync<float> HipHeight     = new();
-    public readonly Sync<bool>  Enabled       = new();
+    public readonly Sync<float> HipHeight = new();
+    public readonly Sync<bool> Enabled = new();
 
     /// <summary>Forward lean of spine in degrees.</summary>
-    public readonly Sync<float> SpineTilt     = new();
+    public readonly Sync<float> SpineTilt = new();
 
     /// <summary>How far hips sit behind the head center.</summary>
     public readonly Sync<float> HipsBackOffset = new();
@@ -85,13 +85,13 @@ public class GodotIKAvatar : ImplementableComponent
     public override void OnInit()
     {
         base.OnInit();
-        HipHeight.Value         = 0.95f;
-        Enabled.Value           = true;
-        SpineTilt.Value         = 20f;
-        HipsBackOffset.Value    = 0.2f;
-        FootZoneOffset.Value    = new float3(0f, -1.4f, -0.25f);
-        FootSeparation.Value    = 0.3f;
-        FootHoverHeight.Value   = 0.15f;
+        HipHeight.Value = 0.95f;
+        Enabled.Value = true;
+        SpineTilt.Value = 20f;
+        HipsBackOffset.Value = 0.2f;
+        FootZoneOffset.Value = new float3(0f, -1.4f, -0.25f);
+        FootSeparation.Value = 0.3f;
+        FootHoverHeight.Value = 0.15f;
         GroundRaycastRange.Value = 0.65f;
         // LeftFootGroundY = 0f (C# default, skip)
         // RightFootGroundY = 0f (C# default, skip)
@@ -245,7 +245,7 @@ public class GodotIKAvatar : ImplementableComponent
     }
 
     /// <summary>Returns the current left foot target rotation for the IK hook.</summary>
-    public floatQ GetLeftFootTargetRotation()  => LeftFootTarget.Target?.GlobalRotation  ?? floatQ.Identity;
+    public floatQ GetLeftFootTargetRotation() => LeftFootTarget.Target?.GlobalRotation ?? floatQ.Identity;
 
     /// <summary>Returns the current right foot target rotation for the IK hook.</summary>
     public floatQ GetRightFootTargetRotation() => RightFootTarget.Target?.GlobalRotation ?? floatQ.Identity;
@@ -278,7 +278,7 @@ public class GodotIKAvatar : ImplementableComponent
     public float3 GetRightHandTargetPosition() => RightHandTarget.Target?.GlobalPosition ?? float3.Zero;
     public floatQ GetRightHandTargetRotation() => RightHandTarget.Target?.GlobalRotation ?? floatQ.Identity;
 
-    public float3 GetLeftFootTargetPosition()  => LeftFootTarget.Target?.GlobalPosition  ?? float3.Zero;
+    public float3 GetLeftFootTargetPosition() => LeftFootTarget.Target?.GlobalPosition ?? float3.Zero;
     public float3 GetRightFootTargetPosition() => RightFootTarget.Target?.GlobalPosition ?? float3.Zero;
 
     public Slot GetHips() => _hips;

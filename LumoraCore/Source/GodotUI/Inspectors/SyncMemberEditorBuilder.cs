@@ -218,21 +218,21 @@ public static class SyncMemberEditorBuilder
 
     private static FieldEditorKind ClassifyType(Type t)
     {
-        if (t == typeof(bool))    return FieldEditorKind.Bool;
-        if (t == typeof(string))  return FieldEditorKind.String;
-        if (t == typeof(float2))  return FieldEditorKind.Float2;
-        if (t == typeof(float3))  return FieldEditorKind.Float3;
-        if (t == typeof(float4))  return FieldEditorKind.Float4;
-        if (t == typeof(color))   return FieldEditorKind.Color;
+        if (t == typeof(bool)) return FieldEditorKind.Bool;
+        if (t == typeof(string)) return FieldEditorKind.String;
+        if (t == typeof(float2)) return FieldEditorKind.Float2;
+        if (t == typeof(float3)) return FieldEditorKind.Float3;
+        if (t == typeof(float4)) return FieldEditorKind.Float4;
+        if (t == typeof(color)) return FieldEditorKind.Color;
         if (t == typeof(colorHDR)) return FieldEditorKind.ColorHDR;
-        if (t == typeof(floatQ))  return FieldEditorKind.Quaternion;
-        if (t.IsEnum)             return FieldEditorKind.Enum;
+        if (t == typeof(floatQ)) return FieldEditorKind.Quaternion;
+        if (t.IsEnum) return FieldEditorKind.Enum;
 
         if (t == typeof(float) || t == typeof(double))
             return FieldEditorKind.Float;
 
-        if (t == typeof(int)   || t == typeof(long)  || t == typeof(short) ||
-            t == typeof(byte)  || t == typeof(uint)  || t == typeof(ulong) ||
+        if (t == typeof(int) || t == typeof(long) || t == typeof(short) ||
+            t == typeof(byte) || t == typeof(uint) || t == typeof(ulong) ||
             t == typeof(ushort) || t == typeof(sbyte))
             return FieldEditorKind.Int;
 
@@ -246,13 +246,13 @@ public static class SyncMemberEditorBuilder
         if (raw == null) return "null";
         return kind switch
         {
-            FieldEditorKind.Float    => ((IConvertible)raw).ToSingle(null).ToString("G6"),
-            FieldEditorKind.Float2   => raw is float2 v2  ? $"({v2.x:G5}, {v2.y:G5})"                      : raw.ToString()!,
-            FieldEditorKind.Float3   => raw is float3 v3  ? $"({v3.x:G5}, {v3.y:G5}, {v3.z:G5})"           : raw.ToString()!,
-            FieldEditorKind.Float4   => raw is float4 v4  ? $"({v4.x:G5}, {v4.y:G5}, {v4.z:G5}, {v4.w:G5})" : raw.ToString()!,
-            FieldEditorKind.Color    => raw is color c    ? $"#{F2X(c.r)}{F2X(c.g)}{F2X(c.b)}{F2X(c.a)}  ({c.r:F3}, {c.g:F3}, {c.b:F3}, {c.a:F3})" : raw.ToString()!,
+            FieldEditorKind.Float => ((IConvertible)raw).ToSingle(null).ToString("G6"),
+            FieldEditorKind.Float2 => raw is float2 v2 ? $"({v2.x:G5}, {v2.y:G5})" : raw.ToString()!,
+            FieldEditorKind.Float3 => raw is float3 v3 ? $"({v3.x:G5}, {v3.y:G5}, {v3.z:G5})" : raw.ToString()!,
+            FieldEditorKind.Float4 => raw is float4 v4 ? $"({v4.x:G5}, {v4.y:G5}, {v4.z:G5}, {v4.w:G5})" : raw.ToString()!,
+            FieldEditorKind.Color => raw is color c ? $"#{F2X(c.r)}{F2X(c.g)}{F2X(c.b)}{F2X(c.a)}  ({c.r:F3}, {c.g:F3}, {c.b:F3}, {c.a:F3})" : raw.ToString()!,
             FieldEditorKind.ColorHDR => raw is colorHDR h ? $"HDR ({h.r:F3}, {h.g:F3}, {h.b:F3}, {h.a:F3})" : raw.ToString()!,
-            FieldEditorKind.Quaternion => raw is floatQ q ? $"({q.x:F3}, {q.y:F3}, {q.z:F3}, {q.w:F3})"   : raw.ToString()!,
+            FieldEditorKind.Quaternion => raw is floatQ q ? $"({q.x:F3}, {q.y:F3}, {q.z:F3}, {q.w:F3})" : raw.ToString()!,
             _ => raw.ToString() ?? "?",
         };
     }
@@ -278,17 +278,17 @@ public static class SyncMemberEditorBuilder
         {
             var t = field.ValueType;
             object? parsed =
-                t == typeof(bool)   ? bool.Parse(rawInput) :
-                t == typeof(int)    ? int.Parse(rawInput) :
-                t == typeof(long)   ? long.Parse(rawInput) :
-                t == typeof(short)  ? short.Parse(rawInput) :
-                t == typeof(byte)   ? byte.Parse(rawInput) :
-                t == typeof(uint)   ? uint.Parse(rawInput) :
-                t == typeof(ulong)  ? ulong.Parse(rawInput) :
-                t == typeof(float)  ? float.Parse(rawInput, System.Globalization.CultureInfo.InvariantCulture) :
+                t == typeof(bool) ? bool.Parse(rawInput) :
+                t == typeof(int) ? int.Parse(rawInput) :
+                t == typeof(long) ? long.Parse(rawInput) :
+                t == typeof(short) ? short.Parse(rawInput) :
+                t == typeof(byte) ? byte.Parse(rawInput) :
+                t == typeof(uint) ? uint.Parse(rawInput) :
+                t == typeof(ulong) ? ulong.Parse(rawInput) :
+                t == typeof(float) ? float.Parse(rawInput, System.Globalization.CultureInfo.InvariantCulture) :
                 t == typeof(double) ? double.Parse(rawInput, System.Globalization.CultureInfo.InvariantCulture) :
                 t == typeof(string) ? rawInput :
-                t.IsEnum            ? Enum.Parse(t, rawInput) :
+                t.IsEnum ? Enum.Parse(t, rawInput) :
                 (object?)null;
 
             if (parsed == null && t != typeof(string)) return false;
@@ -306,21 +306,21 @@ public static class SyncMemberEditorBuilder
 
     public static void SetInt(ISyncMember member, int value)
     {
-        if      (member is IField<int>    fi) fi.Value = value;
-        else if (member is IField<long>   fl) fl.Value = value;
-        else if (member is IField<short>  fs) fs.Value = (short)value;
-        else if (member is IField<byte>   fb) fb.Value = (byte)value;
-        else if (member is IField<uint>   fu) fu.Value = (uint)value;
-        else if (member is IField<ulong>  fU) fU.Value = (ulong)value;
-        else if (member is IField         f  && f.CanWrite)
+        if (member is IField<int> fi) fi.Value = value;
+        else if (member is IField<long> fl) fl.Value = value;
+        else if (member is IField<short> fs) fs.Value = (short)value;
+        else if (member is IField<byte> fb) fb.Value = (byte)value;
+        else if (member is IField<uint> fu) fu.Value = (uint)value;
+        else if (member is IField<ulong> fU) fU.Value = (ulong)value;
+        else if (member is IField f && f.CanWrite)
             f.BoxedValue = Convert.ChangeType(value, f.ValueType);
     }
 
     public static void SetFloat(ISyncMember member, float value)
     {
-        if      (member is IField<float>  ff) ff.Value = value;
+        if (member is IField<float> ff) ff.Value = value;
         else if (member is IField<double> fd) fd.Value = value;
-        else if (member is IField         f  && f.CanWrite)
+        else if (member is IField f && f.CanWrite)
             f.BoxedValue = Convert.ChangeType(value, f.ValueType);
     }
 

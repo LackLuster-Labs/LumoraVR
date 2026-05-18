@@ -33,7 +33,7 @@ public class Animator : Component
     public override void OnInit()
     {
         base.OnInit();
-        Loop.Value  = true;
+        Loop.Value = true;
         Speed.Value = 1.0f;
         // Position = 0.0f (C# default, skip)
         // Playing = false (C# default, skip)

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using LumoraLogger = Lumora.Core.Logging.Logger;
@@ -71,7 +71,7 @@ public abstract class SyncElement : IWorldElement, IDisposable, IInitializable, 
 
         World = world;
         world.ReferenceController.RegisterObject(this);
-        
+
         // Register with SyncController for network sync
         world.SyncController?.RegisterSyncElement(this);
 
@@ -206,7 +206,7 @@ public abstract class SyncElement : IWorldElement, IDisposable, IInitializable, 
     protected virtual ILinkRef ActiveLink => null;
 
     protected virtual string Name => GetType().Name;
-    
+
     /// <summary>
     /// Type of sync member - must be implemented by concrete classes
     /// </summary>

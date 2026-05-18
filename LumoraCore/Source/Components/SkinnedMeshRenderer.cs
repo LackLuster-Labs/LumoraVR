@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Lumora.Core;
 using Lumora.Core.Assets;
 using Lumora.Core.Math;
@@ -146,9 +146,9 @@ public class SkinnedMeshRenderer : ImplementableComponent
     public override void OnInit()
     {
         base.OnInit();
-        ShadowCastMode.Value    = Components.ShadowCastMode.On;
+        ShadowCastMode.Value = Components.ShadowCastMode.On;
         UpdateWhenOffscreen.Value = true;
-        Quality.Value           = SkinQuality.FourBones;
+        Quality.Value = SkinQuality.FourBones;
     }
 
     public override void OnUpdate(float delta)

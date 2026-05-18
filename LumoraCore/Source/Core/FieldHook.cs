@@ -20,10 +20,10 @@ public delegate void HookFieldSetter<T>(SyncField<T> field, T value);
 /// <typeparam name="T">The type of value being hooked</typeparam>
 public class FieldHook<T> : ILinkRef
 {
-	private SyncField<T> _target;
-	private HookFieldSetter<T> _fieldHook;
-	private bool _isActive;
-	private World _world;
+    private SyncField<T> _target;
+    private HookFieldSetter<T> _fieldHook;
+    private bool _isActive;
+    private World _world;
 
     /// <summary>
     /// The target being linked to.
@@ -71,14 +71,14 @@ public class FieldHook<T> : ILinkRef
     /// </summary>
     public bool HookSetup => _fieldHook != null;
 
-	// IWorldElement implementation
-	public World World => _world;
-	public RefID ReferenceID => RefID.Null;
-	public bool IsLocalElement => true;
-	public bool IsPersistent => false;
-	public bool IsDestroyed { get; private set; }
-	public bool IsInitialized { get; private set; }
-	public string ParentHierarchyToString() => $"FieldHook<{typeof(T).Name}>";
+    // IWorldElement implementation
+    public World World => _world;
+    public RefID ReferenceID => RefID.Null;
+    public bool IsLocalElement => true;
+    public bool IsPersistent => false;
+    public bool IsDestroyed { get; private set; }
+    public bool IsInitialized { get; private set; }
+    public string ParentHierarchyToString() => $"FieldHook<{typeof(T).Name}>";
 
     public FieldHook(World world)
     {
@@ -101,17 +101,17 @@ public class FieldHook<T> : ILinkRef
         _fieldHook = hook;
     }
 
-	/// <summary>
-	/// Set the target field to hook.
-	/// </summary>
-	/// <param name="target">The Sync field to hook</param>
-	public void HookTarget(SyncField<T> target)
-	{
-		// Release previous target if any
-		if (_target != null && _isActive)
-		{
-			_target.ReleaseLink(this);
-		}
+    /// <summary>
+    /// Set the target field to hook.
+    /// </summary>
+    /// <param name="target">The Sync field to hook</param>
+    public void HookTarget(SyncField<T> target)
+    {
+        // Release previous target if any
+        if (_target != null && _isActive)
+        {
+            _target.ReleaseLink(this);
+        }
 
         _target = target;
 

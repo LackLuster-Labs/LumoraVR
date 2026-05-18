@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Godot;
 using Lumora.Core;
@@ -382,7 +382,7 @@ public class GodotIKAvatarHook : ComponentHook<GodotIKAvatar>
 
         float range = Owner.GroundRaycastRange.Value;
 
-        Owner.LeftFootGroundY.Value  = RaycastGroundY(spaceState, Owner.GetLeftFootTargetPosition(),  range);
+        Owner.LeftFootGroundY.Value = RaycastGroundY(spaceState, Owner.GetLeftFootTargetPosition(), range);
         Owner.RightFootGroundY.Value = RaycastGroundY(spaceState, Owner.GetRightFootTargetPosition(), range);
     }
 
@@ -393,7 +393,7 @@ public class GodotIKAvatarHook : ComponentHook<GodotIKAvatar>
     private static float RaycastGroundY(PhysicsDirectSpaceState3D spaceState, float3 footPos, float range)
     {
         var from = new Vector3(footPos.x, footPos.y + range, footPos.z);
-        var to   = new Vector3(footPos.x, footPos.y - range, footPos.z);
+        var to = new Vector3(footPos.x, footPos.y - range, footPos.z);
 
         var query = PhysicsRayQueryParameters3D.Create(from, to);
         query.CollideWithAreas = false;

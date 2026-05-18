@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Lumora.Core.Assets;
 using Lumora.Core.Components.Interaction;
@@ -454,46 +454,46 @@ public sealed class ControllerRayBeam : Component
         switch (collider)
         {
             case BoxCollider box:
-            {
-                float3 size = AbsVector(box.Size.Value);
-                float3 half = size * 0.5f;
-                float3 offset = box.Offset.Value;
-                min = new float3(offset.x - half.x, offset.y - half.y, offset.z - half.z);
-                max = new float3(offset.x + half.x, offset.y + half.y, offset.z + half.z);
-                return true;
-            }
+                {
+                    float3 size = AbsVector(box.Size.Value);
+                    float3 half = size * 0.5f;
+                    float3 offset = box.Offset.Value;
+                    min = new float3(offset.x - half.x, offset.y - half.y, offset.z - half.z);
+                    max = new float3(offset.x + half.x, offset.y + half.y, offset.z + half.z);
+                    return true;
+                }
             case SphereCollider sphere:
-            {
-                float radius = MathF.Max(MathF.Abs(sphere.Radius.Value), 0.0005f);
-                float3 offset = sphere.Offset.Value;
-                min = new float3(offset.x - radius, offset.y - radius, offset.z - radius);
-                max = new float3(offset.x + radius, offset.y + radius, offset.z + radius);
-                return true;
-            }
+                {
+                    float radius = MathF.Max(MathF.Abs(sphere.Radius.Value), 0.0005f);
+                    float3 offset = sphere.Offset.Value;
+                    min = new float3(offset.x - radius, offset.y - radius, offset.z - radius);
+                    max = new float3(offset.x + radius, offset.y + radius, offset.z + radius);
+                    return true;
+                }
             case CapsuleCollider capsule:
-            {
-                float radius = MathF.Max(MathF.Abs(capsule.Radius.Value), 0.0005f);
-                float halfHeight = MathF.Max(MathF.Abs(capsule.Height.Value) * 0.5f, radius);
-                float3 offset = capsule.Offset.Value;
-                min = new float3(offset.x - radius, offset.y - halfHeight, offset.z - radius);
-                max = new float3(offset.x + radius, offset.y + halfHeight, offset.z + radius);
-                return true;
-            }
+                {
+                    float radius = MathF.Max(MathF.Abs(capsule.Radius.Value), 0.0005f);
+                    float halfHeight = MathF.Max(MathF.Abs(capsule.Height.Value) * 0.5f, radius);
+                    float3 offset = capsule.Offset.Value;
+                    min = new float3(offset.x - radius, offset.y - halfHeight, offset.z - radius);
+                    max = new float3(offset.x + radius, offset.y + halfHeight, offset.z + radius);
+                    return true;
+                }
             case CylinderCollider cylinder:
-            {
-                float radius = MathF.Max(MathF.Abs(cylinder.Radius.Value), 0.0005f);
-                float halfHeight = MathF.Max(MathF.Abs(cylinder.Height.Value) * 0.5f, 0.0005f);
-                float3 offset = cylinder.Offset.Value;
-                min = new float3(offset.x - radius, offset.y - halfHeight, offset.z - radius);
-                max = new float3(offset.x + radius, offset.y + halfHeight, offset.z + radius);
-                return true;
-            }
+                {
+                    float radius = MathF.Max(MathF.Abs(cylinder.Radius.Value), 0.0005f);
+                    float halfHeight = MathF.Max(MathF.Abs(cylinder.Height.Value) * 0.5f, 0.0005f);
+                    float3 offset = cylinder.Offset.Value;
+                    min = new float3(offset.x - radius, offset.y - halfHeight, offset.z - radius);
+                    max = new float3(offset.x + radius, offset.y + halfHeight, offset.z + radius);
+                    return true;
+                }
             default:
-            {
-                min = float3.Zero;
-                max = float3.Zero;
-                return false;
-            }
+                {
+                    min = float3.Zero;
+                    max = float3.Zero;
+                    return false;
+                }
         }
     }
 

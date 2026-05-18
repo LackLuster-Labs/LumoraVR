@@ -107,20 +107,20 @@ public class Camera : ImplementableComponent
         base.OnInit();
 
         // Projection = ProjectionType.Perspective (enum 0, C# default, skip)
-        FieldOfView.Value        = 60f;
-        OrthographicSize.Value   = 5f;
-        NearClip.Value           = 0.05f;
-        FarClip.Value            = 1000f;
+        FieldOfView.Value = 60f;
+        OrthographicSize.Value = 5f;
+        NearClip.Value = 0.05f;
+        FarClip.Value = 1000f;
         // Clear = ClearMode.Skybox (enum 0, C# default, skip)
-        BackgroundColor.Value    = new color(0.2f, 0.2f, 0.2f, 1f);
+        BackgroundColor.Value = new color(0.2f, 0.2f, 0.2f, 1f);
         // TargetTexture = default (C# default null, skip)
         // Depth = 0 (C# default, skip)
-        CullingMask.Value        = -1; // All layers
-        RenderShadows.Value      = true;
+        CullingMask.Value = -1; // All layers
+        RenderShadows.Value = true;
         UseOcclusionCulling.Value = true;
-        AllowHDR.Value           = true;
-        AllowMSAA.Value          = true;
-        ViewportRect.Value       = new float4(0f, 0f, 1f, 1f);
+        AllowHDR.Value = true;
+        AllowMSAA.Value = true;
+        ViewportRect.Value = new float4(0f, 0f, 1f, 1f);
         // SelectiveRender = false (C# default, skip)
         RenderPostProcessing.Value = true;
     }

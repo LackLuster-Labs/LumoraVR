@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -108,7 +108,7 @@ public class SessionConnectionManager : IDisposable
         {
             LumoraLogger.Warn($"Connection closed: {c.FailReason}");
             taskCompletionSource.TrySetResult(false);
-            
+
             // Trigger host disconnected event if this was the host connection
             if (HostConnection == c)
             {

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using Lumora.Core;
+using Lumora.Core;
 using Lumora.Core.Input;
 using Lumora.Core.Math;
 using Lumora.Core.Components.Avatar;

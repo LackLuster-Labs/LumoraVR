@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using Godot;
+using Godot;
 using Lumora.Godot.Hooks;
 using Lumora.Source.UI;
 using Lumora.Source.Godot.UI;
@@ -24,17 +24,17 @@ public partial class DesktopCameraController : Node
 
     // ===== THIRD-PERSON SETTINGS =====
     private const float TpDefaultDistance = 3.5f;
-    private const float TpMinDistance     = 1.0f;
-    private const float TpMaxDistance     = 12.0f;
-    private const float TpPivotHeight     = 1.4f;   // above character feet
-    private const float TpHeightOffset    = 0.4f;   // extra shoulder clearance
-    private const float TpDefaultPitch    = 0.21f;  // ~12 degrees in radians
-    private const float TpMinPitch        = -0.35f; // slightly below horizon
-    private const float TpMaxPitch        =  1.40f; // nearly top-down
+    private const float TpMinDistance = 1.0f;
+    private const float TpMaxDistance = 12.0f;
+    private const float TpPivotHeight = 1.4f;   // above character feet
+    private const float TpHeightOffset = 0.4f;   // extra shoulder clearance
+    private const float TpDefaultPitch = 0.21f;  // ~12 degrees in radians
+    private const float TpMinPitch = -0.35f; // slightly below horizon
+    private const float TpMaxPitch = 1.40f; // nearly top-down
 
     // ===== FREE-CAM SETTINGS =====
-    private const float FreeCamBaseSpeed   = 5f;
-    private const float FreeCamFastMult    = 4f;
+    private const float FreeCamBaseSpeed = 5f;
+    private const float FreeCamFastMult = 4f;
     private const float LookReferenceHeight = 1080f;
     private const uint FreeCamIndicatorLayer = 1u << 19;
 
@@ -42,27 +42,27 @@ public partial class DesktopCameraController : Node
 
     // ===== REFERENCES =====
     private Lumora.Core.Engine _engine;
-    private Camera3D  _overrideCamera;
-    private Node3D    _freeCamIndicator;
-    private Label3D   _freeCamLabel;
+    private Camera3D _overrideCamera;
+    private Node3D _freeCamIndicator;
+    private Label3D _freeCamLabel;
 
     // ===== STATE =====
     public static CameraMode ActiveMode { get; private set; } = CameraMode.FirstPerson;
 
-    private CameraMode _mode      = CameraMode.FirstPerson;
-    private bool       _f5WasDown;
-    private bool       _f6WasDown;
+    private CameraMode _mode = CameraMode.FirstPerson;
+    private bool _f5WasDown;
+    private bool _f6WasDown;
 
     // Third-person orbit (values in radians)
-    private float   _tpDistance = TpDefaultDistance;
-    private float   _tpOrbitYaw;
-    private float   _tpOrbitPitch = TpDefaultPitch;
+    private float _tpDistance = TpDefaultDistance;
+    private float _tpOrbitYaw;
+    private float _tpOrbitPitch = TpDefaultPitch;
     private Vector2 _pendingTpMouse;
 
     // Free-cam
     private Vector3 _freeCamPos;
-    private float   _freeCamYaw;
-    private float   _freeCamPitch;
+    private float _freeCamYaw;
+    private float _freeCamPitch;
     private Vector2 _pendingFreeCamMouse;
 
     // ===== INIT =====
@@ -78,9 +78,9 @@ public partial class DesktopCameraController : Node
         _overrideCamera = new Camera3D
         {
             Name = "OverrideCamera",
-            Fov  = 90f,
+            Fov = 90f,
             Near = 0.05f,
-            Far  = 1000f,
+            Far = 1000f,
             PhysicsInterpolationMode = Node.PhysicsInterpolationModeEnum.Off,
         };
         _overrideCamera.CullMask &= ~FreeCamIndicatorLayer;
@@ -100,9 +100,9 @@ public partial class DesktopCameraController : Node
         mesh.Mesh = new SphereMesh { Radius = 0.18f, Height = 0.36f };
         var mat = new StandardMaterial3D
         {
-            AlbedoColor     = new Color(0.55f, 0.55f, 1.0f),
+            AlbedoColor = new Color(0.55f, 0.55f, 1.0f),
             EmissionEnabled = true,
-            Emission        = new Color(0.25f, 0.25f, 0.75f),
+            Emission = new Color(0.25f, 0.25f, 0.75f),
         };
         mesh.MaterialOverride = mat;
         _freeCamIndicator.AddChild(mesh);
@@ -110,14 +110,14 @@ public partial class DesktopCameraController : Node
         // Billboard username label above the sphere
         _freeCamLabel = new Label3D
         {
-            Name        = "UsernameLabel",
-            Text        = "freecam",
-            Billboard   = BaseMaterial3D.BillboardModeEnum.Enabled,
+            Name = "UsernameLabel",
+            Text = "freecam",
+            Billboard = BaseMaterial3D.BillboardModeEnum.Enabled,
             NoDepthTest = true,
-            PixelSize   = 0.004f,
-            FontSize    = 28,
-            Layers      = FreeCamIndicatorLayer,
-            Position    = new Vector3(0f, 0.38f, 0f),
+            PixelSize = 0.004f,
+            FontSize = 28,
+            Layers = FreeCamIndicatorLayer,
+            Position = new Vector3(0f, 0.38f, 0f),
         };
         _freeCamIndicator.AddChild(_freeCamLabel);
 
@@ -143,8 +143,8 @@ public partial class DesktopCameraController : Node
 
         switch (_mode)
         {
-            case CameraMode.ThirdPerson: UpdateThirdPerson();         break;
-            case CameraMode.FreeCam:     UpdateFreeCam((float)delta); break;
+            case CameraMode.ThirdPerson: UpdateThirdPerson(); break;
+            case CameraMode.FreeCam: UpdateFreeCam((float)delta); break;
         }
     }
 
@@ -175,7 +175,7 @@ public partial class DesktopCameraController : Node
     private void SwitchMode(CameraMode newMode)
     {
         var prev = _mode;
-        _mode      = newMode;
+        _mode = newMode;
         ActiveMode = newMode;
 
         // --- Tear down previous ---
@@ -201,7 +201,7 @@ public partial class DesktopCameraController : Node
 
             case CameraMode.ThirdPerson:
                 // Seed orbit so camera starts directly behind the character
-                _tpOrbitYaw   = GetCharacterBodyYaw();
+                _tpOrbitYaw = GetCharacterBodyYaw();
                 _tpOrbitPitch = TpDefaultPitch;
                 _pendingTpMouse = Vector2.Zero;
                 LocomotionController.SetMouseLookSuppressed(true);
@@ -227,13 +227,13 @@ public partial class DesktopCameraController : Node
         if (_overrideCamera == null) return;
 
         // Apply mouse orbit delta
-        var mouse       = _pendingTpMouse;
+        var mouse = _pendingTpMouse;
         _pendingTpMouse = Vector2.Zero;
 
         float sensitivity = LookSensitivity;
-        _tpOrbitYaw   -= mouse.X * sensitivity;
+        _tpOrbitYaw -= mouse.X * sensitivity;
         _tpOrbitPitch -= mouse.Y * sensitivity;
-        _tpOrbitPitch  = Mathf.Clamp(_tpOrbitPitch, TpMinPitch, TpMaxPitch);
+        _tpOrbitPitch = Mathf.Clamp(_tpOrbitPitch, TpMinPitch, TpMaxPitch);
 
         // Character world position
         Vector3 charPos;
@@ -246,7 +246,7 @@ public partial class DesktopCameraController : Node
         Vector3 pivot = charPos + Vector3.Up * (TpPivotHeight + TpHeightOffset);
 
         // Build orbit offset: +Z = behind character at yaw=charFacing
-        var yawQ   = Quaternion.FromEuler(new Vector3(0f, _tpOrbitYaw,   0f));
+        var yawQ = Quaternion.FromEuler(new Vector3(0f, _tpOrbitYaw, 0f));
         var pitchQ = Quaternion.FromEuler(new Vector3(_tpOrbitPitch, 0f, 0f));
         Vector3 offset = (yawQ * pitchQ) * new Vector3(0f, 0f, _tpDistance);
         Vector3 camPos = pivot + offset;
@@ -275,10 +275,10 @@ public partial class DesktopCameraController : Node
         var active = GetViewport()?.GetCamera3D();
         if (active != null && active != _overrideCamera)
         {
-            _freeCamPos   = active.GlobalPosition;
-            var euler     = active.GlobalTransform.Basis.GetEuler();
+            _freeCamPos = active.GlobalPosition;
+            var euler = active.GlobalTransform.Basis.GetEuler();
             _freeCamPitch = euler.X;
-            _freeCamYaw   = euler.Y;
+            _freeCamYaw = euler.Y;
         }
     }
 
@@ -294,15 +294,15 @@ public partial class DesktopCameraController : Node
         if (_overrideCamera == null) return;
         if (DashboardToggle.IsDashboardVisible) return;
 
-        var mouse            = _pendingFreeCamMouse;
+        var mouse = _pendingFreeCamMouse;
         _pendingFreeCamMouse = Vector2.Zero;
 
         float sensitivity = LookSensitivity;
-        _freeCamYaw   -= mouse.X * sensitivity;
+        _freeCamYaw -= mouse.X * sensitivity;
         _freeCamPitch -= mouse.Y * sensitivity;
-        _freeCamPitch  = Mathf.Clamp(_freeCamPitch, -Mathf.Pi * 0.499f, Mathf.Pi * 0.499f);
+        _freeCamPitch = Mathf.Clamp(_freeCamPitch, -Mathf.Pi * 0.499f, Mathf.Pi * 0.499f);
 
-        var yawQ   = Quaternion.FromEuler(new Vector3(0f, _freeCamYaw,   0f));
+        var yawQ = Quaternion.FromEuler(new Vector3(0f, _freeCamYaw, 0f));
         var pitchQ = Quaternion.FromEuler(new Vector3(_freeCamPitch, 0f, 0f));
         Quaternion camRot = yawQ * pitchQ;
 
@@ -311,12 +311,12 @@ public partial class DesktopCameraController : Node
             : FreeCamBaseSpeed;
 
         var move = Vector3.Zero;
-        if (global::Godot.Input.IsKeyPressed(Key.W))     move.Z -= 1f;
-        if (global::Godot.Input.IsKeyPressed(Key.S))     move.Z += 1f;
-        if (global::Godot.Input.IsKeyPressed(Key.A))     move.X -= 1f;
-        if (global::Godot.Input.IsKeyPressed(Key.D))     move.X += 1f;
+        if (global::Godot.Input.IsKeyPressed(Key.W)) move.Z -= 1f;
+        if (global::Godot.Input.IsKeyPressed(Key.S)) move.Z += 1f;
+        if (global::Godot.Input.IsKeyPressed(Key.A)) move.X -= 1f;
+        if (global::Godot.Input.IsKeyPressed(Key.D)) move.X += 1f;
         if (global::Godot.Input.IsKeyPressed(Key.Space)) move.Y += 1f;
-        if (global::Godot.Input.IsKeyPressed(Key.Ctrl))  move.Y -= 1f;
+        if (global::Godot.Input.IsKeyPressed(Key.Ctrl)) move.Y -= 1f;
 
         if (move.LengthSquared() > 0.001f)
             _freeCamPos += (camRot * move.Normalized()) * speed * delta;

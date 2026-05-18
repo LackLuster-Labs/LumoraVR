@@ -18,7 +18,7 @@ public class RemoteAudioManager
         private readonly List<IAudioEffect> _effects = new();
         private float _volumeDb;
 
-        public bool Mute {get; set;}
+        public bool Mute { get; set; }
         public float Channels => 2f;
         public List<IAudioEffect> Effects => _effects;
         public IAudioBus? Target { get; set; }
@@ -129,7 +129,7 @@ public class RemoteAudioManager
     private IAudioMixer _mixer = new CacheMixer();
     public IAudioMixer Mixer => _mixer;
 
-    public Lumora.Core.External.Audio.Godot.IAudioCapureEffect? MicCapture {get; internal set;}
+    public Lumora.Core.External.Audio.Godot.IAudioCapureEffect? MicCapture { get; internal set; }
     public void Initialize(IAudioMixer mixer)
     {
         ArgumentNullException.ThrowIfNull(mixer);
@@ -195,7 +195,8 @@ public class RemoteAudioManager
 
             importedSource.Target = importedTarget;
         }
-        if(targetMixer is External.Audio.Godot.IAudioOutputMixerWithInput inputmixer){
+        if (targetMixer is External.Audio.Godot.IAudioOutputMixerWithInput inputmixer)
+        {
             inputmixer.InitializeInput();
         }
     }

@@ -79,17 +79,17 @@ public class Light : ImplementableComponent
 
         // LightType.Point is value 0 — C# default, but set for clarity
         // Type.Value = LightType.Point; // skip, it's enum 0
-        LightColor.Value       = new color(1f, 1f, 1f, 1f);
-        Intensity.Value        = 1f;
-        Range.Value            = 10f;
-        SpotAngle.Value        = 30f;
-        Shadows.Value          = ShadowType.Hard;
-        ShadowStrength.Value   = 1f;
-        ShadowBias.Value       = 0.05f;
+        LightColor.Value = new color(1f, 1f, 1f, 1f);
+        Intensity.Value = 1f;
+        Range.Value = 10f;
+        SpotAngle.Value = 30f;
+        Shadows.Value = ShadowType.Hard;
+        ShadowStrength.Value = 1f;
+        ShadowBias.Value = 0.05f;
         ShadowNormalBias.Value = 0.4f;
-        ShadowNearPlane.Value  = 0.2f;
+        ShadowNearPlane.Value = 0.2f;
         // Cookie = default (C# default null, skip)
-        CookieSize.Value       = 10f;
+        CookieSize.Value = 10f;
     }
 
     public override void OnStart()

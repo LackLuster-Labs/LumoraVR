@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using Lumora.Core;
@@ -44,13 +44,13 @@ public abstract class BinaryMessageBatch : SyncMessage
 
     // ===== DATA RECORD MANAGEMENT =====
 
-	/// <summary>
-	/// Begin writing a new data record for a sync element.
-	/// </summary>
-	public BinaryWriter BeginNewDataRecord(RefID targetID)
-	{
-		if (_currentRecordIndex >= 0)
-			throw new InvalidOperationException("Previous data record not finished!");
+    /// <summary>
+    /// Begin writing a new data record for a sync element.
+    /// </summary>
+    public BinaryWriter BeginNewDataRecord(RefID targetID)
+    {
+        if (_currentRecordIndex >= 0)
+            throw new InvalidOperationException("Previous data record not finished!");
 
         var record = new DataRecord
         {
@@ -62,17 +62,17 @@ public abstract class BinaryMessageBatch : SyncMessage
         _dataRecords.Add(record);
         _currentRecordIndex = _dataRecords.Count - 1;
 
-		// Just track the start - we'll write the header in FinishDataRecord
+        // Just track the start - we'll write the header in FinishDataRecord
         return _writer;
     }
 
-	/// <summary>
-	/// Finish writing the current data record.
-	/// </summary>
-	public void FinishDataRecord(RefID targetID)
-	{
-		if (_currentRecordIndex < 0)
-			throw new InvalidOperationException("No data record in progress!");
+    /// <summary>
+    /// Finish writing the current data record.
+    /// </summary>
+    public void FinishDataRecord(RefID targetID)
+    {
+        if (_currentRecordIndex < 0)
+            throw new InvalidOperationException("No data record in progress!");
 
         var record = _dataRecords[_currentRecordIndex];
         if (record.TargetID != targetID)
@@ -84,20 +84,20 @@ public abstract class BinaryMessageBatch : SyncMessage
         _currentRecordIndex = -1;
     }
 
-	/// <summary>
-	/// Cancel the current data record (used when encoding fails).
-	/// Removes the record and resets stream position.
-	/// </summary>
-	public void CancelDataRecord()
-	{
-		if (_currentRecordIndex < 0)
-			return; // Nothing to cancel
+    /// <summary>
+    /// Cancel the current data record (used when encoding fails).
+    /// Removes the record and resets stream position.
+    /// </summary>
+    public void CancelDataRecord()
+    {
+        if (_currentRecordIndex < 0)
+            return; // Nothing to cancel
 
-		var record = _dataRecords[_currentRecordIndex];
-		_stream.Position = record.StartOffset; // Reset stream to before this record
-		_dataRecords.RemoveAt(_currentRecordIndex);
-		_currentRecordIndex = -1;
-	}
+        var record = _dataRecords[_currentRecordIndex];
+        _stream.Position = record.StartOffset; // Reset stream to before this record
+        _dataRecords.RemoveAt(_currentRecordIndex);
+        _currentRecordIndex = -1;
+    }
 
     /// <summary>
     /// Get a data record by index.
@@ -107,18 +107,18 @@ public abstract class BinaryMessageBatch : SyncMessage
         return _dataRecords[index];
     }
 
-	/// <summary>
-	/// Find data record index by target ID.
-	/// </summary>
-	public int FindDataRecordIndex(RefID targetID)
-	{
-		for (int i = 0; i < _dataRecords.Count; i++)
-		{
-			if (_dataRecords[i].TargetID == targetID)
-				return i;
-		}
-		return -1;
-	}
+    /// <summary>
+    /// Find data record index by target ID.
+    /// </summary>
+    public int FindDataRecordIndex(RefID targetID)
+    {
+        for (int i = 0; i < _dataRecords.Count; i++)
+        {
+            if (_dataRecords[i].TargetID == targetID)
+                return i;
+        }
+        return -1;
+    }
 
     /// <summary>
     /// Seek to a data record for reading.
@@ -175,17 +175,17 @@ public abstract class BinaryMessageBatch : SyncMessage
         _dataRecords.RemoveAll(r => r.Validity != MessageValidity.Valid);
     }
 
-	/// <summary>
-	/// Get all conflicting record IDs.
-	/// </summary>
-	public void GetConflictingDataRecords(List<RefID> output)
-	{
-		foreach (var record in _dataRecords)
-		{
-			if (record.Validity == MessageValidity.Conflict)
-				output.Add(record.TargetID);
-		}
-	}
+    /// <summary>
+    /// Get all conflicting record IDs.
+    /// </summary>
+    public void GetConflictingDataRecords(List<RefID> output)
+    {
+        foreach (var record in _dataRecords)
+        {
+            if (record.Validity == MessageValidity.Conflict)
+                output.Add(record.TargetID);
+        }
+    }
 
     // ===== ENCODING/DECODING =====
 
@@ -311,11 +311,11 @@ public abstract class BinaryMessageBatch : SyncMessage
 /// </summary>
 public struct DataRecord
 {
-	public RefID TargetID;
-	public int StartOffset;
-	public int EndOffset;
-	public MessageValidity Validity;
-	public bool IsProcessed;
+    public RefID TargetID;
+    public int StartOffset;
+    public int EndOffset;
+    public MessageValidity Validity;
+    public bool IsProcessed;
 }
 
 /// <summary>

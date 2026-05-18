@@ -22,7 +22,7 @@ public sealed class Grabbable : Component
     public override void OnInit()
     {
         base.OnInit();
-        AllowGrab.Value      = true;
+        AllowGrab.Value = true;
         FollowRotation.Value = false;
     }
 }

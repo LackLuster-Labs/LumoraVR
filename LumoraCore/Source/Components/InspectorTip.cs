@@ -56,7 +56,7 @@ public class InspectorTip : Component
         if (ctrl == null) return;
 
         bool triggerNow = ctrl.TriggerPressed;
-        bool gripNow    = ctrl.GripValue > 0.7f;
+        bool gripNow = ctrl.GripValue > 0.7f;
 
         // Leading-edge trigger → inspect hovered slot
         if (triggerNow && !_prevTrigger)
@@ -74,7 +74,7 @@ public class InspectorTip : Component
         }
 
         _prevTrigger = triggerNow;
-        _prevGrip    = gripNow;
+        _prevGrip = gripNow;
     }
 
     // ── Slot lookup ───────────────────────────────────────────────────────────
@@ -123,8 +123,8 @@ public class InspectorTip : Component
     private void PositionPanelInFront(Slot panelSlot)
     {
         // Place the inspector SpawnDistance units in front of the controller
-        float3 forward   = -Slot.Forward; // controller visual faces -Z
-        float  dist      = SpawnDistance.Value;
+        float3 forward = -Slot.Forward; // controller visual faces -Z
+        float dist = SpawnDistance.Value;
         panelSlot.GlobalPosition = new float3(
             Slot.GlobalPosition.x + forward.x * dist,
             Slot.GlobalPosition.y + forward.y * dist,

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Lumora.Core;
 using Lumora.Core.Input;
 using Lumora.Core.Math;

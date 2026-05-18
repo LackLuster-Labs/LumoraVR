@@ -72,9 +72,9 @@ public class ContextMenuItem
 
     // ── Computed helpers ───────────────────────────────────────────────────────
 
-    public float AngleEnd     => AngleStart + ArcLength;
-    public float AngleMiddle  => AngleStart + ArcLength * 0.5f;
-    public float RadiusEnd    => RadiusStart + Thickness;
+    public float AngleEnd => AngleStart + ArcLength;
+    public float AngleMiddle => AngleStart + ArcLength * 0.5f;
+    public float RadiusEnd => RadiusStart + Thickness;
     public float RadiusMiddle => RadiusStart + Thickness * 0.5f;
 }
 
@@ -108,9 +108,9 @@ public class ContextMenuPage
     {
         Items.Add(new ContextMenuItem
         {
-            Label     = label,
+            Label = label,
             OnPressed = onPressed,
-            IconPath  = iconPath,
+            IconPath = iconPath,
         });
         return this;
     }
@@ -125,16 +125,16 @@ public class ContextMenuPage
     {
         if (Items.Count == 0) return;
 
-        float totalGap  = SeparationAngle * Items.Count;
+        float totalGap = SeparationAngle * Items.Count;
         float available = 360f - totalGap;
-        float slice     = available / Items.Count;
+        float slice = available / Items.Count;
 
         // Start at top (-90° = 12 o'clock)
         float angle = -90f;
         foreach (var item in Items)
         {
             item.AngleStart = angle + SeparationAngle * 0.5f;
-            item.ArcLength  = slice;
+            item.ArcLength = slice;
             angle += slice + SeparationAngle;
         }
     }

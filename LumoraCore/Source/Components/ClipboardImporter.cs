@@ -45,7 +45,7 @@ public class ClipboardImporter : Component
         base.OnInit();
 
         SpawnInFrontOfUser.Value = true;
-        SpawnDistance.Value      = 2.0f;
+        SpawnDistance.Value = 2.0f;
     }
 
     public override void OnStart()

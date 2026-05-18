@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using LumoraLogger = Lumora.Core.Logging.Logger;
@@ -78,51 +78,51 @@ public class ReferenceController : IDisposable
 
     // Object registry
     private readonly Dictionary<RefID, IWorldElement> _objects = new();
-    
+
     // Pending reference requests (for objects not yet created)
     private readonly Dictionary<RefID, List<IWorldElementReceiver>> _pendingRequests = new();
-    
+
     // Allocation context stack
     private readonly Stack<AllocationContext> _allocationStack = new();
     private AllocationContext _currentAllocation;
-    
+
     // Local allocation tracking
     private ulong _localAllocationPosition = 1;
     private int _localAllocationDepth;
-    
+
     // Trash bin integration (for restore from trash)
     private readonly Dictionary<RefID, TrashEntry> _trashedObjects = new();
-    
+
     /// <summary>
     /// The world this controller belongs to.
     /// </summary>
     public World World { get; }
-    
+
     /// <summary>
     /// All registered objects.
     /// </summary>
     public IEnumerable<KeyValuePair<RefID, IWorldElement>> AllObjects => _objects;
-    
+
     /// <summary>
     /// Number of registered objects.
     /// </summary>
     public int ObjectCount => _objects.Count;
-    
+
     /// <summary>
     /// Number of pending reference requests.
     /// </summary>
     public int PendingRequestCount => _pendingRequests.Count;
-    
+
     /// <summary>
     /// Current allocation context info (for debugging).
     /// </summary>
-    public string AllocationContextInfo => 
+    public string AllocationContextInfo =>
         $"User:{_currentAllocation.UserByte} Pos:{_currentAllocation.Position} Depth:{_allocationStack.Count}";
-    
+
     public ReferenceController(World world)
     {
         World = world ?? throw new ArgumentNullException(nameof(world));
-        
+
         // Initialize with authority allocation context
         _currentAllocation = new AllocationContext
         {
@@ -131,9 +131,9 @@ public class ReferenceController : IDisposable
             NestedDepth = 0
         };
     }
-    
+
     #region Object Registration
-    
+
     /// <summary>
     /// Register a world element with the controller.
     /// Called during element initialization.
@@ -142,12 +142,12 @@ public class ReferenceController : IDisposable
     {
         if (element == null)
             throw new ArgumentNullException(nameof(element));
-        
+
         RefID id = element.ReferenceID;
-        
+
         if (id.IsNull)
             throw new ArgumentException("Cannot register element with null RefID", nameof(element));
-        
+
         if (_objects.ContainsKey(id))
         {
             var existing = _objects[id];
@@ -155,9 +155,9 @@ public class ReferenceController : IDisposable
                 $"RefID collision! {id} already registered to {existing.GetType().Name}, " +
                 $"cannot register {element.GetType().Name}");
         }
-        
+
         _objects[id] = element;
-        
+
         // Process any pending requests for this ID
         if (_pendingRequests.TryGetValue(id, out var receivers))
         {
@@ -176,7 +176,7 @@ public class ReferenceController : IDisposable
             // Return list to pool if using pooling
         }
     }
-    
+
     /// <summary>
     /// Unregister a world element from the controller.
     /// Called during element destruction.
@@ -186,7 +186,7 @@ public class ReferenceController : IDisposable
         if (element == null) return;
         _objects.Remove(element.ReferenceID);
     }
-    
+
     /// <summary>
     /// Unregister by RefID directly.
     /// </summary>
@@ -194,11 +194,11 @@ public class ReferenceController : IDisposable
     {
         _objects.Remove(id);
     }
-    
+
     #endregion
-    
+
     #region Object Lookup
-    
+
     /// <summary>
     /// Get an object by RefID, or null if not found.
     /// </summary>
@@ -208,7 +208,7 @@ public class ReferenceController : IDisposable
         _objects.TryGetValue(id, out var element);
         return element;
     }
-    
+
     /// <summary>
     /// Get an object by RefID, or throw if not found.
     /// </summary>
@@ -216,10 +216,10 @@ public class ReferenceController : IDisposable
     {
         if (_objects.TryGetValue(id, out var element))
             return element;
-        
+
         throw new KeyNotFoundException($"No object found with RefID {id}");
     }
-    
+
     /// <summary>
     /// Try to get an object of specific type.
     /// </summary>
@@ -234,7 +234,7 @@ public class ReferenceController : IDisposable
         element = null;
         return false;
     }
-    
+
     /// <summary>
     /// Check if an object exists with the given RefID.
     /// </summary>
@@ -243,11 +243,11 @@ public class ReferenceController : IDisposable
     {
         return _objects.ContainsKey(id);
     }
-    
+
     #endregion
-    
+
     #region Async Reference Resolution
-    
+
     /// <summary>
     /// Request an object by RefID. If available, callback is invoked immediately.
     /// If not yet available, callback is invoked when object is registered.
@@ -256,17 +256,17 @@ public class ReferenceController : IDisposable
     {
         if (id.IsNull)
             return;
-        
+
         if (receiver == null)
             throw new ArgumentNullException(nameof(receiver));
-        
+
         // Check if already available
         if (_objects.TryGetValue(id, out var element))
         {
             receiver.OnWorldElementAvailable(element);
             return;
         }
-        
+
         // Queue for later
         if (!_pendingRequests.TryGetValue(id, out var list))
         {
@@ -275,7 +275,7 @@ public class ReferenceController : IDisposable
         }
         list.Add(receiver);
     }
-    
+
     /// <summary>
     /// Cancel a pending request.
     /// </summary>
@@ -290,11 +290,11 @@ public class ReferenceController : IDisposable
             }
         }
     }
-    
+
     #endregion
-    
+
     #region Allocation Block Management
-    
+
     /// <summary>
     /// Begin an allocation block at a specific RefID.
     /// Used when receiving objects from network or loading from save.
@@ -320,7 +320,7 @@ public class ReferenceController : IDisposable
             NestedDepth = 0
         };
     }
-    
+
     /// <summary>
     /// End the current allocation block and restore previous context.
     /// </summary>
@@ -336,10 +336,10 @@ public class ReferenceController : IDisposable
         {
             throw new InvalidOperationException("Allocation stack is empty, cannot end block!");
         }
-        
+
         _currentAllocation = _allocationStack.Pop();
     }
-    
+
     /// <summary>
     /// Begin a local allocation block for non-networked objects.
     /// </summary>
@@ -361,7 +361,7 @@ public class ReferenceController : IDisposable
         };
         _localAllocationDepth = 1;
     }
-    
+
     /// <summary>
     /// End local allocation block.
     /// </summary>
@@ -390,7 +390,7 @@ public class ReferenceController : IDisposable
 
         _currentAllocation = _allocationStack.Pop();
     }
-    
+
     /// <summary>
     /// Allocate the next RefID from current context.
     /// </summary>
@@ -401,7 +401,7 @@ public class ReferenceController : IDisposable
         _currentAllocation.Position++;
         return id;
     }
-    
+
     /// <summary>
     /// Peek at the next RefID without allocating.
     /// </summary>
@@ -410,7 +410,7 @@ public class ReferenceController : IDisposable
         CheckAllocation();
         return RefID.Construct(_currentAllocation.UserByte, _currentAllocation.Position);
     }
-    
+
     /// <summary>
     /// Set the allocation context directly.
     /// Used by RefIDAllocator for user range management.
@@ -425,26 +425,26 @@ public class ReferenceController : IDisposable
             NestedDepth = 0
         };
     }
-    
+
     /// <summary>
     /// Get current allocation user byte.
     /// </summary>
     public byte CurrentUserByte => _currentAllocation.UserByte;
-    
+
     /// <summary>
     /// Get current allocation position.
     /// </summary>
     public ulong CurrentPosition => _currentAllocation.Position;
-    
+
     /// <summary>
     /// Whether currently in a local allocation block.
     /// </summary>
     public bool IsInLocalAllocation => _currentAllocation.UserByte == RefIDConstants.LOCAL_BYTE;
-    
+
     #endregion
-    
+
     #region Trash Integration
-    
+
     /// <summary>
     /// Try to retrieve an object from trash during sync.
     /// Used when receiving delete confirmations that need rollback.
@@ -458,23 +458,23 @@ public class ReferenceController : IDisposable
         }
         return null;
     }
-    
+
     /// <summary>
     /// Move an object to trash (pending deletion confirmation).
     /// </summary>
     public void MoveToTrash(IWorldElement element, ulong tick)
     {
         if (element == null) return;
-        
+
         _trashedObjects[element.ReferenceID] = new TrashEntry
         {
             Element = element,
             TrashTick = tick
         };
-        
+
         UnregisterObject(element);
     }
-    
+
     /// <summary>
     /// Permanently delete from trash.
     /// </summary>
@@ -482,7 +482,7 @@ public class ReferenceController : IDisposable
     {
         _trashedObjects.Remove(id);
     }
-    
+
     /// <summary>
     /// Restore from trash (deletion rejected).
     /// </summary>
@@ -496,11 +496,11 @@ public class ReferenceController : IDisposable
         }
         return false;
     }
-    
+
     #endregion
-    
+
     #region Cleanup
-    
+
     /// <summary>
     /// Clear all pending requests (used during world shutdown).
     /// </summary>
@@ -508,7 +508,7 @@ public class ReferenceController : IDisposable
     {
         _pendingRequests.Clear();
     }
-    
+
     /// <summary>
     /// Reset the controller (used when resetting world state).
     /// </summary>
@@ -531,12 +531,12 @@ public class ReferenceController : IDisposable
             NestedDepth = 0
         };
     }
-    
+
     public void Dispose()
     {
         Reset();
     }
-    
+
     #endregion
 
     private void CheckAllocation()
@@ -558,21 +558,21 @@ public class ReferenceController : IDisposable
                 "creating new objects in the wrong context?");
         }
     }
-    
+
     #region Internal Types
-    
+
     private struct AllocationContext
     {
         public byte UserByte;
         public ulong Position;
         public int NestedDepth;
     }
-    
+
     private struct TrashEntry
     {
         public IWorldElement Element;
         public ulong TrashTick;
     }
-    
+
     #endregion
 }

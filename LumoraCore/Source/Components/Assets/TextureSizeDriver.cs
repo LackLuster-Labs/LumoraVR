@@ -28,7 +28,7 @@ public sealed class TextureSizeDriver : Component
     public override void OnInit()
     {
         base.OnInit();
-        MaxSide.Value       = 1f;
+        MaxSide.Value = 1f;
         ColliderDepth.Value = 0.02f;
     }
 

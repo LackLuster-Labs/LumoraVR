@@ -258,7 +258,7 @@ public class ComponentInspector : GodotUIPanel
         var descriptors = GetMemberDescriptors();
         return new Dictionary<string, string>
         {
-            ["TypeName"]    = component.GetType().Name,
+            ["TypeName"] = component.GetType().Name,
             ["MemberCount"] = descriptors.Count.ToString(),
             ["AllowRemove"] = AllowRemove.Value ? "1" : "0",
         };

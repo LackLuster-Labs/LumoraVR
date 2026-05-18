@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using Godot;
+using Godot;
 using Lumora.Core.Logging;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 

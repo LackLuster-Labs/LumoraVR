@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using Godot;
+using Godot;
 using Lumora.Core;
 using Lumora.Core.Components;
 using Lumora.Core.Math;
@@ -44,7 +44,7 @@ public class CharacterControllerHook : ComponentHook<CharacterController>, IChar
         _characterBody = new CharacterBody3D();
         _characterBody.Name = $"@CharacterBody3D_{Owner?.Slot?.Name?.Value ?? "Unknown"}";
 
-       
+
         // In Lumora/Godot, we parent CharacterBody3D to WORLD ROOT to avoid double transforms.
         // This is because:
         // 1. Godot's CharacterBody3D.MoveAndSlide() operates in world space

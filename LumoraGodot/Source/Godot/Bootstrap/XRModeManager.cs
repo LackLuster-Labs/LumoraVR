@@ -42,27 +42,27 @@ public partial class XRModeManager : Node
     public bool IsVRActive { get; private set; }
 
     private bool _initialized = false;
-    private bool _switching   = false;
+    private bool _switching = false;
 
     // ===== REFERENCES (provided at Initialize) =====
     private Lumora.Core.Engine _engine;
-    private HeadOutput         _headOutput;
-    private InputInterface     _inputInterface;
-    private Camera3D           _mainCamera;
-    private GodotVRDriver      _vrDriver;
+    private HeadOutput _headOutput;
+    private InputInterface _inputInterface;
+    private Camera3D _mainCamera;
+    private GodotVRDriver _vrDriver;
 
     // ===== MANAGED INPUT NODES =====
     // Only one set is alive at a time; the other is null.
-    private DesktopInput             _desktopInput;
-    private DesktopCameraController  _desktopCamera;
-    private EngineVRInputProvider    _vrInputProvider;
-    private LaserInteractionManager  _vrLaserManager;
-    private GrabManager              _vrGrabManager;
+    private DesktopInput _desktopInput;
+    private DesktopCameraController _desktopCamera;
+    private EngineVRInputProvider _vrInputProvider;
+    private LaserInteractionManager _vrLaserManager;
+    private GrabManager _vrGrabManager;
 
     // ===== XR SCENE NODES =====
     // Created on first VR switch and reused thereafter.
-    private XROrigin3D  _xrOrigin;
-    private XRCamera3D  _xrCamera;
+    private XROrigin3D _xrOrigin;
+    private XRCamera3D _xrCamera;
 
     // =====================================================================
     //  KEY DETECTION
@@ -102,20 +102,20 @@ public partial class XRModeManager : Node
     /// <param name="vrDriver">The low-level Godot VR driver (for node refresh).</param>
     /// <param name="startingInVR">Whether the engine launched in VR mode.</param>
     public void Initialize(
-        Lumora.Core.Engine  engine,
-        HeadOutput          headOutput,
-        InputInterface      inputInterface,
-        Camera3D            mainCamera,
-        GodotVRDriver       vrDriver,
-        bool                startingInVR)
+        Lumora.Core.Engine engine,
+        HeadOutput headOutput,
+        InputInterface inputInterface,
+        Camera3D mainCamera,
+        GodotVRDriver vrDriver,
+        bool startingInVR)
     {
-        _engine         = engine;
-        _headOutput     = headOutput;
+        _engine = engine;
+        _headOutput = headOutput;
         _inputInterface = inputInterface;
-        _mainCamera     = mainCamera;
-        _vrDriver       = vrDriver;
-        IsVRActive      = startingInVR;
-        Instance        = this;
+        _mainCamera = mainCamera;
+        _vrDriver = vrDriver;
+        IsVRActive = startingInVR;
+        Instance = this;
 
         // Cache any XR nodes that were already created during boot.
         FindXRNodesFromTree();
@@ -129,7 +129,7 @@ public partial class XRModeManager : Node
         _initialized = true;
 
         var keyHint = OS.HasFeature("editor") ? "Shift+F8 (editor)" : "F8";
-        LumoraLogger.Log($"XRModeManager: Initialized. Mode={( startingInVR ? "VR" : "Desktop" )}");
+        LumoraLogger.Log($"XRModeManager: Initialized. Mode={(startingInVR ? "VR" : "Desktop")}");
         LumoraLogger.Log($"XRModeManager: Press {keyHint} at any time to toggle between Desktop and VR.");
     }
 
@@ -208,7 +208,7 @@ public partial class XRModeManager : Node
         SetupDesktopInput();
 
         IsVRActive = false;
-        _switching  = false;
+        _switching = false;
 
         LumoraLogger.Log("XRModeManager: ✓ Desktop mode active. Press F8 to switch back to VR.");
         ModeChanged?.Invoke(false);
@@ -286,7 +286,7 @@ public partial class XRModeManager : Node
             SetupVRInput();
 
             IsVRActive = true;
-            _switching  = false;
+            _switching = false;
 
             LumoraLogger.Log("XRModeManager: ✓ VR mode active. Press F8 to return to Desktop.");
             ModeChanged?.Invoke(true);
@@ -307,7 +307,7 @@ public partial class XRModeManager : Node
             catch { /* ignore recovery errors */ }
 
             IsVRActive = false;
-            _switching  = false;
+            _switching = false;
         }
     }
 
@@ -400,7 +400,7 @@ public partial class XRModeManager : Node
         _xrOrigin = parent.GetNodeOrNull<XROrigin3D>("XROrigin3D");
         if (_xrOrigin == null)
         {
-            _xrOrigin      = new XROrigin3D();
+            _xrOrigin = new XROrigin3D();
             _xrOrigin.Name = "XROrigin3D";
             parent.AddChild(_xrOrigin);
             LumoraLogger.Log("XRModeManager: Created XROrigin3D");
@@ -414,7 +414,7 @@ public partial class XRModeManager : Node
         _xrCamera = _xrOrigin.GetNodeOrNull<XRCamera3D>("XRCamera3D");
         if (_xrCamera == null)
         {
-            _xrCamera      = new XRCamera3D();
+            _xrCamera = new XRCamera3D();
             _xrCamera.Name = "XRCamera3D";
             _xrOrigin.AddChild(_xrCamera);
             LumoraLogger.Log("XRModeManager: Created XRCamera3D");

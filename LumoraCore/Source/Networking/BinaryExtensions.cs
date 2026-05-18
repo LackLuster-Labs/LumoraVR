@@ -33,18 +33,18 @@ public static class BinaryExtensions
         ulong result = 0;
         int shift = 0;
         byte b;
-        
+
         do
         {
             if (shift >= 64)
                 throw new FormatException("Invalid 7-bit encoded integer");
-                
+
             b = reader.ReadByte();
             result |= (ulong)(b & 0x7F) << shift;
             shift += 7;
         }
         while ((b & 0x80) != 0);
-        
+
         return result;
     }
 

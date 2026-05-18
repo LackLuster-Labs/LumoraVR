@@ -46,15 +46,17 @@ public partial class AudioBus : IAudioBus
         }
     }
 
-    public bool Mute {
+    public bool Mute
+    {
         get
         {
             EnsureValid();
             return AudioServer.IsBusMute(_busId);
         }
-        set {
+        set
+        {
             EnsureValid();
-            AudioServer.SetBusMute(_busId,value);
+            AudioServer.SetBusMute(_busId, value);
         }
     }
     IAudioBus? IAudioBus.Target

@@ -10,17 +10,17 @@ namespace Lumora.Core.Components.IK;
 [ComponentCategory("IK")]
 public class IKSolver : Component
 {
-    public readonly Sync<bool>  Enabled          = new();
+    public readonly Sync<bool> Enabled = new();
     public readonly Sync<float> TimeStepDuration = new();
-    public readonly Sync<int>   ControlIterations = new();
-    public readonly Sync<int>   FixerIterations   = new();
+    public readonly Sync<int> ControlIterations = new();
+    public readonly Sync<int> FixerIterations = new();
 
     public override void OnInit()
     {
         base.OnInit();
-        Enabled.Value           = true;
-        TimeStepDuration.Value  = 0.02f;
+        Enabled.Value = true;
+        TimeStepDuration.Value = 0.02f;
         ControlIterations.Value = 4;
-        FixerIterations.Value   = 4;
+        FixerIterations.Value = 4;
     }
 }

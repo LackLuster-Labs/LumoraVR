@@ -46,7 +46,7 @@ namespace Lumora.Core.Templates
                 // attached anywhere in the world hierarchy — fully dynamic.
 
                 var dashItem = contextMenuSlot.AttachComponent<RootContextMenuItem>();
-                dashItem.Label.Value    = "Dashboard";
+                dashItem.Label.Value = "Dashboard";
                 dashItem.IconPath.Value = "res://Icons/dashboard.png";
                 dashItem.IsToggle.Value = true;
                 dashItem.Priority.Value = 100;
@@ -57,7 +57,7 @@ namespace Lumora.Core.Templates
                 };
 
                 var closeItem = contextMenuSlot.AttachComponent<RootContextMenuItem>();
-                closeItem.Label.Value    = "Close Menu";
+                closeItem.Label.Value = "Close Menu";
                 closeItem.IconPath.Value = "res://Icons/close.png";
                 closeItem.Priority.Value = -100; // always last
 

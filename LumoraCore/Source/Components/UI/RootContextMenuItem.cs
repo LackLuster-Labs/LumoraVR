@@ -29,14 +29,14 @@ public class RootContextMenuItem : Component
 {
     // ── Synced settings ────────────────────────────────────────────────────────
 
-    public readonly Sync<string> Label     = new();
-    public readonly Sync<string> IconPath  = new();
-    public readonly Sync<bool>   IsEnabled = new();
-    public readonly Sync<bool>   IsToggle  = new();
-    public readonly Sync<bool>   IsToggled = new();
+    public readonly Sync<string> Label = new();
+    public readonly Sync<string> IconPath = new();
+    public readonly Sync<bool> IsEnabled = new();
+    public readonly Sync<bool> IsToggle = new();
+    public readonly Sync<bool> IsToggled = new();
 
     /// <summary>Sort priority. Items with higher Priority appear earlier in the menu.</summary>
-    public readonly Sync<int>    Priority  = new();
+    public readonly Sync<int> Priority = new();
 
     // ── Runtime-only ──────────────────────────────────────────────────────────
 
@@ -55,8 +55,8 @@ public class RootContextMenuItem : Component
     {
         base.OnInit();
         // Label = "" (string null/empty treated same way, but match original)
-        Label.Value     = "";
-        IconPath.Value  = "";
+        Label.Value = "";
+        IconPath.Value = "";
         IsEnabled.Value = true;
         // IsToggle  = false (C# default, skip)
         // IsToggled = false (C# default, skip)
@@ -73,12 +73,12 @@ public class RootContextMenuItem : Component
     {
         var item = new ContextMenuItem
         {
-            Label     = Label.Value,
-            IconPath  = string.IsNullOrEmpty(IconPath.Value) ? null : IconPath.Value,
+            Label = Label.Value,
+            IconPath = string.IsNullOrEmpty(IconPath.Value) ? null : IconPath.Value,
             IsEnabled = IsEnabled.Value,
-            IsToggle  = IsToggle.Value,
+            IsToggle = IsToggle.Value,
             IsToggled = IsToggled.Value,
-            SubPage   = SubPage,
+            SubPage = SubPage,
         };
 
         if (SubPage == null)

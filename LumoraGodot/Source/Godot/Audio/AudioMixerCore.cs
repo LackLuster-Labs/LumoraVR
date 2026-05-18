@@ -61,7 +61,7 @@ public partial class AudioMixer
     {
         lock (_sync)
         {
-            return TryGetValidBusNoLock(name,out var bus) ? bus : null;
+            return TryGetValidBusNoLock(name, out var bus) ? bus : null;
         }
     }
 
@@ -108,10 +108,11 @@ public partial class AudioMixer
                 break;
             }
         }
-        if(captureEffect is null){
+        if (captureEffect is null)
+        {
             captureEffect = new AudioEffectCapture();
-            if(captureEffect is null)return false;
-            AudioServer.AddBusEffect(busindex.Value,captureEffect);
+            if (captureEffect is null) return false;
+            AudioServer.AddBusEffect(busindex.Value, captureEffect);
         }
         return true;
     }

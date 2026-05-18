@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
@@ -30,13 +30,13 @@ public class WorkerManager
         nameToIndex = new Dictionary<string, int>();
         types = new List<Type>();
         typesToRegister = new HashSet<string>();
-        
+
         // Synchronized type index table
         indexTable = new SyncArray<string>();
         indexTable.Initialize(world, world.RootSlot);
         indexTable.EndInitPhase();
         indexTable.DataWritten += NewIndexes;
-        
+
         if (world.IsAuthority)
         {
             // Index 0 is reserved for null/unknown types
@@ -50,7 +50,7 @@ public class WorkerManager
         {
             return;
         }
-        
+
         foreach (string typeName in typesToRegister)
         {
             RegisterType(typeName);
@@ -181,7 +181,7 @@ public class WorkerManager
         {
             return type;
         }
-        
+
         Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
         for (int i = 0; i < assemblies.Length; i++)
         {
@@ -191,7 +191,7 @@ public class WorkerManager
                 return type;
             }
         }
-        
+
         LumoraLogger.Error("Unable to find type: " + typename);
         return null;
     }

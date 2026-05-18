@@ -25,15 +25,15 @@ public partial class ContextMenuView : Control
 {
     // ── Configuration (tweakable from inspector or ContextMenuHook) ────────────
 
-    [Export] public Color BaseColor     { get; set; } = new(0.10f, 0.10f, 0.10f, 0.90f);
-    [Export] public Color HoverColor    { get; set; } = new(0.24f, 0.24f, 0.24f, 0.96f);
+    [Export] public Color BaseColor { get; set; } = new(0.10f, 0.10f, 0.10f, 0.90f);
+    [Export] public Color HoverColor { get; set; } = new(0.24f, 0.24f, 0.24f, 0.96f);
     [Export] public Color DisabledColor { get; set; } = new(0.07f, 0.07f, 0.07f, 0.60f);
-    [Export] public Color TextColor     { get; set; } = Colors.White;
-    [Export] public Color CenterColor   { get; set; } = new(0.05f, 0.05f, 0.05f, 0.92f);
-    [Export] public float CenterRadius  { get; set; } = 24f;
-    [Export] public float OutlineWidth  { get; set; } = 2.0f;
-    [Export] public int   ArcResolution { get; set; } = 28;   // polygon vertices per arc face
-    [Export] public float OpenSpeed     { get; set; } = 10f;  // animation rate (units/sec)
+    [Export] public Color TextColor { get; set; } = Colors.White;
+    [Export] public Color CenterColor { get; set; } = new(0.05f, 0.05f, 0.05f, 0.92f);
+    [Export] public float CenterRadius { get; set; } = 24f;
+    [Export] public float OutlineWidth { get; set; } = 2.0f;
+    [Export] public int ArcResolution { get; set; } = 28;   // polygon vertices per arc face
+    [Export] public float OpenSpeed { get; set; } = 10f;  // animation rate (units/sec)
 
     // ── Events ─────────────────────────────────────────────────────────────────
 
@@ -52,34 +52,34 @@ public partial class ContextMenuView : Control
     // ── Internal state ─────────────────────────────────────────────────────────
 
     private readonly List<ViewItem> _items = new();
-    private int    _hoveredIndex = -1;
-    private float  _openProgress = 0f;  // 0 = closed, 1 = fully open
-    private bool   _isOpen       = false;
-    private string _centerLabel  = "";
+    private int _hoveredIndex = -1;
+    private float _openProgress = 0f;  // 0 = closed, 1 = fully open
+    private bool _isOpen = false;
+    private string _centerLabel = "";
 
     // ── Per-item cached data ───────────────────────────────────────────────────
 
     private sealed record ViewItem(
-        string     Label,
-        string?    IconPath,
-        Color      Fill,
-        Color      Outline,
-        Color      LabelCol,
-        bool       IsEnabled,
-        bool       IsToggled,
-        float      AngleStartDeg,
-        float      ArcLengthDeg,
-        float      RadiusStart,
-        float      Thickness,
+        string Label,
+        string? IconPath,
+        Color Fill,
+        Color Outline,
+        Color LabelCol,
+        bool IsEnabled,
+        bool IsToggled,
+        float AngleStartDeg,
+        float ArcLengthDeg,
+        float RadiusStart,
+        float Thickness,
         Texture2D? Icon
     )
     {
         public float AngleStartRad => Mathf.DegToRad(AngleStartDeg);
-        public float ArcLengthRad  => Mathf.DegToRad(ArcLengthDeg);
-        public float AngleEndRad   => Mathf.DegToRad(AngleStartDeg + ArcLengthDeg);
-        public float AngleMidRad   => Mathf.DegToRad(AngleStartDeg + ArcLengthDeg * 0.5f);
-        public float RadiusEnd     => RadiusStart + Thickness;
-        public float RadiusMid     => RadiusStart + Thickness * 0.5f;
+        public float ArcLengthRad => Mathf.DegToRad(ArcLengthDeg);
+        public float AngleEndRad => Mathf.DegToRad(AngleStartDeg + ArcLengthDeg);
+        public float AngleMidRad => Mathf.DegToRad(AngleStartDeg + ArcLengthDeg * 0.5f);
+        public float RadiusEnd => RadiusStart + Thickness;
+        public float RadiusMid => RadiusStart + Thickness * 0.5f;
     }
 
     // ── Godot lifecycle ────────────────────────────────────────────────────────
@@ -100,7 +100,7 @@ public partial class ContextMenuView : Control
         }
 
         float target = _isOpen ? 1f : 0f;
-        float prev   = _openProgress;
+        float prev = _openProgress;
         _openProgress = Mathf.MoveToward(_openProgress, target, (float)delta * OpenSpeed);
 
         // Hide after close animation finishes
@@ -122,17 +122,17 @@ public partial class ContextMenuView : Control
         if (_openProgress <= 0f) return;
 
         Vector2 center = Size / 2f;
-        float   s      = _openProgress;  // expand scale
+        float s = _openProgress;  // expand scale
 
         // ── Arc segments ──────────────────────────────────────────────────────
         for (int i = 0; i < _items.Count; i++)
         {
-            var  item    = _items[i];
+            var item = _items[i];
             bool hovered = i == _hoveredIndex;
 
-            Color fill    = !item.IsEnabled ? DisabledColor
-                          : hovered         ? HoverColor
-                          :                   item.Fill;
+            Color fill = !item.IsEnabled ? DisabledColor
+                          : hovered ? HoverColor
+                          : item.Fill;
             Color outline = item.Outline;
 
             // Brighten outline on toggle
@@ -158,9 +158,9 @@ public partial class ContextMenuView : Control
 
         if (!string.IsNullOrEmpty(_centerLabel))
         {
-            var font     = ThemeDB.FallbackFont;
+            var font = ThemeDB.FallbackFont;
             int fontSize = 10;
-            var textSz   = font.GetStringSize(_centerLabel, fontSize: fontSize);
+            var textSz = font.GetStringSize(_centerLabel, fontSize: fontSize);
             DrawString(font, center - textSz * 0.5f + new Vector2(0, fontSize * 0.35f),
                        _centerLabel, HorizontalAlignment.Left, -1, fontSize,
                        TextColor with { A = s });
@@ -191,7 +191,7 @@ public partial class ContextMenuView : Control
     {
         _items.Clear();
         _hoveredIndex = -1;
-        _centerLabel  = centerLabel;
+        _centerLabel = centerLabel;
 
         foreach (var d in items)
         {
@@ -202,9 +202,9 @@ public partial class ContextMenuView : Control
             _items.Add(new ViewItem(
                 d.Label,
                 d.IconPath,
-                ColorFrom(d.FillColor,    0.12f, 0.12f, 0.12f, 0.9f),
+                ColorFrom(d.FillColor, 0.12f, 0.12f, 0.12f, 0.9f),
                 ColorFrom(d.OutlineColor, 0.45f, 0.45f, 0.45f, 1.0f),
-                ColorFrom(d.LabelColor,   1.00f, 1.00f, 1.00f, 1.0f),
+                ColorFrom(d.LabelColor, 1.00f, 1.00f, 1.00f, 1.0f),
                 d.IsEnabled,
                 d.IsToggled,
                 d.AngleStartDeg,
@@ -221,9 +221,9 @@ public partial class ContextMenuView : Control
     /// <summary>Animate the menu open (scale 0 → 1).</summary>
     public void AnimateOpen()
     {
-        _isOpen       = true;
+        _isOpen = true;
         _openProgress = 0f;
-        Visible       = true;
+        Visible = true;
         QueueRedraw();
     }
 
@@ -243,20 +243,20 @@ public partial class ContextMenuView : Control
     {
         if (Size.X < 1f || Size.Y < 1f) return;
 
-        Vector2 center    = Size / 2f;
-        float   minHalf   = Mathf.Min(Size.X, Size.Y) * 0.5f;
-        float   innerR    = minHalf * 0.30f;
-        float   thickness = minHalf * 0.32f;
+        Vector2 center = Size / 2f;
+        float minHalf = Mathf.Min(Size.X, Size.Y) * 0.5f;
+        float innerR = minHalf * 0.30f;
+        float thickness = minHalf * 0.32f;
 
-        const int   count = 6;
-        float sepRad  = Mathf.DegToRad(5f);
+        const int count = 6;
+        float sepRad = Mathf.DegToRad(5f);
         float sliceRad = (Mathf.Tau - sepRad * count) / count;
 
         for (int i = 0; i < count; i++)
         {
-            float start  = -Mathf.Pi * 0.5f + i * (sliceRad + sepRad) + sepRad * 0.5f;
+            float start = -Mathf.Pi * 0.5f + i * (sliceRad + sepRad) + sepRad * 0.5f;
             float bright = 0.10f + i * 0.025f;
-            Color fill    = new(bright, bright, bright + 0.03f, 0.85f);
+            Color fill = new(bright, bright, bright + 0.03f, 0.85f);
             Color outline = new(0.40f, 0.42f, 0.55f, 1f);
             DrawArcSegment(center, start, sliceRad, innerR, thickness, fill, outline);
 
@@ -282,11 +282,11 @@ public partial class ContextMenuView : Control
     /// <summary>Draw one pie-slice arc segment (filled polygon + outline).</summary>
     private void DrawArcSegment(Vector2 center,
                                 float startRad, float arcRad,
-                                float innerR,   float thickness,
-                                Color fill,     Color outline)
+                                float innerR, float thickness,
+                                Color fill, Color outline)
     {
-        float outerR   = innerR + thickness;
-        float endRad   = startRad + arcRad;
+        float outerR = innerR + thickness;
+        float endRad = startRad + arcRad;
 
         // Build closed polygon: outer arc CW, then inner arc CCW
         var outerPts = ArcPoints(center, startRad, endRad, outerR);
@@ -318,9 +318,9 @@ public partial class ContextMenuView : Control
         // Label
         if (!string.IsNullOrEmpty(item.Label))
         {
-            var  font     = ThemeDB.FallbackFont;
-            int  fontSize = 10;
-            var  textSz   = font.GetStringSize(item.Label, fontSize: fontSize);
+            var font = ThemeDB.FallbackFont;
+            int fontSize = 10;
+            var textSz = font.GetStringSize(item.Label, fontSize: fontSize);
             float yOffset = item.Icon != null ? 8f : 4f;
             DrawString(font,
                        pos - new Vector2(textSz.X * 0.5f, -yOffset),
@@ -337,7 +337,7 @@ public partial class ContextMenuView : Control
         {
             float t = i / (float)ArcResolution;
             float a = Mathf.Lerp(fromRad, toRad, t);
-            pts[i]  = center + AngleVec(a) * radius;
+            pts[i] = center + AngleVec(a) * radius;
         }
         return pts;
     }
@@ -350,9 +350,9 @@ public partial class ContextMenuView : Control
     private void UpdateHover(Vector2 mousePos)
     {
         Vector2 delta = mousePos - Size / 2f;
-        float   dist  = delta.Length();
-        float   angle = Mathf.Atan2(delta.Y, delta.X);
-        int     prev  = _hoveredIndex;
+        float dist = delta.Length();
+        float angle = Mathf.Atan2(delta.Y, delta.X);
+        int prev = _hoveredIndex;
 
         _hoveredIndex = -1;
 
@@ -379,7 +379,7 @@ public partial class ContextMenuView : Control
     private void HandleClick(Vector2 mousePos)
     {
         Vector2 delta = mousePos - Size / 2f;
-        float   dist  = delta.Length();
+        float dist = delta.Length();
 
         // Tap center = close / go back
         if (dist <= CenterRadius) { CloseRequested?.Invoke(); return; }
@@ -400,7 +400,7 @@ public partial class ContextMenuView : Control
     private static bool AngleInRange(float angle, float startRad, float arcRad)
     {
         float endRad = startRad + arcRad;
-        while (angle < startRad)             angle += Mathf.Tau;
+        while (angle < startRad) angle += Mathf.Tau;
         while (angle > startRad + Mathf.Tau) angle -= Mathf.Tau;
         return angle <= endRad;
     }
@@ -414,15 +414,15 @@ public partial class ContextMenuView : Control
 /// Carries everything the view needs to draw one arc segment.
 /// </summary>
 public record ContextMenuViewData(
-    string   Label,
+    string Label,
     float[]? FillColor,
     float[]? OutlineColor,
     float[]? LabelColor,
-    string?  IconPath,
-    bool     IsEnabled,
-    bool     IsToggled,
-    float    AngleStartDeg,
-    float    ArcLengthDeg,
-    float    RadiusStart,
-    float    Thickness
+    string? IconPath,
+    bool IsEnabled,
+    bool IsToggled,
+    float AngleStartDeg,
+    float ArcLengthDeg,
+    float RadiusStart,
+    float Thickness
 );

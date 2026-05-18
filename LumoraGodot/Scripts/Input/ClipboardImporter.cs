@@ -576,7 +576,7 @@ public partial class ClipboardImporter : Node
             var path = uri.AbsolutePath;
             var extension = Path.GetExtension(path).ToLowerInvariant();
 
-        var knownExtensions = new List<string>(ModelImporter.SupportedExtensions)
+            var knownExtensions = new List<string>(ModelImporter.SupportedExtensions)
         {
             ".png",
             ".jpg",
@@ -584,10 +584,10 @@ public partial class ClipboardImporter : Node
             ".webp",
             ".gdshader"
         };
-        foreach (var ext in knownExtensions)
-        {
-            if (extension == ext) return ext;
-        }
+            foreach (var ext in knownExtensions)
+            {
+                if (extension == ext) return ext;
+            }
         }
         catch { }
 
@@ -664,7 +664,7 @@ public partial class ClipboardImporter : Node
         {
             using var file = File.OpenRead(filePath);
             var header = new byte[12];
-            file.Read(header, 0, 12);
+            file.ReadExactly(header, 0, 12);
 
             // PNG
             if (header[0] == 0x89 && header[1] == 0x50 && header[2] == 0x4E && header[3] == 0x47)

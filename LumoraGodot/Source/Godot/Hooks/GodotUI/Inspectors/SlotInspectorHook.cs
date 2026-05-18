@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using Godot;
 using Lumora.Core;
 using Lumora.Core.Components;
@@ -398,16 +398,16 @@ public sealed class SlotInspectorHook : ComponentHook<SlotInspector>
             componentsLabel.Text = "Components";
             _propertiesContainer.AddChild(componentsLabel);
 
-        foreach (var component in selected.Components)
-        {
-            AddComponentSection(component);
-        }
+            foreach (var component in selected.Components)
+            {
+                AddComponentSection(component);
+            }
 
-        if (_loadedScene is Control loadedControl)
-        {
-            UIReadability.ApplyToTree(loadedControl);
+            if (_loadedScene is Control loadedControl)
+            {
+                UIReadability.ApplyToTree(loadedControl);
+            }
         }
-    }
     }
 
     private void AddPropertyRow(string label, string value, System.Action<object> onChange)

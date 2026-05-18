@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using Lumora.Core.Assets;
 using Lumora.Core.Components.Meshes;
@@ -44,26 +44,26 @@ public sealed class ControllerHandVisual : Component
     private readonly struct JointEntry
     {
         public readonly BodyNode Node;
-        public readonly Slot     VisualSlot;
+        public readonly Slot VisualSlot;
         public JointEntry(BodyNode node, Slot slot) { Node = node; VisualSlot = slot; }
     }
 
     private readonly struct BoneEntry
     {
-        public readonly BodyNode     NodeA;
-        public readonly BodyNode     NodeB;
-        public readonly Slot         VisualSlot;
+        public readonly BodyNode NodeA;
+        public readonly BodyNode NodeB;
+        public readonly Slot VisualSlot;
         public readonly CylinderMesh Cylinder;
         public BoneEntry(BodyNode a, BodyNode b, Slot slot, CylinderMesh mesh)
-            { NodeA = a; NodeB = b; VisualSlot = slot; Cylinder = mesh; }
+        { NodeA = a; NodeB = b; VisualSlot = slot; Cylinder = mesh; }
     }
 
     // ===== PRIVATE STATE =====
 
-    private Slot         _handSkeletonRoot;
+    private Slot _handSkeletonRoot;
     private PBS_Metallic _handMaterial;
     private List<JointEntry> _joints;
-    private List<BoneEntry>  _bones;
+    private List<BoneEntry> _bones;
     private Dictionary<BodyNode, float3> _jointWorldPositions;
     private Dictionary<BodyNode, float3> _restPoseLocalPositions;
 
@@ -101,18 +101,18 @@ public sealed class ControllerHandVisual : Component
     public override void OnInit()
     {
         base.OnInit();
-        HandSide.Value    = Chirality.Right;
+        HandSide.Value = Chirality.Right;
         JointRadius.Value = 0.0105f;
-        BoneRadius.Value  = 0.0065f;
-        HandScale.Value   = 1.12f;
+        BoneRadius.Value = 0.0065f;
+        HandScale.Value = 1.12f;
     }
 
     public override void OnStart()
     {
         base.OnStart();
         _joints = new List<JointEntry>();
-        _bones  = new List<BoneEntry>();
-        _jointWorldPositions   = new Dictionary<BodyNode, float3>(32);
+        _bones = new List<BoneEntry>();
+        _jointWorldPositions = new Dictionary<BodyNode, float3>(32);
         _restPoseLocalPositions = BuildRestPoseLocalPositions(HandSide.Value, HandScale.Value);
         BuildHandSkeleton();
         RefreshVisuals();
@@ -129,7 +129,7 @@ public sealed class ControllerHandVisual : Component
     {
         // Child slots are destroyed with the parent slot; just release list references.
         _joints = null;
-        _bones  = null;
+        _bones = null;
         _jointWorldPositions = null;
         _restPoseLocalPositions = null;
         base.OnDestroy();
@@ -144,16 +144,16 @@ public sealed class ControllerHandVisual : Component
         // One shared material for all joint spheres and bone cylinders.
         var matSlot = _handSkeletonRoot.AddSlot("HandSkeletonMaterial");
         _handMaterial = matSlot.AttachComponent<PBS_Metallic>();
-        _handMaterial.AlbedoColor.Value   = new colorHDR(0.82f, 0.82f, 0.86f, 1f);
+        _handMaterial.AlbedoColor.Value = new colorHDR(0.82f, 0.82f, 0.86f, 1f);
         _handMaterial.EmissiveColor.Value = new colorHDR(0.06f, 0.06f, 0.10f, 1f);
-        _handMaterial.Metallic.Value      = 0.25f;
-        _handMaterial.Smoothness.Value    = 0.55f;
-        _handMaterial.RenderQueue.Value   = 60;
+        _handMaterial.Metallic.Value = 0.25f;
+        _handMaterial.Smoothness.Value = 0.55f;
+        _handMaterial.RenderQueue.Value = 60;
 
-        Chirality side    = HandSide.Value;
+        Chirality side = HandSide.Value;
         float scale = MathF.Max(HandScale.Value, 0.2f);
-        float     jRadius = JointRadius.Value * scale;
-        float     bRadius = BoneRadius.Value * scale;
+        float jRadius = JointRadius.Value * scale;
+        float bRadius = BoneRadius.Value * scale;
 
         BodyNode palmNode = side == Chirality.Left ? BodyNode.LeftPalm : BodyNode.RightPalm;
 
@@ -181,14 +181,14 @@ public sealed class ControllerHandVisual : Component
 
     private void CreateJointVisual(BodyNode node, float radius)
     {
-        var slot   = _handSkeletonRoot.AddSlot($"Joint_{node}");
+        var slot = _handSkeletonRoot.AddSlot($"Joint_{node}");
         var sphere = slot.AttachComponent<SphereMesh>();
-        sphere.Radius.Value   = radius;
+        sphere.Radius.Value = radius;
         sphere.Segments.Value = 8;
-        sphere.Rings.Value    = 6;
+        sphere.Rings.Value = 6;
 
         var renderer = slot.AttachComponent<MeshRenderer>();
-        renderer.Mesh.Target     = sphere;
+        renderer.Mesh.Target = sphere;
         renderer.Material.Target = _handMaterial;
         renderer.SortingOrder.Value = 60;
 
@@ -197,14 +197,14 @@ public sealed class ControllerHandVisual : Component
 
     private void CreateBoneVisual(BodyNode nodeA, BodyNode nodeB, float radius)
     {
-        var slot     = _handSkeletonRoot.AddSlot($"Bone_{nodeA}_{nodeB}");
+        var slot = _handSkeletonRoot.AddSlot($"Bone_{nodeA}_{nodeB}");
         var cylinder = slot.AttachComponent<CylinderMesh>();
-        cylinder.Radius.Value   = radius;
-        cylinder.Height.Value   = 0.03f; // Overwritten every frame once tracking is active.
+        cylinder.Radius.Value = radius;
+        cylinder.Height.Value = 0.03f; // Overwritten every frame once tracking is active.
         cylinder.Segments.Value = 6;
 
         var renderer = slot.AttachComponent<MeshRenderer>();
-        renderer.Mesh.Target     = cylinder;
+        renderer.Mesh.Target = cylinder;
         renderer.Material.Target = _handMaterial;
         renderer.SortingOrder.Value = 60;
 
@@ -258,7 +258,7 @@ public sealed class ControllerHandVisual : Component
             }
 
             float3 diff = new float3(posB.x - posA.x, posB.y - posA.y, posB.z - posA.z);
-            float  dist = diff.Length;
+            float dist = diff.Length;
 
             if (dist < 0.0005f)
             {
@@ -267,13 +267,13 @@ public sealed class ControllerHandVisual : Component
             }
 
             bone.VisualSlot.ActiveSelf.Value = true;
-            bone.VisualSlot.GlobalPosition   = new float3(
+            bone.VisualSlot.GlobalPosition = new float3(
                 (posA.x + posB.x) * 0.5f,
                 (posA.y + posB.y) * 0.5f,
                 (posA.z + posB.z) * 0.5f);
-            bone.VisualSlot.GlobalRotation   = AlignYToDirection(diff);
-            bone.Cylinder.Height.Value       = dist;
-            bone.Cylinder.Radius.Value       = bRadius;
+            bone.VisualSlot.GlobalRotation = AlignYToDirection(diff);
+            bone.Cylinder.Height.Value = dist;
+            bone.Cylinder.Radius.Value = bRadius;
         }
     }
 
@@ -394,8 +394,8 @@ public sealed class ControllerHandVisual : Component
         float3 dir = new float3(direction.x / len, direction.y / len, direction.z / len);
 
         // Rotation axis = cross(Up, dir). Angle = acos(Up · dir).
-        float3 axis    = float3.Cross(float3.Up, dir);
-        float  axisLen = axis.Length;
+        float3 axis = float3.Cross(float3.Up, dir);
+        float axisLen = axis.Length;
 
         if (axisLen < 0.001f)
         {
@@ -406,7 +406,7 @@ public sealed class ControllerHandVisual : Component
         }
 
         float3 normAxis = new float3(axis.x / axisLen, axis.y / axisLen, axis.z / axisLen);
-        float  angle    = MathF.Acos(System.Math.Clamp(float3.Dot(float3.Up, dir), -1f, 1f));
+        float angle = MathF.Acos(System.Math.Clamp(float3.Dot(float3.Up, dir), -1f, 1f));
         return floatQ.AxisAngle(normAxis, angle);
     }
 }

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using Lumora.Core.Networking.Streams;
+using Lumora.Core.Networking.Streams;
 
 namespace Lumora.Core.Components;
 
