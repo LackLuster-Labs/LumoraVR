@@ -9,17 +9,16 @@ using Lumora.Core.Math;
 namespace Lumora.Godot.Hooks;
 
 /// <summary>
-/// Hook for Camera component → Godot Camera3D.
-/// Platform camera hook for Godot.
+/// Hook for AudioPlayer3D component → Godot AudioStreamPlayer3D.
+/// Platform AudioStreamPlayer3D hook for Godot.
 /// </summary>
 public class AudioPlayer3DHook : ComponentHook<AudioPlayer3D>
 {
     private AudioStreamPlayer3D audioPlayer3D = null!;
     public override void ApplyChanges()
     {
-        if(Owner.Steam is null) return;
         if(audioPlayer3D is null) return;
-        audioPlayer3D.Bus = Enum.GetName(Owner.target.Value);
+        audioPlayer3D.Bus = Enum.GetName(Owner.Category.Value);
         if(Owner is GodotAudioPlayer3D godotAudioPlayer3D)
         {
             audioPlayer3D.AttenuationModel = (AudioStreamPlayer3D.AttenuationModelEnum)godotAudioPlayer3D.AttenuationMode.Value;

@@ -51,6 +51,7 @@ public static class GodotHookRegistry
         World.HookTypes.Register<Lumora.Core.Components.HeadOutput, Lumora.Godot.Hooks.HeadOutputHook>();
         World.HookTypes.Register<CharacterController, Lumora.Godot.Hooks.CharacterControllerHook>();
         World.HookTypes.Register<Lumora.Core.Components.Avatar.GodotIKAvatar, Lumora.Godot.Hooks.GodotIKAvatarHook>();
+        World.HookTypes.Register<Lumora.Core.Components.Audio.AudioPlayer3D,Lumora.Godot.Hooks.AudioPlayer3DHook>();
 
         // Godot UI hooks
         World.HookTypes.Register<GodotUIPanel, Lumora.Godot.Hooks.GodotUI.GodotUIPanelHook>();

@@ -69,6 +69,7 @@ public class OpusStream : Stream, IAudioStream
 
     public void EnqueueRawFrame(ushort sequence, ReadOnlyMemory<byte> payload)
     {
+        if (packetQueue.Count > 20) packetQueue.TryDequeue(out _);
         packetQueue.Enqueue((sequence, payload.ToArray()));
     }
 

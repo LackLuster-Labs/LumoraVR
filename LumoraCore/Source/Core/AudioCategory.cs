@@ -1,6 +1,6 @@
 namespace Lumora.Core;
 
-public enum AudioCategory
+public enum AudioCategory : ushort
 {
-    Music, Effects, Voice
+    Music = 1, Effects = 9, Voice = 2
 }

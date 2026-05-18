@@ -8,8 +8,8 @@ namespace Lumora.Core.Networking.Session;
 
 public class SessionRawStreamManager : IDisposable
 {
-    private readonly List<IRawStream> activestreams = new();
-    private readonly Dictionary<uint, AsyncDisposibleLockedTimer> timers = new();
+    private readonly List<IRawStream> ActiveStreams = new();
+    private readonly Dictionary<uint, AsyncDisposibleLockedTimer> Timers = new();
     private readonly Session _session;
     public SessionRawStreamManager(Session parent)
     {
@@ -20,37 +20,41 @@ public class SessionRawStreamManager : IDisposable
     private void OnMessage(User sender, RefID streamRefID, ushort sequence, ReadOnlyMemory<byte> payload)
     {
         if (!_session.World.ReferenceController.TryGetObject<Stream>(streamRefID, out var stream)
-        || stream.Owner != sender || stream is not IRawStream raw)
+        || stream.Owner != sender || stream is not IRawStream raw || payload.Length > NetworkLimits.MaxRawFrameBytes)
             return;
         raw.EnqueueRawFrame(sequence, payload);
     }
     public void StartPolling(IRawStream stream)
     {
-        activestreams.Add(stream);
+        ActiveStreams.Add(stream);
         uint rate = stream.PollingRate;
         AsyncDisposibleLockedTimer thistimer;
-        if (!timers.TryGetValue(rate, out thistimer))
+        if (!Timers.TryGetValue(rate, out thistimer))
         {
             thistimer = new(TimeSpan.FromMilliseconds(stream.PollingRate));
-            timers.Add(rate, thistimer);
+            thistimer.Start();
+            Timers.Add(rate, thistimer);
         }
         thistimer.Add(stream.Poll);
     }
     public void StopPolling(IRawStream stream)
     {
         uint rate = stream.PollingRate;
-        activestreams.Remove(stream);
-        if (timers.TryGetValue(rate, out var timer))
+        ActiveStreams.Remove(stream);
+        if (Timers.TryGetValue(rate, out var timer))
         {
             timer.Remove(stream.Poll);
-            if (timer.GetRefCount() < 1) timers.Remove(rate);
-            timer.Dispose();
+            if (timer.GetRefCount() < 1)
+            {
+                Timers.Remove(rate);
+                timer.Dispose();
+            }
         }
     }
 
     public void Dispose()
     {
-        foreach (var v in timers)
+        foreach (var v in Timers)
         {
             v.Value.Dispose();
         }
