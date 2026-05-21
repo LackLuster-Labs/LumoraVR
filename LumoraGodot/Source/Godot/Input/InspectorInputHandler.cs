@@ -134,7 +134,7 @@ public partial class InspectorInputHandler : Node3D
     {
         if (_camera == null || !IsInstanceValid(_camera))
         {
-            _camera = GetViewport()?.GetCamera3D();
+            _camera = Lumora.Source.Godot.Bootstrap.XRModeManager.Instance?.CurrentCamera;
         }
     }
 

@@ -168,7 +168,7 @@ public partial class GrabManager : Node3D
         {
             // Check if cached camera is still valid
             if (_camera == null || !GodotObject.IsInstanceValid(_camera))
-                _camera = GetViewport()?.GetCamera3D();
+                _camera = Lumora.Source.Godot.Bootstrap.XRModeManager.Instance?.CurrentCamera;
             if (_camera == null || !GodotObject.IsInstanceValid(_camera))
                 return;
 
@@ -301,7 +301,7 @@ public partial class GrabManager : Node3D
             return true;
         }
 
-        _camera ??= GetViewport()?.GetCamera3D();
+        _camera ??= Lumora.Source.Godot.Bootstrap.XRModeManager.Instance?.CurrentCamera;
         if (_camera == null)
         {
             pos = Vector3.Zero;

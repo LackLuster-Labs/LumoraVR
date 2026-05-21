@@ -90,43 +90,39 @@ public partial class HeadOutput : Node
     }
 
     /// <summary>
-    /// Setup VR camera system.
+    /// Locate the XROrigin3D / XRCamera3D defined in Bootstrap.tscn.
+    /// They live inside the XR SubViewport (see %XROrigin3D / %XRCamera3D) and
+    /// are no longer created at runtime - the .tscn ships them so the XR
+    /// viewport stays valid for the whole process lifetime.
+    /// We resolve via CurrentScene rather than the calling node's owner-chain
+    /// because HeadOutput is created at runtime (Owner == null), which breaks
+    /// the bare-percent unique-name lookup.
+    /// - xlinka
     /// </summary>
     private void SetupVRCamera()
     {
-        // Check if we're in the scene tree yet
-        var parent = GetParent();
-        if (parent == null)
+        if (!IsInsideTree())
         {
-            // Defer VR setup until we're added to the scene tree
             LumoraLogger.Log("HeadOutput: Deferring VR setup until added to scene tree");
             CallDeferred(MethodName.SetupVRCamera);
             return;
         }
 
-        // Create XR Origin if it doesn't exist
-        _xrOrigin = GetNodeOrNull<XROrigin3D>("../XROrigin3D");
-        if (_xrOrigin == null)
+        var sceneRoot = GetTree()?.CurrentScene;
+        _xrOrigin = sceneRoot?.GetNodeOrNull<XROrigin3D>("%XROrigin3D");
+        _vrCamera = sceneRoot?.GetNodeOrNull<XRCamera3D>("%XRCamera3D");
+
+        if (_xrOrigin == null || _vrCamera == null)
         {
-            _xrOrigin = new XROrigin3D();
-            _xrOrigin.Name = "XROrigin3D";
-            parent.AddChild(_xrOrigin);
+            LumoraLogger.Error("HeadOutput: %XROrigin3D / %XRCamera3D not found in scene. " +
+                "Bootstrap.tscn must contain the XR SubViewport sub-tree.");
+            return;
         }
 
-        // Create or find XR Camera
-        _vrCamera = _xrOrigin.GetNodeOrNull<XRCamera3D>("XRCamera3D");
-        if (_vrCamera == null)
-        {
-            _vrCamera = new XRCamera3D();
-            _vrCamera.Name = "XRCamera3D";
-            _xrOrigin.AddChild(_vrCamera);
-        }
         DisableCameraInterpolation(_vrCamera);
-
-        // Use VR camera as primary
         _camera = _vrCamera;
 
-        LumoraLogger.Log("HeadOutput: VR camera setup complete");
+        LumoraLogger.Log("HeadOutput: VR camera bound to %XRCamera3D");
     }
 
     private static void DisableCameraInterpolation(Camera3D camera)

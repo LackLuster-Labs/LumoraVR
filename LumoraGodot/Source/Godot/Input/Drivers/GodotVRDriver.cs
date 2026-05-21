@@ -27,6 +27,10 @@ public class GodotVRDriver : IVRDriver, IInputDriver
     // IVRDriver interface properties
     public bool IsVRActive => _xrInterface != null && _xrInterface.IsInitialized();
     public string VRSystemName => _xrInterface?.GetName() ?? "None";
+    public VRPlatform Platform => DetectPlatform();
+    public string RuntimeName => GetRuntimeName();
+    public string LeftInteractionProfile  => GetTrackerInteractionProfile("left_hand");
+    public string RightInteractionProfile => GetTrackerInteractionProfile("right_hand");
 
     private XRInterface _xrInterface;
     private InputInterface _inputInterface;
@@ -81,12 +85,21 @@ public class GodotVRDriver : IVRDriver, IInputDriver
 
         if (_xrInterface != null && _xrInterface.IsInitialized())
         {
-            GD.Print($"GodotVRDriver: VR active — interface: {_xrInterface.GetName()}");
+            GD.Print($"GodotVRDriver: VR active - interface: {_xrInterface.GetName()}");
+
+            // Log the resolved platform + runtime + active interaction profile
+            // so it's obvious at boot whether we're on Quest, Pico, SteamVR PC,
+            // etc. Useful for gameplay code that branches on Platform, and for
+            // remote debugging on standalone where the only log surface is adb.
+            // - xlinka
+            GD.Print($"GodotVRDriver: Platform={Platform}, Runtime='{RuntimeName}', " +
+                     $"LeftProfile='{LeftInteractionProfile}', RightProfile='{RightInteractionProfile}'");
+
             XRServer.TrackerAdded += OnTrackerAdded;
         }
         else
         {
-            GD.Print("GodotVRDriver: No VR interface active — running in desktop mode");
+            GD.Print("GodotVRDriver: No VR interface active - running in desktop mode");
         }
     }
 
@@ -100,6 +113,55 @@ public class GodotVRDriver : IVRDriver, IInputDriver
 
         if ((XRServer.TrackerType)type == XRServer.TrackerType.Head)
             global::Godot.GD.Print($"GodotVRDriver: HMD device: {desc}");
+    }
+
+    // ===== Platform / interaction profile introspection =====
+    //
+    // OpenXRInterface exposes `runtime_name` as a registered Godot property,
+    // and XRPositionalTracker exposes the active OpenXR interaction profile
+    // path via `Profile`. We go through Get() so this stays compatible across
+    // minor Godot versions that may not expose the same C# bindings.
+    // - xlinka
+
+    private string GetRuntimeName()
+    {
+        if (_xrInterface == null) return string.Empty;
+        var v = _xrInterface.Get("runtime_name");
+        return v.AsString() ?? string.Empty;
+    }
+
+    private static string GetTrackerInteractionProfile(string trackerName)
+    {
+        var tracker = XRServer.GetTracker(trackerName);
+        if (tracker is not XRPositionalTracker pt) return string.Empty;
+        var profile = pt.Profile;
+        return string.IsNullOrEmpty(profile) ? string.Empty : profile;
+    }
+
+    private VRPlatform DetectPlatform()
+    {
+        if (!IsVRActive) return VRPlatform.None;
+
+        // PC OpenXR runtimes (SteamVR, Oculus PC, WMR, Monado, Varjo, ...)
+        // all share the same desktop bucket - mobile/standalone is the
+        // distinction that actually changes rendering and feature defaults.
+        if (!OS.HasFeature("android")) return VRPlatform.DesktopOpenXR;
+
+        var runtime = GetRuntimeName().ToLowerInvariant();
+        if (runtime.Contains("oculus") || runtime.Contains("meta"))     return VRPlatform.MetaQuestStandalone;
+        if (runtime.Contains("pico")   || runtime.Contains("bytedance")) return VRPlatform.PicoStandalone;
+        if (runtime.Contains("vive")   || runtime.Contains("htc")
+                                       || runtime.Contains("focus"))    return VRPlatform.ViveFocusStandalone;
+
+        // Fall back to interaction profile sniffing if the runtime name
+        // didn't give us anything (some early standalone runtimes report
+        // generic strings until the first controller binds).
+        var profiles = (LeftInteractionProfile + "|" + RightInteractionProfile).ToLowerInvariant();
+        if (profiles.Contains("oculus"))                                return VRPlatform.MetaQuestStandalone;
+        if (profiles.Contains("bytedance") || profiles.Contains("pico")) return VRPlatform.PicoStandalone;
+        if (profiles.Contains("htc")       || profiles.Contains("focus3")) return VRPlatform.ViveFocusStandalone;
+
+        return VRPlatform.DesktopOpenXR;
     }
 
     /// <summary>
