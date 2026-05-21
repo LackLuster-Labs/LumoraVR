@@ -70,11 +70,7 @@ public partial class DesktopCameraController : Node
     public void Initialize(Lumora.Core.Engine engine)
     {
         _engine = engine;
-    }
 
-    public override void _Ready()
-    {
-        // Dedicated override camera — not Current until a mode is activated
         _overrideCamera = new Camera3D
         {
             Name = "OverrideCamera",
@@ -85,8 +81,32 @@ public partial class DesktopCameraController : Node
         };
         _overrideCamera.CullMask &= ~FreeCamIndicatorLayer;
         AddChild(_overrideCamera);
+    }
 
+    public override void _Ready()
+    {
         CreateFreeCamIndicator();
+    }
+
+    /// <summary>
+    /// Clean up nodes that we parented OUTSIDE this controller (the override
+    /// camera lives in the desktop SubViewport, the freecam indicator lives
+    /// under the scene root). Without this, every F8 cycle leaks one of each
+    /// into the scene tree.
+    /// - xlinka
+    /// </summary>
+    public override void _ExitTree()
+    {
+        if (_overrideCamera != null && GodotObject.IsInstanceValid(_overrideCamera))
+            _overrideCamera.QueueFree();
+        _overrideCamera = null;
+
+        if (_freeCamIndicator != null && GodotObject.IsInstanceValid(_freeCamIndicator))
+            _freeCamIndicator.QueueFree();
+        _freeCamIndicator = null;
+        _freeCamLabel = null;
+
+        base._ExitTree();
     }
 
     private void CreateFreeCamIndicator()
@@ -272,7 +292,7 @@ public partial class DesktopCameraController : Node
 
     private void SeedFreeCamFromActiveCamera()
     {
-        var active = GetViewport()?.GetCamera3D();
+        var active = Lumora.Source.Godot.Bootstrap.XRModeManager.Instance?.CurrentCamera;
         if (active != null && active != _overrideCamera)
         {
             _freeCamPos = active.GlobalPosition;

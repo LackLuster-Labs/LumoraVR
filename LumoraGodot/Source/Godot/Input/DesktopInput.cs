@@ -158,7 +158,9 @@ public partial class DesktopInput : Node3D, IInputProvider
             return;
 
         // Always re-query the active camera so we pick up CameraHook transitions.
-        _camera = GetViewport()?.GetCamera3D();
+        // GetViewport() here is the root viewport (no camera lives there now);
+        // ask XRModeManager for the active SubViewport's current camera.
+        _camera = Lumora.Source.Godot.Bootstrap.XRModeManager.Instance?.CurrentCamera ?? _camera;
 
         if (_camera != null)
         {

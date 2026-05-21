@@ -25,6 +25,13 @@ namespace Lumora.Source.Godot.Bootstrap;
 /// The manager owns and recreates the mode-specific input provider nodes
 /// (DesktopInput + DesktopCameraController  ←→  EngineVRInputProvider + Laser/Grab managers)
 /// so the rest of the engine doesn't need to know which mode is active.
+///
+/// Rendering is dual-SubViewport: the desktop SubViewport stays mono and the XR
+/// SubViewport stays stereo (<c>use_xr=true</c>) for the whole process. Toggle
+/// is purely "which container is visible + which viewport renders" - we never
+/// flip <c>Viewport.use_xr</c> at runtime, which avoids Godot's render-pipeline
+/// cache invalidation when view_count changes.
+/// - xlinka
 /// </summary>
 public partial class XRModeManager : Node
 {
@@ -36,6 +43,14 @@ public partial class XRModeManager : Node
     /// <c>true</c> = VR is now active, <c>false</c> = Desktop is now active.
     /// </summary>
     public static event Action<bool> ModeChanged;
+
+    /// <summary>
+    /// The Camera3D currently driving rendering for the active mode.
+    /// In VR: the XRCamera3D under XROrigin3D. In desktop: the regular
+    /// mono Camera3D that <see cref="LumoraEngineRunner"/> resolved from
+    /// %DesktopCamera and that we keep as <c>_mainCamera</c>.
+    /// </summary>
+    public Camera3D CurrentCamera => IsVRActive ? _xrCamera : _mainCamera;
 
     // ===== STATE =====
     /// <summary>Whether VR mode is currently active.</summary>
@@ -60,33 +75,13 @@ public partial class XRModeManager : Node
     private GrabManager _vrGrabManager;
 
     // ===== XR SCENE NODES =====
-    // Created on first VR switch and reused thereafter.
+    // Bootstrap.tscn defines the XR sub-tree up-front; we just hold refs.
     private XROrigin3D _xrOrigin;
     private XRCamera3D _xrCamera;
 
     // =====================================================================
     //  KEY DETECTION
     // =====================================================================
-
-    // Godot Editor consumes function keys at the engine level before the game sees them:
-    //   F5 = Run, F6 = Run Scene, F7 = Pause, F8 = Stop, F9 = Continue…
-    // Exported / released builds receive plain F8 unmodified.
-    // When running from the editor, Shift+F8 is used instead. The editor does NOT
-    // intercept F8 with a modifier, so it reaches our handler safely.
-    private static bool IsTogglePressed(InputEventKey key)
-    {
-        if (!key.Pressed || key.Echo) return false;
-        if (key.Keycode != global::Godot.Key.F8) return false;
-
-        if (OS.HasFeature("editor"))
-        {
-            // Editor: Shift+F8 avoids editor Stop (bare F8) and Pause (F9) shortcuts.
-            return key.ShiftPressed && !key.CtrlPressed && !key.AltPressed;
-        }
-
-        // Exported build: plain F8, no modifier.
-        return !key.ShiftPressed && !key.CtrlPressed && !key.AltPressed;
-    }
 
     // =====================================================================
     //  INITIALIZATION
@@ -98,7 +93,7 @@ public partial class XRModeManager : Node
     /// <param name="engine">The running Lumora engine instance.</param>
     /// <param name="headOutput">The active HeadOutput node.</param>
     /// <param name="inputInterface">The engine's InputInterface.</param>
-    /// <param name="mainCamera">The main (desktop) Camera3D.</param>
+    /// <param name="mainCamera">The main (desktop) Camera3D, from %DesktopCamera.</param>
     /// <param name="vrDriver">The low-level Godot VR driver (for node refresh).</param>
     /// <param name="startingInVR">Whether the engine launched in VR mode.</param>
     public void Initialize(
@@ -117,8 +112,13 @@ public partial class XRModeManager : Node
         IsVRActive = startingInVR;
         Instance = this;
 
-        // Cache any XR nodes that were already created during boot.
-        FindXRNodesFromTree();
+        // Bind XR nodes from Bootstrap.tscn. They exist for the whole process
+        // lifetime now - no more runtime creation. Looking up via CurrentScene
+        // because XRModeManager is added at runtime and has no Owner, which
+        // makes `GetNode("%X")` from `this` fail.
+        var sceneRoot = GetTree()?.CurrentScene;
+        _xrOrigin = sceneRoot?.GetNodeOrNull<XROrigin3D>("%XROrigin3D");
+        _xrCamera = sceneRoot?.GetNodeOrNull<XRCamera3D>("%XRCamera3D");
 
         // Spin up the correct input providers for the initial mode.
         if (startingInVR)
@@ -137,20 +137,45 @@ public partial class XRModeManager : Node
     //  INPUT HANDLING
     // =====================================================================
 
-    public override void _UnhandledInput(InputEvent @event)
+    // _Input is kept ONLY as a diagnostic - if F8 ever reaches the event
+    // pipeline we log it. The actual toggle is driven from _Process polling
+    // below, which is robust against focused Controls eating the event.
+    public override void _Input(InputEvent @event)
     {
-        if (!_initialized || _switching)
-            return;
-
-        if (@event is InputEventKey key && IsTogglePressed(key))
+        if (@event is InputEventKey key && key.Pressed && !key.Echo &&
+            (key.PhysicalKeycode == global::Godot.Key.F8 || key.Keycode == global::Godot.Key.F8))
         {
-            GetViewport().SetInputAsHandled();
-            // Defer so the switch runs at the start of the next frame,
-            // never in the middle of Godot's input-processing pipeline.
-            // This prevents native crashes from freeing nodes or calling
-            // OpenXR APIs while the engine is still dispatching events.
+            LumoraLogger.Log($"XRModeManager: F8 _Input event (shift={key.ShiftPressed}, ctrl={key.CtrlPressed}, alt={key.AltPressed})");
+        }
+    }
+
+    /// <summary>
+    /// True when running on a standalone XR device (Quest, Pico, Focus 3, ...).
+    /// On standalone there is no meaningful "desktop mode" - the headset IS
+    /// the screen - so F8 is disabled and gameplay code should avoid offering
+    /// mode-swap UI when this is true.
+    /// </summary>
+    public static bool IsStandalone => OS.HasFeature("android");
+
+    // Edge-triggered polling. Consults Godot's polled key state every frame.
+    // This survives any focused Control / GUI consumption that would have
+    // swallowed the F8 event before _Input or _UnhandledInput saw it.
+    // Disabled on standalone Android - there's no keyboard and no desktop
+    // mode to switch to.
+    // - xlinka
+    private bool _f8WasDown;
+    public override void _Process(double delta)
+    {
+        if (!_initialized || _switching) return;
+        if (IsStandalone) return;
+
+        bool f8Down = global::Godot.Input.IsKeyPressed(global::Godot.Key.F8);
+        if (f8Down && !_f8WasDown)
+        {
+            LumoraLogger.Log($"XRModeManager: F8 polled (IsVRActive={IsVRActive}, queuing toggle)");
             CallDeferred(MethodName.ToggleMode);
         }
+        _f8WasDown = f8Down;
     }
 
     // =====================================================================
@@ -189,14 +214,21 @@ public partial class XRModeManager : Node
         // 1. Remove VR input providers.
         TeardownVRInput();
 
-        // 2. Disable XR rendering on the viewport.
+        // 2. Flip the root viewport back to mono. This is what makes the OS
+        //    window actually show the desktop camera view. Godot emits a one-
+        //    shot batch of framebuffer/pipeline-cache warnings here because
+        //    the renderer was built for stereo; the engine recovers within a
+        //    frame and continues running. Known Godot 4 limitation, no fix
+        //    short of reloading the scene.
+        //    - xlinka
         GetViewport().UseXR = false;
 
-        // 3. Hide the XR origin so it doesn't block the scene.
+        // 3. Hide the XR origin so any 3D content under it doesn't keep being
+        //    rendered. The XR session itself stays alive.
         if (_xrOrigin != null && GodotObject.IsInstanceValid(_xrOrigin))
             _xrOrigin.Visible = false;
 
-        // 4. Restore the regular camera as the active camera.
+        // 4. Restore the desktop camera as the active camera.
         if (_mainCamera != null && GodotObject.IsInstanceValid(_mainCamera))
             _mainCamera.MakeCurrent();
 
@@ -220,8 +252,10 @@ public partial class XRModeManager : Node
 
     /// <summary>
     /// Switch to VR rendering and input mode.
-    /// Will attempt to initialise OpenXR if it is not already running.
-    /// Falls back gracefully (and without crashing) if no headset or runtime is available.
+    /// The OpenXR session is normally established at boot in
+    /// LumoraEngineRunner.PhaseXRDetection. If it isn't (user launched in
+    /// <c>--desktop</c> or the runtime came up late), this will attempt
+    /// Initialize() once and bail cleanly back to desktop if that still fails.
     /// </summary>
     public void SwitchToVR()
     {
@@ -232,7 +266,6 @@ public partial class XRModeManager : Node
 
         try
         {
-            // 1. Locate the OpenXR interface (always present if the plugin is loaded).
             var xrInterface = XRServer.FindInterface("OpenXR");
             if (xrInterface == null)
             {
@@ -241,15 +274,12 @@ public partial class XRModeManager : Node
                 return;
             }
 
-            // 2. Attempt initialization only if not already running.
+            // Recovery path - session is normally already up from PhaseXRDetection.
             if (!xrInterface.IsInitialized())
             {
-                LumoraLogger.Log("XRModeManager: Calling OpenXR.Initialize()...");
+                LumoraLogger.Log("XRModeManager: OpenXR session not yet initialized; attempting Initialize()...");
                 bool ok = false;
-                try
-                {
-                    ok = xrInterface.Initialize();
-                }
+                try { ok = xrInterface.Initialize(); }
                 catch (Exception initEx)
                 {
                     LumoraLogger.Error($"XRModeManager: OpenXR.Initialize() threw an exception: {initEx.Message}");
@@ -257,32 +287,33 @@ public partial class XRModeManager : Node
 
                 if (!ok)
                 {
-                    LumoraLogger.Warn("XRModeManager: OpenXR.Initialize() failed. Make sure SteamVR (or another OpenXR runtime) is running before pressing F8. Switch aborted.");
+                    LumoraLogger.Warn("XRModeManager: OpenXR.Initialize() failed. " +
+                        "Check the active OpenXR runtime in Windows matches your headset. Switch aborted.");
                     _switching = false;
                     return;
                 }
             }
 
-            XRServer.PrimaryInterface = xrInterface;
+            if (XRServer.PrimaryInterface == null)
+                XRServer.PrimaryInterface = xrInterface;
 
-            // 3. Enable XR rendering on the viewport.
-            GetViewport().UseXR = true;
             DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
 
-            // 4. Remove desktop input providers (deferred-safe, we're already deferred).
             TeardownDesktopInput();
 
-            // 5. Ensure the XR camera hierarchy exists.
-            FindOrCreateXRNodes();
+            // Flip the root viewport back to stereo. Going Desktop -> VR is
+            // the clean direction; the warnings only fire when going the
+            // other way.
+            GetViewport().UseXR = true;
 
-            // 6. Refresh the low-level VR driver's XR node references.
-            _vrDriver?.FindXRNodes(GetTree().Root);
+            // Show the XR origin back (we hide it when going to desktop so
+            // any 3D content under it isn't being culled into the wrong view).
+            if (_xrOrigin != null && GodotObject.IsInstanceValid(_xrOrigin))
+                _xrOrigin.Visible = true;
 
-            // 7. Inform HeadOutput of the mode change.
             _headOutput?.NotifyVRActiveChanged(true);
             _headOutput?.SwitchOutputType(HeadOutput.OutputType.VR);
 
-            // 8. Create VR input providers.
             SetupVRInput();
 
             IsVRActive = true;
@@ -295,7 +326,6 @@ public partial class XRModeManager : Node
         {
             // Last-resort catch: log the error and stay in desktop mode so the game keeps running.
             LumoraLogger.Error($"XRModeManager: Unexpected error during VR switch, staying in Desktop mode. ({ex.Message})");
-            // Make sure desktop mode is still functional.
             try
             {
                 GetViewport().UseXR = false;
@@ -310,6 +340,7 @@ public partial class XRModeManager : Node
             _switching = false;
         }
     }
+
 
     // =====================================================================
     //  INPUT PROVIDER SETUP / TEARDOWN
@@ -368,57 +399,6 @@ public partial class XRModeManager : Node
         FreeIfValid(ref _vrLaserManager);
         FreeIfValid(ref _vrGrabManager);
         LumoraLogger.Log("XRModeManager: VR input providers removed");
-    }
-
-    // =====================================================================
-    //  XR SCENE NODE HELPERS
-    // =====================================================================
-
-    /// <summary>
-    /// Look for XR nodes that may have been created during the boot XR detection phase.
-    /// </summary>
-    private void FindXRNodesFromTree()
-    {
-        var parent = GetParent();
-        if (parent == null) return;
-
-        _xrOrigin = parent.GetNodeOrNull<XROrigin3D>("XROrigin3D");
-        if (_xrOrigin != null)
-            _xrCamera = _xrOrigin.GetNodeOrNull<XRCamera3D>("XRCamera3D");
-    }
-
-    /// <summary>
-    /// Ensure XROrigin3D and XRCamera3D exist when switching to VR.
-    /// Reuses nodes created during boot; creates them dynamically otherwise.
-    /// </summary>
-    private void FindOrCreateXRNodes()
-    {
-        var parent = GetParent();
-        if (parent == null) return;
-
-        // --- XROrigin3D ---
-        _xrOrigin = parent.GetNodeOrNull<XROrigin3D>("XROrigin3D");
-        if (_xrOrigin == null)
-        {
-            _xrOrigin = new XROrigin3D();
-            _xrOrigin.Name = "XROrigin3D";
-            parent.AddChild(_xrOrigin);
-            LumoraLogger.Log("XRModeManager: Created XROrigin3D");
-        }
-        else
-        {
-            _xrOrigin.Visible = true;
-        }
-
-        // --- XRCamera3D ---
-        _xrCamera = _xrOrigin.GetNodeOrNull<XRCamera3D>("XRCamera3D");
-        if (_xrCamera == null)
-        {
-            _xrCamera = new XRCamera3D();
-            _xrCamera.Name = "XRCamera3D";
-            _xrOrigin.AddChild(_xrCamera);
-            LumoraLogger.Log("XRModeManager: Created XRCamera3D");
-        }
     }
 
     // =====================================================================

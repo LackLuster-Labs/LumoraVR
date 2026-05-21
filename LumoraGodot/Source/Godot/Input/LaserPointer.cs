@@ -238,7 +238,7 @@ public partial class LaserPointer : Node3D
             }
 
             // Get camera for desktop raycast
-            var camera = GetViewport()?.GetCamera3D();
+            var camera = Lumora.Source.Godot.Bootstrap.XRModeManager.Instance?.CurrentCamera;
             if (camera == null)
             {
                 SetLaserVisible(false);

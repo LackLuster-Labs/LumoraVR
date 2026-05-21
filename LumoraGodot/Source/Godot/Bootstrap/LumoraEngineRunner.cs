@@ -84,6 +84,7 @@ public partial class LumoraEngineRunner : Node
     // ===== SCENE REFERENCES =====
     private Node3D _inputRoot;
     private Camera3D _mainCamera;
+    private bool _vrInitializedAtBoot;
 
     /// <summary>
     /// Initialization phases for engine bootstrap.
@@ -112,6 +113,15 @@ public partial class LumoraEngineRunner : Node
 
     public override void _Ready()
     {
+        // Disable Godot's built-in viewport object-picking before any frame
+        // renders. We use our own raycasts (LaserInteractionManager etc.) and
+        // the built-in path doesn't support stereo anyway, so leaving it on
+        // would log "Object picking can't be used when stereo rendering" the
+        // moment OpenXR comes up. Setting it here, in _Ready, is the earliest
+        // safe spot - long before PhaseXRDetection flips UseXR.
+        // - xlinka
+        GetViewport().PhysicsObjectPicking = false;
+
         if (!SteamManager.Initialize())
         {
             GetTree().Quit();
@@ -206,6 +216,14 @@ public partial class LumoraEngineRunner : Node
 
     private static XrLaunchMode ResolveXrLaunchMode()
     {
+        // On a standalone Android build (Quest, Pico, Vive Focus) there's no
+        // such thing as desktop mode - the device IS the screen. Force VR and
+        // ignore any conflicting --desktop / --xr-mode flag the user might
+        // have left in their preset.
+        // - xlinka
+        if (OS.HasFeature("android"))
+            return XrLaunchMode.Vr;
+
         // Default to Auto so a headset is detected automatically unless the user
         // explicitly passes --desktop / --xr-mode=off on the command line.
         var mode = XrLaunchMode.Auto;
@@ -439,68 +457,85 @@ public partial class LumoraEngineRunner : Node
 
     /// <summary>
     /// PHASE 2: XR Detection
-    /// - Detect if OpenXR is available and initialized
-    /// - Fallback to screen mode if not
+    /// - Initialize the OpenXR session if a runtime is available
+    /// - Set root viewport's UseXR based on whether XR came up
+    ///
+    /// Architecture: single root viewport. When UseXR is true, Godot renders
+    /// stereo to the HMD and auto-mirrors the left eye to the OS window. When
+    /// it's false, the root viewport renders mono from the current Camera3D.
+    /// F8 (in XRModeManager) flips UseXR + the active camera + the input
+    /// providers. The VR->Desktop transition emits a one-shot batch of
+    /// framebuffer/pipeline-cache warnings (a known Godot 4 limitation: the
+    /// renderer's cached pipelines were built for stereo and can't be cheaply
+    /// re-derived for mono); the engine recovers within a frame and keeps
+    /// running. Desktop->VR is clean.
+    /// - xlinka
     /// </summary>
     private async Task PhaseXRDetection()
     {
         LumoraLogger.Log("[Phase 2/6] XR Detection");
         _loadingScreen?.UpdatePhase(1); // Phase index 1
 
-        GetViewport().UseXR = false;
         if (_xrLaunchMode == XrLaunchMode.Desktop)
         {
             LumoraLogger.Log("XR Device: Disabled (desktop launch mode)");
+            GetViewport().UseXR = false;
             await Task.Delay(120);
             return;
         }
 
         var xrInterface = XRServer.FindInterface("OpenXR");
-        if (xrInterface != null)
+        if (xrInterface == null)
         {
-            // Ensure the interface is initialized (some runtimes need an explicit call)
-            if (!xrInterface.IsInitialized())
+            if (OS.HasFeature("android"))
             {
-                LumoraLogger.Log("XR: OpenXR interface found but not initialized. Attempting Initialize()...");
-                if (!xrInterface.Initialize())
+                LumoraLogger.Error("XR: OpenXR interface not found on standalone Android. " +
+                    "The OpenXR Vendors plugin / loader for this headset is probably missing from the APK. Quitting.");
+                GetTree().Quit();
+                return;
+            }
+
+            if (_xrLaunchMode == XrLaunchMode.Vr)
+                LumoraLogger.Warn("XR: VR mode requested, but OpenXR interface was not found. Running in screen mode.");
+            else
+                LumoraLogger.Log("XR Device: None (Screen Mode)");
+
+            GetViewport().UseXR = false;
+            await Task.Delay(120);
+            return;
+        }
+
+        if (!xrInterface.IsInitialized())
+        {
+            LumoraLogger.Log("XR: OpenXR interface found but not initialized. Attempting Initialize()...");
+            if (!xrInterface.Initialize())
+            {
+                if (OS.HasFeature("android"))
                 {
-                    if (_xrLaunchMode == XrLaunchMode.Vr)
-                    {
-                        LumoraLogger.Warn("XR: OpenXR Initialize() failed while VR mode was requested - falling back to screen mode");
-                    }
-                    else
-                    {
-                        LumoraLogger.Warn("XR: OpenXR Initialize() failed - falling back to screen mode");
-                    }
+                    LumoraLogger.Error("XR: OpenXR Initialize() failed on standalone Android. " +
+                        "Check the device's OpenXR runtime is installed and the APK has the correct loader. Quitting.");
+                    GetTree().Quit();
                     return;
                 }
-            }
 
-            // Make it the primary interface if none is set
-            if (XRServer.PrimaryInterface == null)
-            {
-                XRServer.PrimaryInterface = xrInterface;
-            }
-
-            // Switch viewport to XR rendering
-            GetViewport().UseXR = true;
-            DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
-
-            LumoraLogger.Log("XR Device: OpenXR (Active) - viewport switched to XR");
-        }
-        else
-        {
-            if (_xrLaunchMode == XrLaunchMode.Vr)
-            {
-                LumoraLogger.Warn("XR: VR mode requested, but OpenXR interface was not found. Running in screen mode.");
-            }
-            else
-            {
-                LumoraLogger.Log("XR Device: None (Screen Mode)");
+                var ctx = _xrLaunchMode == XrLaunchMode.Vr ? " (VR mode requested)" : string.Empty;
+                LumoraLogger.Warn($"XR: OpenXR Initialize() failed - falling back to screen mode{ctx}. " +
+                    "Check that the active OpenXR runtime in Windows matches the headset you're using.");
+                GetViewport().UseXR = false;
+                await Task.Delay(120);
+                return;
             }
         }
 
-        await Task.Delay(120); // Artificial delay to show phase message
+        if (XRServer.PrimaryInterface == null)
+            XRServer.PrimaryInterface = xrInterface;
+
+        DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
+        _vrInitializedAtBoot = true;
+        GetViewport().UseXR = true;
+
+        LumoraLogger.Log("XR Device: OpenXR (Active) - root viewport in XR mode, HMD will mirror to window");
+        await Task.Delay(120);
     }
 
     /// <summary>
@@ -513,18 +548,18 @@ public partial class LumoraEngineRunner : Node
         LumoraLogger.Log("[Phase 3/6] HeadOutput Creation");
         _loadingScreen?.UpdatePhase(2); // Phase index 2
 
-        // Find or create main camera
-        _mainCamera = GetViewport().GetCamera3D();
+        // DesktopCamera lives inside the DesktopSubViewport defined in Bootstrap.tscn.
+        // It is the active camera for the desktop view; HeadOutput drives it in
+        // screen mode. The XRCamera3D (inside XRViewport) is found later by
+        // HeadOutput.SetupVRCamera when VR is active.
+        _mainCamera = GetNodeOrNull<Camera3D>("%DesktopCamera");
         if (_mainCamera == null)
         {
-            _mainCamera = new Camera3D();
-            _mainCamera.Name = "MainCamera";
-            AddChild(_mainCamera);
+            LumoraLogger.Error("HeadOutput: %DesktopCamera not found in Bootstrap.tscn - falling back to a runtime-created camera under the root viewport.");
+            _mainCamera = new Camera3D { Name = "MainCameraFallback" };
             GetViewport().AddChild(_mainCamera);
-            LumoraLogger.Log("Created new MainCamera");
         }
 
-        // Create HeadOutput system
         _headOutput = new HeadOutput();
         AddChild(_headOutput);
         _headOutput.Initialize(_mainCamera);
@@ -648,12 +683,16 @@ public partial class LumoraEngineRunner : Node
         // Register low-level input drivers (keyboard, mouse, VR tracking layer)
         RegisterInputDrivers();
 
-        // Create the XR Mode Manager – owns Desktop/VR provider nodes and handles F8 hot-swap
-        bool isVRActive = XRServer.PrimaryInterface != null && GetViewport().UseXR;
+        // Create the XR Mode Manager – owns Desktop/VR provider nodes and handles F8 hot-swap.
+        // `_vrInitializedAtBoot` is the source of truth for whether PhaseXRDetection
+        // successfully brought up the OpenXR session and set the root viewport's
+        // UseXR to true.
         _xrModeManager = new XRModeManager();
         _xrModeManager.Name = "XRModeManager";
         AddChild(_xrModeManager);
-        _xrModeManager.Initialize(_engine, _headOutput, _inputInterface, _mainCamera, _vrDriver, isVRActive);
+        _xrModeManager.Initialize(
+            _engine, _headOutput, _inputInterface, _mainCamera, _vrDriver,
+            startingInVR: _vrInitializedAtBoot);
 
         await Task.Delay(150); // Artificial delay to show phase message
     }

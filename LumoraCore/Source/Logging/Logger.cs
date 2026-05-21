@@ -58,17 +58,18 @@ namespace Lumora.Core.Logging
             _logQueue.Enqueue(logEntry);
             _logEvent.Set();
 
-            // Keep console output focused on important messages.
+            // Keep stdout focused on important messages.
             if (level == LogLevel.WARN || level == LogLevel.ERROR)
             {
                 Console.WriteLine(logEntry);
             }
 
-            // Mirror only warnings/errors to Godot console.
-            if (level == LogLevel.WARN || level == LogLevel.ERROR)
-            {
-                TryMirrorToGodotConsole(level, message);
-            }
+            // Mirror all levels to the Godot output panel so diagnostics from
+            // Lumora.Core.Logging.Logger are visible in-editor, not just in the
+            // file at %APPDATA%/Lumora/logs/. Filtering this to WARN/ERROR
+            // hid debugging info that callers expected to see.
+            // - xlinka
+            TryMirrorToGodotConsole(level, message);
 
             OnFormattedLogMessageWritten?.Invoke(message);
             OnLogWritten?.Invoke(level, timestamp, message);

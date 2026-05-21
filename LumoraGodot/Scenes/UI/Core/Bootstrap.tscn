@@ -30,8 +30,22 @@ shadow_enabled = true
 [node name="InputRoot" type="Node3D" parent="."]
 unique_name_in_owner = true
 
-[node name="Camera3D" type="Camera3D" parent="."]
+[node name="DesktopCamera" type="Camera3D" parent="."]
 unique_name_in_owner = true
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.6, 0)
 fov = 90.0
 near = 0.25
+
+[node name="XROrigin3D" type="XROrigin3D" parent="."]
+unique_name_in_owner = true
+
+[node name="XRCamera3D" type="XRCamera3D" parent="XROrigin3D"]
+unique_name_in_owner = true
+
+[node name="LeftController" type="XRController3D" parent="XROrigin3D"]
+unique_name_in_owner = true
+tracker = &"left_hand"
+
+[node name="RightController" type="XRController3D" parent="XROrigin3D"]
+unique_name_in_owner = true
+tracker = &"right_hand"
