@@ -7,6 +7,8 @@ using Lumora.Core.Input;
 using Lumora.Core.Networking.Sync;
 using Lumora.Core.Networking.Streams;
 using LumoraLogger = Lumora.Core.Logging.Logger;
+using Lumora.Core.Networking.Streams.Audio;
+using Lumora.Core.Math;
 
 namespace Lumora.Core;
 
@@ -351,9 +353,11 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
         position = pair.Position;
         rotation = pair.Rotation;
     }
-
+    private bool isVoiceInitilized = false;
     internal void ConfigureLocalTrackingStreams()
     {
+        if(isVoiceInitilized)return;
+        else isVoiceInitilized = true;
         foreach (var stream in Streams)
         {
             stream.Active = true;
@@ -382,6 +386,18 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable
         }
 
         LumoraLogger.Log($"ConfigureLocalTrackingStreams: Configured {StreamCount} streams for local user");
+    }
+    
+    internal void SetupVoiceStream(){
+        var uservoice = AddStream<OpusStream>();
+        uservoice.DataRequested += (out float2[] pcm) =>
+        {
+            var framesize = uservoice.framesize.Value;
+            var capture = Engine.Current?.AudioManager?.MicCapture;
+            pcm = capture?.GetDataOrNull(framesize).ToArray()?? Array.Empty<float2>();
+            if(pcm.Length > 0)return true;
+            return false;
+        };
     }
 
     private void EnsureTrackingStreamsInitialized()

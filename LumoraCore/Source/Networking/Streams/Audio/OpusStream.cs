@@ -30,7 +30,7 @@ public class OpusStream : Stream, IAudioStream
     
     public delegate bool TryRequestData(out float2[] pcm);
 
-    public TryRequestData DataRequested;
+    public TryRequestData? DataRequested;
     private object? _underlying;
     public OpusStream(object underlying)
     {
@@ -61,8 +61,8 @@ public class OpusStream : Stream, IAudioStream
         base.OnInit();
         if (IsLocal)
         {
-            opusEncoder = OpusCodecFactory.CreateEncoder(_sampleRate, _channelCount);
-            //OutputBuffer = new byte[];
+            opusEncoder = OpusCodecFactory.CreateEncoder(_sampleRate, _channelCount,Concentus.Enums.OpusApplication.OPUS_APPLICATION_VOIP);
+            OutputBuffer = new byte[NetworkLimits.MaxRawFrameBytes];
         }
         else
         {
@@ -140,7 +140,7 @@ public class OpusStream : Stream, IAudioStream
                 {
                     if (pkt.Sequence <= lastSequence) continue;
                     int upbylength = System.Math.DivRem(pkt.Sequence - lastSequence, _bufferLimit, out var currentIndex);
-                    if (upbylength > 3) opusDecoder.ResetState();
+                    if (upbylength > 5) opusDecoder.ResetState(); //if we skiped more then 3*4 120ms  
                     else
                         for (int i = 0; i < upbylength * _bufferLimit; i++)
                             opusDecoder.Decode(null, dummyBuffer, framesize, false);
@@ -156,10 +156,11 @@ public class OpusStream : Stream, IAudioStream
             }
         }else
         {
-            if(DataRequested(out var pcm))
+            if(DataRequested?.Invoke(out var pcm) ?? false)
             {
                 
-                opusEncoder.Encode(MemoryMarshal.Cast<float2,float>(pcm),framesize,dummyBuffer.Length);
+                int truelength = opusEncoder.Encode(MemoryMarshal.Cast<float2,float>(pcm),framesize,OutputBuffer,OutputBuffer.Length);
+                Owner.World.Session.SendRawFrame(this,++_sequenceOut,OutputBuffer.AsSpan(truelength));
             }
         }
 
