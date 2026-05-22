@@ -26,6 +26,14 @@ public partial class EngineVRInputProvider : Node3D, IInputProvider
         IInputProvider.Instance = this;
     }
 
+    public override void _ExitTree()
+    {
+        if (object.ReferenceEquals(IInputProvider.Instance, this))
+            IInputProvider.Instance = null;
+
+        base._ExitTree();
+    }
+
     public override void _Process(double delta)
     {
         base._Process(delta);

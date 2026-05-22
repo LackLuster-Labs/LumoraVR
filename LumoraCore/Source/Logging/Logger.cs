@@ -33,15 +33,10 @@ namespace Lumora.Core.Logging
 
         static Logger()
         {
-            string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
-            string gameName = "Lumora";
-            LogDirectory = Path.Combine(appData, gameName, "logs");
-
-            // Ensure the directory exists
-            if (!Directory.Exists(LogDirectory))
-                Directory.CreateDirectory(LogDirectory);
-
-            LogFile = Path.Combine(LogDirectory, $"log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt");
+            LogDirectory = ResolveLogDirectory();
+            LogFile = string.IsNullOrWhiteSpace(LogDirectory)
+                ? string.Empty
+                : Path.Combine(LogDirectory, $"log_{DateTime.Now:yyyy-MM-dd_HH-mm-ss}.txt");
 
             // Start the background logging task
             Task.Run(() => ProcessLogQueue(_cancellationTokenSource.Token));
@@ -125,6 +120,11 @@ namespace Lumora.Core.Logging
         private static void FlushLogQueue()
         {
             if (_logQueue.IsEmpty) return;
+            if (string.IsNullOrWhiteSpace(LogFile))
+            {
+                while (_logQueue.TryDequeue(out _)) { }
+                return;
+            }
 
             try
             {
@@ -137,6 +137,57 @@ namespace Lumora.Core.Logging
             catch (IOException ex)
             {
                 Console.Error.WriteLine($"Failed to write logs to file: {ex.Message}");
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                Console.Error.WriteLine($"Failed to write logs to file: {ex.Message}");
+            }
+        }
+
+        private static string ResolveLogDirectory()
+        {
+            foreach (var basePath in GetCandidateBasePaths())
+            {
+                if (string.IsNullOrWhiteSpace(basePath))
+                    continue;
+
+                try
+                {
+                    var logDirectory = Path.Combine(basePath, "Lumora", "logs");
+                    Directory.CreateDirectory(logDirectory);
+                    return logDirectory;
+                }
+                catch
+                {
+                    // Try the next candidate. Logging must never block startup.
+                }
+            }
+
+            return string.Empty;
+        }
+
+        private static string[] GetCandidateBasePaths()
+        {
+            return new[]
+            {
+                TryGetGodotUserDataDir(),
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+                Path.GetTempPath()
+            };
+        }
+
+        private static string TryGetGodotUserDataDir()
+        {
+            try
+            {
+                var godotOsType = Type.GetType("Godot.OS, GodotSharp");
+                var method = godotOsType?.GetMethod("GetUserDataDir", Type.EmptyTypes);
+                return method?.Invoke(null, null) as string ?? string.Empty;
+            }
+            catch
+            {
+                return string.Empty;
             }
         }
 

@@ -41,6 +41,7 @@ public partial class HeadOutput : Node
 
     // ===== CAMERA REFERENCES =====
     private Camera3D _camera;
+    private Camera3D _desktopCamera;
     private XRCamera3D _vrCamera;
     private XROrigin3D _xrOrigin;
 
@@ -66,11 +67,9 @@ public partial class HeadOutput : Node
     /// </summary>
     public void Initialize(Camera3D camera)
     {
-        _camera = camera;
-        DisableCameraInterpolation(_camera);
-        _camera.Fov = DefaultFOV;
-        _camera.Near = NearClip;
-        _camera.Far = FarClip;
+        _desktopCamera = camera;
+        _camera = _desktopCamera;
+        ConfigureCamera(_desktopCamera, setFov: true);
 
         // Check if VR is active
         var xrInterface = XRServer.FindInterface("OpenXR");
@@ -79,10 +78,12 @@ public partial class HeadOutput : Node
         if (_isVRActive)
         {
             SetupVRCamera();
+            UseVRCamera();
             Type = OutputType.VR;
         }
         else
         {
+            UseDesktopCamera();
             Type = OutputType.Screen;
         }
 
@@ -119,18 +120,65 @@ public partial class HeadOutput : Node
             return;
         }
 
-        DisableCameraInterpolation(_vrCamera);
-        _camera = _vrCamera;
+        ConfigureCamera(_vrCamera, setFov: false);
 
         LumoraLogger.Log("HeadOutput: VR camera bound to %XRCamera3D");
     }
 
-    private static void DisableCameraInterpolation(Camera3D camera)
+    private void UseDesktopCamera()
+    {
+        if (_desktopCamera == null || !GodotObject.IsInstanceValid(_desktopCamera))
+        {
+            LumoraLogger.Warn("HeadOutput: Cannot use desktop camera - camera is missing or invalid.");
+            return;
+        }
+
+        _camera = _desktopCamera;
+
+        if (_vrCamera != null && GodotObject.IsInstanceValid(_vrCamera) && CamerasShareViewport(_desktopCamera, _vrCamera))
+            _vrCamera.Current = false;
+
+        _desktopCamera.MakeCurrent();
+    }
+
+    private void UseVRCamera()
+    {
+        if (_vrCamera == null || !GodotObject.IsInstanceValid(_vrCamera))
+            SetupVRCamera();
+
+        if (_vrCamera == null || !GodotObject.IsInstanceValid(_vrCamera))
+        {
+            LumoraLogger.Warn("HeadOutput: Cannot use VR camera - XRCamera3D is missing or invalid.");
+            return;
+        }
+
+        _camera = _vrCamera;
+
+        if (_desktopCamera != null && GodotObject.IsInstanceValid(_desktopCamera) && CamerasShareViewport(_desktopCamera, _vrCamera))
+            _desktopCamera.Current = false;
+
+        _vrCamera.MakeCurrent();
+    }
+
+    private static bool CamerasShareViewport(Camera3D a, Camera3D b)
+    {
+        if (a == null || b == null || !GodotObject.IsInstanceValid(a) || !GodotObject.IsInstanceValid(b))
+            return false;
+
+        return a.GetViewport() == b.GetViewport();
+    }
+
+    private void ConfigureCamera(Camera3D camera, bool setFov)
     {
         if (camera == null)
             return;
 
         camera.PhysicsInterpolationMode = Node.PhysicsInterpolationModeEnum.Off;
+        camera.Near = NearClip;
+        camera.Far = FarClip;
+
+        if (setFov)
+            camera.Fov = DefaultFOV;
     }
 
     /// <summary>
@@ -294,18 +342,11 @@ public partial class HeadOutput : Node
 
         if (isActive)
         {
-            // Re-create or locate the XR camera hierarchy now that OpenXR is running.
-            SetupVRCamera();
+            UseVRCamera();
         }
         else
         {
-            // Ensure the regular desktop camera becomes current again.
-            if (_camera != null
-                && GodotObject.IsInstanceValid(_camera)
-                && _camera is not XRCamera3D)
-            {
-                _camera.MakeCurrent();
-            }
+            UseDesktopCamera();
         }
 
         LumoraLogger.Log($"HeadOutput: VR active state → {isActive}");
@@ -326,9 +367,14 @@ public partial class HeadOutput : Node
         // Guard: only allow VR if the XR interface has been activated.
         if (newType == OutputType.VR && !_isVRActive)
         {
-            LumoraLogger.Warn("HeadOutput: Cannot switch to VR – XR interface is not active. Staying in Screen mode.");
+            LumoraLogger.Warn("HeadOutput: Cannot switch to VR - XR interface is not active. Staying in Screen mode.");
             return;
         }
+
+        if (newType == OutputType.VR)
+            UseVRCamera();
+        else if (newType == OutputType.Screen)
+            UseDesktopCamera();
 
         Type = newType;
     }
@@ -339,6 +385,7 @@ public partial class HeadOutput : Node
     public void Dispose()
     {
         _camera = null;
+        _desktopCamera = null;
         _vrCamera = null;
         _xrOrigin = null;
     }

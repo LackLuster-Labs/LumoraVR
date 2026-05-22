@@ -48,6 +48,7 @@ public partial class LumoraEngineRunner : Node
 	[Export] public bool AutoHostLocalHome { get; set; } = true;
 	[Export] public bool AutoConnectLocalHome { get; set; } = true;
 	[Export] public int LocalHomePort { get; set; } = 44844;
+	[Export] public int MaximumXrRefreshRate { get; set; } = 90;
 
 	// ===== CORE SYSTEMS =====
 	private Lumora.Core.Engine _engine;
@@ -79,11 +80,15 @@ public partial class LumoraEngineRunner : Node
 	private XRModeManager _xrModeManager;
 	private ThreadingMutex? _debugConsoleInstanceMutex;
 	private bool _ownsDebugConsoleLock;
+	private OpenXRInterface _openXRInterface;
+	private bool _openXRSignalsConnected;
+	private bool _xrIsFocused;
 	private static readonly Dictionary<Type, long> ComponentMemoryEstimateCache = new();
 
 	// ===== SCENE REFERENCES =====
 	private Node3D _inputRoot;
 	private Camera3D _mainCamera;
+	private SubViewport _xrViewport;
 	private bool _vrInitializedAtBoot;
 
 	/// <summary>
@@ -122,7 +127,7 @@ public partial class LumoraEngineRunner : Node
 		// - xlinka
 		GetViewport().PhysicsObjectPicking = false;
 
-		if (!SteamManager.Initialize())
+		if (ShouldUseSteam() && !SteamManager.Initialize())
 		{
 			GetTree().Quit();
 			return;
@@ -458,17 +463,12 @@ public partial class LumoraEngineRunner : Node
 	/// <summary>
 	/// PHASE 2: XR Detection
 	/// - Initialize the OpenXR session if a runtime is available
-	/// - Set root viewport's UseXR based on whether XR came up
+	/// - Create a dedicated XR SubViewport when OpenXR is available
 	///
-	/// Architecture: single root viewport. When UseXR is true, Godot renders
-	/// stereo to the HMD and auto-mirrors the left eye to the OS window. When
-	/// it's false, the root viewport renders mono from the current Camera3D.
-	/// F8 (in XRModeManager) flips UseXR + the active camera + the input
-	/// providers. The VR->Desktop transition emits a one-shot batch of
-	/// framebuffer/pipeline-cache warnings (a known Godot 4 limitation: the
-	/// renderer's cached pipelines were built for stereo and can't be cheaply
-	/// re-derived for mono); the engine recovers within a frame and keeps
-	/// running. Desktop->VR is clean.
+	/// Architecture: the root viewport is always the normal desktop window.
+	/// The XR SubViewport owns the headset render path and XRModeManager keeps
+	/// that viewport UseXR=true while the OpenXR session is alive. F8 swaps
+	/// input and camera ownership; it does not tear down OpenXR.
 	/// - xlinka
 	/// </summary>
 	private async Task PhaseXRDetection()
@@ -530,12 +530,154 @@ public partial class LumoraEngineRunner : Node
 		if (XRServer.PrimaryInterface == null)
 			XRServer.PrimaryInterface = xrInterface;
 
-		DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
-		_vrInitializedAtBoot = true;
-		GetViewport().UseXR = true;
+		_openXRInterface = xrInterface as OpenXRInterface;
+		GetViewport().UseXR = false;
+		ConfigureOpenXRViewport(EnsureXRViewport());
+		ConnectOpenXREvents(_openXRInterface);
 
-		LumoraLogger.Log("XR Device: OpenXR (Active) - root viewport in XR mode, HMD will mirror to window");
+		_vrInitializedAtBoot = true;
+
+		LumoraLogger.Log("XR Device: OpenXR (Active) - dedicated XR viewport renders HMD, root viewport stays desktop");
 		await Task.Delay(120);
+	}
+
+	private SubViewport EnsureXRViewport()
+	{
+		if (_xrViewport != null && GodotObject.IsInstanceValid(_xrViewport))
+			return _xrViewport;
+
+		var sceneRoot = GetTree()?.CurrentScene ?? this;
+		_xrViewport = sceneRoot.GetNodeOrNull<SubViewport>("%XRViewport");
+		if (_xrViewport == null)
+		{
+			_xrViewport = new SubViewport
+			{
+				Name = "XRViewport",
+				UniqueNameInOwner = true,
+				Size = new Vector2I(16, 16),
+				RenderTargetUpdateMode = SubViewport.UpdateMode.Always
+			};
+
+			sceneRoot.AddChild(_xrViewport);
+			_xrViewport.Owner = GetTree()?.CurrentScene;
+		}
+
+		var rootViewport = GetViewport();
+		if (rootViewport?.World3D != null)
+			_xrViewport.World3D = rootViewport.World3D;
+
+		_xrViewport.PhysicsObjectPicking = false;
+
+		var xrOrigin = sceneRoot.GetNodeOrNull<XROrigin3D>("%XROrigin3D");
+		if (xrOrigin != null && GodotObject.IsInstanceValid(xrOrigin) && xrOrigin.GetParent() != _xrViewport)
+			xrOrigin.Reparent(_xrViewport, keepGlobalTransform: true);
+
+		return _xrViewport;
+	}
+
+	private void ConfigureOpenXRViewport(Viewport viewport)
+	{
+		if (viewport == null)
+			return;
+
+		DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
+		viewport.UseXR = true;
+	}
+
+	private void ConnectOpenXREvents(OpenXRInterface xrInterface)
+	{
+		if (xrInterface == null || _openXRSignalsConnected)
+			return;
+
+		xrInterface.SessionBegun += OnOpenXRSessionBegun;
+		xrInterface.SessionVisible += OnOpenXRVisibleState;
+		xrInterface.SessionFocussed += OnOpenXRFocusedState;
+		xrInterface.SessionStopping += OnOpenXRStopping;
+		xrInterface.PoseRecentered += OnOpenXRPoseRecentered;
+		_openXRSignalsConnected = true;
+	}
+
+	private void DisconnectOpenXREvents()
+	{
+		if (_openXRInterface == null || !_openXRSignalsConnected)
+			return;
+
+		_openXRInterface.SessionBegun -= OnOpenXRSessionBegun;
+		_openXRInterface.SessionVisible -= OnOpenXRVisibleState;
+		_openXRInterface.SessionFocussed -= OnOpenXRFocusedState;
+		_openXRInterface.SessionStopping -= OnOpenXRStopping;
+		_openXRInterface.PoseRecentered -= OnOpenXRPoseRecentered;
+		_openXRSignalsConnected = false;
+	}
+
+	private void OnOpenXRSessionBegun()
+	{
+		if (_openXRInterface == null)
+			return;
+
+		var currentRefreshRate = _openXRInterface.DisplayRefreshRate;
+		LumoraLogger.Log(currentRefreshRate > 0.0f
+			? $"OpenXR: Refresh rate reported as {currentRefreshRate}"
+			: "OpenXR: No refresh rate given by XR runtime");
+
+		var newRate = currentRefreshRate;
+		var availableRates = _openXRInterface.GetAvailableDisplayRefreshRates();
+		if (availableRates.Count == 0)
+		{
+			LumoraLogger.Log("OpenXR: Target does not support refresh rate extension");
+		}
+		else if (availableRates.Count == 1)
+		{
+			newRate = (float)availableRates[0];
+		}
+		else
+		{
+			LumoraLogger.Log($"OpenXR: Available refresh rates: {availableRates}");
+			foreach (float rate in availableRates)
+			{
+				if (rate > newRate && rate <= MaximumXrRefreshRate)
+					newRate = rate;
+			}
+		}
+
+		if (newRate > 0.0f && Math.Abs(currentRefreshRate - newRate) > 0.01f)
+		{
+			LumoraLogger.Log($"OpenXR: Setting refresh rate to {newRate}");
+			_openXRInterface.DisplayRefreshRate = newRate;
+			currentRefreshRate = newRate;
+		}
+
+		if (currentRefreshRate > 0.0f)
+		{
+			var physicsRate = Math.Max(60, (int)Math.Round(currentRefreshRate));
+			global::Godot.Engine.PhysicsTicksPerSecond = physicsRate;
+			LumoraLogger.Log($"OpenXR: Physics tick rate set to {physicsRate}");
+		}
+	}
+
+	private void OnOpenXRVisibleState()
+	{
+		if (!_xrIsFocused)
+			return;
+
+		_xrIsFocused = false;
+		LumoraLogger.Log("OpenXR: visible but not focused");
+	}
+
+	private void OnOpenXRFocusedState()
+	{
+		_xrIsFocused = true;
+		LumoraLogger.Log("OpenXR: focused");
+	}
+
+	private void OnOpenXRStopping()
+	{
+		LumoraLogger.Log("OpenXR: stopping");
+	}
+
+	private void OnOpenXRPoseRecentered()
+	{
+		LumoraLogger.Log("OpenXR: pose recentered");
 	}
 
 	/// <summary>
@@ -548,10 +690,9 @@ public partial class LumoraEngineRunner : Node
 		LumoraLogger.Log("[Phase 3/6] HeadOutput Creation");
 		_loadingScreen?.UpdatePhase(2); // Phase index 2
 
-		// DesktopCamera lives inside the DesktopSubViewport defined in Bootstrap.tscn.
-		// It is the active camera for the desktop view; HeadOutput drives it in
-		// screen mode. The XRCamera3D (inside XRViewport) is found later by
-		// HeadOutput.SetupVRCamera when VR is active.
+		// DesktopCamera lives under the root viewport and drives the desktop
+		// window. XRCamera3D is moved under XRViewport during PhaseXRDetection
+		// and drives the headset.
 		_mainCamera = GetNodeOrNull<Camera3D>("%DesktopCamera");
 		if (_mainCamera == null)
 		{
@@ -683,10 +824,10 @@ public partial class LumoraEngineRunner : Node
 		// Register low-level input drivers (keyboard, mouse, VR tracking layer)
 		RegisterInputDrivers();
 
-		// Create the XR Mode Manager – owns Desktop/VR provider nodes and handles F8 hot-swap.
+		// Create the XR Mode Manager - owns Desktop/VR provider nodes and handles F8 hot-swap.
 		// `_vrInitializedAtBoot` is the source of truth for whether PhaseXRDetection
-		// successfully brought up the OpenXR session and set the root viewport's
-		// UseXR to true.
+		// successfully brought up the OpenXR session. XRModeManager owns the
+		// active mode's viewport UseXR flag from here.
 		_xrModeManager = new XRModeManager();
 		_xrModeManager.Name = "XRModeManager";
 		AddChild(_xrModeManager);
@@ -716,7 +857,7 @@ public partial class LumoraEngineRunner : Node
 		_mouseDriver = new GodotMouseDriver();
 		_inputInterface.RegisterMouseDriver(_mouseDriver);
 
-		// VR driver – handles head and controller tracking at the low level
+		// VR driver - handles head and controller tracking at the low level
 		_vrDriver = new GodotVRDriver();
 		_inputInterface.RegisterVRDriver(_vrDriver);
 		_vrDriver.InitializeVR();
@@ -866,7 +1007,8 @@ public partial class LumoraEngineRunner : Node
 			LumoraLogger.Warn("LumoraEngineRunner: No InputInterface available in _Process");
 		}
 
-		SteamManager.RunCallbacks();
+		if (ShouldUseSteam())
+			SteamManager.RunCallbacks();
 
 		// Run engine update loop (includes one input pass + world updates).
 		// Avoid a duplicate InputInterface.UpdateInputs call here.
@@ -1208,6 +1350,7 @@ public partial class LumoraEngineRunner : Node
 	public override void _ExitTree()
 	{
 		LumoraLogger.Log("LumoraEngineRunner: Shutting down...");
+		DisconnectOpenXREvents();
 
 		if (_ownsDebugConsoleLock && _debugConsoleInstanceMutex != null)
 		{
@@ -1228,8 +1371,14 @@ public partial class LumoraEngineRunner : Node
 		_debugUdpSender?.Dispose();
 		_engine?.Dispose();
 		_headOutput?.Dispose();
-		SteamManager.Shutdown();
+		if (ShouldUseSteam())
+			SteamManager.Shutdown();
 
 		base._ExitTree();
+	}
+
+	private static bool ShouldUseSteam()
+	{
+		return !OS.HasFeature("android");
 	}
 }

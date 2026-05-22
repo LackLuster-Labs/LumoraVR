@@ -6,6 +6,7 @@ using Lumora.Core;
 using Lumora.Core.GodotUI;
 using System.Collections.Generic;
 using Lumora.Source.Input;
+using Lumora.Source.Godot.Bootstrap;
 using Lumora.Godot.UI;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
@@ -65,9 +66,29 @@ public class DashboardPanelHook : ComponentHook<DashboardPanel>
 
         Owner.OnDataRefresh += RefreshUIData;
         Owner.IsVisible.Changed += _ => UpdateVisibility();
+        XRModeManager.ModeChanged += OnXRModeChanged;
         UpdateVisibility();
 
         LumoraLogger.Log($"DashboardPanelHook: Initialized in {(_isVRMode ? "VR" : "Desktop")} mode, visible={Owner.IsVisible.Value}");
+    }
+
+    private void OnXRModeChanged(bool vrActive)
+    {
+        if (_isVRMode == vrActive)
+            return;
+
+        LumoraLogger.Log($"DashboardPanelHook: Switching presentation to {(vrActive ? "VR" : "Desktop")} mode");
+
+        ClearModeResources();
+        _isVRMode = vrActive;
+
+        if (_isVRMode)
+            InitializeVRMode();
+        else
+            InitializeDesktopMode();
+
+        RefreshUIData();
+        UpdateVisibility();
     }
 
     private void InitializeDesktopMode()
@@ -386,15 +407,21 @@ public class DashboardPanelHook : ComponentHook<DashboardPanel>
             _activeDashboard = null;
 
         Owner.OnDataRefresh -= RefreshUIData;
+        XRModeManager.ModeChanged -= OnXRModeChanged;
 
-        if (!destroyingWorld)
+        ClearModeResources(queueFree: !destroyingWorld);
+
+        _nodeRegistry.Clear();
+        _isVRMode = false;
+
+        base.Destroy(destroyingWorld);
+    }
+
+    private void ClearModeResources(bool queueFree = true)
+    {
+        if (queueFree)
         {
-            // Desktop mode cleanup
             _canvasLayer?.QueueFree();
-            _desktopUI = null;
-
-            // VR mode cleanup
-            _loadedScene?.QueueFree();
             _collisionArea?.QueueFree();
             _viewport?.QueueFree();
             _meshInstance?.QueueFree();
@@ -403,8 +430,8 @@ public class DashboardPanelHook : ComponentHook<DashboardPanel>
             _boxShape?.Dispose();
         }
 
-        _nodeRegistry.Clear();
         _canvasLayer = null;
+        _desktopUI = null;
         _loadedScene = null;
         _collisionArea = null;
         _collisionShape = null;
@@ -414,7 +441,6 @@ public class DashboardPanelHook : ComponentHook<DashboardPanel>
         _material = null;
         _quadMesh = null;
         _lastViewportSize = Vector2I.Zero;
-
-        base.Destroy(destroyingWorld);
+        _nodeRegistry.Clear();
     }
 }

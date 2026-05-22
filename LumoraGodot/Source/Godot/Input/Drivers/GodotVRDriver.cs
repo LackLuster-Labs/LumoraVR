@@ -25,7 +25,8 @@ public class GodotVRDriver : IVRDriver, IInputDriver
     public int UpdateOrder => 0;
 
     // IVRDriver interface properties
-    public bool IsVRActive => _xrInterface != null && _xrInterface.IsInitialized();
+    public bool IsRuntimeInitialized => _xrInterface != null && _xrInterface.IsInitialized();
+    public bool IsVRActive => _modeActive && IsRuntimeInitialized;
     public string VRSystemName => _xrInterface?.GetName() ?? "None";
     public VRPlatform Platform => DetectPlatform();
     public string RuntimeName => GetRuntimeName();
@@ -34,6 +35,8 @@ public class GodotVRDriver : IVRDriver, IInputDriver
 
     private XRInterface _xrInterface;
     private InputInterface _inputInterface;
+    private bool _modeActive;
+    private bool _trackerAddedConnected;
 
     // Godot XR nodes for tracking (proper Godot 4.x pattern)
     private XRCamera3D _xrCamera;
@@ -85,6 +88,7 @@ public class GodotVRDriver : IVRDriver, IInputDriver
 
         if (_xrInterface != null && _xrInterface.IsInitialized())
         {
+            _modeActive = true;
             GD.Print($"GodotVRDriver: VR active - interface: {_xrInterface.GetName()}");
 
             // Log the resolved platform + runtime + active interaction profile
@@ -95,12 +99,29 @@ public class GodotVRDriver : IVRDriver, IInputDriver
             GD.Print($"GodotVRDriver: Platform={Platform}, Runtime='{RuntimeName}', " +
                      $"LeftProfile='{LeftInteractionProfile}', RightProfile='{RightInteractionProfile}'");
 
-            XRServer.TrackerAdded += OnTrackerAdded;
+            if (!_trackerAddedConnected)
+            {
+                XRServer.TrackerAdded += OnTrackerAdded;
+                _trackerAddedConnected = true;
+            }
         }
         else
         {
+            _modeActive = false;
             GD.Print("GodotVRDriver: No VR interface active - running in desktop mode");
         }
+    }
+
+    public void SetModeActive(bool active)
+    {
+        var newActive = active && IsRuntimeInitialized;
+        if (_modeActive != newActive)
+            GD.Print($"GodotVRDriver: Mode active = {newActive} (runtime initialized: {IsRuntimeInitialized})");
+
+        _modeActive = newActive;
+
+        if (!_modeActive)
+            ClearTrackingState();
     }
 
     private void OnTrackerAdded(StringName trackerName, long type)
@@ -109,7 +130,7 @@ public class GodotVRDriver : IVRDriver, IInputDriver
         if (tracker == null) return;
 
         string desc = tracker is XRPositionalTracker pt ? pt.Description : tracker.Name.ToString();
-        global::Godot.GD.Print($"GodotVRDriver: Tracker connected [{(XRServer.TrackerType)type}] '{trackerName}' — {desc}");
+        global::Godot.GD.Print($"GodotVRDriver: Tracker connected [{(XRServer.TrackerType)type}] '{trackerName}' - {desc}");
 
         if ((XRServer.TrackerType)type == XRServer.TrackerType.Head)
             global::Godot.GD.Print($"GodotVRDriver: HMD device: {desc}");
@@ -311,6 +332,12 @@ public class GodotVRDriver : IVRDriver, IInputDriver
     {
         if (_inputInterface == null)
             return;
+
+        if (!IsVRActive)
+        {
+            ClearTrackingState();
+            return;
+        }
 
         // Update head tracking
         UpdateHeadTracking();
@@ -680,7 +707,7 @@ public class GodotVRDriver : IVRDriver, IInputDriver
             isTracking = true;
         }
         // Fall back to XRServer
-        else if (_xrInterface != null && _xrInterface.IsInitialized())
+        else if (IsVRActive)
         {
             Transform3D headTransform = XRServer.GetHmdTransform();
 
@@ -731,7 +758,7 @@ public class GodotVRDriver : IVRDriver, IInputDriver
             isTracking = xrController.GetIsActive();
         }
         // Fall back to XRPositionalTracker
-        else if (_xrInterface != null && _xrInterface.IsInitialized())
+        else if (IsVRActive)
         {
             string sideName = side == Chirality.Left ? "left" : "right";
             var trackerName = new StringName($"/user/hand/{sideName}");
@@ -781,10 +808,74 @@ public class GodotVRDriver : IVRDriver, IInputDriver
     /// </summary>
     public void UpdateVRDevices(VRController leftController, VRController rightController, HeadDevice headDevice)
     {
+        if (!IsVRActive)
+        {
+            ClearLegacyDevice(headDevice);
+            ClearLegacyDevice(leftController);
+            ClearLegacyDevice(rightController);
+            ClearTrackingState();
+            return;
+        }
+
         // Update legacy devices for compatibility
         UpdateHeadDevice(headDevice);
         UpdateController(leftController, Chirality.Left);
         UpdateController(rightController, Chirality.Right);
+    }
+
+    private void ClearTrackingState()
+    {
+        ClearTrackedObject(_headTrackedObject);
+        ClearTrackedObject(_leftControllerTrackedObject);
+        ClearTrackedObject(_rightControllerTrackedObject);
+        ClearTrackedObject(_leftHandTrackedObject);
+        ClearTrackedObject(_rightHandTrackedObject);
+
+        foreach (var tracked in _handSkeletonTrackedObjects.Values)
+            ClearTrackedObject(tracked);
+    }
+
+    private static void ClearTrackedObject(TrackedObject tracked)
+    {
+        if (tracked == null)
+            return;
+
+        tracked.RawPosition = float3.Zero;
+        tracked.RawRotation = floatQ.Identity;
+        tracked.IsTracking = false;
+        tracked.IsDeviceActive = false;
+        tracked.TrackingSpace = null;
+    }
+
+    private static void ClearLegacyDevice(HeadDevice headDevice)
+    {
+        if (headDevice == null)
+            return;
+
+        headDevice.Position = Vector3.Zero;
+        headDevice.Rotation = Quaternion.Identity;
+        headDevice.IsTracked = false;
+        headDevice.IsWorn = false;
+        headDevice.TrackingConfidence = 0f;
+        headDevice.IsDeviceActive = false;
+    }
+
+    private static void ClearLegacyDevice(VRController controller)
+    {
+        if (controller == null)
+            return;
+
+        controller.Position = Vector3.Zero;
+        controller.Rotation = Quaternion.Identity;
+        controller.IsTracked = false;
+        controller.IsDeviceActive = false;
+        controller.ThumbstickPosition = Vector2.Zero;
+        controller.TriggerValue = 0f;
+        controller.TriggerPressed = false;
+        controller.GripValue = 0f;
+        controller.GripPressed = false;
+        controller.PrimaryButtonPressed = false;
+        controller.SecondaryButtonPressed = false;
     }
 
     private void UpdateHeadDevice(HeadDevice headDevice)
@@ -887,7 +978,14 @@ public class GodotVRDriver : IVRDriver, IInputDriver
     /// </summary>
     public void ShutdownVR()
     {
-        XRServer.TrackerAdded -= OnTrackerAdded;
+        if (_trackerAddedConnected)
+        {
+            XRServer.TrackerAdded -= OnTrackerAdded;
+            _trackerAddedConnected = false;
+        }
+
+        _modeActive = false;
+        ClearTrackingState();
         _xrInterface = null;
         GD.Print("GodotVRDriver: VR shutdown");
     }

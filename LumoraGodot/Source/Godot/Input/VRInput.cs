@@ -63,6 +63,14 @@ public partial class VRInput : Node3D, IInputProvider
         }
     }
 
+    public override void _ExitTree()
+    {
+        if (object.ReferenceEquals(IInputProvider.Instance, this))
+            IInputProvider.Instance = null;
+
+        base._ExitTree();
+    }
+
 
     public override void _Process(double delta)
     {

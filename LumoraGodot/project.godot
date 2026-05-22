@@ -16,7 +16,7 @@ compatibility/default_parent_skeleton_in_mesh_instance_3d=true
 
 config/name="LumoraVR"
 run/main_scene="uid://c8sly288nngj4"
-config/features=PackedStringArray("4.6", "C#", "Forward Plus")
+config/features=PackedStringArray("4.7", "C#", "Forward Plus")
 config/icon="res://Assets/Textures/lumoravricon.svg"
 
 [audio]
@@ -206,12 +206,12 @@ common/physics_interpolation=true
 
 [rendering]
 
-renderer/rendering_method.mobile="forward_plus"
 textures/vram_compression/import_etc2_astc=true
 
 [xr]
 
 openxr/enabled=true
+openxr/foveation_eye_tracked=false
 openxr/startup_alert=false
 shaders/enabled=true
 openxr/action_map="res://openxr_action_map.tres"

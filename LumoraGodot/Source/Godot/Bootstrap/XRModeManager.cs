@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Threading.Tasks;
 using Godot;
 using Lumora.Core;
 using Lumora.Core.Input;
@@ -26,11 +27,10 @@ namespace Lumora.Source.Godot.Bootstrap;
 /// (DesktopInput + DesktopCameraController  ←→  EngineVRInputProvider + Laser/Grab managers)
 /// so the rest of the engine doesn't need to know which mode is active.
 ///
-/// Rendering is dual-SubViewport: the desktop SubViewport stays mono and the XR
-/// SubViewport stays stereo (<c>use_xr=true</c>) for the whole process. Toggle
-/// is purely "which container is visible + which viewport renders" - we never
-/// flip <c>Viewport.use_xr</c> at runtime, which avoids Godot's render-pipeline
-/// cache invalidation when view_count changes.
+/// Rendering follows the BarkVR-style split-camera pattern: the desktop camera
+/// never has XR enabled, the XR camera only drives VR, and mode changes are
+/// queued across frame boundaries so queued frees and renderer state settle
+/// before another switch can start.
 /// - xlinka
 /// </summary>
 public partial class XRModeManager : Node
@@ -58,6 +58,13 @@ public partial class XRModeManager : Node
 
     private bool _initialized = false;
     private bool _switching   = false;
+    private bool _toggleQueued = false;
+    private bool? _queuedVRTarget;
+    private ulong _lastSwitchMsec = 0;
+    private bool _xrAvailable = false;
+    private bool _spectatorMirrorLogShown = false;
+
+    private const ulong SwitchCooldownMsec = 500;
 
     // ===== REFERENCES (provided at Initialize) =====
     private Lumora.Core.Engine _engine;
@@ -78,6 +85,7 @@ public partial class XRModeManager : Node
     // Bootstrap.tscn defines the XR sub-tree up-front; we just hold refs.
     private XROrigin3D _xrOrigin;
     private XRCamera3D _xrCamera;
+    private Viewport   _xrViewport;
 
     // =====================================================================
     //  KEY DETECTION
@@ -111,6 +119,7 @@ public partial class XRModeManager : Node
         _vrDriver       = vrDriver;
         IsVRActive      = startingInVR;
         Instance        = this;
+        _xrAvailable    = startingInVR || XRServer.FindInterface("OpenXR")?.IsInitialized() == true;
 
         // Bind XR nodes from Bootstrap.tscn. They exist for the whole process
         // lifetime now - no more runtime creation. Looking up via CurrentScene
@@ -119,6 +128,11 @@ public partial class XRModeManager : Node
         var sceneRoot = GetTree()?.CurrentScene;
         _xrOrigin = sceneRoot?.GetNodeOrNull<XROrigin3D>("%XROrigin3D");
         _xrCamera = sceneRoot?.GetNodeOrNull<XRCamera3D>("%XRCamera3D");
+        _xrViewport = ResolveXRViewport(sceneRoot);
+
+        ApplyRenderingMode(startingInVR);
+        _headOutput?.NotifyVRActiveChanged(startingInVR);
+        _headOutput?.SwitchOutputType(startingInVR ? HeadOutput.OutputType.VR : HeadOutput.OutputType.Screen);
 
         // Spin up the correct input providers for the initial mode.
         if (startingInVR)
@@ -166,16 +180,19 @@ public partial class XRModeManager : Node
     private bool _f8WasDown;
     public override void _Process(double delta)
     {
-        if (!_initialized || _switching) return;
+        if (!_initialized) return;
         if (IsStandalone) return;
 
         bool f8Down = global::Godot.Input.IsKeyPressed(global::Godot.Key.F8);
         if (f8Down && !_f8WasDown)
         {
             LumoraLogger.Log($"XRModeManager: F8 polled (IsVRActive={IsVRActive}, queuing toggle)");
-            CallDeferred(MethodName.ToggleMode);
+            ToggleMode();
         }
         _f8WasDown = f8Down;
+
+        if (IsVRActive)
+            SyncDesktopMirrorCamera();
     }
 
     // =====================================================================
@@ -187,14 +204,7 @@ public partial class XRModeManager : Node
     /// </summary>
     public void ToggleMode()
     {
-        if (_switching) return;
-
-        LumoraLogger.Log($"XRModeManager: F8 toggling {(IsVRActive ? "VR -> Desktop" : "Desktop -> VR")}");
-
-        if (IsVRActive)
-            SwitchToDesktop();
-        else
-            SwitchToVR();
+        QueueModeSwitch(!IsVRActive);
     }
 
     // =====================================================================
@@ -206,44 +216,7 @@ public partial class XRModeManager : Node
     /// </summary>
     public void SwitchToDesktop()
     {
-        if (_switching || !IsVRActive) return;
-        _switching = true;
-
-        LumoraLogger.Log("XRModeManager: Switching → Desktop mode…");
-
-        // 1. Remove VR input providers.
-        TeardownVRInput();
-
-        // 2. Flip the root viewport back to mono. This is what makes the OS
-        //    window actually show the desktop camera view. Godot emits a one-
-        //    shot batch of framebuffer/pipeline-cache warnings here because
-        //    the renderer was built for stereo; the engine recovers within a
-        //    frame and continues running. Known Godot 4 limitation, no fix
-        //    short of reloading the scene.
-        //    - xlinka
-        GetViewport().UseXR = false;
-
-        // 3. Hide the XR origin so any 3D content under it doesn't keep being
-        //    rendered. The XR session itself stays alive.
-        if (_xrOrigin != null && GodotObject.IsInstanceValid(_xrOrigin))
-            _xrOrigin.Visible = false;
-
-        // 4. Restore the desktop camera as the active camera.
-        if (_mainCamera != null && GodotObject.IsInstanceValid(_mainCamera))
-            _mainCamera.MakeCurrent();
-
-        // 5. Inform HeadOutput of the mode change.
-        _headOutput?.NotifyVRActiveChanged(false);
-        _headOutput?.SwitchOutputType(HeadOutput.OutputType.Screen);
-
-        // 6. Create desktop input providers.
-        SetupDesktopInput();
-
-        IsVRActive = false;
-        _switching  = false;
-
-        LumoraLogger.Log("XRModeManager: ✓ Desktop mode active. Press F8 to switch back to VR.");
-        ModeChanged?.Invoke(false);
+        QueueModeSwitch(false);
     }
 
     // =====================================================================
@@ -259,8 +232,108 @@ public partial class XRModeManager : Node
     /// </summary>
     public void SwitchToVR()
     {
-        if (_switching || IsVRActive) return;
+        QueueModeSwitch(true);
+    }
+
+    private void QueueModeSwitch(bool targetVR)
+    {
+        if (!_initialized)
+            return;
+
+        if (IsStandalone && !targetVR)
+        {
+            LumoraLogger.Warn("XRModeManager: Desktop mode is not available on standalone XR devices.");
+            return;
+        }
+
+        if (targetVR == IsVRActive)
+            return;
+
+        if (_switching || _toggleQueued)
+        {
+            LumoraLogger.Log("XRModeManager: Mode switch already queued or active; ignoring duplicate request.");
+            return;
+        }
+
+        var now = Time.GetTicksMsec();
+        if (_lastSwitchMsec != 0 && now - _lastSwitchMsec < SwitchCooldownMsec)
+        {
+            LumoraLogger.Log("XRModeManager: Mode switch ignored; renderer is still settling from the last switch.");
+            return;
+        }
+
+        _queuedVRTarget = targetVR;
+        _toggleQueued = true;
+        LumoraLogger.Log($"XRModeManager: Queued {(targetVR ? "Desktop -> VR" : "VR -> Desktop")} switch.");
+        CallDeferred(nameof(ProcessQueuedModeSwitch));
+    }
+
+    private async void ProcessQueuedModeSwitch()
+    {
+        if (!_toggleQueued)
+            return;
+
+        var targetVR = _queuedVRTarget ?? !IsVRActive;
+        _queuedVRTarget = null;
+        _toggleQueued = false;
+
+        if (!_initialized || _switching || targetVR == IsVRActive)
+            return;
+
         _switching = true;
+        var switched = false;
+
+        try
+        {
+            await WaitProcessFrames(1);
+            switched = targetVR
+                ? await SwitchToVRInternalAsync()
+                : await SwitchToDesktopInternalAsync();
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Error($"XRModeManager: Unexpected mode switch error. ({ex.Message})");
+            if (targetVR)
+                await RecoverDesktopAfterFailedVRSwitchAsync();
+        }
+        finally
+        {
+            if (switched)
+                _lastSwitchMsec = Time.GetTicksMsec();
+
+            _switching = false;
+        }
+    }
+
+    private async Task<bool> SwitchToDesktopInternalAsync()
+    {
+        if (!IsVRActive)
+            return false;
+
+        LumoraLogger.Log("XRModeManager: Switching to Desktop mode...");
+
+        TeardownVRInput();
+        await WaitProcessFrames(1);
+
+        ApplyRenderingMode(false);
+        _headOutput?.NotifyVRActiveChanged(false);
+        _headOutput?.SwitchOutputType(HeadOutput.OutputType.Screen);
+        await WaitProcessFrames(1);
+
+        SetupDesktopInput();
+        await WaitProcessFrames(1);
+
+        IsVRActive = false;
+
+        LumoraLogger.Log("XRModeManager: Desktop mode active. Press F8 to switch back to VR.");
+        ModeChanged?.Invoke(false);
+        return true;
+    }
+
+    private async Task<bool> SwitchToVRInternalAsync()
+    {
+        if (IsVRActive)
+            return false;
 
         LumoraLogger.Log("XRModeManager: Switching to VR mode...");
 
@@ -270,9 +343,11 @@ public partial class XRModeManager : Node
             if (xrInterface == null)
             {
                 LumoraLogger.Warn("XRModeManager: OpenXR interface not found. Is a VR runtime running? Switch aborted.");
-                _switching = false;
-                return;
+                return false;
             }
+
+            if (!_xrAvailable)
+                LumoraLogger.Log("XRModeManager: OpenXR capability not established yet; checking runtime now.");
 
             // Recovery path - session is normally already up from PhaseXRDetection.
             if (!xrInterface.IsInitialized())
@@ -289,62 +364,205 @@ public partial class XRModeManager : Node
                 {
                     LumoraLogger.Warn("XRModeManager: OpenXR.Initialize() failed. " +
                         "Check the active OpenXR runtime in Windows matches your headset. Switch aborted.");
-                    _switching = false;
-                    return;
+                    return false;
                 }
             }
 
-            if (XRServer.PrimaryInterface == null)
-                XRServer.PrimaryInterface = xrInterface;
+            _xrAvailable = true;
+
+            XRServer.PrimaryInterface = xrInterface;
 
             DisplayServer.WindowSetVsyncMode(DisplayServer.VSyncMode.Disabled);
+            _vrDriver?.InitializeVR();
+            _vrDriver?.FindXRNodes(GetTree()?.Root);
 
             TeardownDesktopInput();
+            await WaitProcessFrames(1);
 
-            // Flip the root viewport back to stereo. Going Desktop -> VR is
-            // the clean direction; the warnings only fire when going the
-            // other way.
-            GetViewport().UseXR = true;
-
-            // Show the XR origin back (we hide it when going to desktop so
-            // any 3D content under it isn't being culled into the wrong view).
-            if (_xrOrigin != null && GodotObject.IsInstanceValid(_xrOrigin))
-                _xrOrigin.Visible = true;
-
+            ApplyRenderingMode(true);
             _headOutput?.NotifyVRActiveChanged(true);
             _headOutput?.SwitchOutputType(HeadOutput.OutputType.VR);
+            await WaitProcessFrames(1);
 
             SetupVRInput();
+            await WaitProcessFrames(1);
 
             IsVRActive = true;
-            _switching = false;
 
-            LumoraLogger.Log("XRModeManager: ✓ VR mode active. Press F8 to return to Desktop.");
+            LumoraLogger.Log("XRModeManager: VR mode active. Press F8 to return to Desktop.");
             ModeChanged?.Invoke(true);
+            return true;
         }
         catch (Exception ex)
         {
-            // Last-resort catch: log the error and stay in desktop mode so the game keeps running.
             LumoraLogger.Error($"XRModeManager: Unexpected error during VR switch, staying in Desktop mode. ({ex.Message})");
-            try
-            {
-                GetViewport().UseXR = false;
-                if (_mainCamera != null && GodotObject.IsInstanceValid(_mainCamera))
-                    _mainCamera.MakeCurrent();
-                if (_desktopInput == null || !GodotObject.IsInstanceValid(_desktopInput))
-                    SetupDesktopInput();
-            }
-            catch { /* ignore recovery errors */ }
+            await RecoverDesktopAfterFailedVRSwitchAsync();
+            return false;
+        }
+    }
+
+    private async Task RecoverDesktopAfterFailedVRSwitchAsync()
+    {
+        try
+        {
+            ApplyRenderingMode(false);
+            _headOutput?.NotifyVRActiveChanged(false);
+            _headOutput?.SwitchOutputType(HeadOutput.OutputType.Screen);
+            await WaitProcessFrames(1);
+
+            if (_desktopInput == null || !GodotObject.IsInstanceValid(_desktopInput))
+                SetupDesktopInput();
 
             IsVRActive = false;
-            _switching  = false;
         }
+        catch
+        {
+            // Nothing else useful to do here; the original switch failure was already logged.
+        }
+    }
+
+    private async Task WaitProcessFrames(int frameCount)
+    {
+        var tree = GetTree();
+        if (tree == null)
+            return;
+
+        for (var i = 0; i < frameCount; i++)
+            await ToSignal(tree, SceneTree.SignalName.ProcessFrame);
     }
 
 
     // =====================================================================
     //  INPUT PROVIDER SETUP / TEARDOWN
     // =====================================================================
+
+    private void ApplyRenderingMode(bool vrActive)
+    {
+        var rootViewport = GetViewport();
+        var xrViewport = ResolveXRViewport(GetTree()?.CurrentScene);
+
+        if (rootViewport != null && rootViewport != xrViewport)
+            rootViewport.UseXR = false;
+
+        var keepXRViewportEnabled = vrActive || IsOpenXRSessionActive();
+
+        if (xrViewport != null)
+        {
+            xrViewport.UseXR = keepXRViewportEnabled;
+        }
+        else if (rootViewport != null)
+        {
+            rootViewport.UseXR = keepXRViewportEnabled;
+        }
+
+        if (_xrOrigin != null && GodotObject.IsInstanceValid(_xrOrigin))
+            _xrOrigin.Visible = true;
+
+        var camerasShareViewport = CamerasShareViewport();
+
+        if (vrActive)
+        {
+            _vrDriver?.SetModeActive(true);
+
+            if (camerasShareViewport && _mainCamera != null && GodotObject.IsInstanceValid(_mainCamera))
+                _mainCamera.Current = false;
+
+            if (_xrCamera != null && GodotObject.IsInstanceValid(_xrCamera))
+                _xrCamera.MakeCurrent();
+            else
+                LumoraLogger.Warn("XRModeManager: Cannot make XR camera current - %XRCamera3D is missing.");
+
+            if (!camerasShareViewport && _mainCamera != null && GodotObject.IsInstanceValid(_mainCamera))
+                _mainCamera.MakeCurrent();
+
+            SyncDesktopMirrorCamera();
+        }
+        else
+        {
+            _spectatorMirrorLogShown = false;
+            _vrDriver?.SetModeActive(false);
+
+            if (camerasShareViewport && _xrCamera != null && GodotObject.IsInstanceValid(_xrCamera))
+                _xrCamera.Current = false;
+
+            if (_mainCamera != null && GodotObject.IsInstanceValid(_mainCamera))
+                _mainCamera.MakeCurrent();
+            else
+                LumoraLogger.Warn("XRModeManager: Cannot make desktop camera current - %DesktopCamera is missing.");
+
+            if (!camerasShareViewport && _xrCamera != null && GodotObject.IsInstanceValid(_xrCamera))
+                _xrCamera.MakeCurrent();
+        }
+    }
+
+    private Viewport ResolveXRViewport(Node sceneRoot = null)
+    {
+        if (_xrViewport != null && GodotObject.IsInstanceValid(_xrViewport))
+            return _xrViewport;
+
+        if (_xrCamera != null && GodotObject.IsInstanceValid(_xrCamera) && _xrCamera.IsInsideTree())
+        {
+            _xrViewport = _xrCamera.GetViewport();
+            if (_xrViewport != null)
+                return _xrViewport;
+        }
+
+        if (_xrOrigin != null && GodotObject.IsInstanceValid(_xrOrigin) && _xrOrigin.IsInsideTree())
+        {
+            _xrViewport = _xrOrigin.GetViewport();
+            if (_xrViewport != null)
+                return _xrViewport;
+        }
+
+        sceneRoot ??= GetTree()?.CurrentScene;
+        _xrViewport = sceneRoot?.GetNodeOrNull<SubViewport>("%XRViewport");
+        return _xrViewport;
+    }
+
+    private bool IsOpenXRSessionActive()
+    {
+        return _xrAvailable || XRServer.FindInterface("OpenXR")?.IsInitialized() == true;
+    }
+
+    private bool CamerasShareViewport()
+    {
+        if (_mainCamera == null || _xrCamera == null)
+            return false;
+
+        if (!GodotObject.IsInstanceValid(_mainCamera) || !GodotObject.IsInstanceValid(_xrCamera))
+            return false;
+
+        return _mainCamera.GetViewport() == _xrCamera.GetViewport();
+    }
+
+    private void SyncDesktopMirrorCamera()
+    {
+        if (_mainCamera == null || _xrCamera == null)
+            return;
+
+        if (!GodotObject.IsInstanceValid(_mainCamera) || !GodotObject.IsInstanceValid(_xrCamera))
+            return;
+
+        if (!_mainCamera.IsInsideTree() || !_xrCamera.IsInsideTree())
+            return;
+
+        if (_mainCamera.GetViewport() == _xrCamera.GetViewport())
+            return;
+
+        _mainCamera.GlobalTransform = _xrCamera.GlobalTransform;
+        _mainCamera.Near = _xrCamera.Near;
+        _mainCamera.Far = _xrCamera.Far;
+        _mainCamera.Fov = _xrCamera.Fov;
+
+        if (!_mainCamera.Current)
+            _mainCamera.MakeCurrent();
+
+        if (!_spectatorMirrorLogShown)
+        {
+            LumoraLogger.Log("XRModeManager: DesktopCamera is mirroring XRCamera3D for the monitor view.");
+            _spectatorMirrorLogShown = true;
+        }
+    }
 
     private void SetupDesktopInput()
     {

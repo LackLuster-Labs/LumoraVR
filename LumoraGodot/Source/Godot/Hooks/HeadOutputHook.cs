@@ -39,14 +39,10 @@ public class HeadOutputHook : ComponentHook<HeadOutput>
         if (userRoot?.ActiveUser != Owner.World.LocalUser)
             return;
 
-        // Camera automatically follows its parent node (head slot)
-        // The head slot's position is updated by UserRoot/CharacterController
-
-        // Update camera settings if needed
-        if (Owner.Enabled != _camera.Current)
-        {
-            _camera.Current = Owner.Enabled;
-        }
+        // Bootstrap HeadOutput owns the active desktop/XR cameras. Keep this
+        // legacy head camera from stealing the viewport during mode switches.
+        if (_camera.Current)
+            _camera.Current = false;
     }
 
     private void TryInitializeCamera()
@@ -71,7 +67,7 @@ public class HeadOutputHook : ComponentHook<HeadOutput>
         _camera = new Camera3D
         {
             Name = "UserCamera",
-            Current = true,
+            Current = false,
             Fov = 90f,
             Near = 0.05f,
             Far = 1000f,

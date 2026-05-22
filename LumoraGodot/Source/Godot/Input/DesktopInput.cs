@@ -69,11 +69,9 @@ public partial class DesktopInput : Node3D, IInputProvider
         CreateCursorUI();
         CreateInteractionRay();
 
-        // Set as input provider if no VR
-        if (IInputProvider.Instance == null || !IInputProvider.Instance.IsVR)
-        {
-            IInputProvider.Instance = this;
-        }
+        // XRModeManager only creates DesktopInput while desktop mode is active,
+        // so it should always own the global provider until it exits.
+        IInputProvider.Instance = this;
 
         // Create laser interaction manager for UI clicking
         // The LaserPointer handles sending mouse events to SubViewports
@@ -86,6 +84,15 @@ public partial class DesktopInput : Node3D, IInputProvider
         AddChild(_grabManager);
 
         LumoraLogger.Log("DesktopInput initialized");
+    }
+
+    public override void _ExitTree()
+    {
+        if (object.ReferenceEquals(IInputProvider.Instance, this))
+            IInputProvider.Instance = null;
+
+        InterfaceSettings.Changed -= ApplyCursorSettings;
+        base._ExitTree();
     }
 
     private void CreateCursorUI()
@@ -153,7 +160,7 @@ public partial class DesktopInput : Node3D, IInputProvider
     private void UpdateCamera()
     {
         // During freecam the override camera is Current, but hands/rays must stay
-        // anchored to the character's head — not fly around with the freecam.
+        // anchored to the character's head - not fly around with the freecam.
         if (LocomotionController.FreeCamActive)
             return;
 

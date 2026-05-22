@@ -29,7 +29,7 @@ on:
         type: boolean
 
 env:
-  GODOT_VERSION: 4.6.2-stable
+  GODOT_VERSION: 4.7-dev4
   DOTNET_VERSION: 10.0.x
   SOLUTION_PATH: LumoraGodot/Lumora.sln
   GODOT_PROJECT_DIR: LumoraGodot
@@ -75,13 +75,13 @@ jobs:
           set -euo pipefail
           GV="${GODOT_VERSION}"
 
-          curl -fLO "https://github.com/godotengine/godot/releases/download/${GV}/Godot_v${GV}_mono_linux_x86_64.zip"
+          curl -fLO "https://godot-releases.nbg1.your-objectstorage.com/${GV}/Godot_v${GV}_mono_linux_x86_64.zip"
           unzip -q "Godot_v${GV}_mono_linux_x86_64.zip"
           sudo mv "Godot_v${GV}_mono_linux_x86_64" /opt/godot
           sudo ln -s "/opt/godot/Godot_v${GV}_mono_linux.x86_64" /usr/local/bin/godot
           godot --version
 
-          curl -fLO "https://github.com/godotengine/godot/releases/download/${GV}/Godot_v${GV}_mono_export_templates.tpz"
+          curl -fLO "https://godot-releases.nbg1.your-objectstorage.com/${GV}/Godot_v${GV}_mono_export_templates.tpz"
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GV/-/.}.mono"
           mkdir -p "$TEMPLATE_DIR"
           rm -rf /tmp/tpl
@@ -176,7 +176,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $gv = $env:GODOT_VERSION
 
-          Invoke-WebRequest -Uri "https://github.com/godotengine/godot/releases/download/$gv/Godot_v${gv}_mono_win64.zip" -OutFile godot.zip
+          Invoke-WebRequest -Uri "https://godot-releases.nbg1.your-objectstorage.com/$gv/Godot_v${gv}_mono_win64.zip" -OutFile godot.zip
           Expand-Archive -Path godot.zip -DestinationPath godot
           $consoleExe = Get-ChildItem godot -Recurse -Filter "*console*.exe" | Select-Object -First 1
           if (-not $consoleExe) { throw "Godot console exe not found in archive" }
@@ -184,7 +184,7 @@ jobs:
           Add-Content $env:GITHUB_PATH $consoleExe.Directory.FullName
           & $consoleExe.FullName --version
 
-          Invoke-WebRequest -Uri "https://github.com/godotengine/godot/releases/download/$gv/Godot_v${gv}_mono_export_templates.tpz" -OutFile templates.tpz
+          Invoke-WebRequest -Uri "https://godot-releases.nbg1.your-objectstorage.com/$gv/Godot_v${gv}_mono_export_templates.tpz" -OutFile templates.tpz
           $templatesDir = Join-Path $env:APPDATA "Godot\export_templates\$($gv -replace '-','.').mono"
           New-Item -ItemType Directory -Force -Path $templatesDir | Out-Null
           if (Test-Path tpl) {
@@ -234,9 +234,21 @@ jobs:
         working-directory: ${{ env.GODOT_PROJECT_DIR }}
         shell: pwsh
         run: |
-          & $env:GODOT_EXE --headless --import
-          if ($LASTEXITCODE -ne 0) {
-            Write-Host "Ignoring Godot import exit code $LASTEXITCODE"
+          # Godot 4.6.2 on Windows imports cleanly but then hangs (or
+          # segfaults) on shutdown after "Loading editor layout" - the
+          # actual work is done by the time it gets stuck. Run with a
+          # hard timeout and kill it once it overruns; the cache it
+          # generated up to that point is what --export-release needs.
+          # - xlinka
+          $proc = Start-Process -FilePath $env:GODOT_EXE `
+            -ArgumentList '--headless','--import' `
+            -NoNewWindow -PassThru
+          if (-not $proc.WaitForExit(240000)) {
+            Write-Host "Godot import pass exceeded 240s; killing PID $($proc.Id)"
+            try { $proc.Kill($true) } catch { Write-Host "Kill failed: $_" }
+            $proc.WaitForExit(15000) | Out-Null
+          } elseif ($proc.ExitCode -ne 0) {
+            Write-Host "Ignoring Godot import exit code $($proc.ExitCode)"
           }
 
       - name: Export Windows
@@ -270,28 +282,25 @@ jobs:
   build-android:
     needs: version
     runs-on: ubuntu-latest
-    # Required GitHub Secrets for store-quality signed APKs (Meta Horizon Store
-    # and Pico Store both require a stable release key fingerprint across
-    # versions). If any of these are missing the workflow falls back to debug
-    # signing - fine for sideloading via adb / SideQuest, NOT acceptable for
-    # store submission.
+    # Godot's release-signing validator (has_valid_keystore_credentials)
+    # parses keytool stdout and rejects valid credentials on CI - it checks
+    # the first 14 bytes of output for "keytool error:" instead of the exit
+    # code. We sidestep it by flipping package/signed=false in the preset
+    # (Godot exports an unaligned/unsigned APK) and run apksigner ourselves
+    # with the release keystore decoded from secrets.
     #
-    #   ANDROID_RELEASE_KEYSTORE_B64       base64-encoded .keystore file
-    #                                       (cat lumora-release.keystore | base64 -w0)
-    #   ANDROID_RELEASE_KEYSTORE_PASSWORD  password set on the keystore at creation
-    #   ANDROID_RELEASE_KEY_ALIAS          the -alias value passed to keytool -genkey
-    #   ANDROID_RELEASE_KEY_PASSWORD       optional current key password, only
-    #                                       needed if it differs from the
-    #                                       keystore password
-    #
-    # Godot has one Android Release Password field. Generate the keystore with
-    # matching key and keystore passwords if possible. If the passwords differ,
-    # this workflow rewrites the temporary CI keystore copy before export.
+    # Required GitHub Secrets:
+    #   ANDROID_RELEASE_KEYSTORE_B64       base64 of release.keystore
+    #                                       (base64 -w0 release.keystore)
+    #   ANDROID_RELEASE_KEYSTORE_PASSWORD  storepass
+    #   ANDROID_RELEASE_KEY_ALIAS          alias inside the keystore
+    #   ANDROID_RELEASE_KEY_PASSWORD       optional; defaults to storepass
+    #                                       if the alias was created with a
+    #                                       matching key password.
     #
     # Generate the keystore once locally:
     #   keytool -genkey -v -keystore lumora-release.keystore -alias lumora \
     #           -keyalg RSA -keysize 2048 -validity 10000
-    # Then base64 it and paste into the GitHub Secret.
     # - xlinka
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -329,13 +338,13 @@ jobs:
           set -euo pipefail
           GV="${GODOT_VERSION}"
 
-          curl -fLO "https://github.com/godotengine/godot/releases/download/${GV}/Godot_v${GV}_mono_linux_x86_64.zip"
+          curl -fLO "https://godot-releases.nbg1.your-objectstorage.com/${GV}/Godot_v${GV}_mono_linux_x86_64.zip"
           unzip -q "Godot_v${GV}_mono_linux_x86_64.zip"
           sudo mv "Godot_v${GV}_mono_linux_x86_64" /opt/godot
           sudo ln -s "/opt/godot/Godot_v${GV}_mono_linux.x86_64" /usr/local/bin/godot
           godot --version
 
-          curl -fLO "https://github.com/godotengine/godot/releases/download/${GV}/Godot_v${GV}_mono_export_templates.tpz"
+          curl -fLO "https://godot-releases.nbg1.your-objectstorage.com/${GV}/Godot_v${GV}_mono_export_templates.tpz"
           TEMPLATE_DIR="$HOME/.local/share/godot/export_templates/${GV/-/.}.mono"
           mkdir -p "$TEMPLATE_DIR"
           rm -rf /tmp/tpl
@@ -379,16 +388,17 @@ jobs:
           }
           EOF
 
-      - name: Stamp export metadata
+      - name: Stamp export metadata and disable APK signing
         working-directory: ${{ env.GODOT_PROJECT_DIR }}
         run: |
           set -euo pipefail
           sed -i \
             -e "s/^application\\/file_version=.*/application\\/file_version=\"${VERSION}\"/" \
             -e "s/^application\\/product_version=.*/application\\/product_version=\"${VERSION}\"/" \
+            -e "s/^package\\/signed=.*/package\\/signed=false/" \
             export_presets.cfg
 
-      - name: Configure Android release keystore
+      - name: Decode Android release keystore
         working-directory: ${{ env.GODOT_PROJECT_DIR }}
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_RELEASE_KEYSTORE_B64 }}
@@ -397,59 +407,31 @@ jobs:
           KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-
           if [ -z "${KEYSTORE_B64:-}" ] || [ -z "${KEYSTORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ]; then
-            echo "::warning::One or more Android release keystore secrets are not set."
-            echo "::warning::APKs will be debug-signed - fine for sideloading, NOT acceptable for store submission."
-            echo "::warning::Required secrets: ANDROID_RELEASE_KEYSTORE_B64, ANDROID_RELEASE_KEYSTORE_PASSWORD, ANDROID_RELEASE_KEY_ALIAS"
-            exit 0
+            echo "::error::Missing one of ANDROID_RELEASE_KEYSTORE_B64, ANDROID_RELEASE_KEYSTORE_PASSWORD, ANDROID_RELEASE_KEY_ALIAS."
+            exit 1
           fi
-
-          # Decode the keystore into the project root so the Godot exporter can
-          # find it via the absolute path passed through Godot's documented
-          # Android export environment overrides.
-          printf '%s' "${KEYSTORE_B64}" | base64 -d > release.keystore
           echo "::add-mask::${KEYSTORE_PASSWORD}"
           echo "::add-mask::${KEY_ALIAS}"
           if [ -n "${KEY_PASSWORD:-}" ]; then
             echo "::add-mask::${KEY_PASSWORD}"
           fi
 
-          KEY_ENTRY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
-          if [ "${KEY_ENTRY_PASSWORD}" != "${KEYSTORE_PASSWORD}" ]; then
-            echo "Aligning temporary Android key password with keystore password for Godot export."
-            if ! keytool -keypasswd \
-              -alias "${KEY_ALIAS}" \
-              -keystore release.keystore \
-              -storepass "${KEYSTORE_PASSWORD}" \
-              -keypass "${KEY_ENTRY_PASSWORD}" \
-              -new "${KEYSTORE_PASSWORD}" \
-              >/dev/null 2>&1; then
-              echo "::error::Android key password update failed."
-              echo "::error::Check ANDROID_RELEASE_KEY_PASSWORD, ANDROID_RELEASE_KEYSTORE_PASSWORD, and ANDROID_RELEASE_KEY_ALIAS."
-              exit 1
-            fi
-          fi
+          # Strip whitespace/newlines that paste-style secrets sometimes carry.
+          printf '%s' "${KEYSTORE_B64}" | tr -d '\r\n ' | base64 -d > release.keystore
+          echo "Decoded release.keystore: $(stat -c '%s bytes' release.keystore)"
 
-          # Godot performs this same `keytool -list` check before export.
-          # Keep it here so bad secrets fail before any APK build work starts.
-          KEYTOOL_OUTPUT="$(mktemp)"
+          # Storepass + alias sanity check. apksigner does a full check later,
+          # but failing here means we don't waste time on the export first.
           if ! keytool -list \
             -keystore release.keystore \
             -storepass "${KEYSTORE_PASSWORD}" \
             -alias "${KEY_ALIAS}" \
-            >"${KEYTOOL_OUTPUT}" 2>&1; then
-            echo "::error::Android release keystore validation failed."
-            echo "::error::Check ANDROID_RELEASE_KEYSTORE_PASSWORD and ANDROID_RELEASE_KEY_ALIAS."
-            echo "keytool validation output:"
-            sed -e 's/[[:cntrl:]]//g' "${KEYTOOL_OUTPUT}" || true
-            rm -f "${KEYTOOL_OUTPUT}"
+            >/dev/null 2>&1; then
+            echo "::error::keytool rejected the storepass or alias. Check ANDROID_RELEASE_KEYSTORE_PASSWORD and ANDROID_RELEASE_KEY_ALIAS."
             exit 1
           fi
-          rm -f "${KEYTOOL_OUTPUT}"
-
-          echo "Android release keystore validation passed."
-          echo "Release keystore configured: $(stat -c '%s bytes' release.keystore)"
+          echo "Release keystore validated."
 
       - name: Build .NET solution
         run: |
@@ -499,189 +481,86 @@ jobs:
           mkdir -p android/build
           unzip -q -o "${ANDROID_TEMPLATE_ZIP}" -d android/build/
           test -f android/build/build.gradle || { echo "Android build template extracted but build.gradle missing"; ls -laR android || true; exit 1; }
-          echo "Android build template installed at android/build/"
 
-      - name: Configure Godot Android export credentials
+          # The editor's --install-android-build-template also writes a
+          # version marker file. Without it, the gradle export step fails
+          # with: "Trying to build from a gradle built template, but no
+          # version info for it exists." Content must match Godot's
+          # VERSION_FULL_CONFIG (major.minor.patch.status[.module_config])
+          # for the running editor; we derive it from GODOT_VERSION.
+          # - xlinka
+          GODOT_VERSION_FULL_CONFIG="${GV/-/.}.mono"
+          printf '%s' "${GODOT_VERSION_FULL_CONFIG}" > android/.build_version
+          printf '%s' "${GODOT_VERSION_FULL_CONFIG}" > android/build/version.txt
+
+          # And the editor also drops .gdignore files so its filesystem
+          # scanner does not index the build template tree. Without these,
+          # the second Android export (Pico after Quest) sees the merged
+          # assets/resources Quest wrote, registers every OpenXR singleton
+          # twice, and creates .webp.import companions in res/mipmap-*/
+          # that gradle's resource merger then rejects. - xlinka
+          touch android/.gdignore android/build/.gdignore
+          echo "Android build template installed at android/build/ (version: ${GODOT_VERSION_FULL_CONFIG})"
+
+      - name: Export Quest APK (unsigned)
         working-directory: ${{ env.GODOT_PROJECT_DIR }}
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
         run: |
           set -euo pipefail
-
-          if [ ! -f release.keystore ] || [ -z "${KEYSTORE_PASSWORD:-}" ] || [ -z "${KEY_ALIAS:-}" ]; then
-            echo "::warning::Release keystore credentials are incomplete; Godot will use preset/default signing settings."
-            exit 0
-          fi
-
-          echo "::add-mask::${KEYSTORE_PASSWORD}"
-          echo "::add-mask::${KEY_ALIAS}"
-          python3 - <<'PY'
-          import json
-          import os
-          from pathlib import Path
-
-          keystore_path = str(Path("release.keystore").resolve())
-          key_alias = os.environ["KEY_ALIAS"]
-          keystore_password = os.environ["KEYSTORE_PASSWORD"]
-
-          def q(value: str) -> str:
-              return json.dumps(value)
-
-          content = f"""[preset.2]
-
-          script_encryption_key=""
-
-          [preset.2.options]
-
-          keystore/debug=""
-          keystore/debug_user=""
-          keystore/debug_password=""
-          keystore/release={q(keystore_path)}
-          keystore/release_user={q(key_alias)}
-          keystore/release_password={q(keystore_password)}
-
-          [preset.3]
-
-          script_encryption_key=""
-
-          [preset.3.options]
-
-          keystore/debug=""
-          keystore/debug_user=""
-          keystore/debug_password=""
-          keystore/release={q(keystore_path)}
-          keystore/release_user={q(key_alias)}
-          keystore/release_password={q(keystore_password)}
-          """
-
-          credentials_path = Path(".godot/export_credentials.cfg")
-          credentials_path.parent.mkdir(parents=True, exist_ok=True)
-          credentials_path.write_text(content, encoding="utf-8")
-
-          preset_path = Path("export_presets.cfg")
-          lines = preset_path.read_text(encoding="utf-8").splitlines(keepends=True)
-          current_preset = None
-          patched = []
-          for line in lines:
-              stripped = line.strip()
-              if stripped.startswith("[preset.") and stripped.endswith("]") and ".options" not in stripped:
-                  current_preset = stripped.removeprefix("[preset.").removesuffix("]")
-              if current_preset in {"2", "3"}:
-                  if line.startswith("keystore/release="):
-                      line = f"keystore/release={q(keystore_path)}\n"
-                  elif line.startswith("keystore/release_user="):
-                      line = f"keystore/release_user={q(key_alias)}\n"
-                  elif line.startswith("keystore/release_password="):
-                      line = f"keystore/release_password={q(keystore_password)}\n"
-              patched.append(line)
-          preset_path.write_text("".join(patched), encoding="utf-8")
-          PY
-
-          echo "Godot export credentials configured for Android presets."
-          echo "Godot export presets patched for Android signing in this CI workspace."
-
-      - name: Export Quest APK
-        working-directory: ${{ env.GODOT_PROJECT_DIR }}
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
-        run: |
-          set -euo pipefail
-
-          echo "Quest export diagnostics:"
-          echo "- workflow debug revision: android-quest-signing-v3"
-          echo "- working directory: $(pwd)"
-          echo "- release.keystore present: $([ -f release.keystore ] && echo yes || echo no)"
-          if [ -f release.keystore ]; then
-            echo "- release.keystore size: $(stat -c '%s bytes' release.keystore)"
-          fi
-          echo "- android/build/build.gradle present: $([ -f android/build/build.gradle ] && echo yes || echo no)"
-          echo "- KEYSTORE_PASSWORD set: $([ -n "${KEYSTORE_PASSWORD:-}" ] && echo yes || echo no)"
-          echo "- KEY_ALIAS set: $([ -n "${KEY_ALIAS:-}" ] && echo yes || echo no)"
-          echo "- export_presets release fields set:"
-          awk -F= '
-            /^keystore\/release="/ { print "  release path: " ($2 == "\"\"" ? "empty" : "set") }
-            /^keystore\/release_user="/ { print "  release user: " ($2 == "\"\"" ? "empty" : "set") }
-            /^keystore\/release_password="/ { print "  release password: " ($2 == "\"\"" ? "empty" : "set") }
-          ' export_presets.cfg
-
-          if [ -f release.keystore ] && [ -n "${KEYSTORE_PASSWORD:-}" ] && [ -n "${KEY_ALIAS:-}" ]; then
-            echo "::add-mask::${KEYSTORE_PASSWORD}"
-            echo "::add-mask::${KEY_ALIAS}"
-            KEYTOOL_OUTPUT="$(mktemp)"
-            if ! keytool -list \
-              -keystore release.keystore \
-              -storepass "${KEYSTORE_PASSWORD}" \
-              -alias "${KEY_ALIAS}" \
-              >"${KEYTOOL_OUTPUT}" 2>&1; then
-              echo "::error::Godot signing credentials are not valid for release.keystore."
-              echo "keytool validation output:"
-              sed -e 's/[[:cntrl:]]//g' "${KEYTOOL_OUTPUT}" || true
-              rm -f "${KEYTOOL_OUTPUT}"
-              exit 1
-            fi
-            rm -f "${KEYTOOL_OUTPUT}"
-            echo "- Godot-style keytool validation: passed"
-            echo "- export_credentials release fields set:"
-            awk -F= '
-              /^keystore\/release=/ { print "  release path: " ($2 == "\"\"" ? "empty" : "set") }
-              /^keystore\/release_user=/ { print "  release user: " ($2 == "\"\"" ? "empty" : "set") }
-              /^keystore\/release_password=/ { print "  release password: " ($2 == "\"\"" ? "empty" : "set") }
-            ' .godot/export_credentials.cfg
-            export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$(pwd)/release.keystore"
-            export GODOT_ANDROID_KEYSTORE_RELEASE_USER="${KEY_ALIAS}"
-            export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="${KEYSTORE_PASSWORD}"
-            echo "- Godot release keystore override path exists: $([ -f "${GODOT_ANDROID_KEYSTORE_RELEASE_PATH}" ] && echo yes || echo no)"
-            echo "- Godot release keystore override user set: yes"
-            echo "- Godot release keystore override password set: yes"
-          else
-            echo "::warning::Release keystore override not configured for Quest export; Godot may fail release signing."
-          fi
-
           mkdir -p ../build/android
           godot --headless --verbose --export-release "Quest" ../build/android/LumoraVR-Quest.apk
           ls -la ../build/android
 
-      - name: Export Pico APK
+      - name: Export Pico APK (unsigned)
+        working-directory: ${{ env.GODOT_PROJECT_DIR }}
+        run: |
+          set -euo pipefail
+          godot --headless --export-release "Pico" ../build/android/LumoraVR-Pico.apk
+          ls -la ../build/android
+
+      - name: Sign Quest + Pico APKs with apksigner
         working-directory: ${{ env.GODOT_PROJECT_DIR }}
         env:
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_RELEASE_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -f release.keystore ] && [ -n "${KEYSTORE_PASSWORD:-}" ] && [ -n "${KEY_ALIAS:-}" ]; then
-            echo "::add-mask::${KEYSTORE_PASSWORD}"
-            echo "::add-mask::${KEY_ALIAS}"
-            if ! keytool -list \
-              -keystore release.keystore \
-              -storepass "${KEYSTORE_PASSWORD}" \
-              -alias "${KEY_ALIAS}" \
-              >/dev/null 2>&1; then
-              echo "::error::Godot signing credentials are not valid for release.keystore."
-              exit 1
-            fi
-            export GODOT_ANDROID_KEYSTORE_RELEASE_PATH="$(pwd)/release.keystore"
-            export GODOT_ANDROID_KEYSTORE_RELEASE_USER="${KEY_ALIAS}"
-            export GODOT_ANDROID_KEYSTORE_RELEASE_PASSWORD="${KEYSTORE_PASSWORD}"
+          echo "::add-mask::${KEYSTORE_PASSWORD}"
+          echo "::add-mask::${KEY_ALIAS}"
+          if [ -n "${KEY_PASSWORD:-}" ]; then
+            echo "::add-mask::${KEY_PASSWORD}"
           fi
-          godot --headless --export-release "Pico" ../build/android/LumoraVR-Pico.apk
-          ls -la ../build/android
+          # apksigner reads --key-pass from --ks-pass when omitted; we always
+          # pass it explicitly so a keystore with a distinct key password
+          # works without any extra alignment step.
+          KEY_PASS="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
 
-      # Defence-in-depth: remove the decoded keystore and Godot credentials as
-      # soon as both Android exports have finished. The uploaded artifacts below
-      # only need the generated APKs/zips.
+          APKSIGNER="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS_VERSION}/apksigner"
+          ZIPALIGN="${ANDROID_HOME}/build-tools/${ANDROID_BUILD_TOOLS_VERSION}/zipalign"
+          [ -x "${APKSIGNER}" ] || { echo "::error::apksigner not found at ${APKSIGNER}"; exit 1; }
+          [ -x "${ZIPALIGN}" ] || { echo "::error::zipalign not found at ${ZIPALIGN}"; exit 1; }
+
+          for APK in ../build/android/LumoraVR-Quest.apk ../build/android/LumoraVR-Pico.apk; do
+            echo "::group::Sign ${APK}"
+            ALIGNED="${APK%.apk}-aligned.apk"
+            "${ZIPALIGN}" -p -f 4 "${APK}" "${ALIGNED}"
+            mv "${ALIGNED}" "${APK}"
+            "${APKSIGNER}" sign \
+              --ks release.keystore \
+              --ks-pass "pass:${KEYSTORE_PASSWORD}" \
+              --ks-key-alias "${KEY_ALIAS}" \
+              --key-pass "pass:${KEY_PASS}" \
+              "${APK}"
+            "${APKSIGNER}" verify --verbose "${APK}"
+            echo "::endgroup::"
+          done
+
+      # Defence-in-depth: wipe the decoded keystore even if signing or
+      # later steps fail. The uploaded artifacts only need the APKs/zips.
       - name: Scrub Android signing credentials from workspace
         if: always()
         working-directory: ${{ env.GODOT_PROJECT_DIR }}
-        run: |
-          rm -f release.keystore || true
-          rm -f .godot/export_credentials.cfg || true
-          sed -i \
-            -e 's|^keystore/release=".*"|keystore/release=""|' \
-            -e 's|^keystore/release_user=".*"|keystore/release_user=""|' \
-            -e 's|^keystore/release_password=".*"|keystore/release_password=""|' \
-            export_presets.cfg || true
+        run: rm -f release.keystore
 
       - name: Package zips
         run: |
