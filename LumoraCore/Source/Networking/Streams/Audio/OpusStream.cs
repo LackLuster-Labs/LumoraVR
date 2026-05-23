@@ -3,6 +3,7 @@ using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Concentus;
+using Concentus.Enums;
 using Lumora.Core.Math;
 using Lumora.Core.Networking.Sync;
 
@@ -105,13 +106,11 @@ public class OpusStream : Stream, IAudioStream
     #endregion
     #region Channel Count 
     public int ChannelConunt => _channelCount;
-    private int _channelCount = 1;
+    private int _channelCount = 2;
     #endregion
     private int _currentIndex;
     private static readonly int _bufferLimit = 4;
     public event PCMCallback? OnNewData;
-    private int currentIndex = 0;
-
     public void EnqueueRawFrame(ushort sequence, ReadOnlyMemory<byte> payload)
     {
         if (packetQueue.Count > _bufferLimit) packetQueue.TryDequeue(out _);
@@ -150,9 +149,23 @@ public class OpusStream : Stream, IAudioStream
                 }
             }
             if (available > 0)
+
             {
-                int outsize = opusDecoder.Decode(jitterBuffer[_currentIndex], dummyBuffer, framesize, true);
-                OnNewData(MemoryMarshal.Cast<float, float2>(dummyBuffer.AsSpan(outsize)));
+                int outsize = 0;
+                
+                //this can throw but the return code is more useful
+                try{
+                    outsize = opusDecoder.Decode(jitterBuffer[_currentIndex], dummyBuffer, framesize, true);
+                }catch {}
+                if(outsize == OpusError.OPUS_INVALID_PACKET)
+                {
+                    outsize = opusDecoder.Decode(null,dummyBuffer,framesize,false);
+                    
+                }
+                if(outsize > 0)
+                    OnNewData(MemoryMarshal.Cast<float, float2>(dummyBuffer.AsSpan(outsize)));
+                else
+                    Lumora.Core.Logging.Logger.Error($"No Opusdata to decode {ReferenceID}");
             }
         }else
         {
@@ -160,6 +173,7 @@ public class OpusStream : Stream, IAudioStream
             {
                 
                 int truelength = opusEncoder.Encode(MemoryMarshal.Cast<float2,float>(pcm),framesize,OutputBuffer,OutputBuffer.Length);
+                if(truelength > 0)
                 Owner.World.Session.SendRawFrame(this,++_sequenceOut,OutputBuffer.AsSpan(truelength));
             }
         }
