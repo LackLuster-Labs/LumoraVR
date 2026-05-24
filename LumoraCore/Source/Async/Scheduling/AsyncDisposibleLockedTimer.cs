@@ -10,7 +10,7 @@ namespace Lumora.Core.Scheduling;
 public class AsyncDisposibleLockedTimer : IDisposable
 {
     private readonly PeriodicTimer _timer;
-    private readonly List<Func<Task>> users = new();
+    private readonly List<Action> users = new();
     private readonly CancellationTokenSource cancellationToken = new();
     private readonly Object _lock = new();
     public delegate void ErrorHandler(Task task);
@@ -63,20 +63,20 @@ public class AsyncDisposibleLockedTimer : IDisposable
             List<Task> tasks = new();
             lock (_lock)
             {
-                foreach (Func<Task> task in users)
+                foreach (var task in users)
                 {
-                    tasks.Add(task());
+                    tasks.Add(Task.Run(task));
                 }
             }
             _ = Task.WhenAll(tasks).ContinueWith(async (task) => { if (task.IsFaulted) await PollErrorHandler(tasks.AsReadOnly()); });
         }
     }
-    public void Add(Func<Task> act)
+    public void Add(Action act)
     {
         lock (_lock)
             users.Add(act);
     }
-    public void Remove(Func<Task> act)
+    public void Remove(Action act)
     {
         lock (_lock)
             users.Remove(act);
