@@ -3,6 +3,7 @@
 
 using System;
 using System.IO;
+using Lumora.Core.Networking.Streams.Audio;
 using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core.Networking.Streams;
@@ -75,6 +76,7 @@ public class SyncStreamBag : SyncRefIDBagBase<Stream>
         {
             "Lumora.Core.Networking.Streams.Float3ValueStream" => new Float3ValueStream(),
             "Lumora.Core.Networking.Streams.FloatQValueStream" => new FloatQValueStream(),
+            "Lumora.Core.Networking.Streams.Audio.OpusStream" => new OpusStream(),
             _ => throw new InvalidOperationException($"Unknown stream type: {typeName}")
         };
 
