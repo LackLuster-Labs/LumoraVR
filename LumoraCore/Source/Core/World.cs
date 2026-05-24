@@ -1031,6 +1031,7 @@ public class World
 		if (_state == WorldState.Running)
 		{
 			user?.ConfigureLocalTrackingStreams();
+			user?.SetupVoiceStream();
 		}
 		AddUser(user);
 		LumoraLogger.Log($"Local user set: {user.UserName.Value}");
@@ -1131,6 +1132,7 @@ public class World
 		LocalUser = hostUser;
 		AddUserToBag(hostUser, userRefId, isNewlyCreated: true);
 		hostUser.ConfigureLocalTrackingStreams();
+		hostUser.SetupVoiceStream();
 		LumoraLogger.Log($"Created host user '{resolvedName}' with RefID {userRefId}");
 		return hostUser;
 	}
@@ -1304,6 +1306,7 @@ public class World
 		if (!IsAuthority && LocalUser != null)
 		{
 			LocalUser.ConfigureLocalTrackingStreams();
+			LocalUser.SetupVoiceStream();
 			LumoraLogger.Log($"Configured tracking streams for local user '{LocalUser.UserName.Value}' on world Running");
 		}
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
@@ -409,12 +409,13 @@ public class Engine : IDisposable
 
             // Initialize AudioSystem
             AudioManager = new();
-            foreach (string name in new string[] { "Music", "Effects", "Voice" })
+            foreach (string name in Enum.GetNames<AudioCategory>())
             {
                 if (AudioManager.Mixer.TryCreateAudioBus(name, out var bus) && AudioManager.Mixer.TryGetAudioBusByName("Master", out var master))
                     bus.Target = master;
             }
-            if(AudioManager.Mixer.TryGetAudioBusByName("Voice",out var voicebus)){
+            if (AudioManager.Mixer.TryGetAudioBusByName("Voice", out var voicebus))
+            {
                 voicebus.Mute = true;
             }
 

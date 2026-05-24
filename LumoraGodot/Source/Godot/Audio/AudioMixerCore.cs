@@ -6,10 +6,11 @@ using System.Collections.Generic;
 using System.Diagnostics.CodeAnalysis;
 using Godot;
 using Lumora.Core.External.Audio.GenericOutputMixer;
+using Lumora.Core.External.Audio.Godot;
 #nullable enable
 namespace Lumora.Source.Godot;
 
-public partial class AudioMixer
+public partial class AudioMixer : IAudioCaputreProvider
 {
     private static readonly AudioMixer _instance = new();
     public static AudioMixer GetMixer() => _instance;

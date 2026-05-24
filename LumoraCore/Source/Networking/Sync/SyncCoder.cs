@@ -42,6 +42,7 @@ public static class SyncCoder
         [typeof(BoundingBox)] = (w, v) => EncodeBoundingBox(w, (BoundingBox)v),
         [typeof(BodyNode)] = (w, v) => w.Write((int)(BodyNode)v),
         [typeof(BodyNode?)] = (w, v) => EncodeNullableBodyNode(w, (BodyNode?)v),
+        [typeof(AudioCategory)] = (w, v) => w.Write((ushort)v),
         [typeof(object)] = (w, v) => EncodeObject(w, v),
     };
 
@@ -81,6 +82,7 @@ public static class SyncCoder
         [typeof(BoundingBox)] = r => DecodeBoundingBox(r),
         [typeof(BodyNode)] = r => (BodyNode)r.ReadInt32(),
         [typeof(BodyNode?)] = r => DecodeNullableBodyNode(r),
+        [typeof(AudioCategory)] = r => (AudioCategory)r.ReadUInt16(),
         [typeof(object)] = r => DecodeObject(r),
     };
 
@@ -111,6 +113,7 @@ public static class SyncCoder
         [typeof(BoundingBox)] = new BoundingBox(),
         [typeof(BodyNode)] = BodyNode.NONE,
         [typeof(BodyNode?)] = null,
+        [typeof(AudioCategory)] = AudioCategory.Effects,
         [typeof(object)] = null,
     };
 

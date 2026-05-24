@@ -1,12 +1,10 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Threading.Tasks;
-using Lumora.Core;
 using Lumora.Core.Networking.Discovery;
-using Lumora.Core.Networking.LNL;
 using Lumora.Core.Networking.Streams;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
@@ -21,6 +19,8 @@ public class Session : IDisposable
     public SessionConnectionManager Connections { get; private set; }
     public SessionSyncManager Sync { get; private set; }
     public SessionAssetTransferer AssetTransferer { get; private set; }
+
+    public SessionRawStreamManager RawStreamManager { get; private set; }
 
     /// <summary>
     /// Session metadata describing identity, settings, and state.
@@ -84,6 +84,7 @@ public class Session : IDisposable
     {
         World = world;
         Connections = new SessionConnectionManager(this);
+        RawStreamManager = new SessionRawStreamManager(this);
     }
 
     /// <summary>
@@ -461,6 +462,7 @@ public class Session : IDisposable
 
         Sync?.Dispose();
         Connections?.Dispose();
+        RawStreamManager?.Dispose();
 
         World = null;
         Metadata = null;
