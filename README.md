@@ -22,13 +22,13 @@ Lumora VR is a feature-rich Social VR Platform designed for mid-range PC users w
 For questions or issues, please open an issue or make a PR.
 
 
-## Licence
+## License
 
 LumoraVR is source-available under the [LumoraVR Source Available License v2.0](./LICENSE.md).
 
 **Non-commercial use is free.** Build, fork, host community servers, experiment, share — as long as no money changes hands.
 
-**Commercial use requires a paid licence.** Contact **legal@lumoravr.com**.
+**Commercial use requires a paid license.** Contact **legal@lumoravr.com**.
 
 **On 2030-03-24 this version becomes GPL v3** — fully open source, forever.
 
@@ -39,7 +39,7 @@ LumoraVR is source-available under the [LumoraVR Source Available License v2.0](
 - Fork for personal non-commercial experimentation or to submit pull requests.
 - Use the source code for non-commercial AI/ML research.
 
-**What requires a commercial licence:**
+**What requires a commercial license:**
 - Running a paid or monetised service.
 - Distributing as part of a commercial product or selling access.
 - Publishing on commercial storefronts (Steam, Meta Store, App Store, Google Play, etc.).
@@ -51,6 +51,6 @@ LumoraVR is source-available under the [LumoraVR Source Available License v2.0](
 - Include attribution — e.g. "Based on LumoraVR" in your readme or about screen.
 - Not use the LumoraVR name, logo, or branding to promote or represent your project.
 
-**Contributions:** By submitting a pull request you grant LUMORAVR LTD a perpetual, royalty-free licence to use your contribution for any purpose, including commercially. You retain ownership subject to this licence. See [CLA](.github/CLA.md).
+**Contributions:** By submitting a pull request you grant LUMORAVR LTD a perpetual, royalty-free license to use your contribution for any purpose, including commercially. You retain ownership subject to this license. See [CLA](.github/CLA.md).
 
 See [LICENSE.md](./LICENSE.md) for full terms.
