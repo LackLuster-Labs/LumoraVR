@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using Godot;
 using LumoraLogger = Lumora.Core.Logging.Logger;
@@ -21,7 +22,7 @@ namespace Lumora.Godot.Hooks;
 // That first ask parses the source and reads Godot's own disk cache of what it compiled before, and the
 // cache read was the expensive part: 13 to 59 ms a shader on the main thread, against 2 to 7 ms for a
 // source it had never seen, and a graph opening asked for two hundred of them. Two threads take them in
-// the order asked and warm each one up before the frame gets it. -xlinka
+// the order asked, two more take only what materials wear, and each is warmed up before the frame gets it. -xlinka
 //
 // Two lanes. What a material wears goes first; a card's node preview waits until no material is waiting,
 // so a graph opening with two hundred previews never stands between a world's materials and the shaders they wear.
@@ -30,6 +31,9 @@ internal static class CustomShaderCache
 {
     private const int Capacity = 384;
     private const int Builders = 2;
+    // Builders that only take what a material wears. A cold lit shader waits a second or more on Godot's
+    // compile, and with two builders a world's dozen of them landed one pair at a time. -xlinka
+    private const int WornOnlyBuilders = 2;
 
     // Main thread only.
     private static readonly Dictionary<string, LinkedListNode<(string Source, Shader Shader)>> _bySource = new(StringComparer.Ordinal);
@@ -53,7 +57,9 @@ internal static class CustomShaderCache
         Lumora.Core.Assets.ShaderBuildStatus.PendingProvider = () => Pending;
     }
 
-    // Asked for and not handed over yet: waiting for a builder, building, or built and waiting for the frame.
+    // What a material wears, asked for and not handed over yet: waiting for a builder, building, or built and
+    // waiting for the frame. A card's node preview is left out: a world standing behind two hundred of them
+    // waited for every one before the user was let in. -xlinka
     public static int Pending => Volatile.Read(ref _pending);
 
     // The shader for this source if it is compiled. Otherwise null, and ready hears it on a later frame.
@@ -67,7 +73,6 @@ internal static class CustomShaderCache
         {
             callbacks = new List<Action<Shader>>();
             _waiting[source] = callbacks;
-            Interlocked.Increment(ref _pending);
             StartBuilders();
             _queued[source] = 0;
             if (late)
@@ -76,13 +81,16 @@ internal static class CustomShaderCache
             }
             else
             {
-                _waitingFirst.Add(source);
+                if (_waitingFirst.Add(source))
+                    Interlocked.Increment(ref _pending);
                 _first.Add(source);
             }
         }
-        else if (!late && _waitingFirst.Add(source) && _queued.ContainsKey(source))
+        else if (!late && _waitingFirst.Add(source))
         {
-            _first.Add(source);
+            Interlocked.Increment(ref _pending);
+            if (_queued.ContainsKey(source))
+                _first.Add(source);
         }
         callbacks.Add(ready);
         StartPumping();
@@ -115,7 +123,22 @@ internal static class CustomShaderCache
             var oldest = _recent.Last!;
             _recent.RemoveLast();
             _bySource.Remove(oldest.Value.Source);
+            Retire(oldest.Value.Shader);
         }
+    }
+
+    // A shader dropped from here is held a while longer before it is let go. Freeing a shader waits for every
+    // pipeline Godot still has queued for it, on the main thread, and one dropped while a graph's previews were still
+    // compiling held the frame for all of them (ShaderFiles). -xlinka
+    private const double RetireSeconds = 120.0;
+    private static readonly Queue<(Shader Shader, long At)> _retired = new();
+
+    private static void Retire(Shader shader)
+    {
+        long now = Stopwatch.GetTimestamp();
+        while (_retired.Count > 0 && Stopwatch.GetElapsedTime(_retired.Peek().At, now).TotalSeconds >= RetireSeconds)
+            _retired.Dequeue();
+        _retired.Enqueue((shader, now));
     }
 
     private static void StartBuilders()
@@ -124,15 +147,23 @@ internal static class CustomShaderCache
             return;
         _buildersStarted = true;
         PrepareWarmSurface();
-        for (int i = 0; i < Builders; i++)
-            new Thread(Build) { IsBackground = true, Name = $"Shader build {i + 1}" }.Start();
+        for (int i = 0; i < Builders + WornOnlyBuilders; i++)
+        {
+            bool wornOnly = i >= Builders;
+            new Thread(() => Build(wornOnly)) { IsBackground = true, Name = $"Shader build {i + 1}" }.Start();
+        }
     }
 
-    private static void Build()
+    private static void Build(bool wornOnly)
     {
         while (true)
         {
-            BlockingCollection<string>.TakeFromAny(_lanes, out var source);
+            string source;
+            bool late = false;
+            if (wornOnly)
+                source = _first.Take();
+            else
+                late = BlockingCollection<string>.TakeFromAny(_lanes, out source) == 1;
             if (source == null || !_queued.TryRemove(source, out _))
                 continue;
             Shader? shader = null;
@@ -140,7 +171,12 @@ internal static class CustomShaderCache
             {
                 shader = new Shader { Code = source };
                 shader.GetRid();
+                if (late)
+                    HeadStart();
+                long warmed = Stopwatch.GetTimestamp();
                 Warm(shader);
+                if (late)
+                    NoteLateWarm(Stopwatch.GetElapsedTime(warmed).TotalMilliseconds);
             }
             catch (Exception ex)
             {
@@ -149,6 +185,30 @@ internal static class CustomShaderCache
             }
             _built.Enqueue((source, shader));
         }
+    }
+
+    // A preview's shader compiles for a while before its warm-up material exists. Godot updates every new
+    // material on the main thread, and that update waits for whatever of the shader's compile is left, so a
+    // warm-up made at once held the frame for the rest of it: 30 to 45 ms each time a preview compiled cold,
+    // a stutter all through a graph's first fill. The wait follows how long recent warm-ups took, a few
+    // milliseconds when Godot's own cache has them. -xlinka
+    private const double HeadStartMaxMs = 250.0;
+    private static readonly object LateTiming = new();
+    private static double _lateWarmMs;
+
+    private static void HeadStart()
+    {
+        double ms;
+        lock (LateTiming)
+            ms = Math.Min(_lateWarmMs, HeadStartMaxMs);
+        if (ms >= 1.0)
+            Thread.Sleep(TimeSpan.FromMilliseconds(ms));
+    }
+
+    private static void NoteLateWarm(double ms)
+    {
+        lock (LateTiming)
+            _lateWarmMs = _lateWarmMs <= 0.0 ? ms : _lateWarmMs * 0.75 + ms * 0.25;
     }
 
     // One triangle's surface as Godot itself lays it out, made once on the main thread: positions, normals,
@@ -210,9 +270,9 @@ internal static class CustomShaderCache
     {
         while (_built.TryDequeue(out var built))
         {
-            if (_waiting.Remove(built.Source, out var callbacks))
+            _waiting.Remove(built.Source, out var callbacks);
+            if (_waitingFirst.Remove(built.Source))
                 Interlocked.Decrement(ref _pending);
-            _waitingFirst.Remove(built.Source);
             if (built.Shader == null)
                 continue;
             Keep(built.Source, built.Shader);

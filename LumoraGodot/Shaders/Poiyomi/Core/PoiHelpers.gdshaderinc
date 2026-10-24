@@ -1,5 +1,6 @@
 // Ported from Poiyomi Toon Shader 10.0.24 (MIT, Poiyomi Labs); see LICENSE.txt.
-// Poiyomi's shared helpers: color, blend, mask, random, rotation, edge and camera math.
+// Poiyomi's shared helpers: color, blend, mask, random, rotation, edge and camera math, and the global
+// theme colors.
 // Helpers that read the camera or the object take PoiMesh / PoiCam first. Spherical harmonics, lightmaps,
 // shadow masks, baked GI and the camera-mode globals have no counterpart here: the environment supplies
 // ambient and reflections.
@@ -1023,10 +1024,16 @@ vec3 hueShiftHSV(vec3 color, float hueOffset, float selectOrShift)
 
 vec3 hueShift(vec3 color, float shift, float ColorSpace, float selectOrShift)
 {
-	vec3 oklab = hueShiftOKLab(color, shift, selectOrShift);
-	vec3 hsv = hueShiftHSV(color, shift, selectOrShift);
 	float w = clamp(ColorSpace, 0.0, 1.0);
-	return mix(oklab, hsv, w);
+	if (w <= 0.0)
+	{
+		return hueShiftOKLab(color, shift, selectOrShift);
+	}
+	if (w >= 1.0)
+	{
+		return hueShiftHSV(color, shift, selectOrShift);
+	}
+	return mix(hueShiftOKLab(color, shift, selectOrShift), hueShiftHSV(color, shift, selectOrShift), w);
 }
 
 vec3 hueShift(vec3 color, float shift, float ColorSpace)
@@ -1806,6 +1813,13 @@ vec3 lilTransformDirOStoWS(in PoiMesh poiMesh, vec3 directionOS, bool doNormaliz
 #define poiGetWidthAndHeight(tex) vec2(textureSize(tex, 0).xy)
 
 // There is always a radiance source (sky, probe or flat ambient).
+// An omni or spot light the shading left black. The matcap light hook adds such a light's share times its
+// finalLighting, so there it has nothing to add and skips the work. -xlinka
+bool poiLightAddsNoShare(in PoiLight poiLight)
+{
+	return !poiLight.isDirectional && all(equal(poiLight.finalLighting, vec3(0.0)));
+}
+
 bool SceneHasReflections()
 {
 	return true;
@@ -1852,11 +1866,85 @@ vec2 vertexUV(in appdata v, float index)
 	return vertexUV(v, int(index));
 }
 
+// Saturation for theme colors. Below 0 this is a plain OKLab chroma reduction toward grey. From 0 to 1
+// it strips the achromatic content out of the color, which is what "more saturated" conventionally
+// means. Past 1 there is no chroma left for sRGB to give at this hue, so the remainder deepens the color
+// by dropping its level instead of the slider going dead.
+vec3 poiThemeSaturation(vec3 color, float amount)
+{
+	if (amount <= 0.0)
+	{
+		return PoiApplyChromatize(color, amount);
+	}
+	float minRgb = min(color.r, min(color.g, color.b));
+	float maxRgb = max(color.r, max(color.g, color.b));
+	float rangeRgb = maxRgb - minRgb;
+	// A greyscale color has no hue to push toward, so leave it alone.
+	vec3 pureHue = (rangeRgb > 0.0001) ? ((color - minRgb) / rangeRgb) * maxRgb : color;
+	vec3 saturated = mix(color, pureHue, clamp(amount, 0.0, 1.0));
+	return saturated / (1.0 + 0.35 * max(amount - 1.0, 0.0));
+}
+
+// One global theme; the source writes this out four times.
+vec4 poiCalculateGlobalTheme(vec4 themeColorHDR, float hue, float hueSpeed, float saturationMethod, float saturation, float value, float brightness, float hueShiftColorSpace)
+{
+	// Theme colors are defined as HDR; convert to SDR and do the HSV adjustment, then re-apply exposure
+	vec3 themeColor = vec3(0.0);
+	float themeColorExposure = 0.0;
+	DecomposeHDRColor(themeColorHDR.rgb, themeColor, themeColorExposure);
+
+	float themeHue = fract(hue + hueSpeed * POI_TIME.x);
+	int method = int(saturationMethod);
+	if (method == 0)
+	{
+		// Saturation/Value (old)
+		themeColor = ModifyViaHSV(themeColor, 0.0, saturation, value);
+		themeColor = hueShift(themeColor, themeHue, hueShiftColorSpace, 1.0);
+	}
+	else if (method == 1)
+	{
+		// Saturation/Brightness (new)
+		themeColor = hueShift(themeColor, themeHue, hueShiftColorSpace, 1.0);
+		// Hue shifting in OKLab can land outside the sRGB gamut; clamp first so a negative channel never
+		// reaches linear_srgb_to_oklab (pow of a negative is NaN).
+		themeColor = max(vec3(0.0), themeColor);
+		themeColor = poiThemeSaturation(themeColor, saturation);
+		// Brightness rides on the exposure rather than the color: the peak rescale below would undo a
+		// gain on the color, so the slider could darken but never brighten.
+		themeColorExposure += log2(max(brightness + 1.0, 0.0001));
+		themeColor = max(vec3(0.0), themeColor);
+	}
+	else
+	{
+		themeColor = vec3(1.0, 0.0, 0.0);
+	}
+	// DecomposeHDRColor guarantees max(channel) <= 1; hue shift, saturation and brightness can each break
+	// that. Rescale by the peak instead of clamping per channel, so the hue survives and the authored HDR
+	// intensity stays the only source of overbrightness.
+	themeColor = max(vec3(0.0), themeColor);
+	themeColor /= max(1.0, max(themeColor.r, max(themeColor.g, themeColor.b)));
+	return vec4(ApplyHDRExposure(themeColor, themeColorExposure), themeColorHDR.a);
+}
+
+// A theme is worked out where a color picks it, from uniforms alone, so a material whose colors pick none
+// pays nothing for the four. -xlinka
 vec3 poiThemeColor(in PoiMods poiMods, in vec3 srcColor, in float themeIndex)
 {
 	float poiThemeIdx = clamp(max(themeIndex - 1.0, 0.0), 0.0, 11.0);
-	bool poiThemeUse = (themeIndex != 0.0) && (poiThemeIdx <= 3.0);
-	return poiThemeUse ? poiMods.globalColorTheme[int(poiThemeIdx)].rgb : srcColor;
+	if (themeIndex == 0.0 || poiThemeIdx > 3.0)
+	{
+		return srcColor;
+	}
+	switch (int(poiThemeIdx))
+	{
+		case 0:
+			return poiCalculateGlobalTheme(_GlobalThemeColor0, _GlobalThemeHue0, _GlobalThemeHueSpeed0, _GlobalThemeSaturationMethod0, _GlobalThemeSaturation0, _GlobalThemeValue0, _GlobalThemeBrightness0, _GlobalThemeHueShiftColorSpace0).rgb;
+		case 1:
+			return poiCalculateGlobalTheme(_GlobalThemeColor1, _GlobalThemeHue1, _GlobalThemeHueSpeed1, _GlobalThemeSaturationMethod1, _GlobalThemeSaturation1, _GlobalThemeValue1, _GlobalThemeBrightness1, _GlobalThemeHueShiftColorSpace1).rgb;
+		case 2:
+			return poiCalculateGlobalTheme(_GlobalThemeColor2, _GlobalThemeHue2, _GlobalThemeHueSpeed2, _GlobalThemeSaturationMethod2, _GlobalThemeSaturation2, _GlobalThemeValue2, _GlobalThemeBrightness2, _GlobalThemeHueShiftColorSpace2).rgb;
+	}
+	return poiCalculateGlobalTheme(_GlobalThemeColor3, _GlobalThemeHue3, _GlobalThemeHueSpeed3, _GlobalThemeSaturationMethod3, _GlobalThemeSaturation3, _GlobalThemeValue3, _GlobalThemeBrightness3, _GlobalThemeHueShiftColorSpace3).rgb;
 }
 
 struct PoiSpriteSheetConfig

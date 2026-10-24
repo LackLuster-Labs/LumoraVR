@@ -45,6 +45,19 @@ public class PoiyomiMaterial : MaterialProvider, ICommonMaterial, ICustomInspect
     private bool _indexDirty = true;
     private bool _isUpdatingMaterial;
 
+    // The property names the shader text was last written from. Build reads them through ReadForSource; a value it
+    // did not read cannot change the text. Swapped whole, since a change can arrive on the sync thread. -xlinka
+    private HashSet<string>? _sourceReads;
+    private HashSet<string>? _readsBuilding;
+    private Func<string, float>? _readForSource;
+
+    // Values changed since the last push, and the batch being pushed now.
+    private readonly object _valuesGate = new();
+    private List<ShaderUniformParam> _changedValues = new();
+    private List<ShaderUniformParam> _pushing = new();
+    private bool _valuesQueued;
+    private Action? _pushValues;
+
     protected override MaterialType MaterialType => MaterialType.Poiyomi;
 
     public colorHDR Color
@@ -82,6 +95,10 @@ public class PoiyomiMaterial : MaterialProvider, ICommonMaterial, ICustomInspect
         get { var st = GetVector("_MainTex_ST"); return new float2(st.z, st.w); }
         set { var st = GetVector("_MainTex_ST"); SetVector("_MainTex_ST", new float4(st.x, st.y, value.x, value.y)); }
     }
+
+    // Set by the platform once a renderer on this machine has shown this material through its simple stand-in. The
+    // stand-in reads the values again only when the material says it changed, so value pushes say so from then on.
+    public bool ShownSimplified { get; set; }
 
     public PoiyomiMaterial()
     {
@@ -175,55 +192,129 @@ public class PoiyomiMaterial : MaterialProvider, ICommonMaterial, ICustomInspect
                     || (param.Type.Value == ShaderUniformType.TextureCube && param.Cubemap.Target != null))
                     textures.Add(param.Name.Value);
             }
-            var (main, outline) = PoiyomiShaderSource.Build(GetFloat, textures);
+            var reads = _readsBuilding = new HashSet<string>(StringComparer.Ordinal);
+            var (main, outline) = PoiyomiShaderSource.Build(_readForSource ??= ReadForSource, textures);
+            _sourceReads = reads;
             asset.SetCustomShaderSource(main);
             asset.SetNextPassShaderSource(outline ?? string.Empty);
             asset.SetFloat("RenderQueue", RenderQueue.Value);
 
+            // Everything goes out below, so values waiting for a push are already in.
+            lock (_valuesGate)
+                _changedValues.Clear();
             foreach (var param in Properties)
             {
                 var name = param.Name.Value;
                 if (string.IsNullOrEmpty(name))
                     continue;
-                var v = param.Value.Value;
-                switch (param.Type.Value)
-                {
-                    case ShaderUniformType.Float:
-                        asset.SetFloat(name, v.x);
-                        break;
-                    case ShaderUniformType.Int:
-                    case ShaderUniformType.Bool:
-                        asset.SetInt(name, (int)MathF.Round(v.x));
-                        break;
-                    case ShaderUniformType.Vec2:
-                        asset.SetFloat2(name, new float2(v.x, v.y));
-                        break;
-                    case ShaderUniformType.Vec3:
-                        // A color goes as a color: Godot converts a source_color uniform from sRGB only then.
-                        if (param.IsColor.Value)
-                            asset.SetColor(name, new colorHDR(v.x, v.y, v.z, 1f));
-                        else
-                            asset.SetFloat3(name, new float3(v.x, v.y, v.z));
-                        break;
-                    case ShaderUniformType.Vec4:
-                        if (param.IsColor.Value)
-                            asset.SetColor(name, ToColor(v));
-                        else
-                            asset.SetFloat4(name, v);
-                        break;
-                    case ShaderUniformType.Texture2D:
-                        asset.SetTexture(name, param.Texture.Asset);
-                        break;
-                    case ShaderUniformType.TextureCube:
-                        asset.SetCubemap(name, param.Cubemap.Asset);
-                        break;
-                }
+                Stage(asset, name, param);
             }
         }
         finally
         {
             _isUpdatingMaterial = false;
         }
+    }
+
+    private float ReadForSource(string name)
+    {
+        _readsBuilding?.Add(name);
+        return GetFloat(name);
+    }
+
+    private static void Stage(MaterialAsset asset, string name, ShaderUniformParam param)
+    {
+        var v = param.Value.Value;
+        switch (param.Type.Value)
+        {
+            case ShaderUniformType.Float:
+                asset.SetFloat(name, v.x);
+                break;
+            case ShaderUniformType.Int:
+            case ShaderUniformType.Bool:
+                asset.SetInt(name, (int)MathF.Round(v.x));
+                break;
+            case ShaderUniformType.Vec2:
+                asset.SetFloat2(name, new float2(v.x, v.y));
+                break;
+            case ShaderUniformType.Vec3:
+                // A color goes as a color: Godot converts a source_color uniform from sRGB only then.
+                if (param.IsColor.Value)
+                    asset.SetColor(name, new colorHDR(v.x, v.y, v.z, 1f));
+                else
+                    asset.SetFloat3(name, new float3(v.x, v.y, v.z));
+                break;
+            case ShaderUniformType.Vec4:
+                if (param.IsColor.Value)
+                    asset.SetColor(name, ToColor(v));
+                else
+                    asset.SetFloat4(name, v);
+                break;
+            case ShaderUniformType.Texture2D:
+                asset.SetTexture(name, param.Texture.Asset);
+                break;
+            case ShaderUniformType.TextureCube:
+                asset.SetCubemap(name, param.Cubemap.Asset);
+                break;
+        }
+    }
+
+    // A value the shader text was not written from goes to the live material by itself. Mayu's heart rate counter
+    // eases its decal scale a little every frame, and each step rebuilt the whole material: the text written again,
+    // every one of its 185 properties staged again, every renderer wearing it told to re-apply it. A value the text
+    // reads (a feature switch, the blend or cull mode) still rebuilds. -xlinka
+    private void ValueChanged(ShaderUniformParam param)
+    {
+        if (_isUpdatingMaterial || IsDestroyed)
+            return;
+        var reads = _sourceReads;
+        if (reads == null || Asset == null || reads.Contains(param.Name.Value ?? string.Empty)
+            || param.Type.Value is ShaderUniformType.Texture2D or ShaderUniformType.TextureCube)
+        {
+            MarkChangeDirty();
+            return;
+        }
+        if (AssetReferenceCount == 0)
+            return;
+        lock (_valuesGate)
+        {
+            if (!_changedValues.Contains(param))
+                _changedValues.Add(param);
+            if (_valuesQueued)
+                return;
+            _valuesQueued = true;
+        }
+        var world = World;
+        if (world != null)
+            world.RunSynchronously(_pushValues ??= PushValues);
+        else
+            PushValues();
+    }
+
+    private void PushValues()
+    {
+        lock (_valuesGate)
+        {
+            _valuesQueued = false;
+            (_pushing, _changedValues) = (_changedValues, _pushing);
+        }
+        var asset = Asset;
+        if (IsDestroyed || asset == null)
+        {
+            _pushing.Clear();
+            return;
+        }
+        foreach (var param in _pushing)
+        {
+            var name = param.Name.Value;
+            if (param.IsDestroyed || string.IsNullOrEmpty(name))
+                continue;
+            Stage(asset, name, param);
+            asset.ApplyStagedNow(name);
+        }
+        _pushing.Clear();
+        if (ShownSimplified)
+            AssetUpdated();
     }
 
     private static colorHDR ToColor(float4 v) => new colorHDR(v.x, v.y, v.z, v.w);
@@ -274,7 +365,7 @@ public class PoiyomiMaterial : MaterialProvider, ICommonMaterial, ICustomInspect
             return;
         var observer = new PropertyObserver
         {
-            ValueChanged = _ => PropertyChanged(),
+            ValueChanged = _ => ValueChanged(param),
             NameChanged = _ =>
             {
                 _indexDirty = true;

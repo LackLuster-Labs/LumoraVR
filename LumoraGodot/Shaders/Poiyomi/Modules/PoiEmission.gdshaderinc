@@ -89,10 +89,10 @@ float calculateBlinkingEmission(in float blinkMin, in float blinkMax, in float b
 }
 
 // The light-dependent end of applyEmission: fluorescence, hue shift (after it, as Poiyomi orders them)
-// and glow in the dark.
-vec3 poiEmissionFinish(vec3 emissionColor, float emissionStrength, in PoiLight poiLight, float fluorescence, float hueShiftEnabled, float hueShiftAmount, float hueShiftSpeed, float hueShiftColorSpace, float hueSelectOrShift, float saturation, float gitdMinLight, float gitdMaxLight, float gitdMinMultiplier, float gitdMaxMultiplier, float gitdEnabled, float gitdWorldOrMesh)
+// and glow in the dark. Color and strength apart, so the light hook can keep a color that does not
+// depend on the light. -xlinka
+vec3 poiEmissionFinishColor(vec3 emissionColor, in PoiLight poiLight, float fluorescence, float hueShiftEnabled, float hueShiftAmount, float hueShiftSpeed, float hueShiftColorSpace, float hueSelectOrShift, float saturation)
 {
-	float glowInTheDarkMultiplier = calculateGlowInTheDark(gitdMinLight, gitdMaxLight, gitdMinMultiplier, gitdMaxMultiplier, gitdEnabled, gitdWorldOrMesh, poiLight);
 	vec3 inverseLighting = clamp((1.0 - poiLight.directColor) * sqrt(poiLight.directColor), 0.0, 1.0);
 	emissionColor = mix(emissionColor.rgb, emissionColor.rgb * inverseLighting, fluorescence);
 	if (hueShiftEnabled >= 0.5)
@@ -100,8 +100,20 @@ vec3 poiEmissionFinish(vec3 emissionColor, float emissionStrength, in PoiLight p
 		emissionColor = hueShift(emissionColor, fract(hueShiftAmount + hueShiftSpeed * POI_TIME.x), hueShiftColorSpace, hueSelectOrShift);
 		emissionColor = mix(emissionColor, vec3(dot(emissionColor, vec3(0.3, 0.59, 0.11))), -saturation);
 	}
+	return emissionColor;
+}
+
+vec3 poiEmissionFinishStrength(vec3 emissionColor, float emissionStrength, in PoiLight poiLight, float gitdMinLight, float gitdMaxLight, float gitdMinMultiplier, float gitdMaxMultiplier, float gitdEnabled, float gitdWorldOrMesh)
+{
+	float glowInTheDarkMultiplier = calculateGlowInTheDark(gitdMinLight, gitdMaxLight, gitdMinMultiplier, gitdMaxMultiplier, gitdEnabled, gitdWorldOrMesh, poiLight);
 	emissionStrength *= glowInTheDarkMultiplier;
 	return max(emissionStrength * emissionColor, vec3(0.0));
+}
+
+vec3 poiEmissionFinish(vec3 emissionColor, float emissionStrength, in PoiLight poiLight, float fluorescence, float hueShiftEnabled, float hueShiftAmount, float hueShiftSpeed, float hueShiftColorSpace, float hueSelectOrShift, float saturation, float gitdMinLight, float gitdMaxLight, float gitdMinMultiplier, float gitdMaxMultiplier, float gitdEnabled, float gitdWorldOrMesh)
+{
+	vec3 color = poiEmissionFinishColor(emissionColor, poiLight, fluorescence, hueShiftEnabled, hueShiftAmount, hueShiftSpeed, hueShiftColorSpace, hueSelectOrShift, saturation);
+	return poiEmissionFinishStrength(color, emissionStrength, poiLight, gitdMinLight, gitdMaxLight, gitdMinMultiplier, gitdMaxMultiplier, gitdEnabled, gitdWorldOrMesh);
 }
 #endif
 
@@ -184,6 +196,16 @@ void poiEmissionInputs(in PoiFragData poiFragData, in PoiMesh poiMesh, in PoiLig
 vec3 poiEmissionLighting(vec3 emissionColor0, float emissionStrength0, in PoiLight poiLight)
 {
 	return poiEmissionFinish(emissionColor0, emissionStrength0, poiLight, _EmissionFluorescence, _EmissionHueShiftEnabled, _EmissionHueShift, _EmissionHueShiftSpeed, _EmissionHueShiftColorSpace, _EmissionHueSelectOrShift, _EmissionSaturation, _GITDEMinLight, _GITDEMaxLight, _GITDEMinEmissionMultiplier, _GITDEMaxEmissionMultiplier, _EnableGITDEmission, _GITDEWorldOrMesh);
+}
+
+vec3 poiEmissionLightColor(vec3 emissionColor0, in PoiLight poiLight)
+{
+	return poiEmissionFinishColor(emissionColor0, poiLight, _EmissionFluorescence, _EmissionHueShiftEnabled, _EmissionHueShift, _EmissionHueShiftSpeed, _EmissionHueShiftColorSpace, _EmissionHueSelectOrShift, _EmissionSaturation);
+}
+
+vec3 poiEmissionLightStrength(vec3 emissionColor0, float emissionStrength0, in PoiLight poiLight)
+{
+	return poiEmissionFinishStrength(emissionColor0, emissionStrength0, poiLight, _GITDEMinLight, _GITDEMaxLight, _GITDEMinEmissionMultiplier, _GITDEMaxEmissionMultiplier, _EnableGITDEmission, _GITDEWorldOrMesh);
 }
 
 bool poiEmissionUsesLight()
@@ -283,6 +305,16 @@ vec3 poiEmissionLighting__1(vec3 emissionColor0__1, float emissionStrength0__1, 
 	return poiEmissionFinish(emissionColor0__1, emissionStrength0__1, poiLight, _EmissionFluorescence1, _EmissionHueShiftEnabled1, _EmissionHueShift1, _EmissionHueShiftSpeed1, _EmissionHueShiftColorSpace1, _EmissionHueSelectOrShift1, _EmissionSaturation1, _GITDEMinLight1, _GITDEMaxLight1, _GITDEMinEmissionMultiplier1, _GITDEMaxEmissionMultiplier1, _EnableGITDEmission1, _GITDEWorldOrMesh1);
 }
 
+vec3 poiEmissionLightColor__1(vec3 emissionColor0__1, in PoiLight poiLight)
+{
+	return poiEmissionFinishColor(emissionColor0__1, poiLight, _EmissionFluorescence1, _EmissionHueShiftEnabled1, _EmissionHueShift1, _EmissionHueShiftSpeed1, _EmissionHueShiftColorSpace1, _EmissionHueSelectOrShift1, _EmissionSaturation1);
+}
+
+vec3 poiEmissionLightStrength__1(vec3 emissionColor0__1, float emissionStrength0__1, in PoiLight poiLight)
+{
+	return poiEmissionFinishStrength(emissionColor0__1, emissionStrength0__1, poiLight, _GITDEMinLight1, _GITDEMaxLight1, _GITDEMinEmissionMultiplier1, _GITDEMaxEmissionMultiplier1, _EnableGITDEmission1, _GITDEWorldOrMesh1);
+}
+
 bool poiEmissionUsesLight__1()
 {
 	return _EnableGITDEmission1 != 0.0 || _EmissionFluorescence1 != 0.0;
@@ -378,6 +410,16 @@ void poiEmissionInputs__2(in PoiFragData poiFragData, in PoiMesh poiMesh, in Poi
 vec3 poiEmissionLighting__2(vec3 emissionColor0__2, float emissionStrength0__2, in PoiLight poiLight)
 {
 	return poiEmissionFinish(emissionColor0__2, emissionStrength0__2, poiLight, _EmissionFluorescence2, _EmissionHueShiftEnabled2, _EmissionHueShift2, _EmissionHueShiftSpeed2, _EmissionHueShiftColorSpace2, _EmissionHueSelectOrShift2, _EmissionSaturation2, _GITDEMinLight2, _GITDEMaxLight2, _GITDEMinEmissionMultiplier2, _GITDEMaxEmissionMultiplier2, _EnableGITDEmission2, _GITDEWorldOrMesh2);
+}
+
+vec3 poiEmissionLightColor__2(vec3 emissionColor0__2, in PoiLight poiLight)
+{
+	return poiEmissionFinishColor(emissionColor0__2, poiLight, _EmissionFluorescence2, _EmissionHueShiftEnabled2, _EmissionHueShift2, _EmissionHueShiftSpeed2, _EmissionHueShiftColorSpace2, _EmissionHueSelectOrShift2, _EmissionSaturation2);
+}
+
+vec3 poiEmissionLightStrength__2(vec3 emissionColor0__2, float emissionStrength0__2, in PoiLight poiLight)
+{
+	return poiEmissionFinishStrength(emissionColor0__2, emissionStrength0__2, poiLight, _GITDEMinLight2, _GITDEMaxLight2, _GITDEMinEmissionMultiplier2, _GITDEMaxEmissionMultiplier2, _EnableGITDEmission2, _GITDEWorldOrMesh2);
 }
 
 bool poiEmissionUsesLight__2()
@@ -477,6 +519,16 @@ vec3 poiEmissionLighting__3(vec3 emissionColor0__3, float emissionStrength0__3, 
 	return poiEmissionFinish(emissionColor0__3, emissionStrength0__3, poiLight, _EmissionFluorescence3, _EmissionHueShiftEnabled3, _EmissionHueShift3, _EmissionHueShiftSpeed3, _EmissionHueShiftColorSpace3, _EmissionHueSelectOrShift3, _EmissionSaturation3, _GITDEMinLight3, _GITDEMaxLight3, _GITDEMinEmissionMultiplier3, _GITDEMaxEmissionMultiplier3, _EnableGITDEmission3, _GITDEWorldOrMesh3);
 }
 
+vec3 poiEmissionLightColor__3(vec3 emissionColor0__3, in PoiLight poiLight)
+{
+	return poiEmissionFinishColor(emissionColor0__3, poiLight, _EmissionFluorescence3, _EmissionHueShiftEnabled3, _EmissionHueShift3, _EmissionHueShiftSpeed3, _EmissionHueShiftColorSpace3, _EmissionHueSelectOrShift3, _EmissionSaturation3);
+}
+
+vec3 poiEmissionLightStrength__3(vec3 emissionColor0__3, float emissionStrength0__3, in PoiLight poiLight)
+{
+	return poiEmissionFinishStrength(emissionColor0__3, emissionStrength0__3, poiLight, _GITDEMinLight3, _GITDEMaxLight3, _GITDEMinEmissionMultiplier3, _GITDEMaxEmissionMultiplier3, _EnableGITDEmission3, _GITDEWorldOrMesh3);
+}
+
 bool poiEmissionUsesLight__3()
 {
 	return _EnableGITDEmission3 != 0.0 || _EmissionFluorescence3 != 0.0;
@@ -497,7 +549,10 @@ vec3 applyEmission__3(inout PoiFragData poiFragData, in PoiMesh poiMesh, in PoiL
 #if defined(POI_EMISSION_0) || defined(POI_EMISSION_1) || defined(POI_EMISSION_2) || defined(POI_EMISSION_3)
 // Glow in the dark and fluorescence follow Poiyomi's main light: directional lights only. The base color
 // replace is redone with the lit emission. Slots without a light-dependent term still enter the replace sum.
+// Without fluorescence the color is the same lit and unlit, so its hue shift runs once. -xlinka
+#if defined(POI_EMISSION_READS_LIGHT)
 #define POI_HAS_LIGHT_HOOK_EMISSION
+#endif
 void applyEmissionLight(inout PoiLight poiLight, inout PoiFragData poiFragData, in PoiMesh poiMesh, in PoiCam poiCam, inout PoiMods poiMods)
 {
 	if (!poiLight.isDirectional)
@@ -536,8 +591,14 @@ void applyEmissionLight(inout PoiLight poiLight, inout PoiFragData poiFragData, 
 	if (poiEmissionUsesLight() || _EmissionReplace0 != 0.0)
 	{
 		poiEmissionInputs(poiFragData, poiMesh, poiLight, poiMods, emissionColor, emissionStrength);
-		emissionWithLight = poiEmissionLighting(emissionColor, emissionStrength, poiLight);
-		emissionWithoutLight = poiEmissionLighting(emissionColor, emissionStrength, unlitLight);
+		vec3 colorWithLight = poiEmissionLightColor(emissionColor, poiLight);
+		vec3 colorWithoutLight = colorWithLight;
+		if (_EmissionFluorescence != 0.0)
+		{
+			colorWithoutLight = poiEmissionLightColor(emissionColor, unlitLight);
+		}
+		emissionWithLight = poiEmissionLightStrength(colorWithLight, emissionStrength, poiLight);
+		emissionWithoutLight = poiEmissionLightStrength(colorWithoutLight, emissionStrength, unlitLight);
 		emissionLit += emissionWithLight;
 		emissionUnlit += emissionWithoutLight;
 		emissionBaseReplaceLit += emissionWithLight * _EmissionReplace0;
@@ -548,8 +609,14 @@ void applyEmissionLight(inout PoiLight poiLight, inout PoiFragData poiFragData, 
 	if (poiEmissionUsesLight__1() || _EmissionReplace1 != 0.0)
 	{
 		poiEmissionInputs__1(poiFragData, poiMesh, poiLight, poiMods, emissionColor, emissionStrength);
-		emissionWithLight = poiEmissionLighting__1(emissionColor, emissionStrength, poiLight);
-		emissionWithoutLight = poiEmissionLighting__1(emissionColor, emissionStrength, unlitLight);
+		vec3 colorWithLight = poiEmissionLightColor__1(emissionColor, poiLight);
+		vec3 colorWithoutLight = colorWithLight;
+		if (_EmissionFluorescence1 != 0.0)
+		{
+			colorWithoutLight = poiEmissionLightColor__1(emissionColor, unlitLight);
+		}
+		emissionWithLight = poiEmissionLightStrength__1(colorWithLight, emissionStrength, poiLight);
+		emissionWithoutLight = poiEmissionLightStrength__1(colorWithoutLight, emissionStrength, unlitLight);
 		emissionLit += emissionWithLight;
 		emissionUnlit += emissionWithoutLight;
 		emissionBaseReplaceLit += emissionWithLight * _EmissionReplace1;
@@ -560,8 +627,14 @@ void applyEmissionLight(inout PoiLight poiLight, inout PoiFragData poiFragData, 
 	if (poiEmissionUsesLight__2() || _EmissionReplace2 != 0.0)
 	{
 		poiEmissionInputs__2(poiFragData, poiMesh, poiLight, poiMods, emissionColor, emissionStrength);
-		emissionWithLight = poiEmissionLighting__2(emissionColor, emissionStrength, poiLight);
-		emissionWithoutLight = poiEmissionLighting__2(emissionColor, emissionStrength, unlitLight);
+		vec3 colorWithLight = poiEmissionLightColor__2(emissionColor, poiLight);
+		vec3 colorWithoutLight = colorWithLight;
+		if (_EmissionFluorescence2 != 0.0)
+		{
+			colorWithoutLight = poiEmissionLightColor__2(emissionColor, unlitLight);
+		}
+		emissionWithLight = poiEmissionLightStrength__2(colorWithLight, emissionStrength, poiLight);
+		emissionWithoutLight = poiEmissionLightStrength__2(colorWithoutLight, emissionStrength, unlitLight);
 		emissionLit += emissionWithLight;
 		emissionUnlit += emissionWithoutLight;
 		emissionBaseReplaceLit += emissionWithLight * _EmissionReplace2;
@@ -572,8 +645,14 @@ void applyEmissionLight(inout PoiLight poiLight, inout PoiFragData poiFragData, 
 	if (poiEmissionUsesLight__3() || _EmissionReplace3 != 0.0)
 	{
 		poiEmissionInputs__3(poiFragData, poiMesh, poiLight, poiMods, emissionColor, emissionStrength);
-		emissionWithLight = poiEmissionLighting__3(emissionColor, emissionStrength, poiLight);
-		emissionWithoutLight = poiEmissionLighting__3(emissionColor, emissionStrength, unlitLight);
+		vec3 colorWithLight = poiEmissionLightColor__3(emissionColor, poiLight);
+		vec3 colorWithoutLight = colorWithLight;
+		if (_EmissionFluorescence3 != 0.0)
+		{
+			colorWithoutLight = poiEmissionLightColor__3(emissionColor, unlitLight);
+		}
+		emissionWithLight = poiEmissionLightStrength__3(colorWithLight, emissionStrength, poiLight);
+		emissionWithoutLight = poiEmissionLightStrength__3(colorWithoutLight, emissionStrength, unlitLight);
 		emissionLit += emissionWithLight;
 		emissionUnlit += emissionWithoutLight;
 		emissionBaseReplaceLit += emissionWithLight * _EmissionReplace3;

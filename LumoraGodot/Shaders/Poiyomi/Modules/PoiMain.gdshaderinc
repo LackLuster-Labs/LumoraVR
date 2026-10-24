@@ -1,6 +1,6 @@
 // Ported from Poiyomi Toon Shader 10.0.24 (MIT, Poiyomi Labs); see LICENSE.txt.
 // Main color and texture, color adjust, alpha options, dithering and alpha to coverage, video effects,
-// main, second and detail normals, global masks and themes, the UV set (UV settings, polar, panosphere,
+// main, second and detail normals, global masks, the UV set (UV settings, polar, panosphere,
 // world, local, view normal, screen space, distortion), UDIM discard, parallax, black light masking,
 // skin, vertex color, back face and the RGB mask.
 //
@@ -567,74 +567,6 @@ void applyMainNormal2(inout PoiMesh poiMesh, in PoiMods poiMods)
 #endif
 }
 #endif
-
-// Saturation for theme colors. Below 0 this is a plain OKLab chroma reduction toward grey. From 0 to 1
-// it strips the achromatic content out of the color, which is what "more saturated" conventionally
-// means. Past 1 there is no chroma left for sRGB to give at this hue, so the remainder deepens the color
-// by dropping its level instead of the slider going dead.
-vec3 poiThemeSaturation(vec3 color, float amount)
-{
-	if (amount <= 0.0)
-	{
-		return PoiApplyChromatize(color, amount);
-	}
-	float minRgb = min(color.r, min(color.g, color.b));
-	float maxRgb = max(color.r, max(color.g, color.b));
-	float rangeRgb = maxRgb - minRgb;
-	// A greyscale color has no hue to push toward, so leave it alone.
-	vec3 pureHue = (rangeRgb > 0.0001) ? ((color - minRgb) / rangeRgb) * maxRgb : color;
-	vec3 saturated = mix(color, pureHue, clamp(amount, 0.0, 1.0));
-	return saturated / (1.0 + 0.35 * max(amount - 1.0, 0.0));
-}
-
-// One global theme; the source writes this out four times.
-vec4 poiCalculateGlobalTheme(vec4 themeColorHDR, float hue, float hueSpeed, float saturationMethod, float saturation, float value, float brightness, float hueShiftColorSpace)
-{
-	// Theme colors are defined as HDR; convert to SDR and do the HSV adjustment, then re-apply exposure
-	vec3 themeColor = vec3(0.0);
-	float themeColorExposure = 0.0;
-	DecomposeHDRColor(themeColorHDR.rgb, themeColor, themeColorExposure);
-
-	float themeHue = fract(hue + hueSpeed * POI_TIME.x);
-	int method = int(saturationMethod);
-	if (method == 0)
-	{
-		// Saturation/Value (old)
-		themeColor = ModifyViaHSV(themeColor, 0.0, saturation, value);
-		themeColor = hueShift(themeColor, themeHue, hueShiftColorSpace, 1.0);
-	}
-	else if (method == 1)
-	{
-		// Saturation/Brightness (new)
-		themeColor = hueShift(themeColor, themeHue, hueShiftColorSpace, 1.0);
-		// Hue shifting in OKLab can land outside the sRGB gamut; clamp first so a negative channel never
-		// reaches linear_srgb_to_oklab (pow of a negative is NaN).
-		themeColor = max(vec3(0.0), themeColor);
-		themeColor = poiThemeSaturation(themeColor, saturation);
-		// Brightness rides on the exposure rather than the color: the peak rescale below would undo a
-		// gain on the color, so the slider could darken but never brighten.
-		themeColorExposure += log2(max(brightness + 1.0, 0.0001));
-		themeColor = max(vec3(0.0), themeColor);
-	}
-	else
-	{
-		themeColor = vec3(1.0, 0.0, 0.0);
-	}
-	// DecomposeHDRColor guarantees max(channel) <= 1; hue shift, saturation and brightness can each break
-	// that. Rescale by the peak instead of clamping per channel, so the hue survives and the authored HDR
-	// intensity stays the only source of overbrightness.
-	themeColor = max(vec3(0.0), themeColor);
-	themeColor /= max(1.0, max(themeColor.r, max(themeColor.g, themeColor.b)));
-	return vec4(ApplyHDRExposure(themeColor, themeColorExposure), themeColorHDR.a);
-}
-
-void calculateGlobalThemes(inout PoiMods poiMods)
-{
-	poiMods.globalColorTheme[0] = poiCalculateGlobalTheme(_GlobalThemeColor0, _GlobalThemeHue0, _GlobalThemeHueSpeed0, _GlobalThemeSaturationMethod0, _GlobalThemeSaturation0, _GlobalThemeValue0, _GlobalThemeBrightness0, _GlobalThemeHueShiftColorSpace0);
-	poiMods.globalColorTheme[1] = poiCalculateGlobalTheme(_GlobalThemeColor1, _GlobalThemeHue1, _GlobalThemeHueSpeed1, _GlobalThemeSaturationMethod1, _GlobalThemeSaturation1, _GlobalThemeValue1, _GlobalThemeBrightness1, _GlobalThemeHueShiftColorSpace1);
-	poiMods.globalColorTheme[2] = poiCalculateGlobalTheme(_GlobalThemeColor2, _GlobalThemeHue2, _GlobalThemeHueSpeed2, _GlobalThemeSaturationMethod2, _GlobalThemeSaturation2, _GlobalThemeValue2, _GlobalThemeBrightness2, _GlobalThemeHueShiftColorSpace2);
-	poiMods.globalColorTheme[3] = poiCalculateGlobalTheme(_GlobalThemeColor3, _GlobalThemeHue3, _GlobalThemeHueSpeed3, _GlobalThemeSaturationMethod3, _GlobalThemeSaturation3, _GlobalThemeValue3, _GlobalThemeBrightness3, _GlobalThemeHueShiftColorSpace3);
-}
 
 #if defined(POI_GLOBALMASK_TEXTURES)
 void ApplyGlobalMaskTextures(in PoiMesh poiMesh, inout PoiMods poiMods)

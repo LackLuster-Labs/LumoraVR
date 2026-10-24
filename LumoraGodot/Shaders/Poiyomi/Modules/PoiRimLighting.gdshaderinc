@@ -231,6 +231,20 @@ void ApplyLiltoonRimLighting(inout PoiFragData poiFragData, in PoiMesh poiMesh, 
 #if defined(POI_RIM_0)
 void poiRimLightingLight0(inout PoiLight poiLight, in PoiFragData poiFragData, in PoiMesh poiMesh, in PoiCam poiCam, in PoiMods poiMods)
 {
+	bool readsLight = false;
+#if defined(POI_RIM_0_POIYOMI)
+	readsLight = readsLight || _RimShadowToggle != 0.0;
+#endif
+#if defined(POI_RIM_0_UTS2)
+	readsLight = readsLight || _Is_LightColor_RimLight != 0.0 || _LightDirection_MaskOn != 0.0 || _Add_Antipodean_RimLight != 0.0;
+#endif
+#if defined(POI_RIM_0_LILTOON)
+	readsLight = readsLight || _RimDirStrength != 0.0 || _RimShadowMask != 0.0;
+#endif
+	if (!readsLight)
+	{
+		return;
+	}
 	PoiLight unlitLight = poiGlowUnlitLight(poiLight, poiMesh, poiCam);
 	PoiFragData fragLit = poiFragData;
 	PoiFragData fragUnlit = poiFragData;
@@ -306,6 +320,20 @@ void poiRimLightingLight0(inout PoiLight poiLight, in PoiFragData poiFragData, i
 #if defined(POI_RIM_1)
 void poiRimLightingLight1(inout PoiLight poiLight, in PoiFragData poiFragData, in PoiMesh poiMesh, in PoiCam poiCam, in PoiMods poiMods)
 {
+	bool readsLight = false;
+#if defined(POI_RIM_1_POIYOMI)
+	readsLight = readsLight || _Rim2ShadowToggle != 0.0;
+#endif
+#if defined(POI_RIM_1_UTS2)
+	readsLight = readsLight || _Is_LightColor_Rim2Light != 0.0 || _LightDirection_MaskOn2 != 0.0 || _Add_Antipodean_Rim2Light != 0.0;
+#endif
+#if defined(POI_RIM_1_LILTOON)
+	readsLight = readsLight || _Rim2DirStrength != 0.0 || _Rim2ShadowMask != 0.0;
+#endif
+	if (!readsLight)
+	{
+		return;
+	}
 	PoiLight unlitLight = poiGlowUnlitLight(poiLight, poiMesh, poiCam);
 	PoiFragData fragLit = poiFragData;
 	PoiFragData fragUnlit = poiFragData;
@@ -380,7 +408,9 @@ void poiRimLightingLight1(inout PoiLight poiLight, in PoiFragData poiFragData, i
 
 // Rim masks that read the light (shadow masks, light direction, light color) per light. The base color
 // FRAG hands over already carries the fragment's unlit rims; it stands in for the color before them.
+#if defined(POI_RIM_READS_LIGHT)
 #define POI_HAS_LIGHT_HOOK_RIM
+#endif
 void applyRimLightingLight(inout PoiLight poiLight, inout PoiFragData poiFragData, in PoiMesh poiMesh, in PoiCam poiCam, inout PoiMods poiMods)
 {
 #if defined(POI_RIM_0)

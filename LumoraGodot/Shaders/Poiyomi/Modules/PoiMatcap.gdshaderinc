@@ -525,7 +525,9 @@ void applyMatcap(inout PoiFragData poiFragData, in PoiCam poiCam, in PoiMesh poi
 // Per light: the blend's difference to the stand-in light lands in this light's share, and Add To Light
 // plus the emission difference ride the main-light path only (directional lights), as the source's add
 // pass leaves them out.
+#if defined(POI_MATCAP_READS_LIGHT)
 #define POI_HAS_LIGHT_HOOK_MATCAP
+#endif
 void applyMatcapLight(inout PoiLight poiLight, inout PoiFragData poiFragData, in PoiMesh poiMesh, in PoiCam poiCam, inout PoiMods poiMods)
 {
 	if (!poiSurfaceLightDeferred())
@@ -552,6 +554,10 @@ void applyMatcapLight(inout PoiLight poiLight, inout PoiFragData poiFragData, in
 #endif
 	bool mainLight = poiLight.isAdditive == 0;
 	if (!lightShaped && !(lightAdds && mainLight))
+	{
+		return;
+	}
+	if (poiLightAddsNoShare(poiLight))
 	{
 		return;
 	}

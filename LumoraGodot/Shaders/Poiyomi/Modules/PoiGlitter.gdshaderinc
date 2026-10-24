@@ -343,7 +343,9 @@ bool poiGlitterUsesLight()
 
 // Light reflection mode, hide in shadow, scale with lighting and the linear mode's light direction. The
 // unlit run is skipped where it adds nothing (fully masked, or no light to reflect).
+#if defined(POI_GLITTER_READS_LIGHT)
 #define POI_HAS_LIGHT_HOOK_GLITTER
+#endif
 void applyGlitterLight(inout PoiLight poiLight, inout PoiFragData poiFragData, in PoiMesh poiMesh, in PoiCam poiCam, inout PoiMods poiMods)
 {
 	if (!poiGlitterUsesLight())

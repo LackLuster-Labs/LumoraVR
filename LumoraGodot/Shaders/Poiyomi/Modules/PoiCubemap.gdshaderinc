@@ -133,7 +133,9 @@ void applyCubemap(inout PoiFragData poiFragData, in PoiCam poiCam, in PoiMesh po
 // Per light, with Light Mask on: the blend's difference to the stand-in light lands in this light's share;
 // the emission difference rides the main-light path only (directional lights), as the source's add pass
 // leaves emission out.
+#if defined(POI_CUBEMAP_READS_LIGHT)
 #define POI_HAS_LIGHT_HOOK_CUBEMAP
+#endif
 void applyCubemapLight(inout PoiLight poiLight, inout PoiFragData poiFragData, in PoiMesh poiMesh, in PoiCam poiCam, inout PoiMods poiMods)
 {
 	if (!poiSurfaceLightDeferred() || _CubeMapLightMask == 0.0)

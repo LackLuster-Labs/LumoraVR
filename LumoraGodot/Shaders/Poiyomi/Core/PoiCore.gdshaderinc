@@ -33,6 +33,16 @@
 #define POI_PASS_BASE
 #endif
 
+// UV sets 4-10 (panosphere, world, polar, distorted, local, view normal, screen) exist where a selector can
+// pick one: the generator defines POI_NEEDS_DERIVED_UVS when one of the material's picks 4 or above, and
+// distortion writes its own. Elsewhere the array holds the four mesh UVs. -xlinka
+#if defined(POI_NEEDS_DERIVED_UVS) || defined(POI_DISTORTION)
+#define POI_UV_DERIVED_SETS
+#define POI_UV_COUNT 11
+#else
+#define POI_UV_COUNT 4
+#endif
+
 struct PoiMesh
 {
 	// 0 vertex normal, 1 fragment normal; world space.
@@ -51,7 +61,7 @@ struct PoiMesh
 	vec4 vertexColor;
 	// 0-3 UV0-UV3, 4 panosphere, 5 world xz, 6 polar, 7 distorted, 8 local position, 9 matcap,
 	// 10 screen space.
-	vec2 uv[11];
+	vec2 uv[POI_UV_COUNT];
 	vec2 parallaxUV;
 	vec2 dx;
 	vec2 dy;
@@ -101,7 +111,6 @@ struct PoiMods
 	vec2 detailMask;
 	vec2 backFaceDetailIntensity;
 	float globalEmission;
-	vec4 globalColorTheme[12];
 	float globalMask[16];
 };
 
@@ -244,7 +253,7 @@ PoiMesh PoiMesh_zero()
 	r.objectScale = 1.0;
 	r.isFrontFace = 1.0;
 	r.vertexColor = vec4(1.0);
-	for (int k = 0; k < 11; k++)
+	for (int k = 0; k < POI_UV_COUNT; k++)
 	{
 		r.uv[k] = vec2(0.0);
 	}
@@ -299,10 +308,6 @@ PoiMods PoiMods_zero()
 	r.detailMask = vec2(0.0);
 	r.backFaceDetailIntensity = vec2(0.0);
 	r.globalEmission = 1.0;
-	for (int k = 0; k < 12; k++)
-	{
-		r.globalColorTheme[k] = vec4(0.0);
-	}
 	for (int k = 0; k < 16; k++)
 	{
 		r.globalMask[k] = 0.0;
@@ -586,7 +591,7 @@ varying vec4 poi_vo_misc;
 // 17 of its 32), so only values fragment() makes cross here, packed: they are never interpolated, so
 // colors and masks travel as half pairs and positions as raw float bits. light() rebuilds the rest from its
 // own built-ins (POI_HANDOFF_LOAD) and the light pipeline redoes the cheap derived values (UVs, view
-// directions, theme colors) with the functions fragment() used.
+// directions) with the functions fragment() used.
 varying flat uvec4 poi_fl_h[8];
 #if defined(POI_BENTNORMALMAP)
 varying flat uvec2 poi_fl_bent;
@@ -621,7 +626,7 @@ uint poiPackHandoffFlags(int eyeIndex, float isFrontFace, bool isOrthographic, b
 
 // light(): the structs back. The world position comes from the fragment depth, the fragment normal from
 // NORMAL (view space); uv[0..3] are the mesh UVs before the UV settings. uv[4..10], the view directions,
-// the fragment normal's tangent frame, the theme colors, the vertex color and the light's own fields are
+// the fragment normal's tangent frame, the vertex color and the light's own fields are
 // left for the light pipeline to fill.
 #define POI_HANDOFF_LOAD(poiMesh, poiCam, poiMods, poiFragData, poiLight) \
 	poiMesh = PoiMesh_zero(); \

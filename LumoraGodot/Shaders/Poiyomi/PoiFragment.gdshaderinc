@@ -230,7 +230,9 @@ void PoiLightingDependantModules(inout PoiLight poiLight, inout PoiFragData poiF
 #endif
 }
 
-// The light hooks of the modules frag runs after the lighting point, in the source's order.
+// The light hooks of the modules frag runs after the lighting point, in the source's order. Emission, rim,
+// matcap, cubemap and glitter compile theirs only under POI_<module>_READS_LIGHT, which the generator sets
+// when the material's values make the hook read the light. -xlinka
 void PoiLightingPostModulesLight(inout PoiLight poiLight, inout PoiFragData poiFragData, in PoiMesh poiMesh, in PoiCam poiCam, inout PoiMods poiMods)
 {
 #if defined(POI_HAS_LIGHT_HOOK_CUBEMAP)
@@ -285,11 +287,13 @@ void poiFragViewSetup(inout PoiCam poiCam, inout PoiMesh poiMesh, inout vec3 poi
 // 8 local pos, 9 view normal, 10 screen space
 void poiFragUVSetup(inout PoiMesh poiMesh, in PoiCam poiCam, vec4 clipPos)
 {
+#if defined(POI_UV_DERIVED_SETS)
 	poiMesh.uv[4] = poiMesh.uv[0];
 	poiMesh.uv[5] = poiMesh.uv[0];
 	poiMesh.uv[6] = poiMesh.uv[0];
 	poiMesh.uv[7] = poiMesh.uv[0];
 	poiMesh.uv[8] = poiMesh.uv[0];
+#endif
 
 	poiMesh.uv[0] = applyUVSettings(poiMesh.uv[0], _UVSettingsTiling0, _UVSettingsOffset0, _UVSettingsAngle0, _UVSettingsPan0, _UVSettingsRotate0);
 	poiMesh.uv[1] = applyUVSettings(poiMesh.uv[1], _UVSettingsTiling1, _UVSettingsOffset1, _UVSettingsAngle1, _UVSettingsPan1, _UVSettingsRotate1);
@@ -304,6 +308,7 @@ void poiFragUVSetup(inout PoiMesh poiMesh, in PoiCam poiCam, vec4 clipPos)
 		poiMesh.uv[3].x += 1.0;
 	}
 
+#if defined(POI_NEEDS_DERIVED_UVS)
 	poiMesh.uv[4] = calculatePanosphereUV(poiMesh, poiCam, _PanoUseBothEyes, _StereoEnabled);
 	poiMesh.uv[5] = calculateWorldUV(poiMesh);
 	poiMesh.uv[8] = calculatelocalUV(poiMesh);
@@ -313,6 +318,7 @@ void poiFragUVSetup(inout PoiMesh poiMesh, in PoiCam poiCam, vec4 clipPos)
 
 	// Polar is computed last
 	poiMesh.uv[6] = calculatePolarCoordinate(poiMesh);
+#endif
 
 #if defined(POI_DISTORTION)
 	poiMesh.uv[7] = distortedUV(poiMesh);
@@ -562,8 +568,6 @@ void fragment()
 
 	// Camera data
 	poiFragCameraData(poiCam, poiMesh, poiCenterCameraPosition, poiCenterViewDistanceSq, poiCenterViewInvDistance, i.pos, i.worldDir);
-
-	calculateGlobalThemes(poiMods);
 
 #if defined(POI_BLACKLIGHTMASKING)
 	calculateBlackLightMasks(poiMesh, poiMods);
@@ -1080,8 +1084,6 @@ void poiLightProgram(inout PoiMesh poiMesh, inout PoiCam poiCam, inout PoiMods p
 	poiMesh.binormal[1] = normalize(cross(-poiMesh.normals[1], poiMesh.tangent[0]));
 
 	poiFragCameraData(poiCam, poiMesh, poiCenterCameraPosition, poiCenterViewDistanceSq, poiCenterViewInvDistance, clipPos, worldDir);
-
-	calculateGlobalThemes(poiMods);
 
 	// Directional lights take the source's main light path, omni and spot lights its add pass path.
 	poiLight.isDirectional = isDirectional;
