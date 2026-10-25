@@ -134,8 +134,8 @@ public class PBS_Specular : MaterialProvider, ICommonMaterial
         asset.SetBlendMode(BlendMode.Value);
         asset.SetCulling(Culling.Value);
         _generatedVariant = MaterialVariantSource.Apply(asset,
-            MaterialVariantSource.Specular(Culling.Value, OffsetFactor.Value != 0f || OffsetUnits.Value != 0f),
-            MaterialVariantSource.SpecularFile(Culling.Value), _generatedVariant);
+            MaterialVariantSource.Specular(Culling.Value, BlendMode.Value, OffsetFactor.Value != 0f || OffsetUnits.Value != 0f),
+            MaterialVariantSource.SpecularFile(Culling.Value, BlendMode.Value), _generatedVariant);
         asset.SetFloat("AlphaCutoff", AlphaCutoff.Value);
         asset.SetFloat("RenderQueue", RenderQueue.Value);
 

@@ -51,6 +51,15 @@ public class TextMaterial : MaterialProvider, ICommonMaterial
     public readonly Sync<byte> StencilID;
     public readonly Sync<byte> StencilWriteMask;
     public readonly Sync<byte> StencilReadMask;
+    // Depth bias: Factor scales the surface's depth slope, Units the smallest depth step. Negative pulls the
+    // letters toward the camera, so text laid on a surface wins against it.
+    public readonly Sync<float> OffsetFactor;
+    public readonly Sync<float> OffsetUnits;
+    // What fills each glyph's quad outside the letter. Automatic takes the face colour (the outline's when
+    // there is one) at no alpha, so the edges fade without a fringe; otherwise BackgroundColor shows, and a
+    // background with alpha draws a box behind every letter. Distance-field atlases only.
+    public readonly Sync<bool> AutoBackgroundColor;
+    public readonly Sync<colorHDR> BackgroundColor;
 
     private bool _variantOn;
 
@@ -105,6 +114,10 @@ public class TextMaterial : MaterialProvider, ICommonMaterial
         StencilID = new Sync<byte>(this, 0);
         StencilWriteMask = new Sync<byte>(this, byte.MaxValue);
         StencilReadMask = new Sync<byte>(this, byte.MaxValue);
+        OffsetFactor = new Sync<float>(this, 0f);
+        OffsetUnits = new Sync<float>(this, 0f);
+        AutoBackgroundColor = new Sync<bool>(this, true);
+        BackgroundColor = new Sync<colorHDR>(this, new colorHDR(0f, 0f, 0f, 0f));
     }
 
     public override void OnChanges()
@@ -136,20 +149,28 @@ public class TextMaterial : MaterialProvider, ICommonMaterial
         asset.SetInt("ZTest", (int)ZTest.Value);
         asset.SetInt("RenderQueue", RenderQueue.Value);
         asset.SetInt("ColorMask", (int)ColorMask.Value);
+        asset.SetFloat("OffsetFactor", OffsetFactor.Value);
+        asset.SetFloat("OffsetUnits", OffsetUnits.Value);
+        asset.SetBool("UseBackgroundColor", !AutoBackgroundColor.Value);
+        asset.SetColor("BackgroundColor", BackgroundColor.Value);
+        bool depthOffset = OffsetFactor.Value != 0f || OffsetUnits.Value != 0f;
         _variantOn = MaterialVariantSource.Apply(asset,
             VariantSource(Culling.Value, ColorMask.Value, StencilComparison.Value, StencilOperation.Value,
-                StencilID.Value, StencilWriteMask.Value, StencilReadMask.Value, ZWrite.Value),
+                StencilID.Value, StencilWriteMask.Value, StencilReadMask.Value, ZWrite.Value, ZTest.Value, depthOffset),
             "res://Shaders/Text_Unlit.gdshader", _variantOn);
     }
 
-    // Depth writing, culling and the stencil are compile-time render state. Text_Unlit.gdshader draws both faces with no
-    // stencil, which is nearly all text; any other state gets a few lines of source over the same body,
-    // compiled once per distinct text. Godot's stencil keeps one reference value for the test and the write
-    // and stores only that value, so the masks fold into it, and an operation other than Replace stores what
-    // it would leave in a cleared buffer: exact for one stamp on a cleared buffer, the usual use. A write marks
-    // the letters only (TEXT_STAMP), not the quads they sit on. -xlinka
+    // Depth writing and testing, culling, a depth bias and the stencil are compile-time render state.
+    // Text_Unlit.gdshader draws both faces with no stencil, which is nearly all text; any other state gets a
+    // few lines of source over the same body, compiled once per distinct text. Godot's stencil keeps one
+    // reference value for the test and the write and stores only that value, so the masks fold into it, and an
+    // operation other than Replace stores what it would leave in a cleared buffer: exact for one stamp on a
+    // cleared buffer, the usual use. A write marks the letters only (TEXT_STAMP), not the quads they sit on.
+    // Text that skips the depth test draws over everything, with no bias to apply; Godot tests nearer-or-equal
+    // or not at all, so Less reads as the default. -xlinka
     internal static string? VariantSource(Culling culling, ColorMask colorMask, StencilComparison comparison,
-        StencilOperation operation, byte id, byte writeMask, byte readMask, ZWrite zWrite = Assets.ZWrite.Auto)
+        StencilOperation operation, byte id, byte writeMask, byte readMask, ZWrite zWrite = Assets.ZWrite.Auto,
+        ZTest zTest = Assets.ZTest.LessOrEqual, bool depthOffset = false)
     {
         bool never = comparison == Assets.StencilComparison.Never;
         bool enabled = !never && comparison != Assets.StencilComparison.Disabled;
@@ -157,11 +178,15 @@ public class TextMaterial : MaterialProvider, ICommonMaterial
         bool write = enabled && operation != Assets.StencilOperation.Keep;
         bool hidden = never || (colorMask & Assets.ColorMask.RGB) == Assets.ColorMask.None;
         bool depth = zWrite == Assets.ZWrite.On || (zWrite == Assets.ZWrite.Auto && !hidden);
-        if (culling == Assets.Culling.None && !read && !write && !hidden && depth)
+        bool overAll = zTest is Assets.ZTest.Disabled or Assets.ZTest.Always;
+        bool bias = depthOffset && !overAll;
+        if (culling == Assets.Culling.None && !read && !write && !hidden && depth && !overAll && !bias)
             return null;
 
         var sb = new StringBuilder("shader_type spatial;\nrender_mode unshaded, blend_mix, ", 200);
         sb.Append(depth ? "depth_draw_always, " : "depth_draw_never, ");
+        if (overAll)
+            sb.Append("depth_test_disabled, ");
         sb.Append(culling switch
         {
             Assets.Culling.Back => "cull_front",
@@ -182,6 +207,8 @@ public class TextMaterial : MaterialProvider, ICommonMaterial
             sb.Append("#define TEXT_STAMP\n");
         if (hidden)
             sb.Append("#define TEXT_HIDDEN\n");
+        if (bias)
+            sb.Append("#define DEPTH_OFFSET\n");
         sb.Append("#include \"res://Shaders/Text_Unlit_Core.gdshaderinc\"\n");
         return sb.ToString();
     }

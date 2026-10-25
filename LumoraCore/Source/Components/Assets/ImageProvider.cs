@@ -33,6 +33,15 @@ public class ImageProvider : StaticAssetProvider<TextureAsset>, ICustomInspector
 
     public readonly Sync<bool> AllowCompression;
 
+    // Every material slot this picture is bound to reads it the way this says, unless it says Slot.
+    public readonly Sync<TextureProfile> Profile;
+
+    // Point keeps every texel square; Slot leaves the filtering to the material slot. On, UseWrapModes has every
+    // slot repeat or clamp the picture as WrapModeU/WrapModeV say; off, each slot does what it was made to.
+    // A slot wraps both axes one way, so it clamps only when both say clamp, and mirroring repeats.
+    public readonly Sync<TextureFilter> Filter;
+    public readonly Sync<bool> UseWrapModes;
+
     public ImageProvider()
     {
         IsNormalMap = new Sync<bool>(this, false);
@@ -41,6 +50,9 @@ public class ImageProvider : StaticAssetProvider<TextureAsset>, ICustomInspector
         GenerateMipmaps = new Sync<bool>(this, true);
         MaxSizeOverride = new Sync<int>(this, 0);
         AllowCompression = new Sync<bool>(this, true);
+        Profile = new Sync<TextureProfile>(this, TextureProfile.Slot);
+        Filter = new Sync<TextureFilter>(this, TextureFilter.Slot);
+        UseWrapModes = new Sync<bool>(this, false);
     }
 
     public override void OnStart()
@@ -91,7 +103,10 @@ public class ImageProvider : StaticAssetProvider<TextureAsset>, ICustomInspector
             WrapModeV.Value,
             IsNormalMap.Value,
             EffectiveMaxSize,
-            AllowCompression.Value ? TextureCompressionKind.Block : TextureCompressionKind.None);
+            AllowCompression.Value ? TextureCompressionKind.Block : TextureCompressionKind.None,
+            Profile.Value,
+            Filter.Value,
+            UseWrapModes.Value);
 
     // A cloud texture keeps its lumora address as the key it is loaded under, not the file or download
     // it would resolve to: that is how the texture knows to read the variants its uploader registered,

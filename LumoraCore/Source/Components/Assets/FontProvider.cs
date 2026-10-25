@@ -111,13 +111,14 @@ public sealed class FontProvider : AssetProvider<FontSet>, IAssetRequester
         var resolved = ProcessURL(raw);
         if (resolved == null)
             return;
-        if (resolved.IsFile)
+        bool local = string.Equals(resolved.Scheme, "local", StringComparison.OrdinalIgnoreCase);
+        if (resolved.IsFile || (local && Engine.Current?.LocalDB?.Exists(resolved.OriginalString) == true))
         {
             if (!into.Contains(resolved))
                 into.Add(resolved);
             return;
         }
-        if (string.Equals(resolved.Scheme, "local", StringComparison.OrdinalIgnoreCase))
+        if (local)
             FetchFromSession(resolved.OriginalString);
     }
 
@@ -130,9 +131,9 @@ public sealed class FontProvider : AssetProvider<FontSet>, IAssetRequester
         }
 
         var world = World;
-        _ = Lumora.Core.Networking.AssetFetcher.FetchLocalFileAsync(uri).ContinueWith(task =>
+        _ = Lumora.Core.Networking.AssetFetcher.EnsureLocalAsync(uri).ContinueWith(task =>
         {
-            if (task.Result == null || world == null || world.IsDisposed)
+            if (!task.Result || world == null || world.IsDisposed)
                 return;
             world.RunSynchronously(() =>
             {

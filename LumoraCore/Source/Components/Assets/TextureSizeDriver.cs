@@ -8,9 +8,6 @@ using Lumora.Core.Math;
 
 namespace Lumora.Core.Components.Assets;
 
-/// <summary>
-/// Drives a QuadMesh size from an ImageProvider's loaded texture aspect ratio.
-/// </summary>
 [ComponentCategory("Assets")]
 public sealed class TextureSizeDriver : Component
 {
@@ -41,20 +38,24 @@ public sealed class TextureSizeDriver : Component
         if (provider == null || quad == null)
             return;
 
+        // One frame's shape for an animated picture, and the file's own size for it, so a peer whose cap made the
+        // sheet smaller works out the same quad.
         var asset = provider.Asset;
-        if (asset == null || asset.Width <= 0 || asset.Height <= 0)
+        if (asset == null || asset.FrameWidth <= 0 || asset.FrameHeight <= 0)
             return;
+        int width = asset.FrameWidth;
+        int height = asset.FrameHeight;
 
         float maxSide = MaxSide.Value;
         if (_hasApplied &&
-            asset.Width == _lastWidth &&
-            asset.Height == _lastHeight &&
+            width == _lastWidth &&
+            height == _lastHeight &&
             System.Math.Abs(maxSide - _lastMaxSide) < 0.0001f)
         {
             return;
         }
 
-        float aspect = (float)asset.Width / asset.Height;
+        float aspect = (float)width / height;
         float2 size = aspect >= 1f
             ? new float2(maxSide * aspect, maxSide)
             : new float2(maxSide, maxSide / aspect);
@@ -67,8 +68,8 @@ public sealed class TextureSizeDriver : Component
             collider.Size.Value = new float3(size.x, size.y, System.Math.Max(0.001f, ColliderDepth.Value));
         }
 
-        _lastWidth = asset.Width;
-        _lastHeight = asset.Height;
+        _lastWidth = width;
+        _lastHeight = height;
         _lastMaxSide = maxSide;
         _hasApplied = true;
     }

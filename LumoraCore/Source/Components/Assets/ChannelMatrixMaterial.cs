@@ -54,6 +54,25 @@ public class ChannelMatrixMaterial : MaterialProvider
     // ordinary transparent surface.
     public readonly Sync<int> RenderQueue;
 
+    // Additive and multiply combine the filtered colour with the unfiltered one behind it. The defaults are how
+    // the lens always drew: back faces culled and the depth test off, so it shows through what is in front.
+    public readonly Sync<BlendMode> BlendMode;
+    public readonly Sync<Culling> Culling;
+    // Auto writes no depth. ZTest picks when the filter draws against what is already there.
+    public readonly Sync<ZWrite> ZWrite;
+    public readonly Sync<ZTest> ZTest;
+
+    // For use inside a UI: a clip rect in the mesh's own x and y, the channels written, the stencil test.
+    [Group("Canvas")]
+    public readonly Sync<Rect> Rect;
+    public readonly Sync<bool> RectClip;
+    public readonly Sync<ColorMask> ColorMask;
+    public readonly Sync<StencilComparison> StencilComparison;
+    public readonly Sync<StencilOperation> StencilOperation;
+    public readonly Sync<byte> StencilID;
+    public readonly Sync<byte> StencilWriteMask;
+    public readonly Sync<byte> StencilReadMask;
+
     protected override MaterialType MaterialType => MaterialType.ChannelMatrix;
 
     public ChannelMatrixMaterial()
@@ -84,10 +103,26 @@ public class ChannelMatrixMaterial : MaterialProvider
 
         Tint = new Sync<colorHDR>(this, colorHDR.White);
         RenderQueue = new Sync<int>(this, 5000);
+
+        BlendMode = new Sync<BlendMode>(this, Assets.BlendMode.Opaque);
+        Culling = new Sync<Culling>(this, Assets.Culling.Back);
+        ZWrite = new Sync<ZWrite>(this, Assets.ZWrite.Auto);
+        ZTest = new Sync<ZTest>(this, Assets.ZTest.Always);
+        Rect = new Sync<Rect>(this, Lumora.Core.Math.Rect.Zero);
+        RectClip = new Sync<bool>(this, false);
+        ColorMask = new Sync<ColorMask>(this, Assets.ColorMask.RGBA);
+        StencilComparison = new Sync<StencilComparison>(this, Assets.StencilComparison.Always);
+        StencilOperation = new Sync<StencilOperation>(this, Assets.StencilOperation.Keep);
+        StencilID = new Sync<byte>(this, 0);
+        StencilWriteMask = new Sync<byte>(this, byte.MaxValue);
+        StencilReadMask = new Sync<byte>(this, byte.MaxValue);
     }
 
     protected override void UpdateMaterial(MaterialAsset asset)
     {
+        ScreenFilterShader.Apply(asset, "ChannelMatrix", new ScreenFilterState(BlendMode.Value, Culling.Value, ZWrite.Value,
+            ZTest.Value, RenderQueue.Value, Rect.Value, RectClip.Value, ColorMask.Value, StencilComparison.Value,
+            StencilOperation.Value, StencilID.Value, StencilWriteMask.Value, StencilReadMask.Value), 3500, opaqueWritesDepth: false);
         // Packed a row at a time, w carrying that row's offset, which is the shape the shader wants.
         asset.SetColor("LevelsR", new colorHDR(RedFromRed.Value, RedFromGreen.Value, RedFromBlue.Value, RedOffset.Value));
         asset.SetColor("LevelsG", new colorHDR(GreenFromRed.Value, GreenFromGreen.Value, GreenFromBlue.Value, GreenOffset.Value));
@@ -97,6 +132,5 @@ public class ChannelMatrixMaterial : MaterialProvider
         asset.SetFloat3("ClampMax", new float3(ClampRedMax.Value, ClampGreenMax.Value, ClampBlueMax.Value));
 
         asset.SetColor("Tint", Tint.Value);
-        asset.SetFloat("RenderQueue", RenderQueue.Value);
     }
 }

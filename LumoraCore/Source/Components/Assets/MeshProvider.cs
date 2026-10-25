@@ -3,34 +3,32 @@
 
 namespace Lumora.Core.Assets;
 
-/// <summary>
-/// Component that provides mesh assets from URLs. The mesh gathers and decodes itself through the
-/// <see cref="AssetManager"/> (see <see cref="MeshDecoder"/>); this component resolves the URL and
-/// supplies the load options (import scale, keep-readable) as the variant descriptor, so meshes
-/// with matching options for the same URL are shared.
-/// </summary>
+// The load options go out as the variant descriptor, so providers with the same URL and the same options
+// share one mesh.
 [ComponentCategory("Assets")]
 public class MeshProvider : StaticAssetProvider<MeshDataAsset>
 {
-    /// <summary>
-    /// Whether to keep mesh data readable after GPU upload (for physics/runtime manipulation).
-    /// </summary>
+    // Keeps the CPU copy after the GPU upload, for physics or edits at runtime.
     public readonly Sync<bool> KeepReadable;
 
-    /// <summary>Scale factor applied when loading the mesh.</summary>
     public readonly Sync<float> ImportScale;
 
-    /// <summary>Which glTF mesh to decode: -1 = the whole file concatenated; >= 0 = only that mesh (so a
-    /// multi-mesh model can be one Phos asset per mesh, each with its own material).</summary>
+    // -1 decodes the whole file as one mesh; 0 and up decodes only that mesh, so a multi-mesh model can be
+    // one asset per mesh, each with its own material.
     public readonly Sync<int> MeshIndex;
+
+    // Unwelds the mesh and writes each triangle's corners into its vertex colours, which is what the wireframe
+    // material draws its lines from. It costs the mesh its vertex sharing and its own vertex colours.
+    public readonly Sync<bool> WireframeBarycentrics;
 
     public MeshProvider()
     {
         KeepReadable = new Sync<bool>(this, false);
         ImportScale = new Sync<float>(this, 1.0f);
         MeshIndex = new Sync<int>(this, -1);
+        WireframeBarycentrics = new Sync<bool>(this, false);
     }
 
     protected override IAssetVariantDescriptor? GetVariantDescriptor() =>
-        new MeshVariantDescriptor(ImportScale.Value, KeepReadable.Value, MeshIndex.Value);
+        new MeshVariantDescriptor(ImportScale.Value, KeepReadable.Value, MeshIndex.Value, WireframeBarycentrics.Value);
 }

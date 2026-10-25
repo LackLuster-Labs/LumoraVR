@@ -46,6 +46,13 @@ public class UIUnlitMaterial : MaterialProvider, ICommonMaterial
     // surface toward the camera. Zero for both leaves the depth as drawn.
     public readonly Sync<float> OffsetFactor;
     public readonly Sync<float> OffsetUnits;
+    // Where the world's opaque surfaces stand in front of it, what does draw (a material that skips the depth
+    // test) is multiplied by HiddenTint, so a panel seen through a wall reads as behind it.
+    public readonly Sync<bool> TintHidden;
+    public readonly Sync<colorHDR> HiddenTint;
+    public readonly Sync<UITextureMode> TextureMode;
+    // Bound to a frame sheet (an animated picture), the material plays it; off, it holds the first frame.
+    public readonly Sync<bool> PlayFrames;
 
     private bool _variantOn;
 
@@ -101,6 +108,10 @@ public class UIUnlitMaterial : MaterialProvider, ICommonMaterial
         MaskMode = new Sync<UIMaskMode>(this, UIMaskMode.Multiply);
         OffsetFactor = new Sync<float>(this, 0f);
         OffsetUnits = new Sync<float>(this, 0f);
+        TintHidden = new Sync<bool>(this, false);
+        HiddenTint = new Sync<colorHDR>(this, new colorHDR(1f, 1f, 1f, 0.73f));
+        TextureMode = new Sync<UITextureMode>(this, UITextureMode.Color);
+        PlayFrames = new Sync<bool>(this, true);
     }
 
     protected override void UpdateMaterial(MaterialAsset asset)
@@ -110,6 +121,8 @@ public class UIUnlitMaterial : MaterialProvider, ICommonMaterial
         asset.SetBlendMode(BlendMode.Value);
         asset.SetCulling(Culling.Value);
         asset.SetTexture("Texture", DirectTexture ?? Texture.Asset);
+        if (!PlayFrames.Value)
+            asset.SetInt("FrameCount", 1);
         asset.SetFloat2("TextureScale", TextureScale.Value);
         asset.SetFloat2("TextureOffset", TextureOffset.Value);
         asset.SetColor("TintColor", TintColor.Value);
@@ -134,17 +147,21 @@ public class UIUnlitMaterial : MaterialProvider, ICommonMaterial
         asset.SetInt("MaskMode", (int)MaskMode.Value);
         asset.SetFloat("OffsetFactor", OffsetFactor.Value);
         asset.SetFloat("OffsetUnits", OffsetUnits.Value);
+        asset.SetColor("HiddenTint", HiddenTint.Value);
+        asset.SetInt("TextureMode", (int)TextureMode.Value);
 
         // The stencil variants each name a shader of its own and keep it.
         if (MaterialType == MaterialType.UI_Unlit)
         {
             bool depthOffset = OffsetFactor.Value != 0f || OffsetUnits.Value != 0f;
-            _variantOn = MaterialVariantSource.Apply(asset, VariantSource(Culling.Value, ZWrite.Value, ZTest.Value, depthOffset),
+            _variantOn = MaterialVariantSource.Apply(asset,
+                VariantSource(Culling.Value, ZWrite.Value, ZTest.Value, depthOffset, TintHidden.Value),
                 ShippedFile(ZWrite.Value, ZTest.Value), _variantOn);
         }
     }
 
-    // Culling, depth write, depth test and a depth bias are compile-time render state. Three shipped shaders
+    // Culling, depth write, depth test, a depth bias and the hidden tint (which reads the scene's depth, and
+    // so costs a depth copy only where it is asked for) are compile-time render state. Three shipped shaders
     // cover what a canvas needs on its own: read from its face only, a two-sided backing that writes depth,
     // and an overlay that skips the depth test (and so shows both sides). Any other state gets a few lines of
     // source over the same body, compiled once per distinct text however many materials wear it.
@@ -152,11 +169,11 @@ public class UIUnlitMaterial : MaterialProvider, ICommonMaterial
     // Culling is counted from the side a canvas is read from: Back hides the side behind it, Front shows
     // only that side, None shows both. Helio winds the reading side as Godot's back face, which is why Back
     // is cull_front. -xlinka
-    internal static string? VariantSource(Culling culling, ZWrite zWrite, ZTest zTest, bool depthOffset)
+    internal static string? VariantSource(Culling culling, ZWrite zWrite, ZTest zTest, bool depthOffset, bool tintHidden = false)
     {
         bool overlay = zTest is Assets.ZTest.Disabled or Assets.ZTest.Always;
         bool writes = zWrite == Assets.ZWrite.On;
-        if (!depthOffset && (overlay || (writes && culling == Assets.Culling.None) || (!writes && culling == Assets.Culling.Back)))
+        if (!depthOffset && !tintHidden && (overlay || (writes && culling == Assets.Culling.None) || (!writes && culling == Assets.Culling.Back)))
             return null;
 
         var sb = new StringBuilder("shader_type spatial;\nrender_mode unshaded, blend_mix, ", 160);
@@ -169,6 +186,8 @@ public class UIUnlitMaterial : MaterialProvider, ICommonMaterial
             Assets.Culling.Front => "cull_back",
             _ => "cull_disabled",
         }).Append(";\n");
+        if (tintHidden)
+            sb.Append("#define HIDDEN_TINT\n");
         if (depthOffset)
             sb.Append("#define DEPTH_OFFSET\n");
         else if (writes)

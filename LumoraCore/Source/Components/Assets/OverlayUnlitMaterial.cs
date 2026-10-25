@@ -22,6 +22,22 @@ public class OverlayUnlitMaterial : MaterialProvider, ICommonMaterial
     public readonly Sync<ZTest> ZTest;
     public readonly Sync<int> RenderQueue;
 
+    // The behind state's own texture, under the behind transform. Left empty, behind reads Texture, as every
+    // overlay did before it had one.
+    public readonly AssetRef<TextureAsset> BehindTexture;
+    // Cutout drops what falls under it, before the vertex colour.
+    public readonly Sync<float> AlphaCutoff;
+    // Wraps both textures around the centre of the UV square, angle across U and radius along V, each under its
+    // own scale and offset. The power bends the radius.
+    public readonly Sync<bool> PolarUVmapping;
+    public readonly Sync<float> PolarPower;
+    // How vertex colours blend across a triangle: Linear as always, or sRGB for gradients that step evenly.
+    public readonly Sync<ColorProfile> VertexColorInterpolationSpace;
+    // A depth bias for the in-front-or-behind test of the blended overlay: negative pulls the surface toward the
+    // camera, so less of it counts as behind. The additive overlay splits by face and takes none.
+    public readonly Sync<float> OffsetFactor;
+    public readonly Sync<float> OffsetUnits;
+
     protected override MaterialType MaterialType => MaterialType.OverlayUnlit;
 
     public colorHDR Color
@@ -51,6 +67,14 @@ public class OverlayUnlitMaterial : MaterialProvider, ICommonMaterial
         ZWrite = new Sync<ZWrite>(this, Assets.ZWrite.Off);
         ZTest = new Sync<ZTest>(this, Assets.ZTest.Disabled);
         RenderQueue = new Sync<int>(this, 4010);
+
+        BehindTexture = new AssetRef<TextureAsset>(this);
+        AlphaCutoff = new Sync<float>(this, 0.5f);
+        PolarUVmapping = new Sync<bool>(this, false);
+        PolarPower = new Sync<float>(this, 1f);
+        VertexColorInterpolationSpace = new Sync<ColorProfile>(this, ColorProfile.Linear);
+        OffsetFactor = new Sync<float>(this, 0f);
+        OffsetUnits = new Sync<float>(this, 0f);
     }
 
     protected override void UpdateMaterial(MaterialAsset asset)
@@ -68,5 +92,13 @@ public class OverlayUnlitMaterial : MaterialProvider, ICommonMaterial
         asset.SetInt("ZWrite", (int)ZWrite.Value);
         asset.SetInt("ZTest", (int)ZTest.Value);
         asset.SetInt("RenderQueue", RenderQueue.Value);
+        asset.SetTexture("BehindTexture", BehindTexture.Asset);
+        asset.SetBool("UseBehindTexture", BehindTexture.Asset != null);
+        asset.SetFloat("AlphaCutoff", AlphaCutoff.Value);
+        asset.SetBool("PolarMapping", PolarUVmapping.Value);
+        asset.SetFloat("PolarPower", PolarPower.Value);
+        asset.SetInt("VertexColorInterpolationSpace", (int)VertexColorInterpolationSpace.Value);
+        asset.SetFloat("OffsetFactor", OffsetFactor.Value);
+        asset.SetFloat("OffsetUnits", OffsetUnits.Value);
     }
 }

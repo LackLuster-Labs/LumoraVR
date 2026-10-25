@@ -5,15 +5,17 @@ using Lumora.Core.Math;
 
 namespace Lumora.Core.Assets;
 
-// Metallic PBR with an independent albedo, normal map and emission per face side. For single-sheet
-// geometry where the back is meant to read as something else: card faces, flags, book pages, the
-// inside of a shell.
+// PBR with an independent albedo, normal map and emission per face side. For single-sheet geometry where
+// the back is meant to read as something else: card faces, flags, book pages, the inside of a shell.
+//
+// The metallic and specular members differ only in how the surface reflects; see PBS_MetallicDualSided and
+// PBS_SpecularDualSided. Saves from before the split name the old single type, which was the metallic one, and
+// load as PBS_MetallicDualSided (WorkerManager's rename table).
 //
 // Culling is off for the life of this material and is not exposed. Face culling is a compile-time
 // render mode in Godot shaders, and a one-sided variant of a dual-sided material is just the plain
-// metallic material. -xlinka
-[ComponentCategory("Assets/Materials")]
-public class PBS_DualSided : MaterialProvider, ICommonMaterial
+// PBS material. -xlinka
+public abstract class PBS_DualSidedMaterial : MaterialProvider, ICommonMaterial
 {
     [Group("Front")]
     public readonly Sync<colorHDR> FrontAlbedoColor;
@@ -55,14 +57,6 @@ public class PBS_DualSided : MaterialProvider, ICommonMaterial
     [Range(0f, 4f, "0.00")]
     public readonly Sync<float> NormalScale;
 
-    [Group("Surface")]
-    [Range(0f, 1f, "0.00")]
-    public readonly Sync<float> Metallic;
-
-    [Group("Surface")]
-    [Range(0f, 1f, "0.00")]
-    public readonly Sync<float> Smoothness;
-
     [Group("Rendering")]
     public readonly Sync<bool> AlphaClip;
 
@@ -72,8 +66,6 @@ public class PBS_DualSided : MaterialProvider, ICommonMaterial
 
     [Group("Rendering")]
     public readonly Sync<int> RenderQueue;
-
-    protected override MaterialType MaterialType => MaterialType.PBS_DualSided;
 
     public colorHDR Color
     {
@@ -87,7 +79,7 @@ public class PBS_DualSided : MaterialProvider, ICommonMaterial
         set => FrontAlbedoTexture.Target = value;
     }
 
-    public PBS_DualSided()
+    protected PBS_DualSidedMaterial()
     {
         FrontAlbedoColor = new Sync<colorHDR>(this, colorHDR.White);
         FrontAlbedoTexture = new AssetRef<TextureAsset>(this);
@@ -102,8 +94,6 @@ public class PBS_DualSided : MaterialProvider, ICommonMaterial
         TextureScale = new Sync<float2>(this, float2.One);
         TextureOffset = new Sync<float2>(this, float2.Zero);
         NormalScale = new Sync<float>(this, 1f);
-        Metallic = new Sync<float>(this, 0f);
-        Smoothness = new Sync<float>(this, 0.25f);
         AlphaClip = new Sync<bool>(this, false);
         AlphaCutoff = new Sync<float>(this, 0.5f);
         RenderQueue = new Sync<int>(this, -1);
@@ -132,11 +122,13 @@ public class PBS_DualSided : MaterialProvider, ICommonMaterial
         asset.SetFloat2("TextureScale", TextureScale.Value);
         asset.SetFloat2("TextureOffset", TextureOffset.Value);
         asset.SetFloat("NormalScale", NormalScale.Value);
-        asset.SetFloat("Metallic", Metallic.Value);
-        asset.SetFloat("Smoothness", Smoothness.Value);
 
         asset.SetBool("AlphaClip", AlphaClip.Value);
         asset.SetFloat("AlphaCutoff", AlphaCutoff.Value);
         asset.SetInt("RenderQueue", RenderQueue.Value);
+
+        UpdateWorkflow(asset);
     }
+
+    protected abstract void UpdateWorkflow(MaterialAsset asset);
 }

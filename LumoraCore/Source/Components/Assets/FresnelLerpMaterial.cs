@@ -72,6 +72,39 @@ public class FresnelLerpMaterial : MaterialProvider, ICommonMaterial
     [Group("Rendering")]
     public readonly Sync<int> RenderQueue;
 
+    // Reads the lerp texture wrapped around the centre of the UV square, angle across U and radius along V,
+    // under its own scale and offset. The power bends the radius.
+    [Group("Lerp")]
+    public readonly Sync<bool> LerpTexturePolarUV;
+    [Group("Lerp")]
+    public readonly Sync<float> LerpTexturePolarPower;
+
+    // Bends both sets' falloff after the exponent.
+    [Group("Rendering")]
+    public readonly Sync<float> GammaCurve;
+    [Group("Set 0")]
+    public readonly AssetRef<TextureAsset> NormalMap0;
+    [Group("Set 1")]
+    public readonly AssetRef<TextureAsset> NormalMap1;
+
+    // The defaults are the shipped state: blended with a depth pre-pass, back faces culled. Opaque and Cutout
+    // keep the surface in the opaque pass; Auto writes depth there, and through the pre-pass when blended
+    // except for additive and multiply, which write none.
+    [Group("Rendering")]
+    public readonly Sync<BlendMode> BlendMode;
+    [Group("Rendering")]
+    public readonly Sync<Culling> Culling;
+    [Group("Rendering")]
+    public readonly Sync<ZWrite> ZWrite;
+    // DEPTH BIAS: toward the camera (negative) or away from it, in depth only.
+    [Group("Rendering")]
+    public readonly Sync<float> OffsetFactor;
+    [Group("Rendering")]
+    public readonly Sync<float> OffsetUnits;
+
+    // Whether the last update put a generated shader on in place of the shipped file.
+    private bool _generatedVariant;
+
     protected override MaterialType MaterialType => MaterialType.FresnelLerp;
 
     public colorHDR Color
@@ -109,11 +142,37 @@ public class FresnelLerpMaterial : MaterialProvider, ICommonMaterial
         TextureOffset = new Sync<float2>(this, float2.Zero);
         UseVertexColor = new Sync<bool>(this, false);
         RenderQueue = new Sync<int>(this, -1);
+
+        LerpTexturePolarUV = new Sync<bool>(this, false);
+        LerpTexturePolarPower = new Sync<float>(this, 1f);
+        GammaCurve = new Sync<float>(this, 1f);
+        NormalMap0 = new AssetRef<TextureAsset>(this);
+        NormalMap1 = new AssetRef<TextureAsset>(this);
+        BlendMode = new Sync<BlendMode>(this, Assets.BlendMode.Alpha);
+        Culling = new Sync<Culling>(this, Assets.Culling.Back);
+        ZWrite = new Sync<ZWrite>(this, Assets.ZWrite.Auto);
+        OffsetFactor = new Sync<float>(this, 0f);
+        OffsetUnits = new Sync<float>(this, 0f);
     }
 
     protected override void UpdateMaterial(MaterialAsset asset)
     {
+        asset.SetBlendMode(BlendMode.Value);
+        asset.SetCulling(Culling.Value);
+        bool depthOffset = OffsetFactor.Value != 0f || OffsetUnits.Value != 0f;
+        _generatedVariant = MaterialVariantSource.Apply(asset,
+            VariantSource(BlendMode.Value, Culling.Value, ZWrite.Value, depthOffset), ShippedFile, _generatedVariant);
+
         asset.SetFloat("Lerp", Lerp.Value);
+        asset.SetBool("LerpTexturePolar", LerpTexturePolarUV.Value);
+        asset.SetFloat("LerpTexturePolarPower", LerpTexturePolarPower.Value);
+        asset.SetFloat("GammaCurve", GammaCurve.Value);
+        asset.SetTexture("NormalMap0", NormalMap0.Asset);
+        asset.SetBool("UseNormalMap0", NormalMap0.Asset != null);
+        asset.SetTexture("NormalMap1", NormalMap1.Asset);
+        asset.SetBool("UseNormalMap1", NormalMap1.Asset != null);
+        asset.SetFloat("OffsetFactor", OffsetFactor.Value);
+        asset.SetFloat("OffsetUnits", OffsetUnits.Value);
         asset.SetTexture("LerpTexture", LerpTexture.Asset);
         asset.SetBool("UseLerpTexture", LerpTexture.Asset != null);
         asset.SetFloat2("LerpTextureScale", LerpTextureScale.Value);
@@ -139,5 +198,35 @@ public class FresnelLerpMaterial : MaterialProvider, ICommonMaterial
         asset.SetFloat2("TextureOffset", TextureOffset.Value);
         asset.SetBool("UseVertexColor", UseVertexColor.Value);
         asset.SetInt("RenderQueue", RenderQueue.Value);
+    }
+
+    private const string ShippedFile = "res://Shaders/Mat_FresnelLerp.gdshader";
+
+    // Null in the shipped state.
+    private static string? VariantSource(BlendMode blend, Culling culling, ZWrite zWrite, bool depthOffset)
+    {
+        bool blended = RenderModeText.IsBlended(blend);
+        string auto = blend is Assets.BlendMode.Additive or Assets.BlendMode.Multiply ? "depth_draw_never"
+            : blended ? "depth_prepass_alpha" : string.Empty;
+        string depth = zWrite switch
+        {
+            Assets.ZWrite.On => "depth_draw_always",
+            Assets.ZWrite.Off => "depth_draw_never",
+            _ => auto,
+        };
+        if (blend is Assets.BlendMode.Alpha && depth == "depth_prepass_alpha" && culling == Assets.Culling.Back && !depthOffset)
+            return null;
+
+        var sb = new System.Text.StringBuilder("shader_type spatial;\nrender_mode unshaded, ");
+        sb.Append(RenderModeText.Blend(blend));
+        if (depth.Length > 0)
+            sb.Append(", ").Append(depth);
+        sb.Append(", ").Append(RenderModeText.Cull(culling)).Append(";\n");
+        if (blended)
+            sb.Append("#define TRANSPARENT_PASS\n");
+        if (depthOffset)
+            sb.Append("#define DEPTH_OFFSET\n");
+        sb.Append("#include \"res://Shaders/FresnelLerp_Core.gdshaderinc\"\n");
+        return sb.ToString();
     }
 }

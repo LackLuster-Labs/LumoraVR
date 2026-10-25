@@ -165,18 +165,23 @@ public sealed class VideoTextureProvider : DynamicAssetProvider<VideoTexture>, I
     }
 
     [SyncMethod]
+    [ScriptMethod]
     public void Play() => Playback.Play();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Stop() => Playback.Stop();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Pause() => Playback.Pause();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Resume() => Playback.Resume();
 
     [SyncMethod]
+    [ScriptMethod]
     public void TogglePlayback() => Playback.TogglePlayback();
 
     [SyncMethod]
@@ -499,18 +504,19 @@ public sealed class VideoTextureProvider : DynamicAssetProvider<VideoTexture>, I
             return;
         }
 
-        // A local:// video the store holds plays from its file. One it does not hold is somebody else's
+        // A local:// video the store holds plays from the store, by its address: the decoder reads it through
+        // a decrypting stream, since the file itself is sealed. One it does not hold is somebody else's
         // import, and is fetched from the session into the store first: this branch used to stop at "this
         // machine does not hold" it, so a dropped video only ever played for the person who dropped it.
         // -xlinka
         if (url.IsAbsoluteUri && string.Equals(url.Scheme, "local", StringComparison.OrdinalIgnoreCase))
         {
-            var stored = Engine.Current?.LocalDB?.GetFilePath(url.OriginalString);
-            if (!string.IsNullOrEmpty(stored) && File.Exists(stored))
+            var db = Engine.Current?.LocalDB;
+            if (db != null && db.Exists(url.OriginalString))
             {
                 CancelResolve();
                 _serviceKey = null;
-                IssueLoad(asset, stored!, engine, MimeFor(stored!), Stream.Value);
+                IssueLoad(asset, url.OriginalString, engine, MimeFor(db.GetExtension(url.OriginalString)), Stream.Value);
                 return;
             }
             GatherLocal(url, engine);
@@ -613,14 +619,14 @@ public sealed class VideoTextureProvider : DynamicAssetProvider<VideoTexture>, I
 
         StartTask(async () =>
         {
-            string? path = await Lumora.Core.Networking.AssetFetcher.FetchLocalFileAsync(url.OriginalString);
+            bool held = await Lumora.Core.Networking.AssetFetcher.EnsureLocalAsync(url.OriginalString);
 
             await WorldContext.ToWorld();
 
             if (cancellation.IsCancellationRequested || !ReferenceEquals(_resolve, cancellation))
                 return;
 
-            if (string.IsNullOrEmpty(path) || !File.Exists(path))
+            if (!held)
             {
                 SetError($"could not fetch {url.OriginalString} from the session");
                 return;
@@ -629,7 +635,8 @@ public sealed class VideoTextureProvider : DynamicAssetProvider<VideoTexture>, I
             var asset = Asset;
             if (asset == null)
                 return;
-            IssueLoad(asset, path!, engine, MimeFor(path!), Stream.Value);
+            IssueLoad(asset, url.OriginalString, engine, MimeFor(Engine.Current?.LocalDB?.GetExtension(url.OriginalString) ?? string.Empty),
+                Stream.Value);
         });
     }
 
@@ -818,5 +825,7 @@ public sealed class VideoTextureProvider : DynamicAssetProvider<VideoTexture>, I
     private void ClearError() => LoadError.SetValueSilently(string.Empty);
 
     private static string? MimeFor(string path)
-        => path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? "video/mp4" : null;
+        => path.EndsWith(".mp4", StringComparison.OrdinalIgnoreCase) ? "video/mp4"
+            : path.EndsWith(".ogv", StringComparison.OrdinalIgnoreCase) || path.EndsWith(".ogg", StringComparison.OrdinalIgnoreCase) ? "video/ogg"
+            : null;
 }

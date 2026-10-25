@@ -71,6 +71,9 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
     // MATCAP / EMISSION / OCCLUSION
     public readonly AssetRef<TextureAsset> Matcap;
     public readonly Sync<colorHDR> MatcapTint;
+    // Laid over the lookup the view-space normal makes into the matcap, 0..1 on both axes.
+    public readonly Sync<float2> MatcapScale;
+    public readonly Sync<float2> MatcapOffset;
     public readonly AssetRef<TextureAsset> EmissionMap;
     public readonly Sync<colorHDR> EmissionColor;
     public readonly AssetRef<TextureAsset> OcclusionMap;
@@ -99,6 +102,53 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
     public readonly Sync<float> AlphaClip;
     public readonly Sync<Culling> Culling;
     public readonly Sync<int> RenderQueue;
+
+    // OUTLINE STYLE. None draws no hull whatever the width says. Emissive is the flat colour every outline drew
+    // before the style existed, so it is the default.
+    public readonly Sync<ToonOutlineStyle> Outline;
+    // Multiplies the outline colour by the albedo: its colour, and its texture where the hull lies.
+    public readonly Sync<bool> OutlineAlbedoTint;
+
+    // MAP COORDINATES. On, every map tiles with the albedo, which is how every material made before per-map
+    // transforms looks. Off, each map keeps its own scale and offset.
+    public readonly Sync<bool> MapsFollowAlbedo;
+    public readonly Sync<float2> NormalMapScale;
+    public readonly Sync<float2> NormalMapOffset;
+    public readonly Sync<float2> MetallicGlossMapScale;
+    public readonly Sync<float2> MetallicGlossMapOffset;
+    public readonly Sync<float2> EmissionMapScale;
+    public readonly Sync<float2> EmissionMapOffset;
+    public readonly Sync<float2> OcclusionMapScale;
+    public readonly Sync<float2> OcclusionMapOffset;
+    public readonly Sync<float2> ThicknessMapScale;
+    public readonly Sync<float2> ThicknessMapOffset;
+    // The mesh UV set each map reads.
+    public readonly Sync<TextureUVChannel> AlbedoUV;
+    public readonly Sync<TextureUVChannel> NormalUV;
+    public readonly Sync<TextureUVChannel> MetallicUV;
+    public readonly Sync<TextureUVChannel> OcclusionUV;
+    public readonly Sync<TextureUVChannel> EmissionUV;
+    public readonly Sync<TextureUVChannel> ThicknessUV;
+
+    // Picks the shadow ramp's row per pixel from its red channel, 0 the bottom row and 1 the top, so one ramp
+    // texture can shade skin, cloth and metal differently. Without it ShadowRampRow picks the one row.
+    public readonly AssetRef<TextureAsset> ShadowRampMask;
+    public readonly Sync<float2> ShadowRampMaskScale;
+    public readonly Sync<float2> ShadowRampMaskOffset;
+
+    // How vertex colours blend across a triangle: Linear as always, or sRGB for gradients that step evenly.
+    public readonly Sync<ColorProfile> VertexColorInterpolationSpace;
+
+    // Auto keeps the depth pre-pass the shipped variants use. A depth bias pushes the surface toward the
+    // camera (negative) or away from it in depth only.
+    public readonly Sync<ZWrite> ZWrite;
+    public readonly Sync<float> OffsetFactor;
+    public readonly Sync<float> OffsetUnits;
+
+    // Whether the last update put generated source on in place of a shipped file, for the surface and for
+    // the outline pass.
+    private bool _generatedVariant;
+    private bool _litOutline;
 
     protected override MaterialType MaterialType => MaterialType.XiexeToon;
 
@@ -156,6 +206,8 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
 
         Matcap = new AssetRef<TextureAsset>(this);
         MatcapTint = new Sync<colorHDR>(this, colorHDR.White);
+        MatcapScale = new Sync<float2>(this, float2.One);
+        MatcapOffset = new Sync<float2>(this, float2.Zero);
         EmissionMap = new AssetRef<TextureAsset>(this);
         EmissionColor = new Sync<colorHDR>(this, colorHDR.Black);
         OcclusionMap = new AssetRef<TextureAsset>(this);
@@ -175,6 +227,38 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
         AlphaClip = new Sync<float>(this, 0.5f);
         Culling = new Sync<Culling>(this, Assets.Culling.Back);
         RenderQueue = new Sync<int>(this, -1);
+
+        // Every addition below starts where the material already was, so existing content looks the same.
+        Outline = new Sync<ToonOutlineStyle>(this, ToonOutlineStyle.Emissive);
+        OutlineAlbedoTint = new Sync<bool>(this, false);
+
+        MapsFollowAlbedo = new Sync<bool>(this, true);
+        NormalMapScale = new Sync<float2>(this, float2.One);
+        NormalMapOffset = new Sync<float2>(this, float2.Zero);
+        MetallicGlossMapScale = new Sync<float2>(this, float2.One);
+        MetallicGlossMapOffset = new Sync<float2>(this, float2.Zero);
+        EmissionMapScale = new Sync<float2>(this, float2.One);
+        EmissionMapOffset = new Sync<float2>(this, float2.Zero);
+        OcclusionMapScale = new Sync<float2>(this, float2.One);
+        OcclusionMapOffset = new Sync<float2>(this, float2.Zero);
+        ThicknessMapScale = new Sync<float2>(this, float2.One);
+        ThicknessMapOffset = new Sync<float2>(this, float2.Zero);
+        AlbedoUV = new Sync<TextureUVChannel>(this, TextureUVChannel.UV1);
+        NormalUV = new Sync<TextureUVChannel>(this, TextureUVChannel.UV1);
+        MetallicUV = new Sync<TextureUVChannel>(this, TextureUVChannel.UV1);
+        OcclusionUV = new Sync<TextureUVChannel>(this, TextureUVChannel.UV1);
+        EmissionUV = new Sync<TextureUVChannel>(this, TextureUVChannel.UV1);
+        ThicknessUV = new Sync<TextureUVChannel>(this, TextureUVChannel.UV1);
+
+        ShadowRampMask = new AssetRef<TextureAsset>(this);
+        ShadowRampMaskScale = new Sync<float2>(this, float2.One);
+        ShadowRampMaskOffset = new Sync<float2>(this, float2.Zero);
+
+        VertexColorInterpolationSpace = new Sync<ColorProfile>(this, ColorProfile.Linear);
+
+        ZWrite = new Sync<ZWrite>(this, Assets.ZWrite.Auto);
+        OffsetFactor = new Sync<float>(this, 0f);
+        OffsetUnits = new Sync<float>(this, 0f);
     }
 
     protected override void UpdateMaterial(MaterialAsset asset)
@@ -183,6 +267,11 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
         // uniform. It runs FIRST: the swap keeps every uniform on the material, but the property pushes
         // below have to land on whatever shader ends up bound.
         asset.SetCulling(Culling.Value);
+        // Depth write and bias are compile-time as well. Past what the three files cover the material names
+        // its own source over the same body, after the culling swap so the swap cannot undo it.
+        bool depthOffset = OffsetFactor.Value != 0f || OffsetUnits.Value != 0f;
+        _generatedVariant = MaterialVariantSource.Apply(asset, SurfaceSource(Culling.Value, ZWrite.Value, depthOffset),
+            SurfaceFile(Culling.Value), _generatedVariant);
 
         // Names are PascalCase here and the hook snake-cases them onto the shader uniform.
         asset.SetColor("BaseColor", AlbedoColor.Value);
@@ -191,8 +280,29 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
         asset.SetFloat2("MainTextureScale", MainTextureScale.Value);
         asset.SetFloat2("MainTextureOffset", MainTextureOffset.Value);
         asset.SetBool("UseVertexColors", UseVertexColors.Value);
+        asset.SetInt("VertexColorInterpolationSpace", (int)VertexColorInterpolationSpace.Value);
         asset.SetFloat("HueShift", HueShift.Value);
         asset.SetFloat("Saturation", Saturation.Value);
+
+        asset.SetBool("MapsFollowAlbedo", MapsFollowAlbedo.Value);
+        asset.SetInt("AlbedoUvSet", (int)AlbedoUV.Value);
+        asset.SetInt("NormalUvSet", (int)NormalUV.Value);
+        asset.SetInt("MetallicUvSet", (int)MetallicUV.Value);
+        asset.SetInt("OcclusionUvSet", (int)OcclusionUV.Value);
+        asset.SetInt("EmissionUvSet", (int)EmissionUV.Value);
+        asset.SetInt("ThicknessUvSet", (int)ThicknessUV.Value);
+        asset.SetFloat2("NormalMapScale", NormalMapScale.Value);
+        asset.SetFloat2("NormalMapOffset", NormalMapOffset.Value);
+        asset.SetFloat2("MetallicGlossMapScale", MetallicGlossMapScale.Value);
+        asset.SetFloat2("MetallicGlossMapOffset", MetallicGlossMapOffset.Value);
+        asset.SetFloat2("EmissionMapScale", EmissionMapScale.Value);
+        asset.SetFloat2("EmissionMapOffset", EmissionMapOffset.Value);
+        asset.SetFloat2("OcclusionMapScale", OcclusionMapScale.Value);
+        asset.SetFloat2("OcclusionMapOffset", OcclusionMapOffset.Value);
+        asset.SetFloat2("ThicknessMapScale", ThicknessMapScale.Value);
+        asset.SetFloat2("ThicknessMapOffset", ThicknessMapOffset.Value);
+        asset.SetFloat("OffsetFactor", OffsetFactor.Value);
+        asset.SetFloat("OffsetUnits", OffsetUnits.Value);
 
         asset.SetTexture("NormalMap", NormalMap.Asset);
         asset.SetBool("UseNormalMap", NormalMap.Asset != null);
@@ -201,6 +311,10 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
         asset.SetTexture("ShadowRamp", ShadowRamp.Asset);
         asset.SetBool("UseShadowRamp", ShadowRamp.Asset != null);
         asset.SetFloat("RampRow", ShadowRampRow.Value);
+        asset.SetTexture("ShadowRampMask", ShadowRampMask.Asset);
+        asset.SetBool("UseShadowRampMask", ShadowRampMask.Asset != null);
+        asset.SetFloat2("ShadowRampMaskScale", ShadowRampMaskScale.Value);
+        asset.SetFloat2("ShadowRampMaskOffset", ShadowRampMaskOffset.Value);
         asset.SetFloat("ShadowSharpness", ShadowSharpness.Value);
 
         asset.SetColor("RimColor", RimColor.Value);
@@ -228,6 +342,8 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
         asset.SetTexture("Matcap", Matcap.Asset);
         asset.SetBool("UseMatcap", Matcap.Asset != null);
         asset.SetColor("MatcapTint", MatcapTint.Value);
+        asset.SetFloat2("MatcapScale", MatcapScale.Value);
+        asset.SetFloat2("MatcapOffset", MatcapOffset.Value);
 
         asset.SetTexture("EmissionMap", EmissionMap.Asset);
         asset.SetBool("UseEmissionMap", EmissionMap.Asset != null);
@@ -244,18 +360,42 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
         asset.SetFloat("SubsurfacePower", SubsurfacePower.Value);
         asset.SetFloat("SubsurfaceScale", SubsurfaceScale.Value);
 
-        // The hook routes these four to the chained hull material instead of the lit surface.
-        asset.SetColor("OutlineColor", OutlineColor.Value);
+        // The hook routes the outline's colour, width, mask and texture to the chained hull material instead of
+        // the lit surface.
+        var outlineColor = OutlineColor.Value;
+        var outlineTexture = OutlineAlbedoTint.Value ? AlbedoTexture.Asset : null;
+        if (OutlineAlbedoTint.Value)
+        {
+            var albedo = AlbedoColor.Value;
+            outlineColor = new colorHDR(outlineColor.r * albedo.r, outlineColor.g * albedo.g, outlineColor.b * albedo.b, outlineColor.a);
+        }
+        asset.SetColor("OutlineColor", outlineColor);
+        asset.SetTexture("OutlineTexture", outlineTexture!);
+        asset.SetBool("UseOutlineTexture", outlineTexture != null);
+        asset.SetFloat2("OutlineTextureScale", MainTextureScale.Value);
+        asset.SetFloat2("OutlineTextureOffset", MainTextureOffset.Value);
+        // Lit swaps the hull to a shaded source over the same body; coming back to Emissive names the unshaded
+        // one again. None keeps whichever it has and draws no hull at all.
+        if (Outline.Value == ToonOutlineStyle.Lit)
+        {
+            asset.SetNextPassShaderSource(LitOutlineSource);
+            _litOutline = true;
+        }
+        else if (_litOutline && Outline.Value == ToonOutlineStyle.Emissive)
+        {
+            asset.SetNextPassShaderSource(EmissiveOutlineSource);
+            _litOutline = false;
+        }
         // 0.1 HERE IS NOT 0.1 THERE. The flat toon outline multiplies its width by view depth, so its
         // number is a screen-space factor and 0.1 is a reasonable ceiling. This one extrudes the hull in
-        // MODEL SPACE METRES (Mat_XiexeOutline: VERTEX += normal * outline_width), so the same 0.1 is a
+        // MODEL SPACE METRES (XiexeOutline_Core: VERTEX += normal * outline_width), so the same 0.1 is a
         // TEN CENTIMETRE shell. Copied from the other material, it wrapped an imported fox in a black
         // block that reads as a fat outline rather than as a line.
         //
         // A drawn character outline is a millimetre or two, so that is the ceiling. Anything over it is
         // reported once with the authored number, because a value this far out means a different unit
         // scale and the log is what tells us by how much. -xlinka
-        float authoredOutline = OutlineWidth.Value;
+        float authoredOutline = Outline.Value == ToonOutlineStyle.None ? 0f : OutlineWidth.Value;
         float outline = System.Math.Clamp(authoredOutline, 0f, MaxOutlineMetres);
         if (authoredOutline > MaxOutlineMetres && !_warnedOutlineWidth)
         {
@@ -272,5 +412,40 @@ public class XiexeToonMaterial : MaterialProvider, ICommonMaterial
         asset.SetInt("AlphaMode", (int)AlphaMode.Value);
         asset.SetFloat("AlphaClip", AlphaClip.Value);
         asset.SetFloat("RenderQueue", RenderQueue.Value);
+    }
+
+    private const string OutlineCore = "#include \"res://Shaders/XiexeOutline_Core.gdshaderinc\"\n";
+    private const string LitOutlineSource = "shader_type spatial;\nrender_mode cull_front;\n#define OUTLINE_LIT\n" + OutlineCore;
+    // The same state Mat_XiexeOutline ships in.
+    private const string EmissiveOutlineSource = "shader_type spatial;\nrender_mode unshaded, cull_front;\n" + OutlineCore;
+
+    // The material hook loads these three by culling; nothing else about the surface needs a file of its own.
+    private static string SurfaceFile(Culling culling) => culling switch
+    {
+        Assets.Culling.Front => "res://Shaders/Mat_XiexeFrontCull.gdshader",
+        Assets.Culling.None => "res://Shaders/Mat_XiexeDoubleSided.gdshader",
+        _ => "res://Shaders/Mat_Xiexe.gdshader"
+    };
+
+    // Null while a shipped file covers the state: the depth pre-pass and no bias.
+    private static string? SurfaceSource(Culling culling, ZWrite zWrite, bool depthOffset)
+    {
+        if (zWrite == Assets.ZWrite.Auto && !depthOffset)
+            return null;
+        string depth = zWrite switch
+        {
+            Assets.ZWrite.On => "depth_draw_always",
+            Assets.ZWrite.Off => "depth_draw_never",
+            _ => "depth_prepass_alpha",
+        };
+        string cull = culling switch
+        {
+            Assets.Culling.Front => "cull_front",
+            Assets.Culling.None => "cull_disabled",
+            _ => "cull_back",
+        };
+        return "shader_type spatial;\nrender_mode blend_mix, " + depth + ", " + cull + ";\n"
+            + (depthOffset ? "#define DEPTH_OFFSET\n" : string.Empty)
+            + "#include \"res://Shaders/Xiexe_Core.gdshaderinc\"\n";
     }
 }
