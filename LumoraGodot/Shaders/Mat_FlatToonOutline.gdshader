@@ -11,21 +11,24 @@ shader_type spatial;
 render_mode unshaded, cull_front;
 
 uniform vec4 outline_color : source_color = vec4(0.0, 0.0, 0.0, 1.0);
-// Metres at one metre from the camera. The extrusion happens in view space scaled by the vertex's
-// view depth, so the border keeps a constant apparent thickness instead of vanishing at distance
-// or swallowing the model up close.
+// Metres at one metre from the camera. Closer than that the extrusion scales with view depth, so the
+// border holds its screen width and never swallows a model you stand next to. Past a metre it stops
+// scaling and stays that many metres on the object, thinning with it: scaled all the way out, a small
+// thing far away sat inside a fat black disc the size it was at arm's length. -xlinka
 uniform float outline_width : hint_range(0.0, 0.1) = 0.0;
 
 void vertex() {
 	vec3 view_normal = normalize(MODELVIEW_NORMAL_MATRIX * NORMAL);
 	vec3 view_pos = (MODELVIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	view_pos += view_normal * outline_width * max(-view_pos.z, 0.01);
+	view_pos += view_normal * outline_width * clamp(-view_pos.z, 0.01, 1.0);
 	POSITION = PROJECTION_MATRIX * vec4(view_pos, 1.0);
+	// No width, no hull: every corner on one point outside the view rasterises nothing, where a discard
+	// still shaded each back-face pixel in every pass. -xlinka
+	if (outline_width <= 0.0) {
+		POSITION = vec4(2.0, 2.0, 2.0, 1.0);
+	}
 }
 
 void fragment() {
-	if (outline_width <= 0.0) {
-		discard;
-	}
 	ALBEDO = outline_color.rgb;
 }

@@ -1,6 +1,7 @@
 shader_type spatial;
-// Displace PBS, metallic workflow, front faces culled. Alpha blended.
-render_mode blend_mix, depth_prepass_alpha, cull_front;
+// Displace PBS, metallic workflow, front faces culled. Blended, premultiplied.
+render_mode blend_premul_alpha, depth_prepass_alpha, cull_front;
 
 #define TRANSPARENT_PASS
+#define PREMULTIPLIED
 #include "res://Shaders/PBS_Displace.gdshaderinc"

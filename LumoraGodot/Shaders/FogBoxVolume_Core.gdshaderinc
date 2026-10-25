@@ -1,5 +1,5 @@
 // FogBoxVolume body, shared by the blend variants. Fog filling a unit cube (-0.5..0.5 in object
-// space), thickest where the view ray crosses the most of it. Ported from the Unity shader.
+// space), thickest where the view ray crosses the most of it.
 //
 // Drawn from the cube's BACK faces with the depth test off, so it still renders with the eye inside
 // the box and behind whatever stands in it; the depth buffer is what cuts it short instead. Object

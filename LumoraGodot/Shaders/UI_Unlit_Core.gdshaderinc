@@ -12,11 +12,22 @@
 //   DEPTH_OFFSET   writes a biased depth, see DepthOffset.gdshaderinc
 //   BACKING_PUSH   moves the surface a few millimetres away from the camera so the panel's own coplanar UI
 //                  still passes the depth test against the depth it lays down
+//   HIDDEN_TINT    multiplies what lies behind the scene's opaque depth by hidden_tint
 // -xlinka
 
 #ifdef DEPTH_OFFSET
 #include "res://Shaders/DepthOffset.gdshaderinc"
 #endif
+#include "res://Shaders/TextureProfile.gdshaderinc"
+
+#ifdef HIDDEN_TINT
+uniform sampler2D scene_depth : hint_depth_texture, filter_nearest, repeat_disable;
+uniform vec4 hidden_tint : source_color = vec4(1.0, 1.0, 1.0, 0.73);
+#endif
+
+// 0 shows the picture's colours, 1 shows a normal map as its directions. The sampler decodes colour, so a
+// normal map is put back the way it was stored before its axes are read.
+uniform int texture_mode = 0;
 
 uniform vec4 albedo_color : source_color = vec4(1.0);
 // Mipmapped AND anisotropic. Plain trilinear drops to a coarse mip at a glancing angle (the screen-space
@@ -28,9 +39,10 @@ uniform bool use_albedo_texture = false;
 
 uniform vec2 uv_scale = vec2(1.0);
 uniform vec2 uv_offset = vec2(0.0);
-// A texture that is a vertical strip of frames: the quad's UV covers the first frame and the clock
-// picks which one shows, so an animated picture costs no mesh update. One frame means a still. -xlinka
+// A texture that is a sheet of frames, frame_columns to a row: the quad's UV covers the first frame and the
+// clock picks which one shows, so an animated picture costs no mesh update. One frame means a still. -xlinka
 uniform int frame_count = 1;
+uniform int frame_columns = 1;
 uniform float frame_rate = 10.0;
 uniform bool use_vertex_color = true;
 
@@ -100,9 +112,16 @@ void fragment() {
 
 	vec2 uv = UV;
 	if (frame_count > 1) {
-		uv.y += floor(mod(TIME * frame_rate, float(frame_count))) / float(frame_count);
+		int columns = clamp(frame_columns, 1, frame_count);
+		int rows = (frame_count + columns - 1) / columns;
+		int frame = int(floor(mod(TIME * frame_rate, float(frame_count))));
+		uv += vec2(float(frame % columns) / float(columns), float(frame / columns) / float(rows));
 	}
 	vec4 tex = use_albedo_texture ? texture(albedo_texture, uv) : vec4(1.0);
+	if (texture_mode == 1) {
+		vec2 axes = profile_encode(tex.rgb).rg * 2.0 - 1.0;
+		tex = vec4(vec3(axes, sqrt(max(1.0 - dot(axes, axes), 0.0))) * 0.5 + 0.5, 1.0);
+	}
 	vec4 out_color = albedo_color * tex;
 
 	if (use_vertex_color) {
@@ -125,6 +144,13 @@ void fragment() {
 	}
 
 	out_color.a *= clip_alpha;
+
+#ifdef HIDDEN_TINT
+	// Reversed depth: what is farther than the scene's opaque surface here stores less.
+	if (FRAGCOORD.z < texture(scene_depth, SCREEN_UV).r) {
+		out_color *= hidden_tint;
+	}
+#endif
 
 	if ((color_mask % 2) == 0) out_color.r = 0.0;
 	if (((color_mask / 2) % 2) == 0) out_color.g = 0.0;

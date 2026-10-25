@@ -18,11 +18,13 @@ uniform float outline_width : hint_range(0.0, 0.005) = 0.0;
 
 void vertex() {
 	VERTEX += normalize(NORMAL) * outline_width;
+	// No width, no hull: every corner on one point rasterises nothing, where a discard still shaded each
+	// back-face pixel in every pass. -xlinka
+	if (outline_width <= 0.0) {
+		VERTEX = vec3(0.0);
+	}
 }
 
 void fragment() {
-	if (outline_width <= 0.0) {
-		discard;
-	}
 	ALBEDO = outline_color.rgb;
 }

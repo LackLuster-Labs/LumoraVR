@@ -47,11 +47,22 @@ uniform vec2 color_mask_offset = vec2(0.0);
 uniform int blend_mode = 0;
 uniform float alpha_cutoff : hint_range(0.0, 1.0) = 0.5;
 
+#include "res://Shaders/TextureProfile.gdshaderinc"
+
 // SURFACE
+#ifdef PBS_SPECULAR
+uniform vec4 specular_color : source_color = vec4(0.2, 0.2, 0.2, 0.25);
+uniform sampler2D specular_map : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool use_specular_map = false;
+uniform int specular_map_profile = 0;
+#include "res://Shaders/PBS_Specular_Light.gdshaderinc"
+#else
 uniform float metallic : hint_range(0.0, 1.0) = 0.0;
 uniform float smoothness : hint_range(0.0, 1.0) = 0.25;
 uniform sampler2D metallic_map : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_metallic_map = false;
+uniform int metallic_map_profile = 0;
+#endif
 
 uniform sampler2D normal_map : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_normal_map = false;
@@ -59,6 +70,7 @@ uniform float normal_scale : hint_range(0.0, 4.0) = 1.0;
 
 uniform sampler2D occlusion_map : hint_default_white, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_occlusion_map = false;
+uniform int occlusion_map_profile = 0;
 
 // EMISSION, through the same mask.
 uniform vec4 emissive_color0 : source_color = vec4(0.0);
@@ -98,23 +110,39 @@ void fragment() {
 	// The opaque variant leaves TRANSPARENT_PASS undefined and this write disappears at preprocess, so
 	// the shell lands in the opaque pass, writes depth, and stops being sorted against the additive and
 	// multiply layers stacked on the same mesh. -xlinka
-#ifdef TRANSPARENT_PASS
-	ALPHA = c.a;
-#endif
-
+#ifdef PBS_SPECULAR
+	// Reflectance as a colour, smoothness in its alpha; the map replaces the colour. What the specular lobe
+	// reflects is not left for the diffuse, by the strongest channel.
+	vec4 spec = use_specular_map ? profile_color(texture(specular_map, albedo_uv), specular_map_profile) : specular_color;
+	float reflectivity = max(max(spec.r, spec.g), spec.b);
+	spec_f0 = spec.rgb;
+	ALBEDO = c.rgb * (1.0 - reflectivity);
+	METALLIC = 0.0;
+	SPECULAR = clamp(sqrt(reflectivity / 0.16), 0.0, 1.0);
+	ROUGHNESS = clamp(1.0 - spec.a, 0.0, 1.0);
+#else
 	float rough = 1.0 - smoothness;
 	float metal = metallic;
 	if (use_metallic_map) {
-		vec4 m = texture(metallic_map, albedo_uv);
+		vec4 m = profile_data(texture(metallic_map, albedo_uv), metallic_map_profile);
 		metal = m.r;
 		rough = 1.0 - m.a;
 	}
 	METALLIC = clamp(metal, 0.0, 1.0);
 	ROUGHNESS = clamp(rough, 0.0, 1.0);
+	float reflectivity = mix(0.04, 1.0, clamp(metal, 0.0, 1.0));
+#endif
 
+	// Blended is premultiplied: the diffuse fades with alpha and the reflections keep their strength.
+#ifdef TRANSPARENT_PASS
+	ALBEDO *= c.a;
+	ALPHA = reflectivity + c.a * (1.0 - reflectivity);
+#endif
+
+	// Occlusion darkens only the light from the surroundings; direct lights are left alone.
 	if (use_occlusion_map) {
-		AO = texture(occlusion_map, albedo_uv).r;
-		AO_LIGHT_AFFECT = 1.0;
+		AO = profile_data(texture(occlusion_map, albedo_uv), occlusion_map_profile).r;
+		AO_LIGHT_AFFECT = 0.0;
 	}
 
 	vec4 emission = emissive_color0 * mask.r
@@ -125,7 +153,8 @@ void fragment() {
 	if (use_emissive_map) {
 		emission *= texture(emissive_map, albedo_uv);
 	}
-	EMISSION = emission.rgb * emission.a;
+	// The emission colours' alpha is not a strength.
+	EMISSION = emission.rgb;
 
 	if (use_normal_map) {
 		vec3 tn = texture(normal_map, albedo_uv).xyz * 2.0 - 1.0;

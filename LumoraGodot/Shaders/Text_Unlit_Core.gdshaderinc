@@ -9,7 +9,12 @@
 //   TEXT_STAMP    only what lies inside the glyphs is drawn, so a stencil write marks the letters and not
 //                 the quads they sit on
 //   TEXT_HIDDEN   the colour mask drops red, green and blue: nothing shows, the stencil and depth still go
+//   DEPTH_OFFSET  writes a biased depth, see DepthOffset.gdshaderinc
 // -xlinka
+
+#ifdef DEPTH_OFFSET
+#include "res://Shaders/DepthOffset.gdshaderinc"
+#endif
 
 uniform vec4 albedo_color : source_color = vec4(1.0);
 // Plain bilinear, no mipmaps, no aniso - see UI_Text.gdshader for why mip
@@ -39,6 +44,10 @@ uniform float outline_thickness = 0.0;
 // atlases only; a coverage atlas has no distance to move.
 uniform float face_dilate = 0.0;
 uniform float face_softness = 0.0;
+// What fills the glyph quad outside the letter, tinted by the vertex colour like the face. Off, the edge
+// fades out in the face's own colour. Distance-field atlases only.
+uniform bool use_background_color = false;
+uniform vec4 background_color : source_color = vec4(0.0);
 
 // A band of light that sweeps across the letters every few seconds, for marks that are given rather than
 // chosen (staff names). Strength 0 leaves the text exactly as it was. It runs in the text's own space off the
@@ -151,6 +160,11 @@ void fragment() {
 		} else {
 			out_color.a *= face;
 		}
+
+		if (use_background_color) {
+			vec4 bg = use_vertex_color ? background_color * COLOR : background_color;
+			out_color = vec4(mix(bg.rgb, out_color.rgb, shape), out_color.a + bg.a * (1.0 - shape));
+		}
 	} else {
 		float coverage = 1.0;
 		if (use_albedo_texture) {
@@ -221,5 +235,8 @@ void fragment() {
 	ALPHA = 0.0;
 #else
 	ALPHA = out_color.a;
+#endif
+#ifdef DEPTH_OFFSET
+	DEPTH = offset_depth(FRAGCOORD.z);
 #endif
 }

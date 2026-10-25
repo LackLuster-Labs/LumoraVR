@@ -1,7 +1,7 @@
 shader_type spatial;
 // Bends whatever is behind the surface along its view-space normal, optionally a normal-mapped one.
-// The offset is divided by the fragment's depth, so the same glass bends less of the screen far away,
-// as in the Unity shader.
+// The offset is divided by the fragment's depth, so the same glass bends less of the screen far away
+// and a package's refraction strength reads the same here.
 //
 // A sample that lands on something IN FRONT of the glass would pull that thing into the refraction.
 // The depth at the bent sample is checked against the glass: the bend fades back to none as the

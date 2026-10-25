@@ -7,7 +7,7 @@
 // The one thing Godot's light stage cannot carry for us: a per-channel F0.
 varying vec3 spec_f0;
 
-// Cook-Torrance with a GGX distribution, Unity's Smith-joint visibility approximation and a Schlick fresnel
+// Cook-Torrance with a GGX distribution, a Smith-joint visibility approximation and a Schlick fresnel
 // that runs on the COLOURED F0, which is the whole reason this cannot be left to Godot's built-in light path.
 // -xlinka
 void light() {

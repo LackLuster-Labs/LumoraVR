@@ -1,7 +1,6 @@
 // Projection360 body, shared by every variant. A panorama or a cubemap picked by DIRECTION rather
 // than by mesh UV: the direction to the eye in object space (View) or world space (WorldspaceView),
-// the surface normal (Normal), or a pinhole camera laid across the mesh UVs (Perspective). Ported from
-// the Unity shader.
+// the surface normal (Normal), or a pinhole camera laid across the mesh UVs (Perspective).
 //
 // Directions are worked in the left-handed frame the content was authored in, X mirrored on the way
 // in, so the panorama mapping and the angle offsets land where the author put them. A cubemap is

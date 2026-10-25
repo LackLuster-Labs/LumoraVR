@@ -7,10 +7,10 @@
 // generated source defines PBS_STENCIL and includes it directly. The blocks under those names are the whole
 // of what each family adds.
 //
-// These families read occlusion from RED and emission as the colour's RGB alone, where PBS_Metallic_Core reads
-// green and RGB times alpha. Imported content was tuned against the former. -xlinka
+// These families read occlusion from RED, where PBS_Metallic_Core reads green, and emission as the colour's RGB
+// alone. Imported content was tuned against that. -xlinka
 
-// Unity's unity_ColorSpaceDouble in a linear project: the detail albedo is a 2x multiply in gamma space,
+// The detail albedo is a 2x multiply in gamma space,
 // which is 2^2.2 once the sampler has linearised the texel. Mid grey is the neutral detail colour.
 const float DETAIL_COLOR_DOUBLE = 4.59479380;
 
@@ -21,12 +21,15 @@ uniform bool use_albedo_texture = false;
 uniform vec2 texture_scale = vec2(1.0);
 uniform vec2 texture_offset = vec2(0.0);
 
+#include "res://Shaders/TextureProfile.gdshaderinc"
+
 // ---------------------------------------------------------------- workflow
 #ifdef PBS_SPECULAR
 // RGB is the reflectance at normal incidence, A is smoothness. The map replaces the colour outright.
 uniform vec4 specular_color : source_color = vec4(0.0);
 uniform sampler2D specular_map : source_color, filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_specular_map = false;
+uniform int specular_map_profile = 0;
 #include "res://Shaders/PBS_Specular_Light.gdshaderinc"
 #else
 // R is metallic, A is smoothness.
@@ -34,6 +37,7 @@ uniform float metallic : hint_range(0.0, 1.0) = 0.0;
 uniform float smoothness : hint_range(0.0, 1.0) = 0.25;
 uniform sampler2D metallic_map : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_metallic_map = false;
+uniform int metallic_map_profile = 0;
 #endif
 
 // ---------------------------------------------------------------- normal
@@ -48,6 +52,7 @@ uniform bool use_emissive_map = false;
 
 uniform sampler2D occlusion_map : filter_linear_mipmap_anisotropic, repeat_enable;
 uniform bool use_occlusion_map = false;
+uniform int occlusion_map_profile = 0;
 
 // ---------------------------------------------------------------- blending
 uniform float alpha_clip : hint_range(0.0, 1.0) = 0.5;
@@ -60,7 +65,7 @@ vec3 effect_unpack_normal(vec4 packed_normal, float scale) {
 	return n;
 }
 
-// Unity's BlendNormals: add the slopes, multiply the heights.
+// The whiteout blend: add the slopes, multiply the heights.
 vec3 effect_blend_normals(vec3 n1, vec3 n2) {
 	return normalize(vec3(n1.xy + n2.xy, n1.z * n2.z));
 }
@@ -122,9 +127,9 @@ void fragment() {
 	}
 
 #ifdef PBS_SPECULAR
-	vec4 spec = use_specular_map ? texture(specular_map, base_uv) : specular_color;
+	vec4 spec = use_specular_map ? profile_color(texture(specular_map, base_uv), specular_map_profile) : specular_color;
 	// Whatever the specular lobe reflects is not available to the diffuse one; the strongest channel sets
-	// the budget, as in Unity's EnergyConservationBetweenDiffuseAndSpecular.
+	// the budget.
 	float reflectivity = max(max(spec.r, spec.g), spec.b);
 	spec_f0 = spec.rgb;
 	ALBEDO = base.rgb * (1.0 - reflectivity);
@@ -136,7 +141,7 @@ void fragment() {
 	float metal = metallic;
 	float gloss = smoothness;
 	if (use_metallic_map) {
-		vec4 mg = texture(metallic_map, base_uv);
+		vec4 mg = profile_data(texture(metallic_map, base_uv), metallic_map_profile);
 		metal = mg.r;
 		gloss = mg.a;
 	}
@@ -153,6 +158,16 @@ void fragment() {
 	ALPHA = 0.0;
 #elif defined(PBS_STENCIL)
 	ALPHA = 1.0;
+#elif defined(PREMULTIPLIED)
+	// A blended surface of these families is premultiplied: the diffuse fades with alpha, the reflections
+	// keep their strength, and alpha grows by what the surface reflects.
+#ifdef PBS_SPECULAR
+	float premul_reflectivity = reflectivity;
+#else
+	float premul_reflectivity = mix(0.04, 1.0, clamp(metal, 0.0, 1.0));
+#endif
+	ALBEDO *= base.a;
+	ALPHA = premul_reflectivity + base.a * (1.0 - premul_reflectivity);
 #else
 	ALPHA = base.a;
 #endif
@@ -169,9 +184,10 @@ void fragment() {
 #endif
 	EMISSION = emission;
 
+	// Occlusion darkens only the light from the surroundings; direct lights are left alone.
 	if (use_occlusion_map) {
-		AO = texture(occlusion_map, base_uv).r;
-		AO_LIGHT_AFFECT = 1.0;
+		AO = profile_data(texture(occlusion_map, base_uv), occlusion_map_profile).r;
+		AO_LIGHT_AFFECT = 0.0;
 	}
 
 #ifdef PBS_SLICE
