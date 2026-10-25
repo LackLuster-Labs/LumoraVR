@@ -486,6 +486,15 @@ internal static partial class PackageNodeTable
                 s.Wire(date, "text", node, port);
                 return;
             }
+            // A span by its own pattern, the package's default being the same as ours.
+            if (type == "timespan")
+            {
+                string duration = s.Add("FormatDuration", "timespan,string");
+                s.InAt("Parameters", index, duration, "span");
+                s.Set(duration, "format", spec);
+                s.Wire(duration, "text", node, port);
+                return;
+            }
             if (Decimals(spec) is { } decimals && type is "float" or "double")
             {
                 string number = s.Add("FormatNumber", $"{type},int");
@@ -510,7 +519,7 @@ internal static partial class PackageNodeTable
             {
                 if (node.Class is "ValueToObjectCast" or "ObjectCast")
                     cast ??= node.Arg(0);
-                else if (node.Class is not ("ValueRelay" or "ObjectRelay" or "ContinuouslyChangingValueRelay"))
+                else if (node.Class is not ("ValueRelay" or "ObjectRelay" or "ContinuouslyChangingValueRelay" or "ContinuouslyChangingObjectRelay"))
                     return cast ?? ValueTypeOf(node);
                 id = node.Ref("Input");
             }

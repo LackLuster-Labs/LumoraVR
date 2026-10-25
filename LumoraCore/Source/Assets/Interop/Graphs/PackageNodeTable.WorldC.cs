@@ -46,10 +46,14 @@ internal static partial class PackageNodeTable
         On("LocalValue", FamilyC.LocalValue);
         On("DataModelUserRefStore", FamilyC.UserStore);
         On("ObjectMultiplex", FamilyC.ObjectMultiplex);
+        On("ValueMultiplex", FamilyC.ValueMultiplex);
         On("MultiNullCoalesce", FamilyC.NullCoalesce);
         On("AllocatingUser", FamilyC.AllocatingUser);
         On("CreateFieldUndoStep", FamilyC.FieldUndoStep);
         On("TryEnumToInt", FamilyC.EnumToInt);
+        // A step along an enum's values, wrapping at the ends; two names for one number are one step on both sides.
+        Map("NextValue", "NextEnumValue", "{T}", ins: "Value=value", outs: "=next");
+        Map("PreviousValue", "PreviousEnumValue", "{T}", ins: "Value=value", outs: "=previous");
 
         // Shapes the earlier handlers do not take, ahead of them.
         foreach (var cls in new[] { "ValueWrite", "ObjectWrite", "ValueIndirectWrite", "ObjectIndirectWrite" })
@@ -1132,22 +1136,55 @@ internal static partial class PackageNodeTable
             s.Out("Output", Pick(s, type, 0, count), "result");
         }
 
+        // The same for a value, its type's empty value past the list.
+        public static void ValueMultiplex(PackageNodeScope s)
+        {
+            int count = s.Node.Refs("Inputs").Count;
+            s.OutConstant("InputCount", (double)count);
+            if (s.Arg(0) is not { } type)
+            {
+                s.Fail("its type has no counterpart here");
+                return;
+            }
+            if (count == 0)
+            {
+                s.OutConstant("Output", null);
+                return;
+            }
+            s.Out("Output", Pick(s, type, 0, count), "result");
+        }
+
+        // A Select gives nothing past its four, so where the rest go on through d, an index past its three is
+        // held at d and the rest pick by it for themselves.
         private static string Pick(PackageNodeScope s, string type, int start, int count)
         {
             string select = s.Add("Select", type);
-            if (start == 0)
+            int here = count - start <= 4 ? count - start : 3;
+            bool more = start + here < count;
+            string? index = null;
+            if (start != 0)
+            {
+                index = s.Add("Subtract", "int,int");
+                s.In("Index", index, "a");
+                s.Set(index, "b", (double)start);
+            }
+            if (more)
+            {
+                string held = s.Add("Min", "int,int");
+                if (index == null)
+                    s.In("Index", held, "a");
+                else
+                    s.Wire(index, "result", held, "a");
+                s.Set(held, "b", 3d);
+                index = held;
+            }
+            if (index == null)
                 s.In("Index", select, "index");
             else
-            {
-                string shifted = s.Add("Subtract", "int,int");
-                s.In("Index", shifted, "a");
-                s.Set(shifted, "b", (double)start);
-                s.Wire(shifted, "result", select, "index");
-            }
-            int here = count - start <= 4 ? count - start : 3;
+                s.Wire(index, "result", select, "index");
             for (int k = 0; k < here; k++)
                 s.InAt("Inputs", start + k, select, Lettered(k));
-            if (start + here < count)
+            if (more)
                 s.Wire(Pick(s, type, start + here, count), "result", select, "d");
             return select;
         }

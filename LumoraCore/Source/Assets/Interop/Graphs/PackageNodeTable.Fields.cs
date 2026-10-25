@@ -25,10 +25,26 @@ internal static partial class PackageNodeTable
         Same(s =>
         {
             var proxy = s.Helper("FieldDriveBase+Proxy");
-            var field = proxy == null ? null : s.Index.World(proxy.Ref("Drive"));
+            var field = proxy == null ? null : s.Index.World(proxy.Ref("Drive")) ?? InGraphHolder(s, proxy.Ref("Drive"));
+            // Aimed at nothing in the package, it drives nothing there either.
+            if (proxy != null && proxy.Ref("Drive") == null)
+                return;
             if (field == null)
             {
                 s.Problem($"drives {s.Index.Describe(proxy?.Ref("Drive"))}; the drive is left out");
+                return;
+            }
+            // An id field is a reference here, so a drive of one aims the reference at the element fed in.
+            if (field is ISyncRef reference && s.Node.Args.Count > 0 && s.Node.Args[0] == "RefID")
+            {
+                if (!ScriptTypes.TryGet(reference.TargetType, out var held) || !held.IsHandle)
+                {
+                    s.Fail("drives a reference whose type has no counterpart here");
+                    return;
+                }
+                string aim = s.Add("DriveReference", held.Name);
+                s.Bind(aim, "reference", field, "reference");
+                s.In("Value", aim, "target");
                 return;
             }
             if ((FieldType(field) ?? s.Arg(0)) is not { } type)
@@ -46,6 +62,13 @@ internal static partial class PackageNodeTable
             }
             string drive = s.Add("DriveField", type);
             s.Bind(drive, "field", field, $"field<{type}>");
+            if (UvPair(field) is { } uv)
+            {
+                UvInto(s, uv, "Value", drive, "value");
+                if (!uv.IsOffset)
+                    KeepOffset(s, uv, "Value");
+                return;
+            }
             s.In("Value", drive, "value");
         }, "ValueFieldDrive", "ObjectFieldDrive");
 
@@ -134,7 +157,7 @@ internal static partial class PackageNodeTable
             }
         });
 
-        On("DataModelValueFieldStore", s =>
+        Same(s =>
         {
             if (s.Arg(0) is not { } type || Holder(s, s.Node) is not { } field)
             {
@@ -144,10 +167,17 @@ internal static partial class PackageNodeTable
             string read = s.Add("GetField", type);
             s.Bind(read, "field", field, $"field<{type}>");
             s.Out("", read, "result");
-        });
+        }, "DataModelValueFieldStore", "DataModelObjectFieldStore");
 
         On("DataModelObjectRefStore", s =>
         {
+            // A list is no world object to keep a synced reference to; the graph keeps it for itself.
+            if (KeepsList(s.Node) is { } list)
+            {
+                string kept = s.Add("StoredValue", list);
+                s.Out("", kept, "value");
+                return;
+            }
             if (ReferencedType(s) is not { } type || Holder(s, s.Node) is not { } reference)
             {
                 s.Fail("its reference's type cannot be kept here");
@@ -289,7 +319,7 @@ internal static partial class PackageNodeTable
         {
             member = PackageNodeIndex.MemberOf(holder, "Reference", -1);
             if (member is ISyncRef syncRef && proxy != null && s.Index.World(proxy.Ref("Target")) is { } target)
-                syncRef.TrySet(target);
+                syncRef.TrySet(type == "slot" && target is Component component ? component.Slot : target);
         }
         else
         {
@@ -322,18 +352,23 @@ internal static partial class PackageNodeTable
         switch (target.Class)
         {
             case "DataModelValueFieldStore":
+            case "DataModelObjectFieldStore":
             case "DataModelBooleanToggle":
                 return Holder(s, target) is { } field ? new FieldVar(field) : null;
             case "DataModelObjectRefStore":
+                if (KeepsList(target) != null)
+                    return s.Writer.Main.TryGetValue(target, out var list) ? new StoredVar(list) : null;
                 return Holder(s, target) is { } reference ? new ReferenceVar(reference) : null;
             case "StoredValue":
             case "StoredObject":
                 return s.Writer.Main.TryGetValue(target, out var kept) ? new StoredVar(kept) : null;
             case "ValueSource":
             case "ObjectValueSource":
-                return WorldOf(s.Index, target, "Source") is { } source ? new FieldVar(source) : null;
+                return (WorldOf(s.Index, target, "Source") ?? InGraphHolder(s, GlobalTarget(s.Index, target, "Source"))) is { } source
+                    ? new FieldVar(source) : null;
             case "ReferenceSource":
-                return WorldOf(s.Index, target, "Source") is { } held ? new ReferenceVar(held) : null;
+                return (WorldOf(s.Index, target, "Source") ?? InGraphHolder(s, GlobalTarget(s.Index, target, "Source"))) is { } held
+                    ? new ReferenceVar(held) : null;
             case "FieldAsVariable":
                 return new FieldFrom(target, "Field");
             case "ReferenceAsVariable":
@@ -351,6 +386,57 @@ internal static partial class PackageNodeTable
         return index.World(id);
     }
 
+    // The id a node's member names, through the global reference holding it.
+    private static string? GlobalTarget(PackageNodeIndex index, PackageNode node, string member)
+    {
+        string? id = node.Ref(member);
+        if (index.TryNode(id, out var global, out _) && global.Class.StartsWith("GlobalReference", StringComparison.Ordinal))
+            return global.Ref("Reference");
+        return id;
+    }
+
+    // A member inside the graph named as a field: a store's value is the store's holder, and a constant's value,
+    // which the graph then writes into or reads as a field, is a holder seeded with the constant.
+    public static IWorldElement? InGraphHolder(PackageNodeScope s, string? id)
+    {
+        if (!s.Index.TryNode(id, out var node, out var member))
+            return null;
+        if (node.Class.EndsWith("+Store", StringComparison.Ordinal) && node.Ref("Node") is { } served
+            && s.Index.Nodes.TryGetValue(served, out var store))
+            return Holder(s, store);
+        if (node.Class is "ValueInput" or "ValueObjectInput" && member == "Value")
+            return ConstantHolder(s, node);
+        return null;
+    }
+
+    // Made once per constant.
+    private static IWorldElement? ConstantHolder(PackageNodeScope s, PackageNode constant)
+    {
+        if (s.Writer.Holders.TryGetValue(constant, out var made))
+            return made;
+        if (constant.Arg(0) is not { } type || !ScriptTypes.TryGet(type, out var scriptType))
+            return null;
+        Component holder;
+        try
+        {
+            holder = s.Home.AttachComponent(typeof(ValueHolder<>).MakeGenericType(scriptType.ClrType));
+        }
+        catch (Exception ex) when (ex is ArgumentException or InvalidOperationException)
+        {
+            return null;
+        }
+        PackageMemberMapper.Apply(holder, constant.Data, (_, _) => { }, (_, _, _) => { }, _ => null);
+        var member = PackageNodeIndex.MemberOf(holder, "Value", -1);
+        if (member != null)
+            s.Writer.Holders[constant] = member;
+        return member;
+    }
+
+    // Whether something in the graph names a constant's value as a field, to write into or read live.
+    private static bool NamedAsField(PackageNodeScope s, PackageNode constant)
+        => constant.Data.TryGetNode("Value") is Persistence.DataTreeDictionary member
+            && (member.TryGetNode("ID") as Persistence.DataTreeValue)?.Value is string id && s.Index.Read.Contains(id);
+
     // A write's value type: the last generic argument, the first being its context where there are two.
     private static string? WrittenType(PackageNodeScope s)
     {
@@ -360,11 +446,16 @@ internal static partial class PackageNodeTable
         return s.Node.Class.StartsWith("Object", StringComparison.Ordinal) ? ObjectType(arg) : PackageNode.OurType(arg);
     }
 
+    // The list type a reference store keeps, or null for a store of a world object.
+    private static string? KeepsList(PackageNode store)
+        => store.Class == "DataModelObjectRefStore" && store.Args.Count > 0 && ObjectType(store.Args[^1]) is { } type
+            && type.StartsWith("list<", StringComparison.Ordinal) ? type : null;
+
     // Our handle type for an object type of the package's, where a script can hold one.
     private static string? ObjectType(string? their) => their switch
     {
         null => null,
-        "IGrabbable" or "IPlayable" => "slot",
+        "IGrabbable" or "IPlayable" or "IAvatarAnchor" or "AvatarAnchor" => "slot",
         _ => PackageNode.OurType(their),
     };
 
@@ -378,7 +469,10 @@ internal static partial class PackageNodeTable
                 type = FieldType(field.Field) ?? type;
                 string write = s.Add("SetField", type);
                 s.Bind(write, "field", field.Field, $"field<{type}>");
-                s.In(valueInput, write, "value");
+                if (UvPair(field.Field) is { } uv)
+                    UvInto(s, uv, valueInput, write, "value");
+                else
+                    s.In(valueInput, write, "value");
                 return (write, true);
             }
             case FieldFrom from:
@@ -411,6 +505,111 @@ internal static partial class PackageNodeTable
             }
         }
         throw new InvalidOperationException("no write for " + target);
+    }
+
+    // A material's texture transform the import turned over for our upright V (PackageMemberMapper.FlippedUvPair):
+    // an offset is counted from the other end of the texture, v' = 1 - scale - v, so a value a graph writes or
+    // drives into one is turned over the same way, against the scale the material has as it is written; a scale
+    // leaves the offset's turn wrong once it moves, so a drive of one keeps the offset where the package had it.
+    // -xlinka
+    private sealed record UvTarget(bool IsOffset, IWorldElement Scale, IWorldElement Offset);
+
+    private static UvTarget? UvPair(IWorldElement field)
+    {
+        if (field is not Sync<Lumora.Core.Math.float2> || field is not Networking.Sync.SyncElement { Parent: Component owner })
+            return null;
+        string? name = null;
+        for (int i = 0; i < owner.SyncMemberCount && name == null; i++)
+        {
+            if (ReferenceEquals(owner.GetSyncMember(i), field))
+                name = owner.GetSyncMemberName(i);
+        }
+        // A fan-out passing the value on as it is: when everything it drives is a turned-over offset, the value is
+        // turned over before it, against the first target's scale; the package fans one value out to transforms of
+        // one size.
+        if (name == "Value" && owner is ValueMultiDriver<Lumora.Core.Math.float2> fan)
+        {
+            UvTarget? first = null;
+            foreach (var drive in fan.Drives)
+            {
+                if (drive?.Field is not IWorldElement target)
+                    continue;
+                if (UvPair(target) is not { IsOffset: true } turned)
+                    return null;
+                first ??= turned;
+            }
+            return first == null ? null : new UvTarget(true, first.Scale, field);
+        }
+        if (name == null || !PackageMemberMapper.FlippedUvPair(owner, name, out var scaleName, out var offsetName))
+            return null;
+        IWorldElement? scale = null, offset = null;
+        for (int i = 0; i < owner.SyncMemberCount; i++)
+        {
+            string member = owner.GetSyncMemberName(i);
+            if (member == scaleName)
+                scale = owner.GetSyncMember(i) as IWorldElement;
+            else if (member == offsetName)
+                offset = owner.GetSyncMember(i) as IWorldElement;
+        }
+        return scale is Sync<Lumora.Core.Math.float2> && offset is Sync<Lumora.Core.Math.float2> ? new UvTarget(name == offsetName, scale, offset) : null;
+    }
+
+    // What feeds the package input into our port, turned over when it is an offset.
+    private static void UvInto(PackageNodeScope s, UvTarget uv, string theirInput, string node, string port)
+    {
+        if (!uv.IsOffset)
+        {
+            s.In(theirInput, node, port);
+            return;
+        }
+        string value = s.Add("SplitVector", "float2");
+        s.In(theirInput, value, "vector");
+        string scale = s.Add("GetField", "float2");
+        s.Bind(scale, "field", uv.Scale, "field<float2>");
+        string scaleParts = s.Add("SplitVector", "float2");
+        s.Wire(scale, "result", scaleParts, "vector");
+        string rest = s.Add("Subtract", "float,float");
+        s.Set(rest, "a", 1d);
+        s.Wire(scaleParts, "y", rest, "b");
+        string y = s.Add("Subtract", "float,float");
+        s.Wire(rest, "result", y, "a");
+        s.Wire(value, "y", y, "b");
+        string made = s.Add("MakeVector", "float,float");
+        s.Wire(value, "x", made, "x");
+        s.Wire(y, "result", made, "y");
+        s.Wire(made, "vector", node, port);
+    }
+
+    // A drive of the scale alone: the offset the package stored is kept as the scale moves, unless something
+    // in the package drives that offset itself.
+    private static void KeepOffset(PackageNodeScope s, UvTarget uv, string theirInput)
+    {
+        if (uv.Offset is not Sync<Lumora.Core.Math.float2> offset || uv.Scale is not Sync<Lumora.Core.Math.float2> scaleNow || offset.IsDriven)
+            return;
+        foreach (var helpers in s.Index.Helpers.Values)
+        {
+            foreach (var helper in helpers)
+            {
+                if (ReferenceEquals(s.Index.World(helper.Ref("Drive")), uv.Offset))
+                    return;
+            }
+        }
+        // The package's own offset, from the turned one and the scale it was turned against.
+        float stored = 1f - scaleNow.Value.y - offset.Value.y;
+        string drive = s.Add("DriveField", "float2");
+        s.Bind(drive, "field", uv.Offset, "field<float2>");
+        string scale = s.Add("SplitVector", "float2");
+        s.In(theirInput, scale, "vector");
+        string rest = s.Add("Subtract", "float,float");
+        s.Set(rest, "a", 1d);
+        s.Wire(scale, "y", rest, "b");
+        string y = s.Add("Subtract", "float,float");
+        s.Wire(rest, "result", y, "a");
+        s.Set(y, "b", (double)stored);
+        string made = s.Add("MakeVector", "float,float");
+        s.Set(made, "x", (double)offset.Value.x);
+        s.Wire(y, "result", made, "y");
+        s.Wire(made, "vector", drive, "value");
     }
 
     // Goes on by done, or by fail when the write failed: a field or reference write fails exactly when it is

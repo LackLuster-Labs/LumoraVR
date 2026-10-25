@@ -109,8 +109,12 @@ internal sealed class PackageNode
             "DateTime" => "datetime",
             "TimeSpan" => "timespan",
             "Chirality" => "chirality",
+            // Same names and numbers as ours, NONE through END.
+            "BodyNode" => "bodyNode",
             "HeadOutputDevice" => "headOutputDevice",
             "ColorProfile" => "colorProfile",
+            "AssetLoadState" => "assetLoadState",
+            "JoinRequestHandle" => "joinrequest",
             "ISyncRef" => "reference",
             "AudioClip" or "IAssetProvider<AudioClip>" => "audioclip",
             "ITexture2D" or "IAssetProvider<ITexture2D>" or "Texture2D" or "IAssetProvider<Texture2D>" => "texture",
@@ -121,6 +125,9 @@ internal sealed class PackageNode
         if (ours == null && (their.StartsWith("IValue<", StringComparison.Ordinal) || their.StartsWith("IField<", StringComparison.Ordinal))
             && OurType(their[(their.IndexOf('<') + 1)..^1]) is { } inner)
             ours = $"field<{inner}>";
+        // A plain array of values is a list here.
+        if (ours == null && their.StartsWith("RawArray<", StringComparison.Ordinal) && OurType(their[9..^1]) is { } item)
+            ours = $"list<{item}>";
         return ours != null && ScriptTypes.TryGet(ours, out _) ? ours : null;
     }
 

@@ -36,7 +36,38 @@ internal static partial class PackageNodeTable
             s.In("B", product, "b", Identity(type));
             s.Out("", product, "result");
         });
-        Map("ValueDiv", "Divide", "{T},{T}", ins: "A=a B=b", outs: "=result", values: "A=identity B=identity");
+        // A whole number divided by zero is 0 in the package, where ours would stop the call.
+        On("ValueDiv", s =>
+        {
+            if (s.Arg(0) is not { } type)
+            {
+                s.Fail("its type has no counterpart here");
+                return;
+            }
+            if (type is not ("int" or "long" or "uint" or "ulong"))
+            {
+                string plain = s.Add("Divide", $"{type},{type}");
+                s.In("A", plain, "a", Identity(type));
+                s.In("B", plain, "b", Identity(type));
+                s.Out("", plain, "result");
+                return;
+            }
+            string zero = s.Add("IsEqual", $"{type},{type}");
+            s.In("B", zero, "a", 1d);
+            s.Set(zero, "b", 0d);
+            string safe = s.Add("Conditional", type);
+            s.Wire(zero, "result", safe, "condition");
+            s.Set(safe, "whenTrue", 1d);
+            s.In("B", safe, "whenFalse", 1d);
+            string quotient = s.Add("Divide", $"{type},{type}");
+            s.In("A", quotient, "a", 1d);
+            s.Wire(safe, "result", quotient, "b");
+            string result = s.Add("Conditional", type);
+            s.Wire(zero, "result", result, "condition");
+            s.Set(result, "whenTrue", 0d);
+            s.Wire(quotient, "result", result, "whenFalse");
+            s.Out("", result, "result");
+        });
         Map("ValueAbs", "Abs", "{T}", ins: "N=value", outs: "=result");
         Map("ValueSmoothLerp", "SmoothFollow", "{T}", ins: "Input=value Speed=speed", outs: "=result", values: "Speed=0");
         Map("SmoothSlerp_floatQ", "SmoothFollow", "floatQ", ins: "Input=value Speed=speed", outs: "=result", values: "Speed=0");
@@ -46,7 +77,102 @@ internal static partial class PackageNodeTable
         Map("Approximately_Float3", "Approximately", "float3,float3,float", ins: "A=a B=b Epsilon=epsilon", outs: "=result");
         Map("Approximately_FloatQ", "Approximately", "floatQ,floatQ,float", ins: "A=a B=b Epsilon=epsilon", outs: "=result",
             values: "A=[0,0,0,1] B=[0,0,0,1]");
+        foreach (var (cls, type) in new[] { ("Exp_Float", "float"), ("Exp_Double", "double"), ("Exp_Float2", "float2"), ("Exp_Float3", "float3"),
+            ("Exp_Float4", "float4"), ("Exp_Color", "color"), ("Exp_ColorX", "colorHDR") })
+            Map(cls, "Exp", type, ins: "N=power", outs: "=result");
+        Map("FromToRotation_floatQ", "FromToRotation", "float3,float3", ins: "From=from To=to", outs: "=rotation");
         Map("Angle_Float3", "AngleBetween", "float3,float3", ins: "A=a B=b", outs: "=degrees");
+        Map("Angle_Float2", "AngleBetween", "float2,float2", ins: "A=a B=b", outs: "=degrees");
+        foreach (var (cls, type) in new[] { ("Avg_Float", "float"), ("Avg_Double", "double"), ("Avg_Float2", "float2"), ("Avg_Float3", "float3"),
+            ("Avg_Float4", "float4"), ("Avg_ColorX", "colorHDR") })
+            Map(cls, "Average", $"{type},{type}", ins: "A=a B=b", outs: "=result");
+        Map("Unpack_Float4", "SplitVector", "float4", ins: "V=vector", outs: "X=x Y=y Z=z W=w");
+        Map("Parse_Int", "ParseInt", null, ins: "Str=text", outs: "Value=value IsParsed=ok");
+        Map("ComposeTRS_Float4x4", "ComposeTRS", null, ins: "Position=position Rotation=rotation Scale=scale", outs: "=matrix",
+            values: "Rotation=[0,0,0,1] Scale=[1,1,1]");
+        foreach (var (cls, part) in new[] { ("Decomposed_Position_Float4x4", "position"), ("Decomposed_Rotation_Float4x4", "rotation"),
+            ("Decomposed_Scale_Float4x4", "scale") })
+            Map(cls, "DecomposeMatrix", "float4x4", ins: "A=matrix", outs: $"={part}");
+        foreach (var (cls, part) in new[] { ("Decomposed_Rotation_Float3x3", "rotation"), ("Decomposed_Scale_Float3x3", "scale") })
+            Map(cls, "DecomposeMatrix", "float3x3", ins: "A=matrix", outs: $"={part}");
+
+        // Away from the plane across b: what lies along b turned back, the rest kept.
+        On("Reflect_Float3", s =>
+        {
+            string along = s.Add("Dot", "float3,float3");
+            s.In("A", along, "a");
+            s.In("B", along, "b");
+            string length = s.Add("Dot", "float3,float3");
+            s.In("B", length, "a");
+            s.In("B", length, "b");
+            string share = s.Add("Divide", "float,float");
+            s.Wire(along, "result", share, "a");
+            s.Wire(length, "result", share, "b");
+            string twice = s.Add("Multiply", "float,float");
+            s.Wire(share, "result", twice, "a");
+            s.Set(twice, "b", 2d);
+            string back = s.Add("Multiply", "float3,float");
+            s.In("B", back, "a");
+            s.Wire(twice, "result", back, "b");
+            string mirrored = s.Add("Subtract", "float3,float3");
+            s.In("A", mirrored, "a");
+            s.Wire(back, "result", mirrored, "b");
+            s.Out("", mirrored, "result");
+        });
+
+        // Along the rotations by lerp, 0 the first and 1 the next: each neighbouring pair blended by the part of
+        // lerp between them, and the pair lerp falls in picked. Before the first it is the first, past the end
+        // the last.
+        On("MultiSlerp_floatQ", s =>
+        {
+            int count = s.Node.Refs("Operands").Count;
+            var identity = new[] { 0d, 0d, 0d, 1d };
+            if (count == 0)
+            {
+                s.OutConstant("", identity);
+                return;
+            }
+            if (count == 1)
+            {
+                string only = s.Add("Slerp", "floatQ,floatQ,float");
+                s.InAt("Operands", 0, only, "a", identity);
+                s.InAt("Operands", 0, only, "b", identity);
+                s.Set(only, "t", 0d);
+                s.Out("", only, "rotation");
+                return;
+            }
+            var pairs = new string[count - 1];
+            for (int k = 0; k < count - 1; k++)
+            {
+                string part = s.Add("Subtract", "float,float");
+                s.In("Lerp", part, "a", 0d);
+                s.Set(part, "b", (double)k);
+                string t = s.Add("Clamp", "float,float,float");
+                s.Wire(part, "result", t, "value");
+                s.Set(t, "min", 0d);
+                s.Set(t, "max", 1d);
+                string blend = s.Add("Slerp", "floatQ,floatQ,float");
+                s.InAt("Operands", k, blend, "a", identity);
+                s.InAt("Operands", k + 1, blend, "b", identity);
+                s.Wire(t, "result", blend, "t");
+                pairs[k] = blend;
+            }
+            string chain = pairs[^1];
+            string port = "rotation";
+            for (int k = count - 3; k >= 0; k--)
+            {
+                string before = s.Add("LessThan", "float,float");
+                s.In("Lerp", before, "a", 0d);
+                s.Set(before, "b", (double)(k + 1));
+                string pick = s.Add("Conditional", "floatQ");
+                s.Wire(before, "result", pick, "condition");
+                s.Wire(pairs[k], "rotation", pick, "whenTrue");
+                s.Wire(chain, port, pick, "whenFalse");
+                chain = pick;
+                port = "result";
+            }
+            s.Out("", chain, port);
+        });
         Map("InvertColorX", "InvertColor", "colorHDR", ins: "Color=value", outs: "=color");
         Map("ColorXHue", "FromHsvHdr", null, ins: "Hue=hue", outs: "=color", set: "saturation=1 brightness=1");
         Map("ColorXMulAlpha", "MultiplyColorChannel", "colorHDR,colorchannel,float", ins: "Color=value Value=amount", outs: "=color",
@@ -260,7 +386,7 @@ internal static partial class PackageNodeTable
         string? id = index < ids.Count ? ids[index] : null;
         for (int depth = 0; depth < 32 && s.Index.TryNode(id, out var node, out _); depth++)
         {
-            if (node.Class is not ("ValueRelay" or "ObjectRelay" or "ValueToObjectCast" or "ObjectCast" or "ContinuouslyChangingValueRelay"))
+            if (node.Class is not ("ValueRelay" or "ObjectRelay" or "ValueToObjectCast" or "ObjectCast" or "ContinuouslyChangingValueRelay" or "ContinuouslyChangingObjectRelay"))
                 return node;
             id = node.Ref("Input");
         }

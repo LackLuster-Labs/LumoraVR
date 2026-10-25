@@ -189,7 +189,7 @@ internal sealed class PackageNodeScope
             if (!Index.TryNode(id, out var node, out _))
                 return null;
             if (!node.Class.StartsWith("ValueRelay", StringComparison.Ordinal) && !node.Class.StartsWith("ObjectRelay", StringComparison.Ordinal)
-                && !node.Class.StartsWith("ContinuouslyChangingValueRelay", StringComparison.Ordinal))
+                && !node.Class.StartsWith("ContinuouslyChanging", StringComparison.Ordinal))
                 return node;
             id = node.Ref("Input");
         }
@@ -201,7 +201,8 @@ internal sealed class PackageNodeScope
     {
         string? id = Node.Ref(member);
         if (Index.TryNode(id, out var node, out _))
-            return node.Class.StartsWith("GlobalReference", StringComparison.Ordinal) ? Index.World(node.Ref("Reference")) : null;
+            return node.Class.StartsWith("GlobalReference", StringComparison.Ordinal)
+                ? Index.World(node.Ref("Reference")) ?? PackageNodeTable.InGraphHolder(this, node.Ref("Reference")) : null;
         return Index.World(id);
     }
 

@@ -92,9 +92,9 @@ internal static partial class PackageNodeTable
         });
     }
 
-    // A press is heard as it lands, every frame it is held and as it ends, each carrying where it is. With more
-    // than one of those wired, each keeps where it was in a Stored Value before going on, so whatever reads the
-    // point after any of them reads the latest one, as the package's single set of outputs does. -xlinka
+    // A press is heard as it lands, every frame it is held and as it ends, each carrying where it is. Each keeps
+    // where it was in a Stored Value before going on, so whatever reads the point after any of them, or after a
+    // wait, reads the latest one, as the package's single set of outputs does. -xlinka
     private static void ButtonEvents(PackageNodeScope s, Slot slot)
     {
         var points = new List<(string Theirs, string Ours, string Type)>();
@@ -132,10 +132,8 @@ internal static partial class PackageNodeTable
                 s.OutConstant(theirs, null);
             return;
         }
-        if (steps.Count == 1)
+        if (steps.Count == 1 && points.Count == 0)
         {
-            foreach (var (theirs, ours, _) in points)
-                s.Out(theirs, steps[0].Heard, ours);
             s.Exit(steps[0].Call, steps[0].Heard, "next");
             return;
         }

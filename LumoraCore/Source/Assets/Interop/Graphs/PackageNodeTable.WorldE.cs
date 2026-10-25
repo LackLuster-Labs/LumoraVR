@@ -281,7 +281,7 @@ internal static partial class PackageNodeTable
             {
                 if (!index.TryNode(id, out var feeder, out _))
                     return null;
-                if (feeder.Class is not ("ValueRelay" or "ObjectRelay" or "ContinuouslyChangingValueRelay"))
+                if (feeder.Class is not ("ValueRelay" or "ObjectRelay" or "ContinuouslyChangingValueRelay" or "ContinuouslyChangingObjectRelay"))
                     return feeder;
                 id = feeder.Ref("Input");
             }

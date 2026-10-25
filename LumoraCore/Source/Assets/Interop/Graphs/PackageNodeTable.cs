@@ -34,7 +34,11 @@ internal static partial class PackageNodeTable
         WorldC();
         WorldD();
         WorldE();
+        Web();
         Buttons();
+        Text();
+        Playback();
+        Session();
     }
 
     public static bool TryGet(string cls, out Action<PackageNodeScope> handler) => Handlers.TryGetValue(cls, out handler!);

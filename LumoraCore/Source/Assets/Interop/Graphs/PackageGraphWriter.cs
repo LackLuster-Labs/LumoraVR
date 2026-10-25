@@ -309,6 +309,12 @@ internal sealed class PackageGraphWriter
                     else
                         break;
                 }
+                for (int i = 0; i < numbers.Count; i++)
+                {
+                    if (double.IsNaN(numbers[i]))
+                        return null;
+                    numbers[i] = Finite(numbers[i]);
+                }
                 // A colour names its profile last; ours hold sRGB, so a Linear one is converted.
                 if (numbers.Count >= 3 && IsLinearProfile(list))
                 {
@@ -325,11 +331,17 @@ internal sealed class PackageGraphWriter
             case IConvertible number:
             {
                 double d = Convert.ToDouble(number, CultureInfo.InvariantCulture);
-                return double.IsFinite(d) ? GraphValue.Of(d) : null;
+                return double.IsNaN(d) ? null : GraphValue.Of(Finite(d));
             }
         }
         return null;
     }
+
+    // A graph holds finite numbers, so an infinity stands as the largest number there is: a float port reads that
+    // back as the infinity itself, a double port as the largest double, and nothing compares past either. A
+    // package seeds a search for the nearest of something with one; dropped, the search had nothing to beat.
+    private static double Finite(double d)
+        => double.IsPositiveInfinity(d) ? double.MaxValue : double.IsNegativeInfinity(d) ? double.MinValue : d;
 
     private static double[]? Numbers(string text)
     {
@@ -496,7 +508,7 @@ internal sealed class PackageGraphWriter
     private static Spatial Classify(string name)
     {
         string lower = name.ToLowerInvariant();
-        foreach (var never in new[] { "scale", "size", "extent", "range", "color", "colour", "value" })
+        foreach (var never in new[] { "scale", "size", "extent", "range", "color", "colour", "value", "seed", "phase" })
         {
             if (lower.Contains(never, StringComparison.Ordinal))
                 return Spatial.None;

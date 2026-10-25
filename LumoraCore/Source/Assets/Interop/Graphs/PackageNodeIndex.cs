@@ -145,7 +145,7 @@ internal sealed partial class PackageNodeIndex
         }
         if (!_input.Members.TryGetValue(id, out var record) || record.Owner.IsDestroyed)
             return null;
-        var found = MemberOf(record.Owner, record.Member, record.Index);
+        var found = MemberOf(record.Owner, record.Member, record.Index, record.Within);
         if (found != null)
             _fieldNames[found] = record.Member;
         return found;
@@ -175,7 +175,7 @@ internal sealed partial class PackageNodeIndex
             return "nothing";
         if (_input.Members.TryGetValue(id, out var record))
             return record.Owner.IsDestroyed ? $"{record.Member} on a pruned {record.Owner.GetType().Name}"
-                : $"{record.Owner.GetType().Name}.{record.Member}{(record.Index >= 0 ? $"[{record.Index}]" : "")}, which ours has under no such name";
+                : $"{record.Owner.GetType().Name}.{record.Member}{(record.Index >= 0 ? $"[{record.Index}]" : "")}{(record.Within != null ? "." + record.Within : "")}, which ours has under no such name";
         if (_byId.TryGetValue(id, out var element))
             return element.GetType().Name + (element.IsDestroyed ? " (pruned)" : "");
         if (_input.Unattached.TryGetValue(id, out var unattached))
@@ -185,8 +185,22 @@ internal sealed partial class PackageNodeIndex
 
     public PackageSlotRecord? SlotRecord(string? id) => id != null && _input.Slots.TryGetValue(id, out var record) ? record : null;
 
+    // A component that did not come across, with what it stored, by its id.
+    public (string Type, DataTreeDictionary Data)? UnattachedPart(string? id)
+        => id != null && _input.UnattachedParts.TryGetValue(id, out var part) ? part : null;
+
+    // Every one of them, for a graph that names one by what it stored rather than by id.
+    public IEnumerable<KeyValuePair<string, (string Type, DataTreeDictionary Data)>> UnattachedParts => _input.UnattachedParts;
+
+    // Everything the importer built, for the same.
+    public IEnumerable<IWorldElement> Built => _byId.Values;
+
+    // A member id that names an entry of the package's interface palette: its colour as a hex code, and whether
+    // the entry is that code as text.
+    public bool PaletteEntry(string? id, out string code, out bool hex) => WorldUi.TryPaletteEntry(_input, id, out code, out hex);
+
     // Our member under the package's member name. A slot names its members differently.
-    public static IWorldElement? MemberOf(IWorldElement owner, string name, int index)
+    public static IWorldElement? MemberOf(IWorldElement owner, string name, int index, string? within = null)
     {
         ISyncMember? member = null;
         if (owner is Slot slot)
@@ -207,7 +221,13 @@ internal sealed partial class PackageNodeIndex
         else if (owner is Worker worker)
         {
             if (worker is Component component)
-                name = PackageMemberMapper.ResolveMemberName(component, name);
+            {
+                // A member the importer fills in by hand is kept from the plain copy under a mark, and to a graph
+                // it is still the member of that name.
+                string resolved = PackageMemberMapper.ResolveMemberName(component, name);
+                if (resolved.Length == 0 || resolved[0] != '\0')
+                    name = resolved;
+            }
             for (int i = 0; i < worker.SyncMemberCount; i++)
             {
                 if (worker.GetSyncMemberName(i) == name)
@@ -219,7 +239,42 @@ internal sealed partial class PackageNodeIndex
         }
         if (member == null || index < 0)
             return member as IWorldElement;
-        return member is ISyncList list && index < list.Count ? list.GetElement(index) as IWorldElement : null;
+        var entry = member is ISyncList list && index < list.Count ? list.GetElement(index) as IWorldElement : null;
+        return within == null ? entry : Within(entry, within);
+    }
+
+    // A member of a list entry by the package's path inside it. A user the package keeps as a record (the user, and
+    // the ids it finds them again by) is one reference here, so a step naming the reference it stands on stays.
+    private static IWorldElement? Within(IWorldElement? entry, string path)
+    {
+        var at = entry;
+        string? last = null;
+        foreach (var step in path.Split('.'))
+        {
+            if (at == null)
+                return null;
+            var next = NamedMember(at, step);
+            if (next == null && step == last && at is ISyncRef)
+                continue;
+            at = next;
+            last = step;
+        }
+        return at;
+    }
+
+    private static IWorldElement? NamedMember(IWorldElement owner, string name)
+    {
+        if (owner is Worker worker)
+        {
+            for (int i = 0; i < worker.SyncMemberCount; i++)
+            {
+                if (worker.GetSyncMemberName(i) == name)
+                    return worker.GetSyncMember(i) as IWorldElement;
+            }
+            return null;
+        }
+        var field = owner.GetType().GetField(name, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        return field != null && typeof(ISyncMember).IsAssignableFrom(field.FieldType) ? field.GetValue(owner) as IWorldElement : null;
     }
 
     private void Group()

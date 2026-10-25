@@ -23,8 +23,14 @@ internal sealed class PackageNodeInput
     // graph reached for that did not come across.
     public readonly Dictionary<string, string> Unattached = new(StringComparer.OrdinalIgnoreCase);
 
+    // The same components by their own id, with what they stored, for a graph that reads one it can stand in for
+    // itself: a websocket client the graph listens to becomes its own connection.
+    public readonly Dictionary<string, (string Type, DataTreeDictionary Data)> UnattachedParts = new(StringComparer.OrdinalIgnoreCase);
+
     public void RecordUnattached(string type, DataTreeDictionary data)
     {
+        if ((data.TryGetNode("ID") as DataTreeValue)?.Value is string own)
+            UnattachedParts[own] = (type, data);
         foreach (var (name, value) in data.Children)
         {
             if (value is DataTreeDictionary member && (member.TryGetNode("ID") as DataTreeValue)?.Value is string id)
@@ -59,8 +65,27 @@ internal sealed class PackageNodeInput
             for (int i = 0; i < list.Count; i++)
             {
                 if (list[i] is DataTreeDictionary item && (item.TryGetNode("ID") as DataTreeValue)?.Value is string itemId)
+                {
                     Members[itemId] = new PackageMemberRecord(owner, name, i);
+                    RecordWithin(owner, name, i, item, string.Empty);
+                }
             }
+        }
+    }
+
+    // A list entry that is a record keeps its members beside its id, and a record inside it keeps its own the same
+    // way. Each is kept by its entry and its path in the entry, so a drive or a driver of one finds the member of
+    // the entry it means.
+    private void RecordWithin(IWorldElement owner, string list, int index, DataTreeDictionary record, string path)
+    {
+        foreach (var (name, value) in record.Children)
+        {
+            if (value is not DataTreeDictionary member || (member.TryGetNode("ID") as DataTreeValue)?.Value is not string id)
+                continue;
+            string within = path.Length == 0 ? name : path + "." + name;
+            Members.TryAdd(id, new PackageMemberRecord(owner, list, index, within));
+            if (member.TryGetNode("Data") == null && path.Length == 0)
+                RecordWithin(owner, list, index, member, within);
         }
     }
 
@@ -90,4 +115,5 @@ internal readonly record struct PackageNodeRecord(string SlotId, string Encoded,
 
 internal sealed record PackageSlotRecord(string Id, string? ParentId, string Name, Slot Slot);
 
-internal readonly record struct PackageMemberRecord(IWorldElement Owner, string Member, int Index);
+// Within is a member's path inside the list entry at Index, for one kept in an entry.
+internal readonly record struct PackageMemberRecord(IWorldElement Owner, string Member, int Index, string? Within = null);

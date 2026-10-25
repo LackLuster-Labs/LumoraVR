@@ -164,8 +164,16 @@ internal static partial class PackageNodeTable
                 s.Fail("its value's type has no counterpart here");
                 return;
             }
-            string read = s.Add("ReadScopedVariable", type);
             bool named = s.Node.Class.StartsWith("DynamicVariable", StringComparison.Ordinal);
+            // No named variable here holds a list, so one of that name is never there to read.
+            if (type.StartsWith("list<", StringComparison.Ordinal))
+            {
+                s.Problem("reads a named variable holding a list, which named variables here never hold; it reads as not there");
+                s.OutConstant("Value", null);
+                s.OutConstant(named ? "HasValue" : "FoundValue", false);
+                return;
+            }
+            string read = s.Add("ReadScopedVariable", type);
             if (!named && s.Wired("Source"))
                 s.In("Source", read, "slot");
             else
@@ -195,39 +203,104 @@ internal static partial class PackageNodeTable
             s.Out("", there, "result");
         });
 
-        On("ValueIncrement", s =>
+        Same(s => Step(s, up: true), "ValueIncrement", "ValueIndirectIncrement");
+        Same(s => Step(s, up: false), "ValueDecrement", "ValueIndirectDecrement");
+
+        Map("GetTag", "SlotTag", null, ins: "Instance=slot", outs: "=tag");
+
+        // The item at an index of a list, the item type's default outside it.
+        On("GetAtValue", s =>
         {
-            var target = VariableOf(s, "Variable");
-            var type = WrittenType(s);
-            if (target == null || type == null)
+            if (s.Arg(0) is not { } list || !list.StartsWith("list<", StringComparison.Ordinal) || s.Arg(1) is not { } item)
             {
-                s.Fail("counts up something that did not come across");
+                s.Fail("reads a collection of a kind that has no counterpart here");
                 return;
             }
-            string step;
-            bool reports = true;
-            switch (target)
-            {
-                case FieldVar field:
-                    step = s.Add("IncrementField", type);
-                    s.Bind(step, "field", field.Field, $"field<{type}>");
-                    break;
-                case FieldFrom from:
-                    step = s.Add("IncrementField", type);
-                    s.InFrom(from.Node, from.Input, step, "field");
-                    break;
-                case StoredVar stored:
-                    step = s.Add("IncrementValue", type);
-                    s.Set(step, "var", stored.OurNode);
-                    reports = false;
-                    break;
-                default:
-                    s.Fail("counts up a reference");
-                    return;
-            }
-            s.Op("", step);
-            AfterWrite(s, step, reports, "OnWritten", "OnFail");
+            string at = s.Add("ListGetAt", item);
+            s.In("Collection", at, "list");
+            s.In("Index", at, "index", 0d);
+            s.Out("", at, "item");
         });
+        On("UserFromID", s =>
+        {
+            string find = s.Add("UserFromId");
+            s.In("UserId", find, "id");
+            s.Out("", find, "user");
+            if (s.Wired("MachineId"))
+                s.Problem("also looks a user up by machine id, which scripts here never see; only the user id is looked up");
+        });
+        On("HeadSlot", s =>
+        {
+            string head = s.Add("UserTrackedSlot");
+            s.In("UserRoot", head, "user");
+            s.Set(head, "node", "Head");
+            s.Out("", head, "slot");
+        });
+        On("IsPlatformDashOpened", s =>
+        {
+            string presence = s.Add("UserPresence");
+            s.In("User", presence, "user");
+            s.Out("", presence, "dashOpen");
+        });
+
+        // What to leave out, as what to show; the flash root it gives back is not kept here.
+        On("FlashHighlightHierarchy", s =>
+        {
+            string flash = s.Add("FlashHighlight");
+            s.In("HierarchyRoot", flash, "root");
+            s.In("Color", flash, "color", new[] { 1d, 1d, 1d, 1d });
+            s.In("Duration", flash, "seconds", 0.5d);
+            s.In("TrackPosition", flash, "follow", true);
+            foreach (var (theirs, ours) in new[] { ("ExcludeMeshes", "meshes"), ("ExcludeColliders", "colliders"), ("ExcludeDisabled", "hidden") })
+            {
+                string keep = s.Add("Not", "bool");
+                s.In(theirs, keep, "value", false);
+                s.Wire(keep, "result", flash, ours);
+            }
+            s.OutConstant("FlashRoot", null);
+            s.Op("", flash);
+            s.Exit("Next", flash, "next");
+        });
+
+        // An element's id is the element itself here, and a drive of an id field a drive of the reference.
+        On("ReferenceID", s => s.OutThrough("", "Element"));
+
+        On("OpenWorld", s => s.Fail("opens a world by its address in the package; scripts here never take anyone to another world"));
+    }
+
+    // One up or down on a number something writes into: a field, or a value the graph keeps.
+    private static void Step(PackageNodeScope s, bool up)
+    {
+        var target = VariableOf(s, "Variable");
+        var type = WrittenType(s);
+        if (target == null || type == null)
+        {
+            s.Fail($"counts {(up ? "up" : "down")} something that did not come across");
+            return;
+        }
+        string step;
+        bool reports = true;
+        switch (target)
+        {
+            case FieldVar field:
+                step = s.Add(up ? "IncrementField" : "DecrementField", type);
+                s.Bind(step, "field", field.Field, $"field<{type}>");
+                break;
+            case FieldFrom from:
+                step = s.Add(up ? "IncrementField" : "DecrementField", type);
+                s.InFrom(from.Node, from.Input, step, "field");
+                break;
+            case StoredVar stored:
+                step = s.Add(up ? "IncrementValue" : "DecrementValue", type);
+                s.Set(step, "var", stored.OurNode);
+                reports = false;
+                break;
+            default:
+                s.Fail($"counts {(up ? "up" : "down")} a reference");
+                return;
+        }
+        s.Op("", step);
+        AfterWrite(s, step, reports, "OnWritten", "OnFail");
     }
 
     // A package curve preset as our curve and direction.

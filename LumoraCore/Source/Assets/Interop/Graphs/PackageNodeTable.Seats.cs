@@ -21,6 +21,20 @@ internal static partial class PackageNodeTable
             s.In("Anchor", leave, "seat");
             Outcome(s, leave, "released", "OnReleased", "OnFailure");
         });
+
+        // The seat a user sits in and whether they sit at all, the user at this machine when none is named.
+        On("GetUserAnchor", s =>
+        {
+            string seat = s.Add("UserSeat");
+            UserOrMachine(s, s.Node, "User", seat, "user");
+            s.Out("", seat, "seat");
+        });
+        On("IsUserAnchored", s =>
+        {
+            string seat = s.Add("UserSeat");
+            UserOrMachine(s, s.Node, "User", seat, "user");
+            s.Out("", seat, "seated");
+        });
     }
 
     // An action that says whether it worked, its flow going on one way or the other.

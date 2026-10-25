@@ -93,13 +93,15 @@ internal static class PackageNodeGraphs
     // Stores first, so a write met later already knows the value it writes into; buttons last, so the receivers
     // they start have already said where the values they read come from.
     private static int Order(PackageNode node)
-        => node.Class is "StoredValue" or "StoredObject" or "DataModelValueFieldStore" or "DataModelObjectRefStore"
+        => node.Class is "StoredValue" or "StoredObject" or "DataModelValueFieldStore" or "DataModelObjectFieldStore" or "DataModelObjectRefStore"
             or "DataModelBooleanToggle" ? 0 : PackageNodeTable.IsButtonSender(node) ? 2 : 1;
 
-    // Where a graph runs. A graph in an avatar that reads its wearer's devices or machine, does something to
-    // its wearer, or works something out every frame, ran on the wearer's machine, so it runs on its author's,
-    // who wears it. A graph elsewhere that reads devices ran for whoever was at each machine. Anything else
-    // runs on the host.
+    // Where a graph runs. A graph in an avatar that reads its wearer's devices or machine, connects out from
+    // it, does something to its wearer, or works something out every frame, ran on the wearer's machine, so it
+    // runs on its author's, who wears it. A graph elsewhere that reads devices ran for whoever was at each
+    // machine. One elsewhere that asks who is at the machine (who let go of it, whose arm to put it on) means
+    // the person using it, which for a thing of someone's own is its author, so it runs on theirs; a world's
+    // own runs on the host all the same. Anything else runs on the host.
     private static ScriptMode ModeFor(ScriptGraph graph, NodeRegistry registry, bool avatar)
     {
         bool input = false, machine = false, ticking = false;
@@ -108,12 +110,12 @@ internal static class PackageNodeGraphs
             if (!registry.TryGetDefinition(node.Type, out var definition))
                 continue;
             input |= definition.Capability is Capability.Input or Capability.UsersAffect;
-            machine |= node.Type is "MachineUser" or "IsMachineUser";
+            machine |= node.Type is "MachineUser" or "IsMachineUser" or "ConnectWebSocket";
             ticking |= node.Type == "OnUpdate";
         }
         if (avatar)
             return input || machine || ticking ? ScriptMode.Author : ScriptMode.Shared;
-        return input ? ScriptMode.Local : ScriptMode.Shared;
+        return input ? ScriptMode.Local : machine ? ScriptMode.Author : ScriptMode.Shared;
     }
 
     private static async Task Pack(Slot home, PackageGraphWriter writer, ScriptMode mode, PackageImportResult result)

@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using Lumora.Core.Math;
 
 namespace Lumora.Core.Assets.Interop;
 
@@ -13,7 +14,19 @@ internal static partial class PackageNodeTable
 {
     private static void Values()
     {
-        Same(s => s.OutConstant("", s.Node.Stored("Value")), "ValueInput", "ValueObjectInput", "GlobalValue");
+        // A constant the graph names as a field is kept in one, so what is written into it is what is read.
+        Same(s =>
+        {
+            if (s.Node.Class != "GlobalValue" && NamedAsField(s, s.Node) && ConstantHolder(s, s.Node) is { } field
+                && FieldType(field) is { } type)
+            {
+                string read = s.Add("GetField", type);
+                s.Bind(read, "field", field, $"field<{type}>");
+                s.Out("", read, "result");
+                return;
+            }
+            s.OutConstant("", s.Node.Stored("Value"));
+        }, "ValueInput", "ValueObjectInput", "GlobalValue");
         On("RefObjectInput", s => s.OutWorld("", s.Index.World(s.Node.Ref("Target"))));
 
         // A global reference is the object it holds, unless a reference drive in the graph aims it: then it is
@@ -28,11 +41,11 @@ internal static partial class PackageNodeTable
                 s.OutFrom("", drive, "Target");
                 return;
             }
-            s.OutWorld("", s.Index.World(s.Node.Ref("Reference")));
+            s.OutWorld("", s.Index.World(s.Node.Ref("Reference")) ?? InGraphHolder(s, s.Node.Ref("Reference")));
         });
 
-        Same(s => s.OutThrough("", "Input"), "ValueRelay", "ObjectRelay", "ContinuouslyChangingValueRelay", "ValueToObjectCast",
-            "ObjectCast");
+        Same(s => s.OutThrough("", "Input"), "ValueRelay", "ObjectRelay", "ContinuouslyChangingValueRelay",
+            "ContinuouslyChangingObjectRelay", "ValueToObjectCast", "ObjectCast");
         On("ContinuationRelay", s => s.OpThrough("", "Next"));
 
         // Cards that show a value; nothing to carry.
@@ -40,7 +53,7 @@ internal static partial class PackageNodeTable
 
         // Served by the node beside them, which reads what they hold.
         Same(_ => { }, "FieldDriveBase+Proxy", "ReferenceDrive+Proxy", "GetActiveUserSelf+Proxy", "OnLoaded+Proxy",
-            "DataModelValueFieldStore+Store", "DataModelObjectRefStore+Store", "DynamicImpulseReceiver+Proxy",
+            "DataModelValueFieldStore+Store", "DataModelObjectFieldStore+Store", "DataModelObjectRefStore+Store", "DynamicImpulseReceiver+Proxy",
             "DynamicImpulseReceiverWithObject+Proxy", "ElapsedTime+Proxy", "OnDuplicate+Proxy", "FieldHookBase+Proxy");
 
         Same(s =>
@@ -50,6 +63,18 @@ internal static partial class PackageNodeTable
             if (type == null)
             {
                 s.Fail("its type has no counterpart here");
+                return;
+            }
+            // An entry of the package's interface palette is a fixed colour, read as that constant.
+            if (field == null && s.Index.PaletteEntry(GlobalTarget(s.Index, s.Node, "Source"), out var code, out bool hex))
+            {
+                if (hex)
+                    s.OutConstant("", code);
+                else
+                {
+                    var paint = colorHDR.FromHex(code);
+                    s.OutConstant("", new double[] { paint.r, paint.g, paint.b, paint.a });
+                }
                 return;
             }
             if (field == null)

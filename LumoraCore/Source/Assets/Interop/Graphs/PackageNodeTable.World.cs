@@ -45,6 +45,21 @@ internal static partial class PackageNodeTable
             values: "GlobalRotation=[0,0,0,1]");
         Map("TransformRotation", "ConvertRotation", null, ins: "FromSpace=from ToSpace=to SourceRotation=rotation", outs: "=converted",
             values: "SourceRotation=[0,0,0,1]");
+
+        // Out of a slot's own space into the world's; no slot leaves the value as it is, as world space does here.
+        Map("LocalPointToGlobal", "ConvertPoint", null, ins: "Instance=from LocalPoint=point", outs: "=converted");
+        Map("LocalVectorToGlobal", "ConvertVector", null, ins: "Instance=from LocalVector=vector", outs: "=converted");
+        Map("LocalDirectionToGlobal", "ConvertDirection", null, ins: "Instance=from LocalDirection=direction", outs: "=converted");
+        Map("LocalRotationToGlobal", "ConvertRotation", null, ins: "Instance=from LocalRotation=rotation", outs: "=converted",
+            values: "LocalRotation=[0,0,0,1]");
+        Map("LocalScaleToGlobal", "ConvertScale", null, ins: "Instance=from LocalScale=scale", outs: "=converted");
+        Map("GlobalDirectionToLocal", "ConvertDirection", null, ins: "Instance=to GlobalDirection=direction", outs: "=converted");
+        Map("TransformDirection", "ConvertDirection", null, ins: "FromSpace=from ToSpace=to SourceDirection=direction", outs: "=converted");
+        Map("TransformScale", "ConvertScale", null, ins: "FromSpace=from ToSpace=to SourceScale=scale", outs: "=converted");
+        Map("GetDown", "SlotDirection", null, ins: "Instance=slot", outs: "=direction", set: "axis=Down");
+
+        // The named zones a point stands in, the highest priority answering, else the default.
+        Map("SampleValueSpatialVariable", "SampleZone", "{T}", ins: "Point=point Name=zone DefaultValue=defaultValue", outs: "=value");
         Map("CreateTransformUndoStep", "RecordTransform", null, ins: "Target=slot", ops: "=in", exits: "Next=next");
 
         // The package counts depth past the first level, and a negative one has no limit; ours counts the first.
@@ -154,6 +169,7 @@ internal static partial class PackageNodeTable
                 s.Flow(scale, "next", wait);
             s.Exit("OnAnimationFinished", wait, "then");
         });
+        // No user root reads as 1, not as the 0 our scale gives for no slot.
         On("UserRootGlobalScale", s =>
         {
             string root = s.Add("UserBodyRoot");
@@ -162,7 +178,13 @@ internal static partial class PackageNodeTable
             s.Wire(root, "slot", scale, "slot");
             string split = s.Add("SplitVector", "float3");
             s.Wire(scale, "scale", split, "vector");
-            s.Out("", split, "x");
+            string none = s.Add("IsNull", "slot");
+            s.Wire(root, "slot", none, "value");
+            string pick = s.Add("Conditional", "float");
+            s.Wire(none, "null", pick, "condition");
+            s.Set(pick, "whenTrue", 1d);
+            s.Wire(split, "x", pick, "whenFalse");
+            s.Out("", pick, "result");
         });
         On("GetActiveLocomotionModule", s =>
         {

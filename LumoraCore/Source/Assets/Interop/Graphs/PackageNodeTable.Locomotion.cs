@@ -84,6 +84,38 @@ internal static partial class PackageNodeTable
             s.Op("", turn);
             s.Exit("Next", turn, "next");
         });
+        // A character is its user here, as the package finds one from the other.
+        On("IsCharacterOnGround", s =>
+        {
+            string ground = s.Add("UserOnGround");
+            s.In("Character", ground, "user");
+            s.Out("", ground, "grounded");
+        });
+        On("SetCharacterVelocity", s =>
+        {
+            string set = s.Add("SetUserVelocity");
+            s.In("Character", set, "user");
+            s.In("Velocity", set, "velocity");
+            s.Op("", set);
+            s.Exit("Next", set, "next");
+        });
+        // An impulse with mass is a change of speed of a tenth of it, the package's stock character weighing 10.
+        On("ApplyCharacterImpulse", s =>
+        {
+            string light = s.Add("Multiply", "float3,float");
+            s.In("Impulse", light, "a");
+            s.Set(light, "b", 0.1d);
+            string change = s.Add("Conditional", "float3");
+            s.In("IgnoreMass", change, "condition", false);
+            s.In("Impulse", change, "whenTrue");
+            s.Wire(light, "result", change, "whenFalse");
+            string push = s.Add("PushUser");
+            s.In("Character", push, "user");
+            s.Wire(change, "result", push, "velocity");
+            s.Op("", push);
+            s.Exit("Next", push, "next");
+        });
+
         On("UserPrimaryHand", s =>
         {
             string hand = s.Add("PrimaryHand");
