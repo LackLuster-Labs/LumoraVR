@@ -135,7 +135,7 @@ public class Engine : IDisposable
     public Input.InputInterface InputInterface { get; private set; } = null!;
     public AssetManager AssetManager { get; private set; } = null!;
     public GlobalCoroutineManager CoroutineManager { get; private set; } = null!;
-    public EngineMixerManager AudioManager { get; private set; } = null!;
+    
 
     // The mixer everything audible goes through. The platform gives it a device after init.
     public Lumora.Core.Audio.AudioSystem AudioSystem { get; private set; } = null!;
@@ -489,12 +489,6 @@ public class Engine : IDisposable
             }, cancellationToken);
 
             AudioSystem = new Lumora.Core.Audio.AudioSystem();
-            AudioManager = new();
-            foreach (string name in new string[] { "Music", "Effects" })
-            {
-                if (AudioManager.Mixer.TryCreateAudioBus(name, out var bus) && AudioManager.Mixer.TryGetAudioBusByName("Master", out var master))
-                    bus.Target = master;
-            }
 
 
             // Physics is per-world and delegated to the platform engine (Godot/Jolt), accessed
@@ -999,7 +993,6 @@ public class Engine : IDisposable
         // Dispose in reverse initialization order
         DisposeSubsystem("WorldManager", () => { WorldManager?.Dispose(); WorldManager = null!; });
         DisposeSubsystem("AudioSystem", () => { AudioSystem?.Dispose(); AudioSystem = null!; });
-        DisposeSubsystem("AudioManager", () => { AudioManager.Dispose(); });
         // The live feed and the presence reports stop before the client they go through.
         DisposeSubsystem("Social", () => { (Social as IDisposable)?.Dispose(); Social = null; });
         // The queue stops before the client it sends through goes; what it had not sent waits for next run.
