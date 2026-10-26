@@ -161,6 +161,44 @@ public class Skybox : ImplementableComponent, ICustomInspectorUI
         }
     }
 
+    // The sky this world shows, or null.
+    public static Skybox? ActiveIn(World? world)
+    {
+        foreach (var candidate in Snapshot(world))
+        {
+            if (candidate._isActive && !candidate.IsDestroyed)
+                return candidate;
+        }
+        return null;
+    }
+
+    // The light the showing sky gives off, as nine coefficients of linear RGB, with its tint and exposure on.
+    // Null for a sky drawn from a shader, or one whose picture has not loaded.
+    public SphericalHarmonicsL2? Radiance()
+    {
+        CubemapAsset? cube = null;
+        float exposure = Exposure.Value;
+        var tint = new float3(1f, 1f, 1f);
+        switch (SkyMaterial)
+        {
+            case Projection360Material picture when picture.Cubemap.Target != null:
+                cube = picture.Cubemap.Asset;
+                exposure *= picture.Exposure.Value;
+                var t = picture.Tint.Value;
+                tint = new float3(ColorSpace.GammaToLinear(t.r), ColorSpace.GammaToLinear(t.g), ColorSpace.GammaToLinear(t.b));
+                break;
+            case null:
+                cube = Cubemap.Asset;
+                break;
+        }
+        if (cube?.Radiance is not { } radiance)
+            return null;
+        var scale = tint * exposure;
+        for (int i = 0; i < SphericalHarmonicsL2.Count; i++)
+            radiance[i] = radiance[i] * scale;
+        return radiance;
+    }
+
     private static Skybox[] Snapshot(World? world)
     {
         if (world == null)

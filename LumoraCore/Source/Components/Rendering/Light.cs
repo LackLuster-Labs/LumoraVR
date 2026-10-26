@@ -85,6 +85,11 @@ public class Light : ImplementableComponent, IPrimaryColorSource
     // Window those rooms flood to white. Directional lights ignore it. -xlinka
     public readonly Sync<LightFalloff> Falloff = new();
 
+    // Which way the light points, turned from its slot. Identity shines along the slot's -Z. A light that came
+    // from content aimed along +Z carries a half turn here instead of having its slot, and everything on it,
+    // turned round. -xlinka
+    public readonly Sync<floatQ> RotationOffset = new();
+
     public override void OnInit()
     {
         base.OnInit();
@@ -98,19 +103,38 @@ public class Light : ImplementableComponent, IPrimaryColorSource
         Shadows.Value           = ShadowType.Hard;
         ShadowStrength.Value    = 1f;
         ShadowFadeDistance.Value = 0f;
-        ShadowBias.Value        = 0.05f;
-        ShadowNormalBias.Value  = 0.4f;
+        ShadowBias.Value        = DefaultShadowBias;
+        ShadowNormalBias.Value  = DefaultShadowNormalBias;
         ShadowNearPlane.Value   = 0.2f;
         ShadowMaxDistance.Value = 40f;
         ShadowSplits.Value      = ShadowSplitMode.Two;
         DistanceFadeBegin.Value = 0f;
         DistanceFadeLength.Value = 0f;
+        RotationOffset.Value    = floatQ.Identity;
         // Cookie = default (C# default null, skip)
     }
+
+    // Both biases go straight to the renderer in its own units, the normal bias in shadow-map texels along
+    // the surface normal. The old pair, 0.05 and 0.4, striped any face turned close to edge-on to the light:
+    // a tipped box's top under the Grid sun, a flat slab under a spot. Two texels clears both without
+    // lifting a box's shadow off the floor. -xlinka
+    public const float DefaultShadowBias = 0.1f;
+    public const float DefaultShadowNormalBias = 2f;
+    private const float OldShadowBias = 0.05f;
+    private const float OldShadowNormalBias = 0.4f;
 
     public override void OnStart()
     {
         base.OnStart();
+        // Every light saved before the defaults moved still carries the old pair. Only the untouched pair
+        // moves; a light anyone tuned keeps its numbers. -xlinka
+        if (World?.IsAuthority == true
+            && MathF.Abs(ShadowBias.Value - OldShadowBias) < 1e-6f
+            && MathF.Abs(ShadowNormalBias.Value - OldShadowNormalBias) < 1e-6f)
+        {
+            ShadowBias.Value = DefaultShadowBias;
+            ShadowNormalBias.Value = DefaultShadowNormalBias;
+        }
     }
 
     public override void OnUpdate(float delta)

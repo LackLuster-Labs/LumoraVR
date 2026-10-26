@@ -162,6 +162,8 @@ public class SkinnedMeshRenderer : ImplementableComponent, ICustomMemberNameSour
     public const int BlendShapePriorityViseme = 20;
     public const int BlendShapePriorityToggle = 15;
     public const int BlendShapePriorityRest = 12;
+    // Face-tracking shapes the avatar names itself win over the same driver's guesses by name.
+    public const int BlendShapePriorityNamedExpression = 11;
     public const int BlendShapePriorityExpression = 10;
 
     private object?[]? _blendShapeOwners;
@@ -473,6 +475,74 @@ public class SkinnedMeshRenderer : ImplementableComponent, ICustomMemberNameSour
         }
 
         // These flags belong to the hook. A queued apply can be delayed by the frame budget.
+
+        ulong frame = World?.Time.UpdateIndex ?? 0;
+        if ((frame + (ulong)_viewStagger) % ViewCheckEvery == 0)
+            CheckViewerDistance(frame);
+    }
+
+    // OTHER PEOPLE'S AVATARS, FROM HERE
+    //
+    // Someone else's avatar, or one standing in the world, casts no shadow past the viewer's avatar shadow
+    // distance and is not drawn past their draw distance; the wearer's own is never touched, mirrors and all.
+    // Worked out every few frames and handed to the hook only when the answer moves. Local to this machine,
+    // never replicated. A crowd's shadows were as many triangles again as the crowd. -xlinka
+    private const ulong ViewCheckEvery = 8;
+    private static int s_viewStaggers;
+    private readonly int _viewStagger = System.Threading.Interlocked.Increment(ref s_viewStaggers) & 7;
+    private Slot? _viewRoot;
+    private ulong _viewRootFrame = ulong.MaxValue;
+    private float _appliedShadowDistance = float.NaN;
+    private float _appliedDrawDistance = float.NaN;
+
+    // On an avatar the viewer is not wearing.
+    public bool LocalOthersAvatar { get; private set; }
+
+    // Past the viewer's avatar shadow distance: the hook drops the shadow whatever ShadowCastMode says.
+    public bool LocalShadowCulled { get; private set; }
+
+    // The viewer's avatar draw distance for this renderer, 0 for unlimited.
+    public float LocalDrawDistance { get; private set; }
+
+    // Worn by somebody whose shaders this viewer simplifies: the hook swaps toon materials for plain ones.
+    public bool LocalSimpleShading { get; private set; }
+
+    private void CheckViewerDistance(ulong frame)
+    {
+        if (_viewRootFrame == ulong.MaxValue || frame - _viewRootFrame >= 64 || _viewRoot is { IsDestroyed: true })
+        {
+            _viewRoot = Avatar.AvatarViewLod.RootOf(Slot);
+            _viewRootFrame = frame;
+        }
+
+        var local = World?.LocalUser?.Root;
+        bool others = _viewRoot != null && local != null && !ReferenceEquals(_viewRoot.ActiveUserRoot, local);
+        float shadowDistance = EngineSettings.AvatarShadowDistance;
+        float drawDistance = others ? EngineSettings.AvatarDrawDistance : 0f;
+        bool culled = false;
+        if (others && shadowDistance > 0f && local!.HeadSlot is { IsDestroyed: false } head)
+        {
+            // A little give either side so standing on the line does not flicker the shadow.
+            float distance = (_viewRoot!.GlobalPosition - head.GlobalPosition).Length;
+            culled = LocalShadowCulled ? distance > shadowDistance - 1f : distance > shadowDistance;
+        }
+
+        // Only one somebody is wearing or holding. One standing in the world keeps its shaders: it is usually
+        // being looked over before it goes on.
+        int shaders = EngineSettings.OthersAvatarShaders;
+        bool simple = others && shaders != EngineSettings.OthersShadersFull && _viewRoot!.ActiveUserRoot is { } wearer
+            && (shaders == EngineSettings.OthersShadersSimple || wearer.ActiveUser is not { IsFriendOfMine: true });
+
+        if (others == LocalOthersAvatar && culled == LocalShadowCulled && drawDistance == LocalDrawDistance
+            && simple == LocalSimpleShading && shadowDistance == _appliedShadowDistance && drawDistance == _appliedDrawDistance)
+            return;
+        LocalOthersAvatar = others;
+        LocalShadowCulled = culled;
+        LocalDrawDistance = drawDistance;
+        LocalSimpleShading = simple;
+        _appliedShadowDistance = shadowDistance;
+        _appliedDrawDistance = drawDistance;
+        RunApplyChanges();
     }
 
     private void OnSkeletonTargetChanged(SyncRef<SkeletonBuilder> reference)

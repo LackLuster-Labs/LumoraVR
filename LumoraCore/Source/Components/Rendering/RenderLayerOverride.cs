@@ -11,6 +11,8 @@ public class RenderLayerOverride : ImplementableComponent<IHook>
     public const int PrivateLayer = 1 << 1;
     public const int MirrorLayer = 1 << 16;
     public const int EyesOnlyLayer = 1 << 17;
+    // The other side of it: skipped by your own eyes and drawn by every other view.
+    public const int LocalHeadLayer = 1 << 18;
     // Bands a camera can leave out: name plates and their badges, and laser pointers.
     public const int NameplateLayer = 1 << 15;
     public const int PointerLayer = 1 << 14;

@@ -9,64 +9,6 @@ using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core.Components;
 
-public sealed class SyncIntList : SyncList<Sync<int>>
-{
-    public event Action<SyncIntList>? OnChanged;
-
-    public SyncIntList(Component owner)
-    {
-        Parent = owner;
-        ElementsAdded += OnElementsAdded;
-        ElementsRemoving += OnElementsRemoving;
-    }
-
-    public int GetValue(int index, int fallback)
-    {
-        return index >= 0 && index < Count ? GetElement(index).Value : fallback;
-    }
-
-    public void SetValue(int index, int value)
-    {
-        EnsureMinimumCount(index + 1);
-        GetElement(index).Value = value;
-    }
-
-    public bool EnsureExactCount(int count, int defaultValue)
-    {
-        int oldCount = Count;
-        base.EnsureExactCount(count);
-        for (int i = oldCount; i < Count; i++)
-        {
-            GetElement(i).Value = defaultValue;
-        }
-
-        return oldCount != Count;
-    }
-
-    private void OnElementsAdded(SyncElementList<Sync<int>> list, int index, int count)
-    {
-        for (int i = 0; i < count; i++)
-        {
-            list[index + i].OnChanged += OnElementChanged;
-        }
-        OnChanged?.Invoke(this);
-    }
-
-    private void OnElementsRemoving(SyncElementList<Sync<int>> list, int index, int count)
-    {
-        for (int i = 0; i < count; i++)
-        {
-            list[index + i].OnChanged -= OnElementChanged;
-        }
-        OnChanged?.Invoke(this);
-    }
-
-    private void OnElementChanged(int value)
-    {
-        OnChanged?.Invoke(this);
-    }
-}
-
 [ComponentCategory("Rendering")]
 public class MeshRenderer : ImplementableComponent
 {
@@ -89,6 +31,13 @@ public class MeshRenderer : ImplementableComponent
     // GraphicsChunk when the unbounded-ordering mode is enabled; off for all normal (world) meshes. -xlinka
     public bool PerSurfaceOrdering { get; set; }
 
+    // The stride between two renderers' keys in that mode: a renderer's surfaces take SortingOrder * stride + index.
+    public const float PerSurfaceSortStride = 1024f;
+
+    // In that mode, a key for surface 0 in place of its own, so it can draw ahead of renderers earlier in order:
+    // a window's backing goes down before anything of any window. Null keeps the usual key.
+    public float? LeadSurfaceSortingOffset { get; set; }
+
     // Extra frustum-cull margin the hook applies to the mesh instance(s), in the MESH'S OWN LOCAL UNITS -
     // the renderer grows the local bounding box by this and applies the node transform afterwards, so on a
     // slot scaled to 0.001 a margin of 1 buys one millimetre of world, not one metre. Getting that backwards
@@ -105,6 +54,19 @@ public class MeshRenderer : ImplementableComponent
     // uses and keeps the tighter of the two, so the two systems can't undo each other. -xlinka
     public float MaxViewDistance { get; set; }
     public float ViewDistanceFadeMargin { get; set; }
+
+    // The render layers this renderer draws on in place of the ones it would inherit, 0 for none. Set by a
+    // view material override, which shows a renderer one way to some views and another way to the rest; a
+    // plain property, never replicated, since every peer works out its own views. -xlinka
+    public int ViewLayers { get; private set; }
+
+    public void SetViewLayers(int layers)
+    {
+        if (ViewLayers == layers)
+            return;
+        ViewLayers = layers;
+        RunApplyChanges();
+    }
 
     // Draw-over-everything band for this viewer's own hands and lasers while the dash is up. When set,
     // the hook writes this ABSOLUTE sorting offset on the instance in place of RenderQueue + SortingOrder
@@ -337,19 +299,4 @@ public class MeshRenderer : ImplementableComponent
         if (Lumora.Core.Components.Meshes.ConvexHullPointSource.Resolve(this) != null)
             ConvexSplitDialog.Open(this);
     }
-}
-
-public enum ShadowCastMode
-{
-    Off = 0,
-    On = 1,
-    ShadowOnly = 2,
-    DoubleSided = 3
-}
-
-public enum MotionVectorMode
-{
-    Camera = 0,
-    Object = 1,
-    NoMotion = 2
 }

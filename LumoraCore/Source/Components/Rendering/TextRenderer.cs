@@ -245,6 +245,10 @@ public class TextRenderer : ProceduralMesh, IPrimaryColorSource
         m.StencilID.Value = style?.StencilID.Value ?? (byte)0;
         m.StencilWriteMask.Value = style?.StencilWriteMask.Value ?? byte.MaxValue;
         m.StencilReadMask.Value = style?.StencilReadMask.Value ?? byte.MaxValue;
+        m.OffsetFactor.Value = style?.OffsetFactor.Value ?? 0f;
+        m.OffsetUnits.Value = style?.OffsetUnits.Value ?? 0f;
+        m.AutoBackgroundColor.Value = style?.AutoBackgroundColor.Value ?? true;
+        m.BackgroundColor.Value = style?.BackgroundColor.Value ?? new colorHDR(0f, 0f, 0f, 0f);
     }
 
     public override void OnStart()

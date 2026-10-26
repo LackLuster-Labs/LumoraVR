@@ -85,6 +85,7 @@ public class LightHook : NodeBackedComponentHook<Light, Light3D>
     private int _appliedFadeEnabled, _appliedVisible, _appliedShadow, _appliedSplits, _appliedOmniMode;
     private bool _appliedPunctual, _appliedSunBand;
     private Texture2D? _appliedProjector;
+    private Quaternion _appliedTurn;
 
     // This light's place in the point and spot shadow budget.
     private readonly ShadowBudget.Entry _budget = new();
@@ -99,6 +100,7 @@ public class LightHook : NodeBackedComponentHook<Light, Light3D>
         _appliedFadeEnabled = _appliedVisible = _appliedShadow = _appliedSplits = _appliedOmniMode = -1;
         _appliedPunctual = _appliedSunBand = false;
         _appliedProjector = null;
+        _appliedTurn = new Quaternion(float.NaN, float.NaN, float.NaN, float.NaN);
     }
 
     private static bool Changed(ref float last, float value)
@@ -126,6 +128,15 @@ public class LightHook : NodeBackedComponentHook<Light, Light3D>
         if (light == null) return;
         if (!ReferenceEquals(_appliedNode, light))
             ForgetApplied(light);
+
+        // A zero turn is a light saved before the offset existed: straight along the slot.
+        var q = Owner.RotationOffset.Value;
+        var turn = q.x == 0f && q.y == 0f && q.z == 0f && q.w == 0f ? Quaternion.Identity : new Quaternion(q.x, q.y, q.z, q.w).Normalized();
+        if (_appliedTurn != turn)
+        {
+            _appliedTurn = turn;
+            light.Quaternion = turn;
+        }
 
         var c = Owner.LightColor.Value;
         var color = new Color(c.r, c.g, c.b, c.a);
@@ -342,13 +353,19 @@ public class LightHook : NodeBackedComponentHook<Light, Light3D>
         }
     }
 
+    // A light is left out by any camera whose mask misses its layers, like any other instance. The cameras that
+    // film the hidden band alone (somebody's far-off avatar taken for its picture, AvatarPictures) have to see
+    // the world's lights too, or they film the avatar by the sky's light alone: darker and the colour of the
+    // horizon. Nothing on that band is lit by them otherwise; what lives there draws unshaded. -xlinka
+    private const uint LightLayers = (uint)(Helpers.RenderHelper.PUBLIC_LAYER | Helpers.RenderHelper.HIDDEN_LAYER);
+
     private static Light3D BuildLight(LightType type)
     {
         return type switch
         {
-            LightType.Directional => new DirectionalLight3D { Name = "DirectionalLight" },
-            LightType.Point => new OmniLight3D { Name = "PointLight" },
-            LightType.Spot => new SpotLight3D { Name = "SpotLight" },
+            LightType.Directional => new DirectionalLight3D { Name = "DirectionalLight", Layers = LightLayers },
+            LightType.Point => new OmniLight3D { Name = "PointLight", Layers = LightLayers },
+            LightType.Spot => new SpotLight3D { Name = "SpotLight", Layers = LightLayers },
             _ => throw new ArgumentException($"Unknown light type: {type}")
         };
     }

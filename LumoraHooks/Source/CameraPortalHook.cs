@@ -22,6 +22,14 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
     // reflected whole rather than cut along the line it touches.
     private const float ClipSlack = 0.0005f;
     private const int ShadowAtlas = 1024;
+    // A rectangular mirror's capture follows how big its glass is on screen: this much finer than the
+    // pixels it covers, in steps of this many, never under the floor.
+    private const float MirrorOversample = 1.25f;
+    private const int MirrorStep = 128;
+    private const int MirrorFloor = 256;
+    private const int MirrorFirstPicture = 512;
+    private readonly Vector2I[] _mirrorSizes = new Vector2I[MaxViews];
+    private readonly bool[] _everRendered = new bool[MaxViews];
 
     private PortalProcessNode _processNode = null!;
     private readonly SubViewport?[] _viewports = new SubViewport?[MaxViews];
@@ -188,6 +196,15 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
             Park();
             return;
         }
+        // A bare portal in mirror mode reflects on whichever side the viewer stands. Package mirrors come with
+        // their normal either way round: the default one points it out of the glass, the canvas one on the
+        // camera turned half a turn, into the wall. Our own Mirror is one-sided glass and keeps the cut below.
+        if (!portal && !rectangularMirror && (viewerPos - planePos).Dot(planeNormal) <= 0f)
+        {
+            planeNormal = -planeNormal;
+            planePos = portalXf.Origin + planeNormal * owner.PlaneOffset.Value;
+            glassPos = planePos;
+        }
         if (!portal && (viewerPos - planePos).Dot(planeNormal) <= 0f)
         {
             // Behind the glass there is nothing to reflect, and nothing to pay for.
@@ -267,6 +284,7 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
         }
 
         int renderedViews = 0;
+        var renderedSize = size;
 
         for (int v = 0; v < views; v++)
         {
@@ -293,16 +311,24 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
                 projection = WithDepthRange(viewer.GetCameraProjection(), near, far);
             }
 
-            if (hasGlass && !SurfaceInView(eye, projection, glass, new Vector2(glassSize.x, glassSize.y)))
+            // None of the glass is in this eye's view: keep the last picture and skip the render. A mirror that
+            // has no picture yet takes one small one first, so a camera or a photo pointed at glass nobody has
+            // faced finds a reflection rather than black.
+            bool inView = !hasGlass || SurfaceInView(eye, projection, glass, new Vector2(glassSize.x, glassSize.y));
+            if (!inView && _everRendered[v])
             {
-                // None of the glass is in this eye's view: keep the last picture, skip the render.
                 SuspendView(v);
                 continue;
             }
 
+            var viewSize = size;
             Transform3D cam;
             if (rectangularMirror)
             {
+                viewSize = inView
+                    ? FitMirror(v, GlassPixels(eye, projection, glass, new Vector2(glassSize.x, glassSize.y), eyePixels),
+                        surfacePixels, ceiling)
+                    : MirrorCaptureMath.TextureSize(surfacePixels, System.Math.Min(ceiling, MirrorFirstPicture));
                 if (!MirrorCaptureMath.TryFrame(eye.Origin, glass, new Vector2(glassSize.x, glassSize.y),
                     far, out cam, out projection))
                 {
@@ -349,14 +375,17 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
             var viewport = EnsureViewport(v, host);
             var camera = _cameras[v]!;
             if (!ReferenceEquals(viewport.World3D, captureWorld)) viewport.World3D = captureWorld;
-            if (viewport.Size != size)
-                viewport.Size = size;
+            if (viewport.Size != viewSize)
+                viewport.Size = viewSize;
+            if (rectangularMirror && (renderedViews == 0 || viewSize.X * viewSize.Y > renderedSize.X * renderedSize.Y))
+                renderedSize = viewSize;
             ConfigureCapture(camera, viewport, owner, viewerViewport);
             camera.GlobalTransform = cam;
             // Last: a change to the camera's own lens settings resets the projection to the node's.
             var projections = _projections[v] ??= new global::Godot.Collections.Array<Projection> { Projection.Identity };
             projections[0] = projection;
             RenderingServer.CameraSetXRProjections(camera.GetCameraRid(), projections, NoOffset);
+            _everRendered[v] = true;
             renderedViews++;
         }
 
@@ -365,7 +394,7 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
             SuspendView(v);
 
         _parked = false;
-        owner.LocalRenderedResolution = renderedViews > 0 ? new Lumora.Core.Math.int2(size.X, size.Y) : default;
+        owner.LocalRenderedResolution = renderedViews > 0 ? new Lumora.Core.Math.int2(renderedSize.X, renderedSize.Y) : default;
         owner.LocalRenderedViews = renderedViews;
         Publish(views);
     }
@@ -440,8 +469,8 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
         // Make the capture a render dependency of the eye viewport, including after a VR mode switch.
         // Otherwise sibling viewport ordering can make the glass sample the previous frame.
         RenderingServer.ViewportSetParentViewport(viewport.GetViewportRid(), viewerViewport.GetViewportRid());
-        camera.CullMask = unchecked((uint)(RenderHelper.PUBLIC_RENDER_MASK
-            & ~RenderHelper.FREECAM_INDICATOR_LAYER & ~RenderHelper.MIRROR_LAYER));
+        camera.CullMask = RenderHelper.WithoutFilmedAlone(unchecked((uint)(RenderHelper.PUBLIC_RENDER_MASK
+            & ~RenderHelper.FREECAM_INDICATOR_LAYER & ~RenderHelper.MIRROR_LAYER)));
         var viewer = RenderHelper.ViewerCamera?.Invoke();
         var source = owner.OverrideClear.Value ? ClearEnvironment(owner)
             : viewer?.Environment ?? viewer?.GetWorld3D()?.Environment;
@@ -550,7 +579,46 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
 
     // Whether any of the glass lies inside this eye's view. A corner behind the eye counts as in view:
     // that close, rendering is the safe answer.
+    // A corner behind the eye leaves the projected box unknowable, so that counts as in view, unless all four
+    // are behind it: then the whole glass is, and the grid's mirror sat behind everyone at spawn rendering
+    // 4096 across every frame for nobody. -xlinka
     private static bool SurfaceInView(in Transform3D eye, in Projection projection, in Transform3D surface, Vector2 size)
+    {
+        var toView = eye.AffineInverse();
+        float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
+        int behind = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            float sx = (i & 1) == 0 ? -0.5f : 0.5f;
+            float sy = (i & 2) == 0 ? -0.5f : 0.5f;
+            var corner = surface.Origin + surface.Basis.X * (size.X * sx) + surface.Basis.Y * (size.Y * sy);
+            var view = toView * corner;
+            var clip = projection * new Vector4(view.X, view.Y, view.Z, 1f);
+            if (!(clip.W > 1e-5f))
+            {
+                behind++;
+                continue;
+            }
+            float nx = clip.X / clip.W;
+            float ny = clip.Y / clip.W;
+            if (!float.IsFinite(nx) || !float.IsFinite(ny))
+                return true;
+            minX = System.MathF.Min(minX, nx);
+            maxX = System.MathF.Max(maxX, nx);
+            minY = System.MathF.Min(minY, ny);
+            maxY = System.MathF.Max(maxY, ny);
+        }
+        if (behind == 4)
+            return false;
+        if (behind > 0)
+            return true;
+        return maxX >= -1f && minX <= 1f && maxY >= -1f && minY <= 1f;
+    }
+
+    // How many of this eye's pixels the whole glass spans along its longer side, or -1 with a corner behind
+    // the eye (standing at the glass, where it can fill the view).
+    private static float GlassPixels(in Transform3D eye, in Projection projection, in Transform3D surface, Vector2 size,
+        Vector2 eyePixels)
     {
         var toView = eye.AffineInverse();
         float minX = float.MaxValue, minY = float.MaxValue, maxX = float.MinValue, maxY = float.MinValue;
@@ -562,17 +630,37 @@ public sealed partial class CameraPortalHook : ComponentHook<CameraPortal>
             var view = toView * corner;
             var clip = projection * new Vector4(view.X, view.Y, view.Z, 1f);
             if (!(clip.W > 1e-5f))
-                return true;
+                return -1f;
             float nx = clip.X / clip.W;
             float ny = clip.Y / clip.W;
             if (!float.IsFinite(nx) || !float.IsFinite(ny))
-                return true;
+                return -1f;
             minX = System.MathF.Min(minX, nx);
             maxX = System.MathF.Max(maxX, nx);
             minY = System.MathF.Min(minY, ny);
             maxY = System.MathF.Max(maxY, ny);
         }
-        return maxX >= -1f && minX <= 1f && maxY >= -1f && minY <= 1f;
+        return System.MathF.Max((maxX - minX) * 0.5f * eyePixels.X, (maxY - minY) * 0.5f * eyePixels.Y);
+    }
+
+    // A mirror's picture can only be as sharp as its glass is big on screen. Across a room the glass covers a
+    // few hundred pixels, and capturing it at the full resolution there was the most expensive thing in the
+    // frame (4096 across for the grid's mirror at spawn, 2.5 ms of GPU). So the capture follows the glass's
+    // size on screen, never past the mirror's own resolution. It grows at once and only shrinks once that
+    // saves a good share, in steps, so walking about does not reallocate it every frame. -xlinka
+    private Vector2I FitMirror(int view, float glassPixels, Vector2 surfaceSize, int ceiling)
+    {
+        int target = glassPixels < 0f
+            ? ceiling
+            : System.Math.Min(ceiling, (int)(System.MathF.Ceiling(glassPixels * MirrorOversample / MirrorStep) * MirrorStep));
+        target = System.Math.Clamp(target, System.Math.Min(MirrorFloor, ceiling), ceiling);
+        var last = _mirrorSizes[view];
+        int lastLong = System.Math.Max(last.X, last.Y);
+        if (lastLong > 0 && target < lastLong && target > lastLong * 0.7f)
+            return last;
+        var size = MirrorCaptureMath.TextureSize(surfaceSize, target);
+        _mirrorSizes[view] = size;
+        return size;
     }
 
     private void SuspendView(int view)

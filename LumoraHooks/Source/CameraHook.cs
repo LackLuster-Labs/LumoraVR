@@ -29,6 +29,9 @@ public class CameraHook : ComponentHook<Camera>
     // throttle on a static camera never elapses. -xlinka
     private const double LayerRescanInterval = 0.5;
 
+    // The camera is placed from the slot's own transform; nothing hangs under the node.
+    protected override bool ReadsNodePose => false;
+
     private RenderTexture? _boundTexture;
     private int _selectiveLayer;
     private readonly List<Node3D> _selectiveRoots = new();
@@ -54,6 +57,12 @@ public class CameraHook : ComponentHook<Camera>
 
         UpdateSelectiveLayers();
         target.SetCameraOverride(BuildParameters());
+        // The texture draws only while this camera is on and somebody can see what it shows. Its renderer can
+        // come up a frame after the camera does; it is told then.
+        if (target.Hook is RenderTextureHook textureHook)
+            textureHook.SetFilmingCamera(Owner);
+        else
+            Owner.MarkChangeDirty();
     }
 
     public override void Destroy(bool destroyingWorld)
@@ -77,15 +86,16 @@ public class CameraHook : ComponentHook<Camera>
     private RenderCameraParameters BuildParameters()
     {
         var slot = Owner.Slot;
+        float lens = Owner.LensScale;
         return new RenderCameraParameters
         {
             Perspective = Owner.Projection.Value != ProjectionType.Orthographic,
             FieldOfView = Owner.FieldOfView.Value,
-            OrthographicSize = Owner.OrthographicSize.Value,
-            NearClip = Owner.NearClip.Value,
-            FarClip = Owner.FarClip.Value,
+            OrthographicSize = Owner.OrthographicSize.Value * lens,
+            NearClip = Owner.NearClip.Value * lens,
+            FarClip = Owner.FarClip.Value * lens,
             Position = slot.GlobalPosition,
-            Rotation = slot.GlobalRotation,
+            Rotation = Owner.ViewRotation,
             CullMask = EffectiveCullMask(),
             Clear = Owner.Clear.Value,
             BackgroundColor = Owner.BackgroundColor.Value,
@@ -94,8 +104,13 @@ public class CameraHook : ComponentHook<Camera>
             Msaa = Owner.AllowMSAA.Value,
             PostProcessing = Owner.RenderPostProcessing.Value,
             WearerView = Owner.WearerView.Value,
+            StudioLight = Owner.StudioLight.Value,
         };
     }
+
+    // The lent bit this camera films its listed objects alone on, which no other view draws; 0 when it films
+    // everything or leaves objects out.
+    internal int FilmedAloneBit => _selectiveLayer != 0 && _selectiveRoots.Count > 0 ? _selectiveLayer : 0;
 
     private int EffectiveCullMask()
     {
@@ -152,6 +167,8 @@ public class CameraHook : ComponentHook<Camera>
         if (listsChanged)
             RestoreRoots();
 
+        RenderHelper.SetFilmedAlone(_selectiveLayer, wantsSelective);
+
         if (wantsSelective)
         {
             CollectRoots(Owner.SelectiveRender, _selectiveRoots);
@@ -190,6 +207,7 @@ public class CameraHook : ComponentHook<Camera>
 
     private void ReleaseTexture()
     {
+        (_boundTexture?.Hook as RenderTextureHook)?.SetFilmingCamera(null);
         _boundTexture?.SetCameraOverride(null);
         _boundTexture = null;
     }

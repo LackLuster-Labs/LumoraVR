@@ -286,6 +286,8 @@ public sealed class ParticleSystem : ImplementableComponent, IInputUpdateReceive
     // and the renderer skips that pass entirely.
     private ParticleTrailsModule? _trails;
     private ParticleRibbonsModule? _ribbons;
+    private ParticleTrails? _trailsLook;
+    private ParticleRibbons? _ribbonsLook;
     private ParticleFlipbookModule? _flipbook;
     private ParticleLightsModule? _lights;
 
@@ -333,6 +335,11 @@ public sealed class ParticleSystem : ImplementableComponent, IInputUpdateReceive
     public ParticleStrandOutput? TrailStrands => _trails?.Output;
 
     public ParticleStrandOutput? RibbonStrands => _ribbons?.Output;
+
+    // The components behind those two, for what the renderer draws them with.
+    public ParticleTrails? TrailsLook => _trailsLook;
+
+    public ParticleRibbons? RibbonsLook => _ribbonsLook;
 
     // Fractional sheet frame per particle. Valid entries are [0, ParticleCount). Empty when no
     // flipbook is attached.
@@ -644,6 +651,8 @@ public sealed class ParticleSystem : ImplementableComponent, IInputUpdateReceive
         _hasRotationOutput = false;
         _trails = null;
         _ribbons = null;
+        _trailsLook = null;
+        _ribbonsLook = null;
         _flipbook = null;
         _lights = null;
         for (int i = 0; i < _modules.Count; i++)
@@ -659,9 +668,11 @@ public sealed class ParticleSystem : ImplementableComponent, IInputUpdateReceive
             {
                 case ParticleTrailsModule trails:
                     _trails = trails;
+                    _trailsLook = component as ParticleTrails;
                     break;
                 case ParticleRibbonsModule ribbons:
                     _ribbons = ribbons;
+                    _ribbonsLook = component as ParticleRibbons;
                     break;
                 case ParticleFlipbookModule flipbook:
                     _flipbook = flipbook;

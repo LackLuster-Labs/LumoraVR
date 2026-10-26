@@ -68,6 +68,9 @@ public class ReflectionProbe : ImplementableComponent, ICustomInspectorUI, IInsp
     // 0 keeps the renderer default
     public readonly Sync<int> CullMask;
 
+    // captures the sky and nothing in the world: a fallback for everything outside the room probes
+    public readonly Sync<bool> SkyOnly;
+
     // roughly doubles what a bake costs
     public readonly Sync<bool> CaptureShadows;
 
@@ -94,6 +97,17 @@ public class ReflectionProbe : ImplementableComponent, ICustomInspectorUI, IInsp
     // scene once instead, so it is never left empty.
     public readonly Lumora.Core.Assets.AssetRef<Lumora.Core.Assets.CubemapAsset> Cubemap;
 
+    // What a Once probe bakes again after: a sky swapped or retinted, a lamp switched on. Without it the probe
+    // goes on showing them as they were. Changes close together make one bake a second.
+    public readonly SyncRefList<IWorldElement> ChangesSources;
+
+    private const float ChangeBakeSpacing = 1f;
+    private readonly System.Collections.Generic.List<IChangeable> _watched = new();
+    private System.Action<IChangeable>? _sourceChanged;
+    private bool _rebakeAsked;
+    private bool _rebakeQueued;
+    private double _rebakedAt = double.NegativeInfinity;
+
     public ReflectionProbe()
     {
         Size = new Sync<float3>(this, new float3(10f, 10f, 10f));
@@ -105,6 +119,7 @@ public class ReflectionProbe : ImplementableComponent, ICustomInspectorUI, IInsp
         BlendDistance = new Sync<float>(this, 1f);
         MaxDistance = new Sync<float>(this, 0f);
         CullMask = new Sync<int>(this, 0);
+        SkyOnly = new Sync<bool>(this, false);
         CaptureShadows = new Sync<bool>(this, false);
         AmbientMode = new Sync<ProbeAmbientMode>(this, ProbeAmbientMode.Environment);
         AmbientColor = new Sync<color>(this, new color(0f, 0f, 0f, 1f));
@@ -112,6 +127,7 @@ public class ReflectionProbe : ImplementableComponent, ICustomInspectorUI, IInsp
         BakeGeneration = new Sync<int>(this, 0);
         DebugVisual = new Sync<bool>(this, false);
         Cubemap = new Lumora.Core.Assets.AssetRef<Lumora.Core.Assets.CubemapAsset>(this);
+        ChangesSources = new SyncRefList<IWorldElement>(this);
     }
 
     private const string DebugSphereName = "ProbeDebugSphere";
@@ -120,6 +136,72 @@ public class ReflectionProbe : ImplementableComponent, ICustomInspectorUI, IInsp
     {
         base.OnChanges();
         SyncDebugVisual();
+        WatchChangesSources();
+        RebakeIfAsked();
+    }
+
+    private void WatchChangesSources()
+    {
+        _sourceChanged ??= _ =>
+        {
+            _rebakeAsked = true;
+            MarkChangeDirty();
+        };
+        for (int i = _watched.Count - 1; i >= 0; i--)
+        {
+            var watched = _watched[i];
+            if (watched.IsDestroyed || !Lists(watched))
+            {
+                watched.Changed -= _sourceChanged;
+                _watched.RemoveAt(i);
+            }
+        }
+        foreach (var entry in ChangesSources)
+        {
+            if (entry is IChangeable source && !source.IsDestroyed && !ReferenceEquals(source, this) && !_watched.Contains(source))
+            {
+                source.Changed += _sourceChanged;
+                _watched.Add(source);
+            }
+        }
+    }
+
+    private bool Lists(IChangeable source)
+    {
+        foreach (var entry in ChangesSources)
+        {
+            if (ReferenceEquals(entry, source))
+                return true;
+        }
+        return false;
+    }
+
+    // Only the authority counts bakes, so a change seen on every peer bakes once.
+    private void RebakeIfAsked()
+    {
+        if (!_rebakeAsked || World is not { IsAuthority: true } world || UpdateMode.Value != ProbeUpdateMode.Once)
+        {
+            _rebakeAsked = false;
+            return;
+        }
+        double wait = _rebakedAt + ChangeBakeSpacing - world.TotalTime;
+        if (wait > 0)
+        {
+            if (!_rebakeQueued)
+            {
+                _rebakeQueued = true;
+                RunInSeconds((float)wait, () =>
+                {
+                    _rebakeQueued = false;
+                    if (!IsDestroyed)
+                        MarkChangeDirty();
+                });
+            }
+            return;
+        }
+        _rebakeAsked = false;
+        _rebakedAt = world.TotalTime;
+        Rebake();
     }
 
     private void SyncDebugVisual()
@@ -173,6 +255,9 @@ public class ReflectionProbe : ImplementableComponent, ICustomInspectorUI, IInsp
 
     public override void OnDestroy()
     {
+        foreach (var watched in _watched)
+            watched.Changed -= _sourceChanged;
+        _watched.Clear();
         Slot?.FindChild(DebugSphereName, recursive: false)?.Destroy();
         base.OnDestroy();
     }
@@ -180,6 +265,7 @@ public class ReflectionProbe : ImplementableComponent, ICustomInspectorUI, IInsp
     // a Once probe holds the room as it looked when it first came up, so anything that moves the
     // furniture has to say so
     [SyncMethod]
+    [ScriptMethod]
     public void Rebake()
     {
         BakeGeneration.Value++;

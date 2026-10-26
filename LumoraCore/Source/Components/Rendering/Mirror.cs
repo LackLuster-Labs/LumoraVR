@@ -51,6 +51,32 @@ public sealed class Mirror : CameraPortal
         SyncSurface();
     }
 
+    // A mirror on its own: the glass, a collider the size of it and a grab handle, and nothing drawn over the
+    // glass. What Create New and the world templates put down. -xlinka
+    public static Mirror Spawn(Slot parent, float3 position, float3 facing, float2 size)
+    {
+        var root = parent.AddSlot("Mirror");
+        root.GlobalPosition = position;
+        facing.y = 0f;
+        if (facing.LengthSquared < 1e-6f) facing = float3.Backward;
+        facing = facing.Normalized;
+        root.GlobalRotation = floatQ.AxisAngleRad(float3.Up, System.MathF.Atan2(-facing.x, -facing.z));
+        if (float3.Dot(root.Backward, facing) < 0f)
+            root.GlobalRotation = root.GlobalRotation * floatQ.AxisAngleRad(float3.Up, System.MathF.PI);
+        return SetUp(root, size);
+    }
+
+    public static Mirror SetUp(Slot slot, float2? size = null)
+    {
+        var mirror = slot.AttachComponent<Mirror>();
+        if (size is { } wanted)
+            mirror.Size.Value = wanted;
+        slot.GetOrAttachComponent<BoxCollider>();
+        slot.GetOrAttachComponent<Grabbable>().Scalable.Value = true;
+        mirror.SyncSurface();
+        return mirror;
+    }
+
     public override void OnChanges()
     {
         SyncSurface();
@@ -63,11 +89,15 @@ public sealed class Mirror : CameraPortal
             System.Math.Clamp(Size.Value.y, 0.05f, 100f));
         SurfaceSize.Value = size;
         if (Surface.Target != null) Surface.Target.Size.Value = size;
+        if (Slot?.GetComponent<BoxCollider>() is { } collider)
+        {
+            var box = new float3(size.x, size.y, 0.02f);
+            if (collider.Size.Value != box) collider.Size.Value = box;
+        }
         if (Texture.Target != null)
         {
             int resolution = System.Math.Clamp(Resolution.Value, MinimumResolution, MaximumResolution);
-            Texture.Target.Width.Value = resolution;
-            Texture.Target.Height.Value = resolution;
+            Texture.Target.Size.Value = new int2(resolution, resolution);
         }
     }
 }

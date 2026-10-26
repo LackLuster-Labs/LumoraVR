@@ -1,6 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
+using System;
 using Lumora.Core.Assets;
 using Lumora.Core.Math;
 
@@ -26,12 +27,16 @@ public class Camera : ImplementableComponent
     // degrees; used in Perspective mode
     public readonly Sync<float> FieldOfView = new();
 
-    // height in world units; used in Orthographic mode
+    // full height in world units (in slot units with ScaleWithSlot); used in Orthographic mode
     public readonly Sync<float> OrthographicSize = new();
 
     public readonly Sync<float> NearClip = new();
 
     public readonly Sync<float> FarClip = new();
+
+    // The orthographic size and both clip planes count in the slot's own scaled units instead of metres, so a
+    // camera built into an object keeps framing the same part of it however big the object is made.
+    public readonly Sync<bool> ScaleWithSlot = new();
 
     [Group("Clear")]
     public readonly Sync<ClearMode> Clear = new();
@@ -69,11 +74,18 @@ public class Camera : ImplementableComponent
     // stays on the machine that filled it, so nobody else's private interface can end up in it. -xlinka
     public readonly Sync<bool> RenderPrivateUI = new();
 
+    // Lights what it films the way a photo studio would, a soft key over the lens's left shoulder, a rim
+    // behind and a dim fill all round, on top of the world's own lights and in this camera's picture
+    // alone. For one thing filmed on its own, which may well be sitting in the dark.
+    public readonly Sync<bool> StudioLight = new();
+
     // Render ONLY these slots and their children. Empty = render everything the culling mask allows.
     //
     // This is a layer trick underneath: the camera takes one free render layer, the listed subtrees get
     // that layer added on top of whatever they already had, and the camera renders that layer alone. So
-    // the listed objects keep rendering normally for everyone else, and there is no per-object cost.
+    // the listed objects keep rendering normally for everyone else, and there is no per-object cost. No other
+    // view draws that layer, so a listed object that nobody else sees (one on the hidden band, the stage a
+    // camera films a label from) shows in this camera's picture and nowhere else.
     [Group("Selective Rendering")]
     public readonly SyncRefList<Slot> SelectiveRender;
 
@@ -86,6 +98,21 @@ public class Camera : ImplementableComponent
     //
     // Ignored while SelectiveRender is non-empty, where excluding just means not being on the list.
     public readonly SyncRefList<Slot> ExcludeRender;
+
+    // Which way the lens looks, turned from its slot. Identity looks along the slot's -Z; a camera from content
+    // aimed along +Z carries a half turn here rather than a turned slot.
+    public readonly Sync<floatQ> RotationOffset = new();
+
+    // The way the lens faces in the world: the slot's turn, then the camera's own.
+    public floatQ ViewRotation
+    {
+        get
+        {
+            var q = RotationOffset.Value;
+            var slot = Slot?.GlobalRotation ?? floatQ.Identity;
+            return q.x == 0f && q.y == 0f && q.z == 0f && q.w == 0f ? slot : slot * q.Normalized;
+        }
+    }
 
     public Camera()
     {
@@ -111,6 +138,7 @@ public class Camera : ImplementableComponent
         UseOcclusionCulling.Value = true;
         AllowMSAA.Value          = true;
         RenderPostProcessing.Value = true;
+        RotationOffset.Value     = floatQ.Identity;
     }
 
     // 0 when there is no render target, because without one there is no framing to have an aspect of.
@@ -129,12 +157,29 @@ public class Camera : ImplementableComponent
 
     public bool IsRenderTexture => TargetTexture.Target != null;
 
+    // What the lens's size and clip planes are multiplied by: the mean of the slot's three scale axes while
+    // ScaleWithSlot is on, else 1.
+    public float LensScale
+    {
+        get
+        {
+            if (!ScaleWithSlot.Value || Slot == null)
+                return 1f;
+            var scale = Slot.GlobalScale;
+            float mean = (MathF.Abs(scale.x) + MathF.Abs(scale.y) + MathF.Abs(scale.z)) / 3f;
+            return float.IsFinite(mean) ? MathF.Max(mean, 1e-5f) : 1f;
+        }
+    }
+
     // The hook needs the slot's GLOBAL transform, and a slot moving does not dirty the components on it
     // - the slot dirties itself. Without this a camera on a moving mount would film one frame from where
     // it started and then never update again, which is exactly the class of bug ApplyChanges being
     // queue-driven keeps producing. -xlinka
     private float3 _lastPosition;
     private floatQ _lastRotation;
+    private float _lastLens;
+    private Slot? _watched;
+    private Action<Slot>? _moved;
     private bool _hasLastTransform;
     private float _layerRescanTimer;
 
@@ -148,6 +193,22 @@ public class Camera : ImplementableComponent
         var slot = Slot;
         if (slot == null)
             return;
+
+        // A move is also caught when the world reports it, after every update and before the hooks run. The check
+        // below alone sees only the moves made before it this frame: whatever moves the camera after it in the
+        // update order (a route, an anchor) was a frame late whenever the two swapped places, and the picture
+        // held one frame and jumped two. -xlinka
+        if (!ReferenceEquals(_watched, slot))
+        {
+            if (_watched != null && _moved != null)
+                _watched.WorldTransformChanged -= _moved;
+            _watched = slot;
+            slot.WorldTransformChanged += _moved ??= _ =>
+            {
+                if (!IsDestroyed && TargetTexture.Target != null)
+                    MarkChangeDirty();
+            };
+        }
 
         // A selective or excluded subtree that grows new children after the layers were applied has no
         // way to announce itself, and a camera that never moves would otherwise never look again. Poke
@@ -165,14 +226,24 @@ public class Camera : ImplementableComponent
 
         float3 position = slot.GlobalPosition;
         floatQ rotation = slot.GlobalRotation;
+        float lens = LensScale;
 
-        if (_hasLastTransform && position == _lastPosition && rotation == _lastRotation)
+        if (_hasLastTransform && position == _lastPosition && rotation == _lastRotation && lens == _lastLens)
             return;
 
         _lastPosition = position;
         _lastRotation = rotation;
+        _lastLens = lens;
         _hasLastTransform = true;
         MarkChangeDirty();
+    }
+
+    public override void OnDestroy()
+    {
+        if (_watched != null && _moved != null)
+            _watched.WorldTransformChanged -= _moved;
+        _watched = null;
+        base.OnDestroy();
     }
 }
 

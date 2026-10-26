@@ -1,6 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
+using Lumora.Core.Assets;
 using Lumora.Core.Math;
 using Lumora.Simulation.Particles;
 using Lumora.Simulation.Particles.Modules;
@@ -78,6 +79,14 @@ public sealed class ParticleTrails : ParticleModuleBase
 
     // Reference up axis for VelocityAligned, in the system's simulation space.
     public readonly Sync<float3> AlignmentUp = new();
+
+    // Draws the trails with this material in place of the built-in strand shader, as the system's own
+    // Material does for its particles. The strand's colour still rides in on the vertex colours.
+    public readonly AssetRef<MaterialAsset> Material = new();
+
+    // Normals and tangents on the trail mesh. A lit material needs them to shade the band at all; the
+    // built-in shader and unlit materials read neither, so they are left off unless asked for.
+    public readonly Sync<bool> GenerateLightingData = new();
 
     private readonly FloatCurve _widthCurve = new();
     private readonly ColorGradient _colorGradient = new();

@@ -121,6 +121,40 @@ public class GlowCircle : Component, IPrimaryColorSource
         Apply();
     }
 
+    // A marker that arrives with its disc and ring already made, as an imported one does: the parts this built
+    // on attach go, and the ones it came with are taken up one at a time as they are found.
+    internal void DropBuiltParts()
+    {
+        if (_discMesh.Target?.Slot is { } disc && !ReferenceEquals(disc, Slot) && disc.Parent == Slot)
+            disc.Destroy();
+        if (_ringSlot.Target is { } ring && !ReferenceEquals(ring, Slot) && ring.Parent == Slot)
+            ring.Destroy();
+        _discMesh.Target = null!;
+        _ringMesh.Target = null!;
+        _ringSlot.Target = null!;
+        _discMaterial.Target = null!;
+        _ringMaterial.Target = null!;
+    }
+
+    internal enum Part { Disc, Ring, RingSlot, DiscMaterial, RingMaterial }
+
+    internal bool Adopt(Part part, IWorldElement found)
+    {
+        var owner = found is Networking.Sync.SyncElement { Parent: { } parent } && found is not Component and not Lumora.Core.Slot ? parent : found;
+        bool taken = part switch
+        {
+            Part.Disc when owner is QuadMesh quad => (_discMesh.Target = quad) != null,
+            Part.Ring when owner is CylinderMesh cylinder => (_ringMesh.Target = cylinder) != null,
+            Part.RingSlot when owner is Lumora.Core.Slot slot => (_ringSlot.Target = slot) != null,
+            Part.DiscMaterial when owner is UnlitMaterial material => (_discMaterial.Target = material) != null,
+            Part.RingMaterial when owner is UnlitMaterial material => (_ringMaterial.Target = material) != null,
+            _ => false,
+        };
+        if (taken)
+            Apply();
+        return taken;
+    }
+
     private void Apply()
     {
         float radius = Radius.Value;
@@ -129,7 +163,8 @@ public class GlowCircle : Component, IPrimaryColorSource
 
         if (_discMesh.Target is { } disc)
         {
-            disc.Slot.LocalPosition.Value = new float3(0f, SurfaceClearance, 0f);
+            if (!ReferenceEquals(disc.Slot, Slot))
+                disc.Slot.LocalPosition.Value = new float3(0f, SurfaceClearance, 0f);
             disc.Size.Value = new float2(radius * 2.5f, radius * 2.5f); // soft edge extends past the ring
         }
         if (_ringMesh.Target is { } ring)

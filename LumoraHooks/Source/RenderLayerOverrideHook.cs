@@ -12,6 +12,8 @@ public class RenderLayerOverrideHook : ComponentHook<RenderLayerOverride>
 {
     public static IHook<RenderLayerOverride> Constructor() => new RenderLayerOverrideHook();
 
+    protected override bool ReadsNodePose => false;
+
     public override void ApplyChanges()
     {
         if (!Owner.Enabled)

@@ -1,6 +1,8 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
+using System;
+using System.Collections.Generic;
 using Godot;
 using Lumora.Core;
 using Lumora.Core.Components;
@@ -52,6 +54,25 @@ public sealed class ReflectionProbeHook : NodeBackedComponentHook<LumoraProbe, G
     private static global::Godot.BoxMesh? _seedBox;
     private static readonly StringName SeedPicture = "picture";
 
+    // THE RENDERER HOLDS 32 PROBES PER VIEW, AND ONE MORE CRASHES THE GAME.
+    //
+    // Every view (eyes, mirror, camera) keeps reflections in an atlas of 32 slots. A world with more probes
+    // than that in view gets "atlas index invalid", a null framebuffer, a cascade of draw-list errors and
+    // then a fatal index -1 into the 32 slots that closes the game (seen 10-31 in a big joined world). So
+    // only the probes nearest the camera are switched on, at most MaxProbesShown of them, with headroom
+    // under 32, re-chosen twice a second as people move; the rest wait their turn. -xlinka
+    // Follows the project's atlas size, so raising it there is the only change needed to show more.
+    private static readonly int MaxProbesShown = System.Math.Max(8,
+        (int)ProjectSettings.GetSetting("rendering/reflections/reflection_atlas/reflection_count", 32) - 8);
+    private const double BudgetEverySeconds = 0.5;
+    private static readonly List<ReflectionProbeHook> Live = new();
+    private static readonly List<(float Distance, ReflectionProbeHook Hook)> Ranked = new();
+    private static bool _budgetHooked;
+    private static double _nextBudget;
+    private static bool _capLogged;
+    private bool _wanted;
+    private bool _withinBudget = true;
+
     public static IHook<LumoraProbe> Constructor() => new ReflectionProbeHook();
 
     public GodotProbe GodotReflectionProbe => PlatformNode;
@@ -74,7 +95,15 @@ public sealed class ReflectionProbeHook : NodeBackedComponentHook<LumoraProbe, G
         // The quality toggle is a hard off: an invisible probe is not captured and contributes
         // nothing, so turning reflections off actually removes the cost rather than dimming it.
         bool enabled = Owner.Enabled && EngineSettings.ReflectionsEnabled;
-        probe.Visible = enabled;
+        _wanted = enabled;
+        if (!Live.Contains(this))
+            Live.Add(this);
+        if (!_budgetHooked)
+        {
+            _budgetHooked = true;
+            RenderingServer.FramePreDraw += Budget;
+        }
+        probe.Visible = enabled && _withinBudget;
 
         var size = Owner.Size.Value;
         probe.Size = new Vector3(size.x, size.y, size.z);
@@ -97,12 +126,14 @@ public sealed class ReflectionProbeHook : NodeBackedComponentHook<LumoraProbe, G
         // Capture the focused world and the real local head. Diagnostic geometry, private overlays,
         // headless eye-view twins and planar mirror surfaces must not contaminate the cubemap. A seeded
         // probe captures the hidden band alone, where its cubemap box is.
+        // A sky-only probe draws no layer at all, which leaves the renderer the sky alone.
         int cullMask = Owner.CullMask.Value;
         probe.CullMask = _seeded ? (uint)Helpers.RenderHelper.HIDDEN_LAYER
-            : (uint)((cullMask != 0 ? cullMask : Helpers.RenderHelper.PUBLIC_RENDER_MASK)
+            : Owner.SkyOnly.Value ? 0u
+            : Helpers.RenderHelper.WithoutFilmedAlone((uint)((cullMask != 0 ? cullMask : Helpers.RenderHelper.PUBLIC_RENDER_MASK)
             & ~Helpers.RenderHelper.EYES_ONLY_LAYER & ~Helpers.RenderHelper.FREECAM_INDICATOR_LAYER
             & ~Helpers.RenderHelper.MIRROR_LAYER & ~Helpers.RenderHelper.TEMP_LAYER
-            & ~Helpers.RenderHelper.OVERLAY_LAYER & ~Helpers.RenderHelper.HIDDEN_LAYER);
+            & ~Helpers.RenderHelper.OVERLAY_LAYER & ~Helpers.RenderHelper.HIDDEN_LAYER));
 
         probe.AmbientMode = Owner.AmbientMode.Value switch
         {
@@ -357,8 +388,54 @@ void fragment() {
         });
     }
 
+    // Chooses which probes are on: the nearest to the camera that is drawing, counted only in worlds being
+    // shown, measured to the edge of each probe's box so a big room probe you stand in always wins.
+    private static void Budget()
+    {
+        double now = Time.GetTicksMsec() / 1000.0;
+        if (now < _nextBudget)
+            return;
+        _nextBudget = now + BudgetEverySeconds;
+
+        var camera = (global::Godot.Engine.GetMainLoop() as SceneTree)?.Root?.GetCamera3D();
+        if (camera == null || !GodotObject.IsInstanceValid(camera))
+            return;
+        var eye = camera.GlobalPosition;
+
+        Ranked.Clear();
+        foreach (var hook in Live)
+        {
+            var probe = hook.PlatformNode;
+            if (!hook._wanted || probe == null || !GodotObject.IsInstanceValid(probe)
+                || probe.GetParentNode3D() is not { } parent || !parent.IsVisibleInTree())
+                continue;
+            float reach = probe.Size.Length() * 0.5f;
+            Ranked.Add((MathF.Max(0f, eye.DistanceTo(probe.GlobalPosition) - reach), hook));
+        }
+        if (Ranked.Count > MaxProbesShown)
+        {
+            Ranked.Sort((a, b) => a.Distance.CompareTo(b.Distance));
+            if (!_capLogged)
+            {
+                _capLogged = true;
+                Lumora.Core.Logging.Logger.Log($"ReflectionProbes: {Ranked.Count} in shown worlds, the nearest {MaxProbesShown} kept on (the renderer holds {MaxProbesShown + 8} per view)");
+            }
+        }
+        for (int i = 0; i < Ranked.Count; i++)
+        {
+            var hook = Ranked[i].Hook;
+            bool within = i < MaxProbesShown;
+            if (hook._withinBudget == within)
+                continue;
+            hook._withinBudget = within;
+            if (hook.PlatformNode is { } probe && GodotObject.IsInstanceValid(probe))
+                probe.Visible = hook._wanted && within;
+        }
+    }
+
     public override void Destroy(bool destroyingWorld)
     {
+        Live.Remove(this);
         EngineSettings.Changed -= OnSettingsChanged;
         UnhookFrame(PlatformNode);
         UnhookSettle();
