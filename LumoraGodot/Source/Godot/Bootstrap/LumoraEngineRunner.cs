@@ -1215,7 +1215,6 @@ public partial class LumoraEngineRunner : Node
 
 		// Get InputInterface from Engine (it's already initialized in Engine.InitializeAsync)
 		_inputInterface = _engine.InputInterface;
-		_engine.AudioManager.Initialize(AudioMixer.GetMixer());
 
 		// A service page is not a stream URL, and only the platform layer can run the process that turns
 		// one into the other, so the core gets handed a resolver instead of owning one. -xlinka
