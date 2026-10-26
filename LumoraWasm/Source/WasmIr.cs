@@ -226,6 +226,15 @@ internal sealed class WasmCompiledFunction
     public WasmInstr[] Code = System.Array.Empty<WasmInstr>();
     public int[] BranchTable = System.Array.Empty<int>();
     public int[] Moves = System.Array.Empty<int>();
+
+    // The same code as machine code, once WasmJit has made it for the whole module, and the module's other
+    // functions, which that code calls by index.
+    public volatile WasmNativeBody? Native;
+    public WasmModule? Owner;
+    public WasmCompiledFunction[] Peers = System.Array.Empty<WasmCompiledFunction>();
+
+    // Per function import of the module, the call native code makes straight instead, when there is one.
+    public System.Delegate?[] Directs = System.Array.Empty<System.Delegate?>();
 }
 
 internal static class WasmOpcodes

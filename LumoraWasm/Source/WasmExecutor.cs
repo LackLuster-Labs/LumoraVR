@@ -41,12 +41,17 @@ internal sealed class WasmExecutor
     private CallFrame[] _frames = new CallFrame[256];
     private int _depth;
     private int _top;
+    // How deep native code may call before it traps, as the interpreter's maxDepth.
+    private int _nativeLimit;
+    // The native function running and the instruction it last said it was at, which place a trap it raises.
+    internal WasmCompiledFunction? _nativeFn;
+    internal int _nativeAt;
     // Running code is handed its fuel a slice at a time with the rest held back, and the clock is read
     // between slices as well as at every host call, so a call past its deadline stops even in a loop that
     // never leaves the module. -xlinka
     public const long FuelSlice = 1 << 20;
 
-    private long _fuel;
+    internal long _fuel;
     private long _reserve;
     private long _deadline = long.MaxValue;
     private int _invocations;
@@ -91,9 +96,36 @@ internal sealed class WasmExecutor
                 if (fp + compiled.FrameSize > _stack.Length)
                     throw new WasmTrapException(WasmTrapCode.CallStackExhausted);
                 arguments.CopyTo(_stack.AsSpan(fp));
-                Array.Clear(_stack, fp + compiled.ParamCount, compiled.LocalCount - compiled.ParamCount);
-                _top = fp + compiled.FrameSize;
-                Run(target.Instance, compiled, fp, _depth, _depth + Math.Max(1, maxCallDepth));
+                if (compiled.Native is { } native && WasmStore.NativeCode)
+                {
+                    int limit = _nativeLimit;
+                    var running = _nativeFn;
+                    int at = _nativeAt;
+                    _nativeLimit = _depth + Math.Max(1, maxCallDepth);
+                    _nativeFn = null;
+                    try
+                    {
+                        native(this, target.Instance, _stack, fp);
+                    }
+                    catch (WasmTrapException trap) when (!trap.HasLocation && _nativeFn != null)
+                    {
+                        WasmJit.Locate(trap, _nativeFn, _nativeAt);
+                        throw;
+                    }
+                    finally
+                    {
+                        _nativeLimit = limit;
+                        _nativeFn = running;
+                        _nativeAt = at;
+                    }
+                }
+                else
+                {
+                    WasmJit.Request(target.Instance.Module);
+                    Array.Clear(_stack, fp + compiled.ParamCount, compiled.LocalCount - compiled.ParamCount);
+                    _top = fp + compiled.FrameSize;
+                    Run(target.Instance, compiled, fp, _depth, _depth + Math.Max(1, maxCallDepth));
+                }
             }
             _stack.AsSpan(fp, type.Results.Length).CopyTo(results);
             return _fuel + _reserve;
@@ -153,7 +185,7 @@ internal sealed class WasmExecutor
     // The slice in hand is spent: the next comes out of what the call has left, once the clock says there
     // is time for it.
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private long Refuel(long fuel)
+    internal long Refuel(long fuel)
     {
         while (fuel < 0)
         {
@@ -166,6 +198,115 @@ internal sealed class WasmExecutor
         if (Environment.TickCount64 >= _deadline)
             throw new WasmTrapException(WasmTrapCode.OutOfTime);
         return fuel;
+    }
+
+    // What native code (WasmJit) asks of the executor: the room each function needs, the frames it calls into,
+    // and the calls it makes through the instance's imports and tables. The checks and the traps are the
+    // interpreter's own. A native frame lives on the .NET stack as well, so one also stops short of using up
+    // that stack, which the interpreter, keeping its frames in an array, never has to.
+    internal void EnterNative(int fp, int frameSize)
+    {
+        if (!RuntimeHelpers.TryEnsureSufficientExecutionStack())
+            throw new WasmTrapException(WasmTrapCode.CallStackExhausted);
+        _top = fp + frameSize;
+    }
+
+    internal void PushNative(int calleeFp, int frameSize)
+    {
+        if (_depth >= _nativeLimit)
+            throw new WasmTrapException(WasmTrapCode.CallStackExhausted);
+        if (calleeFp + frameSize > _stack.Length)
+            throw new WasmTrapException(WasmTrapCode.CallStackExhausted);
+        _depth++;
+    }
+
+    internal void PopNative() => _depth--;
+
+    // A block's fuel, the way the interpreter charges it.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void Burn(int amount)
+    {
+        _fuel -= amount;
+        if (_fuel < 0)
+            _fuel = Refuel(_fuel);
+    }
+
+    // A direct call's charge, the same a host call is charged: its fuel, then the clock.
+    internal long ChargeDirect(long fuel, int cost)
+    {
+        fuel -= cost;
+        if (fuel < 0)
+            fuel = Refuel(fuel);
+        if (Environment.TickCount64 >= _deadline)
+            throw new WasmTrapException(WasmTrapCode.OutOfTime);
+        return fuel;
+    }
+
+    internal void CallImportNative(WasmInstance instance, int index, int at, int frameEnd)
+        => CallFromNative(instance, instance.Functions[index], at, frameEnd);
+
+    internal void CallIndirectNative(WasmInstance instance, int tableIndex, long typeIndex, ulong element, int at, int frameEnd)
+    {
+        var table = instance.Tables[tableIndex];
+        uint index = (uint)element;
+        if (index >= table.Size)
+            throw new WasmTrapException(WasmTrapCode.UndefinedElement);
+        ulong reference = table.Elements[index];
+        if (reference == 0)
+            throw new WasmTrapException(WasmTrapCode.UninitializedElement);
+        var target = instance.Store.Functions[(int)reference]!;
+        if (target.TypeId != instance.TypeIds[typeIndex])
+            throw new WasmTrapException(WasmTrapCode.IndirectCallTypeMismatch);
+        CallFromNative(instance, target, at, frameEnd);
+    }
+
+    // A function of another instance runs natively when its module has the code, else in the interpreter from
+    // here; a host function is charged and called the way the interpreter calls it.
+    // The caller's place is kept across the call: what runs inside it may name places of its own, and a trap
+    // from the host function itself belongs to the caller's call. A host call that traps leaves the fuel as it
+    // was before its charge, as the interpreter's does.
+    private void CallFromNative(WasmInstance caller, WasmFunction target, int at, int frameEnd)
+    {
+        var running = _nativeFn;
+        int place = _nativeAt;
+        if (target is WasmModuleFunction module)
+        {
+            var callee = module.Compiled;
+            PushNative(at, callee.FrameSize);
+            if (callee.Native is { } native && WasmStore.NativeCode)
+            {
+                native(this, module.Instance, _stack, at);
+            }
+            else
+            {
+                Array.Clear(_stack, at + callee.ParamCount, callee.LocalCount - callee.ParamCount);
+                _top = at + callee.FrameSize;
+                Run(module.Instance, callee, at, _depth, _nativeLimit);
+            }
+            _depth--;
+            _nativeFn = running;
+            _nativeAt = place;
+            return;
+        }
+        var host = (WasmHostFunction)target;
+        var type = host.Type;
+        int width = Math.Max(type.Parameters.Length, type.Results.Length);
+        _top = frameEnd;
+        long before = _fuel;
+        try
+        {
+            ChargeHost(host);
+            CallHost(host, caller, _stack.AsSpan(at, width), type);
+        }
+        catch (WasmException)
+        {
+            _fuel = before;
+            _nativeFn = running;
+            _nativeAt = place;
+            throw;
+        }
+        _nativeFn = running;
+        _nativeAt = place;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

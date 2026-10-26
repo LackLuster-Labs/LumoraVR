@@ -36,6 +36,19 @@ public sealed class WasmStore
     // the default; tools running deep recursion can ask for more before they start.
     public static void ConfigureThreadStack(int slots) => WasmExecutor.ConfigureCurrentThread(slots);
 
+    // Whether modules run as native code (WasmJit) where the platform compiles generated code; off, every
+    // module runs in the interpreter. Both give the same results, so this is for measuring and for tests.
+    public static bool NativeCode
+    {
+        get => _nativeCode;
+        set => _nativeCode = value && WasmJit.Supported;
+    }
+
+    private static volatile bool _nativeCode = WasmJit.Supported;
+
+    // Whether this platform can run modules as native code at all.
+    public static bool NativeCodeSupported => WasmJit.Supported;
+
     public WasmHostFunction CreateHostFunction(WasmFuncType type, WasmHostCallback callback, int fuelCost = 10)
     {
         var function = new WasmHostFunction(type, callback, fuelCost);

@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace Lumora.Wasm;
 
@@ -145,6 +146,25 @@ public sealed class WasmModule
     internal HashSet<uint> DeclaredFunctionReferences = new();
 
     internal WasmCompiledFunction[] Compiled = Array.Empty<WasmCompiledFunction>();
+
+    // Whether this module's functions have native code: WasmJit.None, Making, Made or Refused.
+    internal int NativeState;
+
+    // Makes the module's native code on this thread, so whatever runs it first does not wait for it. False
+    // when the platform runs no generated code, the switch is off, or the code could not be made; the module
+    // then runs in the interpreter, as it always could.
+    public bool CompileNative() => WasmJit.Compile(this);
+
+    // Whether the module runs as native code now.
+    public bool IsNative => Volatile.Read(ref NativeState) == WasmJit.Made;
+
+    // Why its native code could not be made, when it could not.
+    public string? NativeRefusal { get; internal set; }
+
+    // Imports the native code may call straight instead of through the host function linked for them: asked
+    // once per function import when the code is made. Only for an import whose linked host function is always
+    // that same computation, so skipping the host call changes nothing but the time it takes.
+    public Func<WasmImport, WasmFuncType, WasmDirectImport?>? DirectImports { get; set; }
 
     public IReadOnlyList<WasmFuncType> FunctionSignatureTypes => Types;
     public IReadOnlyList<WasmImport> Imports => ImportList;
