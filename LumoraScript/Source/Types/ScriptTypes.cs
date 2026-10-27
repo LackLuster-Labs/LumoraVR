@@ -86,6 +86,7 @@ public static class ScriptTypes
             AddCoded(name, codec);
 
         Add(new ScriptType("uri", typeof(Uri), ScriptTypeKind.Handle));
+        Add(new ScriptType("bigint", typeof(ScriptBigInt), ScriptTypeKind.Handle));
         RegisterGenericHandle("list", typeof(ScriptList<>));
         RegisterGenericHandle("dict", typeof(ScriptDictionary<,>));
         Add(new ScriptType("jsontoken", typeof(ScriptJson), ScriptTypeKind.Handle));

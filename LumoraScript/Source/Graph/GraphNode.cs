@@ -16,6 +16,8 @@ public sealed class GraphNode
     public int Version { get; set; } = 1;
     public string? Signature { get; set; }
     public float3 Position { get; set; }
+    // In its graph's frame. A node square to its graph writes none.
+    public floatQ Rotation { get; set; } = floatQ.Identity;
     public Dictionary<string, GraphValue> Values { get; } = new(StringComparer.Ordinal);
 
     public GraphNode(string id, string type)

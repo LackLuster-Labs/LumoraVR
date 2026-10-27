@@ -35,7 +35,7 @@ public static class ScriptTextForm
             case ScriptTypeKind.Coded:
                 return type.Codec!.Format(value!);
             default:
-                return value as string ?? string.Empty;
+                return value is ScriptBigInt big ? big.ToString() : value as string ?? string.Empty;
         }
     }
 
@@ -72,7 +72,11 @@ public static class ScriptTextForm
                 return true;
             case ScriptTypeKind.Vector:
             {
-                var parts = text.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
+                // "[1; 2]" and "(1, 2)" read as "1,2".
+                string inner = text.Trim();
+                if (inner.Length >= 2 && ((inner[0] == '[' && inner[^1] == ']') || (inner[0] == '(' && inner[^1] == ')')))
+                    inner = inner[1..^1];
+                var parts = inner.Split(new[] { ',', ';', ' ' }, StringSplitOptions.RemoveEmptyEntries);
                 if (parts.Length != type.Leaves.Length)
                     return false;
                 var boxed = Activator.CreateInstance(type.ClrType)!;

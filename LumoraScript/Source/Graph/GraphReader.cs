@@ -123,6 +123,15 @@ internal static class GraphReader
                     throw new GraphFormatException($"node '{id}' position needs three numbers");
                 node.Position = new float3((float)numbers[0], (float)numbers[1], (float)numbers[2]);
             }
+            if (entry.TryGetProperty("rot", out var rotation))
+            {
+                var numbers = Numbers(rotation, "rot", 4);
+                if (numbers.Length != 4)
+                    throw new GraphFormatException($"node '{id}' rotation needs four numbers");
+                var turn = new floatQ((float)numbers[0], (float)numbers[1], (float)numbers[2], (float)numbers[3]);
+                // A turn that is no turn at all reads as square rather than failing the whole graph.
+                node.Rotation = turn.Length > 1e-6f ? turn.Normalized : floatQ.Identity;
+            }
             if (entry.TryGetProperty("values", out var values))
                 ReadValues(node, values, limits);
             graph.Nodes.Add(node);

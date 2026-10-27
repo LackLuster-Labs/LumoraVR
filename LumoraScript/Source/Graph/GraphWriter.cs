@@ -5,6 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using Lumora.Core.Math;
 
 namespace Lumora.Script;
 
@@ -44,6 +45,15 @@ internal static class GraphWriter
                 writer.WriteNumberValue(node.Position.y);
                 writer.WriteNumberValue(node.Position.z);
                 writer.WriteEndArray();
+                if (!IsSquare(node.Rotation))
+                {
+                    writer.WriteStartArray("rot");
+                    writer.WriteNumberValue(node.Rotation.x);
+                    writer.WriteNumberValue(node.Rotation.y);
+                    writer.WriteNumberValue(node.Rotation.z);
+                    writer.WriteNumberValue(node.Rotation.w);
+                    writer.WriteEndArray();
+                }
                 if (node.Values.Count > 0)
                 {
                     writer.WriteStartObject("values");
@@ -64,6 +74,9 @@ internal static class GraphWriter
         }
         return stream.ToArray();
     }
+
+    // Within rounding of no turn: what a node read back through a hand lands on when it was never turned.
+    private static bool IsSquare(floatQ rotation) => System.Math.Abs(floatQ.Dot(rotation, floatQ.Identity)) > 1f - 1e-6f;
 
     private static void WriteWires(Utf8JsonWriter writer, string name, System.Collections.Generic.List<GraphWire> wires)
     {
