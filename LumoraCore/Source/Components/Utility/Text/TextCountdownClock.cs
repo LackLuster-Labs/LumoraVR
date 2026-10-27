@@ -57,6 +57,7 @@ public class TextCountdownClock : Component
     public bool IsFinished => Deadline.IsSet && Deadline.Elapsed >= 0d;
 
     [SyncMethod]
+    [ScriptMethod]
     public void Restart()
     {
         // The anchor replicates, so one peer sets it and everyone counts from it. Two peers restarting
@@ -66,6 +67,7 @@ public class TextCountdownClock : Component
     }
 
     [SyncMethod]
+    [ScriptMethod]
     public void Stop()
     {
         if (World?.IsAuthority == true)

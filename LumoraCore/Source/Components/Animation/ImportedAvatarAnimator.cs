@@ -56,6 +56,10 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
     public readonly SyncFieldList<string> AudioClipKeys = new();
 
     private static readonly string[] MotionNames = { "VelocityX", "VelocityY", "VelocityZ", "AngularY", "Grounded", "Upright", "VRMode", "TrackingType", "Seated", "InStation" };
+    private const int UprightIndex = 5;
+    private const float UprightDeadband = 0.02f;
+    // A real crouch or stand goes out at once; anything less waits for the next tenth of a second.
+    private const float UprightJump = 0.15f;
 
     private UnityAnimatorProgram? _importProgram, _program;
     private UnityAnimatorRuntime? _runtime;
@@ -84,6 +88,11 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
     private Slot? _view;
     private readonly Dictionary<int, (int Last, int Next)> _audioPicks = new();
     private readonly Random _random = new();
+    // The avatar this animator plays on, for AvatarViewLod, found again when it is put on, taken off or moved.
+    private Slot? _lodRoot;
+    private UserRoot? _lodWearer;
+    private bool _lodStale = true;
+    private float _lodDelta;
 
     // One binding as the output reads it: its property (or four, for a material colour or vector), where it
     // writes, its rest, and what it last wrote.
@@ -106,7 +115,7 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
     {
         public ImportedAnimatorParameter? Source;
         public int Parameter;
-        public bool Fed, Trigger;
+        public bool Fed, Trigger, Polled;
         public float Last;
     }
 
@@ -126,9 +135,58 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
     public int TrackingMode(int part) => part >= 0 && part < _tracking.Length ? _tracking[part] : 0;
 
     public override void OnInit() { base.OnInit(); UnitScale.Value = 1f; }
-    public override void OnAwake() { base.OnAwake(); Slot.ActiveChanged += OnSlotActiveChanged; }
+
+    public override void OnAwake()
+    {
+        base.OnAwake();
+        Slot.ActiveChanged += OnSlotActiveChanged;
+        Slot.ParentChanged += OnLodMoved;
+        Slot.ActiveUserRootChanged += OnLodMoved;
+    }
+
     public void InitializeForImport(UnityAnimatorProgram program) => _importProgram = program;
-    public override void OnUpdate(float delta) => Step(delta);
+
+    public override void OnUpdate(float delta)
+    {
+        _lodDelta += delta;
+        if (Waits())
+        {
+            ApplyLive();
+            return;
+        }
+        float step = _lodDelta;
+        _lodDelta = 0f;
+        Step(step);
+    }
+
+    // Somebody else's avatar, or one standing in the world, runs every few frames once it is behind the viewer
+    // or far off (AvatarViewLod), each run carrying the time of the frames it sat out. A menu control that
+    // changed runs it at once, so a toggle shows on the frame it arrives; what it measures for itself (voice,
+    // gestures, contacts) waits for its turn. The wearer's own is never held back. -xlinka
+    private bool Waits()
+    {
+        if (_runtime == null || _dirty.Count > 0 || _boundCount != Bindings.Count || !Enabled.Value || !Slot.IsActive)
+            return false;
+        _wearer.Update(Root.Target ?? Slot);
+        var wearer = _wearer.Current;
+        if (wearer != null && wearer.IsLocalUserRoot)
+            return false;
+        // An avatar nobody wears has its drivers decided here when this machine is the host, and what they set
+        // goes out to everyone: held back here it would reach every other machine late. It still rests on its
+        // idle frames, which change nothing to send. -xlinka
+        if (wearer == null && World.IsAuthority && _runtime.Graph.HasDrivers)
+            return false;
+        if (_lodStale || !ReferenceEquals(wearer, _lodWearer) || _lodRoot is { IsDestroyed: true })
+        {
+            _lodRoot = AvatarViewLod.RootOf(Slot);
+            _lodWearer = wearer;
+            _lodStale = false;
+        }
+        // On the avatar's own pose frames, so the skeleton takes the animation with the IK it rides on.
+        return !AvatarViewLod.Look(_lodRoot).RunsThisFrame(World.Time.UpdateIndex);
+    }
+
+    private void OnLodMoved(Slot slot) => _lodStale = true;
 
     // Also usable by headless validation with an explicit step.
     public void Step(float delta)
@@ -152,19 +210,34 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
         bool owner = _wearer.Current is { } wearer ? wearer.IsLocalUserRoot : World.IsAuthority;
         IsOwner = owner;
         runtime.Owner = owner;
-        // Inputs gain feeds after import (contacts, bone chains), so their kinds are looked at again now and then.
-        if (_inputCount != Parameters.Count || ++_inputAge > 600) MapInputs(runtime);
+        // Inputs gain feeds after import (contacts, bone chains), so their kinds are looked at again now and then,
+        // and laid out afresh only when one has changed: a rebuild resubscribes every input and allocates.
+        if (_inputCount != Parameters.Count)
+            MapInputs(runtime);
+        else if (++_inputAge > 600)
+        {
+            _inputAge = 0;
+            if (Mapped(runtime))
+                _readAll = true;
+            else
+                MapInputs(runtime);
+        }
         if (_boundCount != Bindings.Count) MapBindings(runtime);
 
         ReadInputs(runtime, owner);
         ReadBuiltins(runtime, owner, delta);
-        runtime.Advance(delta);
-        if (owner)
-            foreach (int p in runtime.Driven)
-                Push(p);
-        foreach (var e in runtime.Events)
-            Handle(runtime, e);
-        runtime.Evaluate();
+        // Nothing read this frame differs from what the last full frame started from and nothing playing moves
+        // by itself, so the frame comes out as that one did: only the clocks run on. -xlinka
+        if (!runtime.Rest(delta))
+        {
+            runtime.Advance(delta);
+            if (owner)
+                foreach (int p in runtime.Driven)
+                    Push(p);
+            foreach (var e in runtime.Events)
+                Handle(runtime, e);
+            runtime.Evaluate();
+        }
         Apply(runtime);
         Hold();
     }
@@ -212,6 +285,7 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
             if (Measured(p))
             {
                 polled.Add(i);
+                inputs[i].Polled = true;
                 continue;
             }
             int at = i;
@@ -237,6 +311,38 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
         _dirty.Clear();
         _readAll = true;
     }
+
+    // Whether the inputs still read as MapInputs laid them out: the same parameters, feeds and watched fields,
+    // walked in the order it watched them.
+    private bool Mapped(UnityAnimatorRuntime runtime)
+    {
+        int k = 0;
+        for (int i = 0; i < _inputs.Length; i++)
+        {
+            var p = Parameters[i];
+            int index = p == null ? -1 : runtime.Parameter(p.Parameter.Value ?? "");
+            ref var input = ref _inputs[i];
+            if (!ReferenceEquals(input.Source, index >= 0 ? p : null) || input.Parameter != index
+                || input.Fed != (p?.IsFed == true || p?.OverrideInput.Value == true))
+                return false;
+            if (p == null || index < 0 || input.Trigger)
+                continue;
+            if (input.Polled != Measured(p))
+                return false;
+            if (input.Polled)
+                continue;
+            if (!Watched(ref k, p.Value) || !Watched(ref k, p.Enabled) || !Watched(ref k, p.Synced) || !Watched(ref k, p.OverrideInput))
+                return false;
+            for (int s = 0; s < p.Switches.Count; s++)
+                if (p.Switches[s] is { } field && !Watched(ref k, field))
+                    return false;
+            if (p.Source.Target is { } source && !Watched(ref k, source))
+                return false;
+        }
+        return k == _watched.Count;
+    }
+
+    private bool Watched(ref int k, IChangeable field) => k < _watched.Count && ReferenceEquals(_watched[k++].Field, field);
 
     // Contacts and bone chains are measured on every machine every frame; menu controls and plain values only
     // change now and then, and say so.
@@ -413,6 +519,11 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
         bool vr = input?.IsVRActive == true;
         bool seated = root.Slot.GetComponent<LocomotionController>()?.SeatHoldsCharacter == true;
         float upright = System.Math.Clamp(root.Slot.GlobalPointToLocal(root.HeadPosition).y / MathF.Max(input?.UserHeight ?? 1.7f, .1f), 0f, 1f);
+        // A headset never holds still, so Upright moved every frame and went out every frame, and an avatar
+        // whose controller reads it never rested on any machine. Two percent of standing height is no
+        // crouch anybody means. -xlinka
+        if (MathF.Abs(upright - MotionInputs[UprightIndex]) < UprightDeadband)
+            upright = MotionInputs[UprightIndex];
         var facing = root.Slot.GlobalRotation;
         double delta = now - _lastMotionSend;
         var forward = _lastFacing.Inverse * (facing * float3.Forward);
@@ -427,7 +538,8 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
         for (int i = 0; i < next.Length; i++)
         {
             float before = MotionInputs[i];
-            if (i >= 4 ? before != next[i] : MathF.Abs(before - next[i]) > 0.75f)
+            if (i == UprightIndex ? MathF.Abs(before - next[i]) > UprightJump
+                : i >= 4 ? before != next[i] : MathF.Abs(before - next[i]) > 0.75f)
                 jump = true;
         }
         if (!jump && now - _lastMotionSend < 0.1)
@@ -619,6 +731,20 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
             foreach (int i in _byProperty[property])
                 if (_appliedFrame[i] != _applyFrame)
                     ApplyOne(runtime, i, unit);
+        ApplyLive(runtime, unit);
+    }
+
+    // A frame held back by distance still mixes the partly held shapes over what moved underneath them.
+    private void ApplyLive()
+    {
+        if (_shapesLive.Count == 0 || _runtime == null || _applyAll)
+            return;
+        _applyFrame++;
+        ApplyLive(_runtime, MathF.Max(1e-6f, MathF.Abs(UnitScale.Value)));
+    }
+
+    private void ApplyLive(UnityAnimatorRuntime runtime, float unit)
+    {
         for (int k = _shapesLive.Count - 1; k >= 0; k--)
         {
             int i = _shapesLive[k];
@@ -797,5 +923,14 @@ public sealed class ImportedAvatarAnimator : Component, ICustomInspectorUI, IIns
 
     private void OnSlotActiveChanged(Slot slot) { if (!slot.IsActive) Stop(); }
     public override void OnChanges() { base.OnChanges(); if (!Enabled.Value) Stop(); }
-    public override void OnDestroy() { Slot.ActiveChanged -= OnSlotActiveChanged; Stop(); Unwatch(); base.OnDestroy(); }
+
+    public override void OnDestroy()
+    {
+        Slot.ActiveChanged -= OnSlotActiveChanged;
+        Slot.ParentChanged -= OnLodMoved;
+        Slot.ActiveUserRootChanged -= OnLodMoved;
+        Stop();
+        Unwatch();
+        base.OnDestroy();
+    }
 }

@@ -1,6 +1,7 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
+using System.Collections.Generic;
 using System.Threading.Tasks;
 
 namespace Lumora.Core.Components.Import;
@@ -38,10 +39,72 @@ public sealed class ModelImportRequest
     // files without animations exactly nothing.
     public bool ImportAnimations = true;
 
+    // The advanced answers. Every default here is the import as it was before they existed.
+    public bool FitColliders;
+    public bool ImportLights;
+    public bool ImportCameras;
+    public bool AssetsOnly;
+    public bool MatchTexturesByName;
+    public bool AvatarSetup;
+    public ModelAssetPlacement AssetPlacement = ModelAssetPlacement.WithParts;
+    public bool ShareAssets;
+
+    // Material kind per material, by the name the file gives it; anything not named takes Material.
+    public Dictionary<string, ModelMaterialType>? MaterialTypes;
+
     // A source that already knows how its model goes together (a Unity package carries the materials,
     // the avatar flag and what to switch off) hands over finished settings, and the handler imports with
     // exactly those, avatar or not, instead of mapping the fields above.
     public Lumora.Core.Assets.ModelImportSettings? Settings;
+
+    // The scale the dialog puts on the slot a file lands in: the unit it was told, unless the import fits the model
+    // to a height (Auto Scale, Humanoid, any .vrm), where that height is the whole answer. Scaling the slot as well
+    // stood a "Humanoid" model 1.8 x 1.8 = 3.24 m tall. -xlinka
+    public float TargetScaleFor(string path)
+    {
+        bool vrm = string.Equals(System.IO.Path.GetExtension(path), ".vrm", System.StringComparison.OrdinalIgnoreCase);
+        return AutoScale || vrm ? 1f : Scale;
+    }
+
+    // The answers as the importer's settings. A .vrm keeps the avatar preset it always had (rigged, stood
+    // at 1.7 m, no clips) and takes everything else on top, so the dialog drives an avatar file too instead
+    // of being dropped on the floor for one. -xlinka
+    public Lumora.Core.Assets.ModelImportSettings ToSettings(string path)
+    {
+        bool vrm = string.Equals(System.IO.Path.GetExtension(path), ".vrm", System.StringComparison.OrdinalIgnoreCase);
+        return new Lumora.Core.Assets.ModelImportSettings
+        {
+            // AutoScale -> rescale to a standard height; otherwise honor the unit scale verbatim.
+            Scale = Scale,
+            PreferFileUnits = true,
+            Rescale = vrm || AutoScale,
+            Center = vrm || AutoScale,
+            TargetHeight = vrm ? 1.7f : 1.8f,
+            GenerateColliders = Colliders,
+            FitColliders = FitColliders,
+            SolidToPeople = SolidToPeople,
+            Grabbable = Grabbable,
+            Scalable = Scalable,
+            Material = Material,
+            MaterialTypes = MaterialTypes,
+            VertexColors = ImportVertexColors,
+            MakeDualSided = MakeDualSided,
+            ImportAlbedoColor = ImportAlbedoColor,
+            ImportEmissive = ImportEmissive,
+            ForceNoMipMaps = ForceNoMipMaps,
+            MaxTextureSize = MaxTextureSize,
+            ImportAnimations = !vrm && ImportAnimations,
+            IsAvatarImport = vrm,
+            SetupIK = vrm || AvatarSetup,
+            OpenAvatarStudio = AvatarSetup,
+            ImportLights = ImportLights,
+            ImportCameras = ImportCameras,
+            AssetsOnly = AssetsOnly,
+            MatchTexturesByName = MatchTexturesByName,
+            AssetPlacement = AssetPlacement,
+            ShareAssets = ShareAssets,
+        };
+    }
 }
 
 public interface IImageImportHandler

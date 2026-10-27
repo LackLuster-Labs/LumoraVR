@@ -54,7 +54,10 @@ public class UndoManager : Component
     public override void OnUpdate(float delta)
     {
         base.OnUpdate(delta);
-        if (!World.IsFocused || !ReferenceEquals(this, ForLocalUser(World)) || Helio.UI.TextInput.Focused != null)
+        // Everyone else's history is ruled out by where it sits before the walk that finds the local one.
+        var localRoot = World.LocalUser?.Root;
+        if (!World.IsFocused || localRoot == null || !ReferenceEquals(Slot.ActiveUserRoot, localRoot)
+            || !ReferenceEquals(this, ForLocalUser(World)) || Helio.UI.TextInput.Focused != null)
             return;
         var input = Engine.Current?.InputInterface;
         var actions = input?.Actions?.Editing;

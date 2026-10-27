@@ -100,6 +100,8 @@ public class ClipboardImporter : Component
         if (selected == null || selected.IsDestroyed || selected == world!.RootSlot
             || selected.GetComponent<UserRoot>() != null || selected.GetComponent<ToolItem>() is { IsEquipped: true }
             || DuplicateBlock.Blocks(selected)) return;
+        // A copy on the clipboard is a copy: an account's seal keeps it to its owner.
+        if (Lumora.Core.Security.ItemSeals.RefusesHere(selected, Lumora.Core.Security.SealRule.SaveCopy)) return;
         try
         {
             // A snapshot, so moving or deleting the original cannot change what was copied. Assets
@@ -124,13 +126,28 @@ public class ClipboardImporter : Component
         Slot? slot = null;
         try
         {
-            slot = world!.AddSpawnSlot(world.RootSlot, "Pasted object");
-            slot.LoadObject(_copiedObject.Root);
-            var head = world.LocalUser?.Root?.HeadSlot;
-            slot.GlobalPosition = head != null ? head.GlobalPosition + head.Forward * -1.5f : float3.Zero;
-            slot.GlobalRotation = _copiedRotation;
-            slot.GlobalScale = _copiedScale;
-            UndoManager.ForLocalUser(world)?.Record(SlotExistenceUndoBatch.Created(world, new[] { slot }, UndoLocale.Duplicate));
+            var into = world!;
+            slot = into.AddSpawnSlot(into.RootSlot, "Pasted object");
+            // A big paste goes in over several frames (Slot.LoadObjectStaged), placed as soon as it has a place.
+            var rotation = _copiedRotation;
+            var scale = _copiedScale;
+            var pasted = slot;
+            slot.LoadObjectStaged(_copiedObject.Root, null, placed =>
+            {
+                var head = into.LocalUser?.Root?.HeadSlot;
+                placed.GlobalPosition = head != null ? head.GlobalPosition + head.Forward * -1.5f : float3.Zero;
+                placed.GlobalRotation = rotation;
+                placed.GlobalScale = scale;
+            }, loaded =>
+            {
+                // Not a cloud record: another account's sealed things in it do not come in this way.
+                if (loaded != null)
+                    Lumora.Core.Security.ItemSeals.DropForeignOnLoad(loaded);
+                if (loaded != null && !loaded.IsDestroyed)
+                    UndoManager.ForLocalUser(into)?.Record(SlotExistenceUndoBatch.Created(into, new[] { loaded }, UndoLocale.Duplicate));
+                else if (!pasted.IsDestroyed)
+                    pasted.Destroy();
+            });
         }
         catch (Exception ex)
         {

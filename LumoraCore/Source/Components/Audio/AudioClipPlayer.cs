@@ -137,18 +137,23 @@ public sealed class AudioClipPlayer : Component, IWorldAudioDataSource, IPlayabl
     }
 
     [SyncMethod]
+    [ScriptMethod]
     public void Play() => Playback.Play();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Stop() => Playback.Stop();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Pause() => Playback.Pause();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Resume() => Playback.Resume();
 
     [SyncMethod]
+    [ScriptMethod]
     public void TogglePlayback() => Playback.TogglePlayback();
 
     // WORLD FRAME

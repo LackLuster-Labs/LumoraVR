@@ -77,7 +77,6 @@ public static class AudioStreamSpawner
         grab.AllowGrab.Value = true;
         grab.Scalable.Value = true;
 
-        string controllerDeviceName = string.Empty;
         var source = slot.AttachComponent<UserAudioStream>();
         source.Stream.Target = stream;
         // Raw, not filtered: the gate and the normalizer are shaped for speech.
@@ -85,13 +84,13 @@ public static class AudioStreamSpawner
         // Not a voice, so the microphone mute and the host's silencing do not reach it.
         source.IsVoiceCapture.Value = false;
         source.PreferredInput = input;
-        controllerDeviceName = input?.Name ?? string.Empty;
 
         var controller = slot.AttachComponent<AudioStreamController>();
         controller.Stream.Target = stream;
         controller.Source.Target = source;
-        controller.DeviceName.Value = controllerDeviceName;
-        controller.BuildUI(slot);
+        controller.DeviceName.Value = input?.Name ?? string.Empty;
+        controller.DeviceKind.Value = input?.InputType ?? AudioInputType.Unknown;
+        controller.Configure();
         return controller;
     }
 

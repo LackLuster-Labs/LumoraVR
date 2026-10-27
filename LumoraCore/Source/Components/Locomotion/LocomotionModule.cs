@@ -18,9 +18,11 @@ public abstract class LocomotionModule : Component
 
     // Two different silences, and a module has to tell them apart.
     //
-    // InputBlocked is the loud one: free-cam, an open context menu, body calibration. The user is not
-    // driving their body at all, so a module does nothing whatsoever. A focused text field is not one of
-    // them: it takes the keyboard alone, so a stick still walks and turns while somebody types.
+    // InputBlocked is the loud one: free-cam, body calibration, a desktop tool that has taken mouse and keys.
+    // The user is not driving their body at all, so a module does nothing whatsoever. A focused text field is
+    // not one of them: it takes the keyboard alone, so a stick still walks and turns while somebody types. Nor
+    // is the context menu: in a headset it holds its own hand's stick in the action map, so a module reads that
+    // one stick centred and everything else as usual.
     //
     // MovementBlocked adds the narrow one: a seat. Translation is off, but the user is still sitting there
     // looking around, so turn keeps being serviced and blink still gets to aim (it stands them up when the

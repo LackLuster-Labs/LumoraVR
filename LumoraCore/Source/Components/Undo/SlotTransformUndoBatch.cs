@@ -99,7 +99,7 @@ public sealed class SlotTransformUndoBatch : IUndoBatch, IUndoTargetQuery
 
     private bool Apply(in Pose pose)
     {
-        if (_slot == null || _slot.IsDestroyed)
+        if (_slot == null || _slot.IsDestroyed || UndoTargets.ContainsWornAvatar(_slot))
             return false;
         // The root's pose and parent are locked, so every write below would be swallowed and the step
         // would still report success, walking the cursor past something that did nothing. -xlinka

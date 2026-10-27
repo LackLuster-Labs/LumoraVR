@@ -69,6 +69,19 @@ public class CopyGlobalTransform : Component
         SetChannel(_scale, CopyScale.Value, slot.LocalScale);
     }
 
+    // Every switch off and every link let go now, for a copier that has to stop holding its slot but may not be
+    // removed by whoever stops it. Nothing links the channels again until someone turns one back on.
+    internal void LetGo()
+    {
+        CopyPosition.Value = false;
+        CopyRotation.Value = false;
+        CopyScale.Value = false;
+        ApplyChannels();
+    }
+
+    internal bool HoldsAnyChannel => CopyPosition.Value || CopyRotation.Value || CopyScale.Value
+        || _position.HasTarget || _rotation.HasTarget || _scale.HasTarget;
+
     private static void SetChannel<T>(FieldDrive<T> drive, bool wanted, IField<T> field)
     {
         if (wanted)

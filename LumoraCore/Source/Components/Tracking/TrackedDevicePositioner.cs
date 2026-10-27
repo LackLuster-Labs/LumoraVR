@@ -37,7 +37,6 @@ public class TrackedDevicePositioner : UserRootComponent, IInputUpdateReceiver
     // Internal state
     private UserRoot _userRoot = null!;
     private bool _isRegistered;
-    private int _debugLogCounter = 0;
     private TransformStreamDriver _streamDriver = null!;
     private bool _streamDriverChecked;
 
@@ -126,6 +125,17 @@ public class TrackedDevicePositioner : UserRootComponent, IInputUpdateReceiver
         {
             FindUserRoot();
             TryRegisterWithInput();
+        }
+
+        // The body's own socket goes up as soon as the body is this machine's, focused or not. Input frames skip a
+        // world in the background, and a joined world settles there first: an avatar put on meanwhile found no
+        // head socket, so its IK never ran and the host dressed the socket in the default head once it came.
+        // -xlinka
+        if (BodyNodeRoot.Target == null && CreateAvatarObjectSlot.Value && AutoBodyNode.Value.HasValue && IsUnderLocalUser
+            && World.IsLocalAllocationReady)
+        {
+            using (World.EnterLocalUserAllocation())
+                UpdateObjectSlot();
         }
     }
 
@@ -284,15 +294,6 @@ public class TrackedDevicePositioner : UserRootComponent, IInputUpdateReceiver
         float3 pos = float3.Zero;
         floatQ rot = floatQ.Identity;
         BodyNode node = AutoBodyNode.Value ?? BodyNode.NONE;
-
-        // Debug logging
-        _debugLogCounter++;
-        if (_debugLogCounter >= 60)
-        {
-            _debugLogCounter = 0;
-            var nodeStr = AutoBodyNode.Value?.ToString() ?? "null";
-            // LumoraLogger.Log($"[TDP] {Slot.SlotName.Value} node:{nodeStr} device:{device != null} tracking:{device?.IsTracking} pos:{device?.RawPosition}");
-        }
 
         if (device != null)
         {

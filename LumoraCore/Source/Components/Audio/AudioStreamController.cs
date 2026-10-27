@@ -2,8 +2,8 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Collections.Generic;
 using Helio.UI;
-using Helio.UI.Layout;
 using Lumora.Core.Assets;
 using Lumora.Core.Audio;
 using Lumora.Core.Components.Assets;
@@ -13,6 +13,7 @@ using Lumora.Core.Components.UI;
 using Lumora.Core.Math;
 using Lumora.Core.Networking.Streams;
 using GroupKind = Lumora.Core.Audio.AudioTypeGroup;
+using WorldAudioOutput = Lumora.Core.Components.Audio.AudioOutput;
 
 namespace Lumora.Core.Components.Audio;
 
@@ -21,76 +22,154 @@ namespace Lumora.Core.Components.Audio;
 // is the handle everybody in the room gets on it.
 //
 // The capture is deliberately NOT the voice path: it takes the raw device samples, because a noise gate
-// and a normalizer are shaped for speech and would eat the quiet half of anything else. -xlinka
+// and a normalizer are shaped for speech and would eat the quiet half of anything else.
+//
+// What the room hears (live or paused, how loud, from the panel or everywhere, how far) is synced and
+// only the owner writes it. The panel itself is LOCAL and every peer builds its own: the owner's has
+// working controls, everybody else's shows the same state with the controls locked, plus the one thing
+// that is theirs, whether they hear it at all. A replicated panel meant a guest's press was a write to
+// somebody else's object, and every peer agreeing on which buttons are greyed out is not possible when
+// the answer is different for each of them. -xlinka
 [ComponentCategory("Audio")]
 public sealed class AudioStreamController : Component
 {
     public readonly SyncRef<AudioStream> Stream;
 
-    public readonly SyncRef<Lumora.Core.Components.Audio.AudioOutput> AudioOutput;
+    public readonly SyncRef<WorldAudioOutput> AudioOutput;
 
     // The adapter between the two: an AudioOutput points at a component, and a stream is not one.
     public readonly SyncRef<UserAudioStream> Source;
 
+    // Metres across. The panel is authored in canvas units and scaled to this.
     public readonly Sync<float> PanelWidth;
 
-    // Which device is going out. Replicated, because everybody in the room should be able to see what
-    // they are listening to rather than only the person who started it.
+    // Which device is going out, and what kind of thing it is. Replicated, because everybody in the room
+    // should be able to see what they are listening to rather than only the person who started it.
     public readonly Sync<string> DeviceName;
+    public readonly Sync<AudioInputType> DeviceKind;
 
-    private const float CanvasWidth = 900f;
-    private const float CanvasHeight = 160f;
+    public const float DefaultReach = 25f;
+    public const float MinReach = 2f;
+    public const float MaxReach = 60f;
 
-    private const float PlateMargin = 0.012f;
-    private const float PlateDepth = 0.005f;
+    private const float CanvasWidth = 660f;
+    private const float CanvasHeight = 300f;
 
-    // How fast the meter falls. Instant on the way up, because a peak you missed is a peak you cannot
-    // see; slow on the way down, because a meter that snaps back reads as a strobe rather than a level.
-    private const float MeterRelease = 6f;
+    // The glass sits this far behind the face, and its collider further back still. A collider level
+    // with the face, or in front of it, is what the beam meets first, and the beam then belongs to the
+    // grab and never to a button: that is what left every control on this item dead. -xlinka
+    private const float BackingMargin = 0.012f;
+    private const float BackingDepth = 0.004f;
+    private const float ColliderThickness = 0.012f;
 
-    private Slot? _plateSlot;
-    private Slot? _controlsSlot;
+    // The gauge reads peak level over this many dB below full scale.
+    private const float GaugeRangeDb = 48f;
+    private const float GaugeSweep = 270f;
+    private const float GaugeStart = 135f;
+    // Gauge travel per second on the way down; up is instant, a peak you missed is a peak you cannot see.
+    private const float GaugeRelease = 1.2f;
+    private const float SignalHold = 0.5f;
 
-    private RoundedQuadMesh? _plateMesh;
-    private BoxCollider? _plateCollider;
+    private bool _built;
+    private Slot? _panel;
+    private Slot? _backing;
+    private RoundedQuadMesh? _backingMesh;
+    private BoxCollider? _backingCollider;
     private FontProvider? _font;
+    private FontProvider? _strong;
+    private FontProvider? _glyphs;
 
-    private Text? _titleLabel;
-    private Text? _statusLabel;
-    private Slot? _meterFill;
-    private Slider? _volumeSlider;
-    private Button? _spatialButton;
-    private Button? _playForMeButton;
+    private Text? _title;
+    private Text? _device;
+    private Text? _rolePill;
+    private RoundedPanel? _rolePlate;
+    private Text? _status;
+    private Text? _levelText;
+    private Text? _hint;
+    private Text? _volumeLabel;
+    private Text? _heardLabel;
+    private Text? _reachLabel;
+    private Text? _volumeValue;
+    private Text? _reachValue;
+    private Text? _playGlyph;
+    private Slot? _pauseGlyph;
+    private ArcSegment? _gaugeLevel;
 
-    private float _meterLevel;
-    private float _labelPoll;
+    private Control? _live;
+    private Control? _room;
+    private Control? _everywhere;
+    private Control? _listen;
+    private RoundedPanel? _listenDot;
+    private Control? _end;
+    private Slider? _volume;
+    private Slider? _reach;
+
     private float _lastPanelWidth = -1f;
-    private Slot? _waveformSlot;
-    private Meshes.AudioWaveformMesh? _waveformMesh;
-    private bool _wired;
-    private bool _toggleStateKnown;
-    private bool _lastSpatial;
-    private bool _lastPlayForMe;
+    private float _poll;
+    private float _gauge;
+    private float _shownGauge = -1f;
+    private float _peak;
+    private long _lastSamples = -1;
+    private float _sinceSignal = float.PositiveInfinity;
+
+    // Mine alone, and never sent: whether the owner hears their own stream back, and whether anybody
+    // else hears it at all. Off and on by default respectively.
+    private bool _hearMyself;
+    private bool _mutedHere;
+
+    private readonly List<AudioListener> _listeners = new();
+
+    private sealed class Control
+    {
+        public Slot Slot = null!;
+        public RoundedPanel Plate = null!;
+        public Button Button = null!;
+        public Text? Text;
+    }
 
     public AudioStreamController()
     {
         Stream = new SyncRef<AudioStream>(this);
-        AudioOutput = new SyncRef<Lumora.Core.Components.Audio.AudioOutput>(this);
+        AudioOutput = new SyncRef<WorldAudioOutput>(this);
         Source = new SyncRef<UserAudioStream>(this);
-        PanelWidth = new Sync<float>(this, 0.6f);
+        PanelWidth = new Sync<float>(this, 0.44f);
         DeviceName = new Sync<string>(this, string.Empty);
+        DeviceKind = new Sync<AudioInputType>(this, AudioInputType.Unknown);
     }
 
     public User? Owner => Stream.Target?.Owner;
 
     public bool IsOwnedByLocalUser => Owner != null && ReferenceEquals(Owner, World?.LocalUser);
 
-    // BUILD
+    // A source that has not reached this peer yet is not paused, it is unknown, and reads as live until it
+    // says otherwise.
+    public bool IsLive => Source.Target is not { IsDestroyed: false } source || !source.Paused.Value;
 
-    // Everything the item is, built under one slot. Called once by whoever spawned it; every other peer
-    // receives the result and only LOOKS the parts up (see Wire).
-    public void BuildUI(Slot root)
+    public bool IsEverywhere => AudioOutput.Target is { IsDestroyed: false } output && (output.Global.Value || !output.Spatialize.Value);
+
+    public float Reach => AudioOutput.Target is { IsDestroyed: false } output ? output.MaxDistance.Value : DefaultReach;
+
+    // The slider's travel, 0 to 1. Volume is heard, not measured: a linear fader spends most of its
+    // travel in a range nobody can tell apart, so the travel is squared into the gain.
+    public float VolumeTravel => AudioOutput.Target is { IsDestroyed: false } output ? MathF.Sqrt(Clamp01(output.Volume.Value)) : 1f;
+
+    // What the owner's machine is capturing from, as far as this machine knows. The owner knows the device
+    // itself; everybody else has the replicated kind.
+    public AudioInputType CapturedKind
+        => IsOwnedByLocalUser && Source.Target?.PreferredInput is { } input ? input.InputType : DeviceKind.Value;
+
+    // Monitoring stays off until the owner asks for it. A loopback device can be a muted monitor
+    // or a separate audio route, so its device type cannot decide whether the owner may listen. -xlinka
+    public bool CanHearMyself => IsOwnedByLocalUser;
+
+    public bool HearsHere => IsOwnedByLocalUser ? _hearMyself && CanHearMyself : !_mutedHere;
+
+    // SETUP
+
+    // The synced half of the item, made once by whoever spawned it.
+    public void Configure()
     {
+        var root = Slot;
         if (root == null || root.IsDestroyed || World == null)
             return;
 
@@ -106,272 +185,177 @@ public sealed class AudioStreamController : Component
         var output = AudioOutput.Target;
         if (output == null || output.IsDestroyed)
         {
-            output = root.GetComponent<Lumora.Core.Components.Audio.AudioOutput>()
-                     ?? root.AttachComponent<Lumora.Core.Components.Audio.AudioOutput>();
+            output = root.GetComponent<WorldAudioOutput>() ?? root.AttachComponent<WorldAudioOutput>();
             AudioOutput.Target = output;
         }
 
         output.Source.Target = source;
         output.AudioTypeGroup.Value = GroupKind.Multimedia;
-        output.Spatialize.Value = true;
-        output.SpatialBlend.Value = 1f;
+        ApplyHeard(output, everywhere: false);
         output.MinDistance.Value = 1f;
-        output.MaxDistance.Value = 25f;
+        output.MaxDistance.Value = DefaultReach;
         // An item somebody carries across the room must not pitch-shift while they walk.
         output.DopplerLevel.Value = 0f;
-
-        BuildFont(root);
-        BuildPlate(root);
-        BuildControls(root, output);
-        BuildWaveform(root, output);
-
-        _wired = true;
-        UpdateSurfaces();
     }
 
-    private void BuildFont(Slot root)
+    private static void ApplyHeard(WorldAudioOutput output, bool everywhere)
     {
-        var fontSlot = root.FindChildOrAdd("Font");
-        _font = fontSlot.GetOrAttachComponent<FontProvider>();
-        // Text with no font draws nothing at all, so a face is picked here rather than left to whatever
-        // the world happens to have registered.
-        var url = ImportDialog.ResolveFontUrl(World) ?? DashTheme.FontRegular;
-        _font.URL.Value = url;
-        if (_font.FallbackURLs.Count == 0)
-            _font.FallbackURLs.Add(DashTheme.FontRegular);
+        output.Spatialize.Value = !everywhere;
+        output.SpatialBlend.Value = everywhere ? 0f : 1f;
+        output.Global.Value = everywhere;
     }
 
-    private void BuildPlate(Slot root)
+    // OWNER ACTIONS. Every one of them answers only on the owner's machine. Anywhere else the control is
+    // locked before it can be pressed, and these refuse anyway, quietly, rather than write at an object
+    // that is not ours and be refused by the world.
+
+    public bool SetLive(bool live)
     {
-        _plateSlot = root.FindChildOrAdd("Plate");
-        _plateSlot.LocalPosition.Value = new float3(0f, 0f, -PlateDepth);
-        _plateMesh = _plateSlot.GetOrAttachComponent<RoundedQuadMesh>();
-        _plateMesh.CornerRadius.Value = 0.02f;
-        _plateMesh.CornerSegments.Value = 4;
-        _plateMesh.DualSided.Value = false;
-
-        // Glass, like every other panel body. An opaque slab reads as a placeholder next to them.
-        var material = DashGlass.Attach(_plateSlot);
-
-        var renderer = _plateSlot.GetOrAttachComponent<MeshRenderer>();
-        renderer.Mesh.Target = _plateMesh;
-        renderer.Material.Target = material;
-        renderer.ShadowCastMode.Value = ShadowCastMode.Off;
-
-        _plateCollider = _plateSlot.GetOrAttachComponent<BoxCollider>();
+        if (!IsOwnedByLocalUser || Source.Target is not { IsDestroyed: false } source)
+            return false;
+        if (source.Paused.Value == !live)
+            return true;
+        source.Paused.Value = !live;
+        Repaint();
+        return true;
     }
 
-    // The same live trace the audio player wears, for the same reason: a stream that is running and a
-    // stream that has gone quiet look identical otherwise, and the level meter only says how loud.
-    private void BuildWaveform(Slot root, Lumora.Core.Components.Audio.AudioOutput output)
+    public bool SetVolumeTravel(float travel)
     {
-        _waveformSlot = root.FindChildOrAdd("Waveform");
-        _waveformSlot.LocalPosition.Value = new float3(0f, 0f, -PlateDepth * 0.4f);
-
-        _waveformMesh = _waveformSlot.GetOrAttachComponent<Meshes.AudioWaveformMesh>();
-        _waveformMesh.Source.Target = output;
-        _waveformMesh.Style.Value = Meshes.WaveformStyle.Spectrum;
-        _waveformMesh.Resolution.Value = 96;
-        _waveformMesh.Smoothing.Value = 0.4f;
-
-        var material = _waveformSlot.GetOrAttachComponent<UnlitMaterial>();
-        material.TintColor.Value = ToHDR(DashTheme.Accent);
-        material.Culling.Value = Culling.None;
-        material.BlendMode.Value = BlendMode.Alpha;
-
-        var renderer = _waveformSlot.GetOrAttachComponent<MeshRenderer>();
-        renderer.Mesh.Target = _waveformMesh;
-        renderer.Material.Target = material;
-        renderer.ShadowCastMode.Value = ShadowCastMode.Off;
-    }
-
-    private void BuildControls(Slot root, Lumora.Core.Components.Audio.AudioOutput output)
-    {
-        _controlsSlot = root.FindChildOrAdd("Controls");
-        var rect = _controlsSlot.GetOrAttachComponent<RectTransform>();
-        rect.AnchorMin.Value = new float2(0.5f, 0.5f);
-        rect.AnchorMax.Value = new float2(0.5f, 0.5f);
-        rect.OffsetMin.Value = new float2(CanvasWidth * -0.5f, CanvasHeight * -0.5f);
-        rect.OffsetMax.Value = new float2(CanvasWidth * 0.5f, CanvasHeight * 0.5f);
-        _controlsSlot.GetOrAttachComponent<Canvas>();
-
-        // THE HOUSE BACKDROP, not a flat image: rounded, glass-tinted, outlined, the same one every
-        // other panel in the product wears.
-        var background = _controlsSlot.GetComponent<RoundedPanel>() ?? _controlsSlot.AttachComponent<RoundedPanel>();
-        background.Color.Value = DashTheme.GlassBackdrop;
-        background.CornerRadius.Value = DashTheme.RadiusPanel;
-        background.OutlineColor.Value = DashTheme.OutlineStrong;
-        background.OutlineThickness.Value = DashTheme.OutlineWidth;
-
-        var content = _controlsSlot.FindChildOrAdd("Content");
-        FillRect(content);
-        // ITS OWN CHUNK, and this is what made the panel a black rectangle with nothing on it. The
-        // canvas root carries the backdrop; without a chunk of its own the content is batched into
-        // the root's chunk and drawn underneath the very thing it is supposed to sit on, so every
-        // button, label and meter went behind an opaque panel. The video player hit this and fixed it
-        // there; these two were built from the pattern that predates it. -xlinka
-        content.GetOrAttachComponent<GraphicChunkRoot>();
-        if (content.ChildCount > 0)
-            return;
-
-        var ui = new UIBuilder(content);
-        ui.Font(_font);
-        ui.FontSize(16f);
-        ui.TextColor(DashTheme.Text);
-        ui.ForegroundColor(DashTheme.Accent);
-        ui.BackgroundColor(DashTheme.Surface);
-
-        var column = ui.VerticalLayout(6f, 10f);
-        column.ForceExpandWidth.Value = true;
-        column.ForceExpandHeight.Value = false;
-        column.MainAlignment.Value = MainAxisAlignment.Center;
-        FillRect(ui.Current);
-
-        BuildTitleRow(ui);
-        BuildMeterRow(ui, output);
-        BuildButtonRow(ui);
-
-        ui.NestOut();
-    }
-
-    private void BuildTitleRow(UIBuilder ui)
-    {
-        ui.PushStyle();
-        RowHeight(ui, 28f);
-        ui.HorizontalLayout(8f);
-
-        ui.PushStyle().MinWidth(0f).PreferredWidth(0f).FlexibleWidth(1f);
-        _titleLabel = Label(ui, "TitleLabel", "Audio Stream", 20f, DashTheme.Text, TextHorizontalAlignment.Left);
-        ui.PopStyle();
-
-        ui.PushStyle().MinWidth(300f).PreferredWidth(300f).FlexibleWidth(0f);
-        _statusLabel = Label(ui, "StatusLabel", string.Empty, 14f, DashTheme.TextDim, TextHorizontalAlignment.Right);
-        ui.PopStyle();
-
-        ui.NestOut();
-        ui.PopStyle();
-    }
-
-    // The meter is a track with a fill inside it, and the fill is sized by its anchor rather than by a
-    // layout: a layout rebuild every frame would re-tessellate the whole row for one rectangle.
-    private void BuildMeterRow(UIBuilder ui, Lumora.Core.Components.Audio.AudioOutput output)
-    {
-        ui.PushStyle();
-        RowHeight(ui, 26f);
-        ui.HorizontalLayout(10f);
-
-        ui.PushStyle().MinWidth(0f).PreferredWidth(0f).FlexibleWidth(1f);
-        var track = ui.Panel(DashTheme.Field);
-        track.Slot.Name.Value = "Meter";
-        Metrics(track.Slot, 0f, 0f, 1f, 18f, 18f, 0f);
-
-        var fill = track.Slot.AddSlot("Fill");
-        var fillRect = fill.AttachComponent<RectTransform>();
-        fillRect.AnchorMin.Value = float2.Zero;
-        fillRect.AnchorMax.Value = new float2(0f, 1f);
-        fillRect.OffsetMin.Value = float2.Zero;
-        fillRect.OffsetMax.Value = float2.Zero;
-        var fillImage = fill.AttachComponent<Image>();
-        fillImage.Tint.Value = DashTheme.Accent;
-        _meterFill = fill;
-        ui.PopStyle();
-
-        ui.PushStyle().MinWidth(260f).PreferredWidth(260f).FlexibleWidth(0f);
-        float initial = MathF.Sqrt(Clamp01(output.Volume.Value));
-        _volumeSlider = ui.Slider(initial, 0f, 1f, OnVolumeChanged, DashTheme.Field);
-        _volumeSlider.Slot.Name.Value = "Volume";
-        Metrics(_volumeSlider.Slot, 80f, 80f, 1f, 22f, 22f, 0f);
-        ui.PopStyle();
-
-        ui.NestOut();
-        ui.PopStyle();
-    }
-
-    private void BuildButtonRow(UIBuilder ui)
-    {
-        ui.PushStyle();
-        RowHeight(ui, 38f);
-        ui.HorizontalLayout(6f);
-
-        ui.PushStyle().MinWidth(160f).PreferredWidth(160f).FlexibleWidth(0f);
-        _spatialButton = ui.Button("Spatialized", OnSpatialPressed, DashTheme.Surface);
-        _spatialButton.Slot.Name.Value = "Spatialize";
-
-        _playForMeButton = ui.Button("Play for me", OnPlayForMePressed, DashTheme.Surface);
-        _playForMeButton.Slot.Name.Value = "PlayForMe";
-        ui.PopStyle();
-
-        ui.Spacer();
-
-        ui.PushStyle().MinWidth(120f).PreferredWidth(120f).FlexibleWidth(0f);
-        var stop = ui.Button("Stop", OnStopPressed, DashTheme.Surface);
-        stop.Slot.Name.Value = "Stop";
-        // Stop removes the stream item for good.
-        stop.ActOnRelease.Value = true;
-        foreach (var driver in stop.ColorDrivers)
-        {
-            if (driver != null && !driver.IsDestroyed)
-                driver.HighlightColor.Value = DashTheme.Negative;
-        }
-        ui.PopStyle();
-
-        ui.NestOut();
-        ui.PopStyle();
-    }
-
-    // ACTIONS
-    // Method groups on this component, not closures: a Button stores its action as target + method name,
-    // so a closure would survive only in this process and a duplicated item would come up dead.
-
-    [SyncMethod]
-    public void OnVolumeChanged(Slider slider, float value)
-    {
-        var output = AudioOutput.Target;
-        if (output == null || output.IsDestroyed)
-            return;
-        // Volume is heard, not measured: a linear fader spends most of its travel in a range nobody can
-        // tell apart, so the slider is squared into the gain and rooted back out of it.
-        float t = Clamp01(value);
+        if (!IsOwnedByLocalUser || AudioOutput.Target is not { IsDestroyed: false } output)
+            return false;
+        float t = Clamp01(travel);
         output.Volume.Value = t * t;
+        Repaint();
+        return true;
     }
 
-    [SyncMethod]
-    public void OnSpatialPressed(Button button, UIInteractionContext context)
+    public bool SetEverywhere(bool everywhere)
+    {
+        if (!IsOwnedByLocalUser || AudioOutput.Target is not { IsDestroyed: false } output)
+            return false;
+        ApplyHeard(output, everywhere);
+        Repaint();
+        return true;
+    }
+
+    public bool SetReach(float metres)
+    {
+        if (!IsOwnedByLocalUser || AudioOutput.Target is not { IsDestroyed: false } output)
+            return false;
+        if (!float.IsFinite(metres))
+            return false;
+        output.MaxDistance.Value = System.Math.Clamp(metres, MinReach, MaxReach);
+        Repaint();
+        return true;
+    }
+
+    public bool EndStream()
+    {
+        if (!IsOwnedByLocalUser || Slot is not { IsDestroyed: false } slot || slot.IsRootSlot)
+            return false;
+        try
+        {
+            slot.Destroy();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        return true;
+    }
+
+    // LOCAL ACTIONS. Nothing about these leaves the machine.
+
+    public bool SetHearMyself(bool on)
+    {
+        if (!CanHearMyself)
+            return false;
+        _hearMyself = on;
+        Repaint();
+        return true;
+    }
+
+    public bool SetMutedHere(bool muted)
+    {
+        if (IsOwnedByLocalUser)
+            return false;
+        _mutedHere = muted;
+        Repaint();
+        return true;
+    }
+
+    private void ToggleListen()
+    {
+        if (IsOwnedByLocalUser)
+            SetHearMyself(!_hearMyself);
+        else
+            SetMutedHere(!_mutedHere);
+    }
+
+    // Reach runs along the slider exponentially, so the first half of it is the room you are in and the
+    // second half is the building.
+    private static float ReachToTravel(float metres)
+        => Clamp01(MathF.Log(System.Math.Clamp(metres, MinReach, MaxReach) / MinReach) / MathF.Log(MaxReach / MinReach));
+
+    private static float TravelToReach(float travel)
+        => MinReach * MathF.Pow(MaxReach / MinReach, Clamp01(travel));
+
+    // LIFECYCLE
+
+    public override void OnStart()
+    {
+        base.OnStart();
+        BuildPanel();
+    }
+
+    public override void OnCommonUpdate()
+    {
+        base.OnCommonUpdate();
+
+        if (!_built)
+            BuildPanel();
+
+        UpdateSurfaces();
+
+        // Re-asserted every frame rather than set once: an ear can appear late (the local user's head is
+        // built after their root) or be replaced, and a one-shot exclusion would miss it.
+        var output = AudioOutput.Target;
+        if (output != null && !output.IsDestroyed)
+            ExcludeLocalListeners(output, !HearsHere);
+
+        float delta = World?.Time?.Delta ?? 0f;
+        UpdateGauge(delta);
+
+        _poll -= delta;
+        if (_poll > 0f)
+            return;
+        _poll = 0.1f;
+        Repaint();
+    }
+
+    public override void OnDestroy()
     {
         var output = AudioOutput.Target;
-        if (output == null || output.IsDestroyed)
-            return;
-        bool on = !output.Spatialize.Value;
-        output.Spatialize.Value = on;
-        output.SpatialBlend.Value = on ? 1f : 0f;
-        output.Global.Value = !on;
+        if (output != null && !output.IsDestroyed)
+            ExcludeLocalListeners(output, false);
+        DestroyLocal(_panel);
+        DestroyLocal(_backing);
+        DestroyLocal(_font?.Slot);
+        _panel = null;
+        _backing = null;
+        base.OnDestroy();
     }
 
-    // Per person, not per item. Nothing about this leaves the machine it was pressed on.
-    [SyncMethod]
-    public void OnPlayForMePressed(Button button, UIInteractionContext context)
-        => _playForMe = !PlayForMe;
-
-    // Ends the stream by taking the item away; the capture closes once nothing listens to the device.
-    // Who may take somebody else's is the world's permissions to decide, same as any other item.
-    [SyncMethod]
-    public void OnStopPressed(Button button, UIInteractionContext context)
+    private static void DestroyLocal(Slot? slot)
     {
-        var slot = Slot;
-        if (slot != null && !slot.IsDestroyed && !slot.IsRootSlot)
+        if (slot != null && !slot.IsDestroyed)
             slot.Destroy();
     }
 
-    // Null is the default answer rather than a stored one: whoever spawned this is already hearing the
-    // device out of their own speakers, so playing it back to them is a feedback loop with a delay on
-    // it. Everybody else is here to listen.
-    private bool? _playForMe;
-
-    public bool PlayForMe => _playForMe ?? !IsOwnedByLocalUser;
-
-    // Local exclusion, not the replicated list: whether I hear this is mine to decide, and writing it
-    // into the item would decide it for everybody and be a write to somebody else's object besides.
-    private void ExcludeLocalListeners(Lumora.Core.Components.Audio.AudioOutput output, bool excluded)
+    // Local exclusion, not the replicated list: whether I hear this is mine to decide, and writing it into
+    // the item would decide it for everybody and be a write to somebody else's object besides.
+    private void ExcludeLocalListeners(WorldAudioOutput output, bool excluded)
     {
         var manager = World?.Audio;
         if (manager == null)
@@ -384,204 +368,491 @@ public sealed class AudioStreamController : Component
         _listeners.Clear();
     }
 
-    private static readonly System.Collections.Generic.List<Lumora.Core.Components.Audio.AudioListener> _listeners = new();
+    // LEVEL
 
-    // PER-FRAME
-
-    public override void OnCommonUpdate()
+    // The stream's own last peak: the capture's on the owner's machine, the decoder's everywhere else. A
+    // ring that took no samples since the last frame is silent, whatever its last peak said, because quiet
+    // stretches are never written and a paused stream writes nothing at all.
+    private void UpdateGauge(float delta)
     {
-        base.OnCommonUpdate();
+        var stream = Stream.Target;
+        float peak = 0f;
+        if (stream != null && !stream.IsDestroyed && IsLive)
+        {
+            long samples = stream.Samples;
+            if (samples != _lastSamples)
+            {
+                peak = Clamp01(stream.LastPeak);
+                _lastSamples = samples;
+            }
+        }
 
-        if (!_wired)
-            Wire();
-
-        UpdateSurfaces();
-        UpdateMeter();
-
-        // Re-asserted every frame rather than set once at build: a listener can appear late (the local
-        // user's head is built after their root) or be replaced, and a one-shot exclusion would miss it.
-        var output = AudioOutput.Target;
-        if (output != null && !output.IsDestroyed)
-            ExcludeLocalListeners(output, !PlayForMe);
-
-        _labelPoll -= World?.Time?.Delta ?? 0f;
-        if (_labelPoll > 0f)
-            return;
-        _labelPoll = 0.1f;
-        UpdateLabels();
-    }
-
-    private void UpdateMeter()
-    {
-        var fill = _meterFill;
-        if (fill == null || fill.IsDestroyed)
-            return;
-
-        float peak = Clamp01(Stream.Target?.LastPeak ?? 0f);
-        float delta = World?.Time?.Delta ?? 0f;
-
-        if (peak >= _meterLevel)
-            _meterLevel = peak;
+        if (peak > 0.0001f)
+            _sinceSignal = 0f;
         else
-            _meterLevel = System.Math.Max(peak, _meterLevel - MeterRelease * delta);
+            _sinceSignal += delta;
+        if (peak > 0f || _sinceSignal > SignalHold)
+            _peak = peak;
 
-        var rect = fill.GetComponent<RectTransform>();
-        if (rect == null || rect.IsDestroyed)
+        float target = _peak > 0.0001f ? Clamp01((20f * MathF.Log10(_peak) + GaugeRangeDb) / GaugeRangeDb) : 0f;
+        _gauge = target >= _gauge ? target : MathF.Max(target, _gauge - GaugeRelease * delta);
+
+        var level = _gaugeLevel;
+        if (level == null || level.IsDestroyed || MathF.Abs(_gauge - _shownGauge) < 0.004f)
             return;
-
-        // Local, silent, every frame: a level meter is a picture of what this machine already has and
-        // nobody else needs a delta per frame telling them how loud it was here.
-        float wanted = Clamp01(_meterLevel);
-        var anchor = rect.AnchorMax.Value;
-        if (MathF.Abs(anchor.x - wanted) > 0.002f)
-            rect.AnchorMax.SetValueSilently(new float2(wanted, 1f), change: true);
+        _shownGauge = _gauge;
+        bool lit = _gauge > 0.004f;
+        if (level.Enabled.Value != lit)
+            level.Enabled.Value = lit;
+        if (lit)
+        {
+            level.ArcLength.Value = MathF.Max(1f, GaugeSweep * _gauge);
+            var tint = _gauge > 0.94f ? DashTheme.Negative : _gauge > 0.8f ? DashTheme.Warning : DashTheme.Positive;
+            if (!level.Tint.Value.Equals(tint))
+                level.Tint.Value = tint;
+        }
     }
+
+    // SURFACES
 
     private void UpdateSurfaces()
     {
         float width = PanelWidth.Value;
-        if (width < 0.05f)
+        if (!float.IsFinite(width) || width < 0.05f)
             width = 0.05f;
-        if (width == _lastPanelWidth)
+        if (width == _lastPanelWidth || _panel == null)
             return;
         _lastPanelWidth = width;
 
         float scale = width / CanvasWidth;
         float height = CanvasHeight * scale;
+        var size = new float2(width + BackingMargin * 2f, height + BackingMargin * 2f);
 
-        if (_controlsSlot != null && !_controlsSlot.IsDestroyed)
-            _controlsSlot.LocalScale.SetValueSilently(new float3(scale, scale, scale), change: true);
-
-        if (_plateMesh != null && !_plateMesh.IsDestroyed)
-            _plateMesh.Size.SetValueSilently(new float2(width + PlateMargin * 2f, height + PlateMargin * 2f));
-
-        if (_plateCollider != null && !_plateCollider.IsDestroyed)
-            _plateCollider.Size.SetValueSilently(new float3(width + PlateMargin * 2f, height + PlateMargin * 2f, 0.02f));
-
-        if (_waveformMesh != null && !_waveformMesh.IsDestroyed)
+        if (!_panel.IsDestroyed)
+            _panel.LocalScale.Value = new float3(scale, scale, scale);
+        if (_backingMesh is { IsDestroyed: false })
+            _backingMesh.Size.Value = size;
+        if (_backingCollider is { IsDestroyed: false })
         {
-            _waveformMesh.Width.SetValueSilently(width * 0.94f);
-            _waveformMesh.Height.SetValueSilently(height * 0.40f);
-            _waveformMesh.Thickness.SetValueSilently(System.Math.Max(height * 0.012f, 0.0015f));
+            _backingCollider.Size.Value = new float3(size.x, size.y, ColliderThickness);
+            _backingCollider.Offset.Value = new float3(0f, 0f, -ColliderThickness * 0.5f);
         }
     }
 
-    private void UpdateLabels()
+    // BUILD
+    //
+    // Local slots under the item, built on every peer that has the item, the owner's included. Nothing
+    // here is saved or sent; a late joiner builds its own the moment the item reaches it.
+
+    private void BuildPanel()
     {
-        var owner = Owner;
-        SetText(_titleLabel, owner == null ? "Audio Stream" : $"{owner.UserName.Value}'s Stream");
-
-        var stream = Stream.Target;
-        string device = DeviceName.Value ?? string.Empty;
-        if (stream is OpusStream opus)
-        {
-            string channels = opus.Channels.Value == 2 ? "stereo" : "mono";
-            string detail = $"{opus.BitRate.Value / 1000} kbps {channels}";
-            // The device is the useful half of this line: two streams in a room are told apart by what
-            // they are carrying, not by their bitrate.
-            SetText(_statusLabel, device.Length > 0 ? $"{device} - {detail}" : detail);
-        }
-        else
-        {
-            SetText(_statusLabel, string.Empty);
-        }
-
-        var output = AudioOutput.Target;
-        bool spatial = output != null && !output.IsDestroyed && output.Spatialize.Value;
-        bool playForMe = PlayForMe;
-        if (!_toggleStateKnown || spatial != _lastSpatial || playForMe != _lastPlayForMe)
-        {
-            _toggleStateKnown = true;
-            _lastSpatial = spatial;
-            _lastPlayForMe = playForMe;
-            Highlight(_spatialButton, spatial);
-            Highlight(_playForMeButton, playForMe);
-            SetText(ChildText(_spatialButton), spatial ? "Spatialized" : "Broadcast");
-        }
-
-        if (_volumeSlider != null && !_volumeSlider.IsDestroyed && output != null && !output.IsDestroyed)
-        {
-            float wanted = MathF.Sqrt(Clamp01(output.Volume.Value));
-            if (MathF.Abs(wanted - _volumeSlider.Value.Value) > 0.01f)
-                _volumeSlider.Value.SetValueSilently(wanted);
-        }
-    }
-
-    // RECONNECT
-    // Lookups only: this runs on a peer that RECEIVED the item, and a build on that side would give the
-    // world two of every part.
-    private void Wire()
-    {
-        if (_wired || Slot == null || Slot.IsDestroyed)
+        if (_built || Slot == null || Slot.IsDestroyed || World == null)
             return;
+        _built = true;
 
-        _plateSlot = Slot.FindChild("Plate", recursive: false);
-        _controlsSlot = Slot.FindChild("Controls", recursive: false);
-        var content = _controlsSlot?.FindChild("Content", recursive: false);
-        if (_controlsSlot == null || content == null || content.ChildCount == 0)
-            return;
+        var fonts = Slot.AddLocalSlot("Stream Fonts");
+        _font = Font(fonts, ImportDialog.ResolveFontUrl(World) ?? DashTheme.FontRegular);
+        _strong = Font(fonts, DashTheme.FontSemibold);
+        _glyphs = Font(fonts, DashTheme.FontMono);
 
-        _wired = true;
+        _backing = Slot.AddLocalSlot("Stream Backing");
+        _backing.LocalPosition.Value = new float3(0f, 0f, -BackingDepth);
+        _backingMesh = _backing.AttachComponent<RoundedQuadMesh>();
+        _backingMesh.CornerRadius.Value = 0.02f;
+        _backingMesh.CornerSegments.Value = 4;
+        _backingMesh.DualSided.Value = false;
+        var glass = DashGlass.Attach(_backing);
+        var renderer = _backing.AttachComponent<MeshRenderer>();
+        renderer.Mesh.Target = _backingMesh;
+        renderer.Material.Target = glass;
+        renderer.ShadowCastMode.Value = ShadowCastMode.Off;
+        _backingCollider = _backing.AttachComponent<BoxCollider>();
 
-        _plateMesh = _plateSlot?.GetComponent<RoundedQuadMesh>();
-        _plateCollider = _plateSlot?.GetComponent<BoxCollider>();
-        _waveformSlot = Slot.FindChild("Waveform", recursive: false);
-        _waveformMesh = _waveformSlot?.GetComponent<Meshes.AudioWaveformMesh>();
-        _font = Slot.FindChild("Font", recursive: false)?.GetComponent<FontProvider>();
+        _panel = Slot.AddLocalSlot("Stream Panel");
+        var rect = _panel.AttachComponent<RectTransform>();
+        rect.AnchorMin.Value = new float2(0.5f, 0.5f);
+        rect.AnchorMax.Value = new float2(0.5f, 0.5f);
+        rect.OffsetMin.Value = new float2(CanvasWidth * -0.5f, CanvasHeight * -0.5f);
+        rect.OffsetMax.Value = new float2(CanvasWidth * 0.5f, CanvasHeight * 0.5f);
+        var canvas = _panel.AttachComponent<Canvas>();
+        canvas.MaxViewDistance.Value = 30f;
+        SettingsUI.Panel(_panel, DashTheme.GlassBackdrop, DashTheme.OutlineStrong, DashTheme.RadiusPanel);
 
-        _titleLabel = FindText("TitleLabel");
-        _statusLabel = FindText("StatusLabel");
-        _meterFill = _controlsSlot.FindChild("Meter", recursive: true)?.FindChild("Fill", recursive: false);
-        _volumeSlider = _controlsSlot.FindChild("Volume", recursive: true)?.GetComponent<Slider>();
-        _spatialButton = FindButton("Spatialize");
-        _playForMeButton = FindButton("PlayForMe");
+        // Its own chunk, or the content batches into the root's and draws underneath the backdrop.
+        var content = SettingsUI.Fill(_panel, "Content");
+        content.AttachComponent<GraphicChunkRoot>();
+
+        BuildDeck(content);
+        BuildHeader(content);
+        BuildRows(content);
+        BuildFooter(content);
+
+        _lastPanelWidth = -1f;
+        UpdateSurfaces();
+        Repaint();
     }
 
-    private Text? FindText(string name)
-        => _controlsSlot?.FindChild(name, recursive: true)?.GetComponent<Text>();
-
-    private Button? FindButton(string name)
-        => _controlsSlot?.FindChild(name, recursive: true)?.GetComponent<Button>();
-
-    // HELPERS
-
-    private Text Label(UIBuilder ui, string name, string content, float size, in color tint, TextHorizontalAlignment alignment)
+    private static FontProvider Font(Slot slot, Uri url)
     {
-        var text = ui.Text(content, size, tint);
-        text.Slot.Name.Value = name;
-        text.HorizontalAlignment.Value = alignment;
-        text.VerticalAlignment.Value = TextVerticalAlignment.Middle;
-        text.WordWrap.Value = false;
-        return text;
+        var font = slot.AttachComponent<FontProvider>();
+        font.URL.Value = url;
+        font.FallbackURLs.Add(DashTheme.FontRegular);
+        return font;
     }
 
-    private static Text? ChildText(Button? button)
-        => button == null || button.IsDestroyed
-            ? null
-            : button.Slot?.FindChild("Text", recursive: false)?.GetComponent<Text>();
-
-    private static void RowHeight(UIBuilder ui, float height)
-        => ui.MinHeight(height).PreferredHeight(height).FlexibleHeight(0f);
-
-    private static void Metrics(Slot slot, float minWidth, float preferredWidth, float flexibleWidth,
-        float minHeight, float preferredHeight, float flexibleHeight)
+    // THE DECK, on the left: the on-air button inside its level ring, what state the stream is in, how
+    // loud it is, and whether this machine plays it.
+    private void BuildDeck(Slot content)
     {
-        var element = slot.GetComponent<LayoutElement>() ?? slot.AttachComponent<LayoutElement>();
-        element.MinWidth.Value = minWidth;
-        element.PreferredWidth.Value = preferredWidth;
-        element.FlexibleWidth.Value = flexibleWidth;
-        element.MinHeight.Value = minHeight;
-        element.PreferredHeight.Value = preferredHeight;
-        element.FlexibleHeight.Value = flexibleHeight;
+        var deck = Box(content, "Deck", 14f, 14f, 160f, 272f);
+        SettingsUI.Panel(deck, DashTheme.Field.WithAlpha(0.6f), DashTheme.Outline, DashTheme.RadiusCard);
+
+        var dial = Box(deck, "Dial", 10f, 12f, 140f, 140f);
+        var track = SettingsUI.Fill(dial, "Track").AttachComponent<ArcSegment>();
+        Gauge(track, DashTheme.TextMuted.WithAlpha(0.22f));
+        track.ArcLength.Value = GaugeSweep;
+        // Its own chunk: it moves every frame the music does, and that should cost one ring, not the panel.
+        var levelSlot = SettingsUI.Fill(dial, "Gauge");
+        levelSlot.AttachComponent<GraphicChunkRoot>();
+        _gaugeLevel = levelSlot.AttachComponent<ArcSegment>();
+        Gauge(_gaugeLevel, DashTheme.Positive);
+        _gaugeLevel.ArcLength.Value = 1f;
+        _gaugeLevel.Enabled.Value = false;
+
+        var liveSlot = SettingsUI.Child(dial, "Live", new float2(0.5f, 0.5f), new float2(0.5f, 0.5f),
+            new float2(-50f, -50f), new float2(50f, 50f));
+        _live = NewControl(liveSlot, 50f, () => SetLive(!IsLive));
+        _playGlyph = SettingsUI.FillLabel(liveSlot, "Play", _glyphs, 34f, DashTheme.Accent);
+        _playGlyph.Content.Value = "▶";
+        _pauseGlyph = SettingsUI.Fill(liveSlot, "Pause");
+        PauseBar(_pauseGlyph, -10f);
+        PauseBar(_pauseGlyph, 4f);
+
+        _status = Label(deck, "Status", _strong, DashTheme.FontLabel, DashTheme.Positive, TextHorizontalAlignment.Center, 0f, 156f, 160f, 20f);
+        _levelText = Label(deck, "Level", _glyphs, DashTheme.FontLabel, DashTheme.TextMuted, TextHorizontalAlignment.Center, 0f, 176f, 160f, 18f);
+
+        var listenSlot = Box(deck, "Listen", 10f, 226f, 140f, 36f);
+        _listen = NewControl(listenSlot, 18f, ToggleListen);
+        var dot = Box(listenSlot, "Dot", 12f, 12f, 12f, 12f);
+        _listenDot = SettingsUI.Panel(dot, DashTheme.TextMuted, color.Transparent, 6f);
+        _listen.Text = Label(listenSlot, "Text", _font, DashTheme.FontSmall, DashTheme.Text, TextHorizontalAlignment.Left, 30f, 0f, 104f, 36f, shrink: true);
     }
 
-    private static void FillRect(Slot slot)
+    private static void Gauge(ArcSegment arc, in color tint)
     {
-        var rect = slot.GetComponent<RectTransform>() ?? slot.AttachComponent<RectTransform>();
+        arc.AngleStart.Value = GaugeStart;
+        arc.InnerRadius.Value = 60f;
+        arc.OuterRadius.Value = 67f;
+        arc.CornerRadius.Value = 3.5f;
+        arc.OutlineThickness.Value = 0f;
+        arc.Tint.Value = tint;
+    }
+
+    private static void PauseBar(Slot parent, float x)
+    {
+        var bar = SettingsUI.Child(parent, "Bar", new float2(0.5f, 0.5f), new float2(0.5f, 0.5f),
+            new float2(x, -16f), new float2(x + 6f, 16f));
+        SettingsUI.Panel(bar, DashTheme.OnAccent, color.Transparent, 3f);
+    }
+
+    private void BuildHeader(Slot content)
+    {
+        var badge = Box(content, "Badge", 190f, 18f, 40f, 40f);
+        SettingsUI.Panel(badge, DashTheme.IconPink.WithAlpha(0.2f), color.Transparent, 12f);
+        Icon(badge, "stream-audio", 24f, DashTheme.IconPink);
+
+        _title = Label(content, "Title", _strong, DashTheme.FontTitle, DashTheme.Text, TextHorizontalAlignment.Left, 240f, 16f, 290f, 26f);
+        _device = Label(content, "Device", _font, DashTheme.FontSmall, DashTheme.TextDim, TextHorizontalAlignment.Left, 240f, 42f, 400f, 18f);
+
+        var pill = Box(content, "Role", 540f, 20f, 106f, 22f);
+        _rolePlate = SettingsUI.Panel(pill, DashTheme.AccentSoft, color.Transparent, 11f);
+        _rolePill = SettingsUI.FillLabel(pill, "Text", _strong, DashTheme.FontLabel, DashTheme.Accent, shrinkToFit: true);
+
+        var rule = Box(content, "Rule", 190f, 72f, 456f, 1f);
+        rule.AttachComponent<Image>().Tint.Value = DashTheme.Divider;
+    }
+
+    private void BuildRows(Slot content)
+    {
+        _volumeLabel = RowLabel(content, "VolumeLabel", "Volume", 88f);
+        _volume = RowSlider(content, "Volume", 88f, VolumeTravel, (_, value) => SetVolumeTravel(value));
+        _volumeValue = Label(content, "VolumeValue", _glyphs, DashTheme.FontSmall, DashTheme.TextDim, TextHorizontalAlignment.Right, 590f, 88f, 56f, 34f);
+
+        _heardLabel = RowLabel(content, "HeardLabel", "Heard", 134f);
+        var strip = Box(content, "Heard", 272f, 134f, 374f, 34f);
+        SettingsUI.Panel(strip, DashTheme.Field.WithAlpha(0.7f), DashTheme.Outline, DashTheme.RadiusControl + 1f);
+        _room = Segment(strip, "Room", "In the room", 0, () => SetEverywhere(false));
+        _everywhere = Segment(strip, "Everywhere", "Everywhere", 1, () => SetEverywhere(true));
+
+        _reachLabel = RowLabel(content, "ReachLabel", "Reach", 180f);
+        _reach = RowSlider(content, "Reach", 180f, ReachToTravel(Reach), (_, value) => SetReach(TravelToReach(value)));
+        _reachValue = Label(content, "ReachValue", _glyphs, DashTheme.FontSmall, DashTheme.TextDim, TextHorizontalAlignment.Right, 590f, 180f, 56f, 34f);
+    }
+
+    private void BuildFooter(Slot content)
+    {
+        _hint = Label(content, "Hint", _font, DashTheme.FontLabel, DashTheme.TextMuted, TextHorizontalAlignment.Left, 190f, 228f, 300f, 54f);
+        _hint.WordWrap.Value = true;
+        _hint.Ellipsis.Value = false;
+
+        var endSlot = Box(content, "End", 506f, 238f, 140f, 36f);
+        _end = NewControl(endSlot, DashTheme.RadiusControl, () => EndStream());
+        _end.Text = SettingsUI.FillLabel(endSlot, "Text", _strong, DashTheme.FontSmall, DashTheme.Negative);
+        _end.Text.Content.Value = "End stream";
+        // Ending removes the item for good, so it goes on release: a press that slides off is not a yes.
+        _end.Button.ActOnRelease.Value = true;
+    }
+
+    private Text RowLabel(Slot content, string name, string text, float top)
+    {
+        var label = Label(content, name, _font, DashTheme.FontBody, DashTheme.TextDim, TextHorizontalAlignment.Left, 190f, top, 76f, 34f);
+        label.Content.Value = text;
+        return label;
+    }
+
+    private Slider RowSlider(Slot content, string name, float top, float initial, Action<Slider, float> changed)
+    {
+        var host = Box(content, name, 272f, top, 312f, 34f);
+        var ui = new UIBuilder(host);
+        ui.ForegroundColor(DashTheme.Accent);
+        var slider = ui.Slider(Clamp01(initial), 0f, 1f, null, DashTheme.Field);
+        slider.ValueChanged += changed;
+        var rect = SettingsUI.Rect(slider.Slot);
         rect.AnchorMin.Value = float2.Zero;
         rect.AnchorMax.Value = float2.One;
         rect.OffsetMin.Value = float2.Zero;
         rect.OffsetMax.Value = float2.Zero;
+        return slider;
+    }
+
+    private Control Segment(Slot strip, string name, string label, int index, Action onClick)
+    {
+        var slot = SettingsUI.Child(strip, name, new float2(index * 0.5f, 0f), new float2(index * 0.5f + 0.5f, 1f),
+            new float2(index == 0 ? 3f : 1.5f, 3f), new float2(index == 0 ? -1.5f : -3f, -3f));
+        var control = NewControl(slot, DashTheme.RadiusControl - 1f, onClick);
+        control.Text = SettingsUI.FillLabel(slot, "Text", _font, DashTheme.FontSmall, DashTheme.TextDim, shrinkToFit: true);
+        control.Text.Content.Value = label;
+        return control;
+    }
+
+    // A plate that lights under the pointer. The plate goes on before the button so the button does not
+    // adopt it as an Image; its colours are then the driver's, set in Paint.
+    private Control NewControl(Slot slot, float radius, Action onClick)
+    {
+        var plate = SettingsUI.Panel(slot, DashTheme.Surface, DashTheme.Outline, radius);
+        var button = slot.AttachComponent<Button>();
+        button.Clicked += (_, context) =>
+        {
+            if (context.Actor == null || ReferenceEquals(context.Actor, World?.LocalUser))
+                onClick();
+        };
+        button.AddColorDriver(plate.Color, DashTheme.Surface, InteractionColorMode.Direct);
+        return new Control { Slot = slot, Plate = plate, Button = button };
+    }
+
+    private static Image Icon(Slot host, string icon, float size, in color tint)
+    {
+        var slot = SettingsUI.Child(host, "Icon", new float2(0.5f, 0.5f), new float2(0.5f, 0.5f),
+            new float2(-size * 0.5f, -size * 0.5f), new float2(size * 0.5f, size * 0.5f));
+        var picture = slot.AttachComponent<ImageProvider>();
+        picture.GenerateMipmaps.Value = false;
+        picture.AllowCompression.Value = false;
+        picture.MaxSizeOverride.Value = -1;
+        picture.URL.Value = new Uri("res://Assets/Textures/Icons/" + icon + ".svg");
+        var image = slot.AttachComponent<Image>();
+        image.Texture.Target = picture;
+        image.Tint.Value = tint;
+        return image;
+    }
+
+    // PAINT
+
+    private void Repaint()
+    {
+        if (_panel == null || _panel.IsDestroyed)
+            return;
+
+        var owner = Owner;
+        bool mine = IsOwnedByLocalUser;
+        bool live = IsLive;
+        bool everywhere = IsEverywhere;
+        float reach = Reach;
+        string ownerName = owner?.UserName.Value ?? string.Empty;
+
+        SetText(_title, ownerName.Length > 0 ? $"{ownerName}'s stream" : "Audio stream");
+        SetText(_device, DeviceLine());
+
+        SetText(_rolePill, mine ? "Yours" : "View only");
+        SetColor(_rolePill, mine ? DashTheme.Accent : DashTheme.TextDim);
+        if (_rolePlate is { IsDestroyed: false })
+            SettingsUI.SetFill(_rolePlate, mine ? DashTheme.AccentSoft : DashTheme.Surface.WithAlpha(0.8f));
+
+        bool signal = live && _sinceSignal <= SignalHold;
+        SetText(_status, !live ? "PAUSED" : signal ? "ON AIR" : "NO SIGNAL");
+        SetColor(_status, !live ? DashTheme.Warning : signal ? DashTheme.Positive : DashTheme.TextMuted);
+        SetText(_levelText, signal && _peak > 0.0001f ? $"{20f * MathF.Log10(_peak):0} dB" : "-");
+
+        PaintRound(_live, live, mine);
+        SetActive(_playGlyph?.Slot, !live);
+        SetActive(_pauseGlyph, live);
+        SetColor(_playGlyph, mine ? DashTheme.Accent : DashTheme.TextMuted);
+
+        Paint(_room, !everywhere, mine);
+        Paint(_everywhere, everywhere, mine);
+
+        PaintSlider(_volume, VolumeTravel, mine);
+        PaintSlider(_reach, ReachToTravel(reach), mine && !everywhere);
+        SetText(_volumeValue, $"{MathF.Round(VolumeTravel * 100f)}%");
+        SetText(_reachValue, $"{MathF.Round(reach)} m");
+        SetColor(_volumeLabel, mine ? DashTheme.TextDim : DashTheme.TextMuted);
+        SetColor(_heardLabel, mine ? DashTheme.TextDim : DashTheme.TextMuted);
+        SetColor(_reachLabel, mine && !everywhere ? DashTheme.TextDim : DashTheme.TextMuted);
+        SetColor(_volumeValue, mine ? DashTheme.TextDim : DashTheme.TextMuted);
+        SetColor(_reachValue, !everywhere ? DashTheme.TextDim : DashTheme.TextMuted);
+
+        bool hears = HearsHere;
+        bool canListen = mine ? CanHearMyself : true;
+        Paint(_listen, mine ? hears : _mutedHere, canListen);
+        SetText(_listen?.Text, mine ? "Hear it myself" : _mutedHere ? "Muted for me" : "Mute for me");
+        if (_listenDot is { IsDestroyed: false })
+        {
+            bool lit = mine ? hears : _mutedHere;
+            SettingsUI.SetFill(_listenDot, !canListen ? DashTheme.TextMuted.WithAlpha(0.5f) : lit ? (mine ? DashTheme.Positive : DashTheme.Negative) : DashTheme.TextMuted);
+        }
+
+        SetActive(_end?.Slot, mine);
+        if (_end != null)
+            PaintEnd(_end);
+        if (_hint is { IsDestroyed: false })
+        {
+            var rect = SettingsUI.Rect(_hint.Slot);
+            SettingsUI.SetOffsets(rect, new float2(190f, -282f), new float2(mine ? 490f : 646f, -228f));
+        }
+        SetText(_hint, Hint(mine, everywhere, reach, ownerName));
+    }
+
+    private string DeviceLine()
+    {
+        string device = DeviceName.Value ?? string.Empty;
+        string kind = AudioInputTypes.Describe(DeviceKind.Value);
+        string detail = string.Empty;
+        if (Stream.Target is OpusStream opus)
+            detail = $"{opus.BitRate.Value / 1000} kbps {(opus.Channels.Value == 2 ? "stereo" : "mono")}";
+        var parts = new List<string>(3);
+        if (device.Length > 0)
+            parts.Add(device);
+        if (DeviceKind.Value != AudioInputType.Unknown && !string.Equals(kind, device, StringComparison.OrdinalIgnoreCase))
+            parts.Add(kind);
+        if (detail.Length > 0)
+            parts.Add(detail);
+        return string.Join("  ·  ", parts);
+    }
+
+    private string Hint(bool mine, bool everywhere, float reach, string ownerName)
+    {
+        if (!mine)
+        {
+            string who = ownerName.Length > 0 ? ownerName : "Its owner";
+            return _mutedHere
+                ? "You muted this stream for yourself. Nobody else is affected."
+                : $"{who} sets how this stream plays. Mute for me only changes what you hear.";
+        }
+        if (!IsLive)
+            return "Paused: nothing is being sent. Press the button to go back on air.";
+        if (CapturedKind == AudioInputType.Loopback)
+            return "Hear it myself monitors this device here. Use a separate output to keep playback out of the capture.";
+        return everywhere
+            ? "Everyone in the world hears this at the same level."
+            : $"Heard from this panel, fading out by {MathF.Round(reach)} m.";
+    }
+
+    private static void Paint(Control? control, bool on, bool enabled)
+    {
+        if (control == null || control.Button.IsDestroyed)
+            return;
+        color normal = on ? DashTheme.AccentSoft : DashTheme.Surface.WithAlpha(0.55f);
+        color hover = on ? DashTheme.Accent.WithAlpha(0.28f) : DashTheme.SurfaceHover;
+        color disabled = on ? DashTheme.Accent.WithAlpha(0.12f) : DashTheme.Field.WithAlpha(0.5f);
+        Drive(control.Button, normal, hover, DashTheme.Accent.WithAlpha(0.34f), disabled);
+        Interactable(control.Button, enabled);
+        SettingsUI.SetPaint(control.Plate, control.Plate.Color.Value, on ? (enabled ? DashTheme.Accent : DashTheme.Accent.WithAlpha(0.45f)) : DashTheme.Outline, on ? 2f : DashTheme.OutlineWidth);
+        SetColor(control.Text, !enabled ? (on ? DashTheme.TextDim : DashTheme.TextMuted) : on ? DashTheme.Text : DashTheme.TextDim);
+    }
+
+    private static void PaintRound(Control? control, bool live, bool enabled)
+    {
+        if (control == null || control.Button.IsDestroyed)
+            return;
+        if (live)
+            Drive(control.Button, DashTheme.Accent, DashTheme.AccentHover, DashTheme.AccentPressed, DashTheme.Accent.WithAlpha(0.5f));
+        else
+            Drive(control.Button, DashTheme.Surface, DashTheme.SurfaceHover, DashTheme.SurfacePressed, DashTheme.Surface.WithAlpha(0.6f));
+        Interactable(control.Button, enabled);
+        SettingsUI.SetPaint(control.Plate, control.Plate.Color.Value, live ? color.Transparent : DashTheme.OutlineStrong, DashTheme.OutlineWidth);
+    }
+
+    private static void PaintEnd(Control control)
+    {
+        if (control.Button.IsDestroyed)
+            return;
+        Drive(control.Button, DashTheme.Negative.WithAlpha(0.1f), DashTheme.Negative.WithAlpha(0.22f), DashTheme.Negative.WithAlpha(0.32f), DashTheme.Field);
+        SettingsUI.SetPaint(control.Plate, control.Plate.Color.Value, DashTheme.Negative.WithAlpha(0.45f), DashTheme.OutlineWidth);
+    }
+
+    private static void PaintSlider(Slider? slider, float travel, bool enabled)
+    {
+        if (slider == null || slider.IsDestroyed)
+            return;
+        Interactable(slider, enabled);
+        // Pushed only while nobody is dragging it, or the knob fights the hand.
+        if (!slider.IsPressed.Value && MathF.Abs(slider.Value.Value - travel) > 0.005f)
+        {
+            slider.Value.Value = travel;
+            slider.UpdateHandleDrives();
+        }
+        var fill = slider.Slot.FindChild("Track", recursive: false)?.FindChild("Fill", recursive: false)?.GetComponent<Image>();
+        if (fill != null)
+            SettingsUI.SetTint(fill, enabled ? DashTheme.Accent : DashTheme.TextMuted.WithAlpha(0.7f));
+    }
+
+    private static void Drive(Button button, in color normal, in color hover, in color pressed, in color disabled)
+    {
+        foreach (var driver in button.ColorDrivers)
+        {
+            if (driver == null || driver.IsDestroyed)
+                continue;
+            if (driver.NormalColor.Value.Equals(normal) && driver.HighlightColor.Value.Equals(hover)
+                && driver.PressedColor.Value.Equals(pressed) && driver.DisabledColor.Value.Equals(disabled))
+                continue;
+            driver.NormalColor.Value = normal;
+            driver.HighlightColor.Value = hover;
+            driver.PressedColor.Value = pressed;
+            driver.DisabledColor.Value = disabled;
+            driver.Apply();
+        }
+    }
+
+    private static void Interactable(InteractionElement element, bool value)
+    {
+        if (element.Interactable.Value != value)
+            element.Interactable.Value = value;
+    }
+
+    // HELPERS
+
+    private static Slot Box(Slot parent, string name, float x, float top, float width, float height)
+        => SettingsUI.Child(parent, name, new float2(0f, 1f), new float2(0f, 1f),
+            new float2(x, -(top + height)), new float2(x + width, -top));
+
+    private static Text Label(Slot parent, string name, IAssetProvider<FontSet>? font, float size, in color tint,
+        TextHorizontalAlignment align, float x, float top, float width, float height, bool shrink = false)
+        => SettingsUI.Label(parent, name, font, size, tint, align, new float2(0f, 1f), new float2(0f, 1f),
+            new float2(x, -(top + height)), new float2(x + width, -top), shrink);
+
+    private static void SetActive(Slot? slot, bool active)
+    {
+        if (slot != null && !slot.IsDestroyed && slot.ActiveSelf.Value != active)
+            slot.ActiveSelf.Value = active;
     }
 
     private static void SetText(Text? text, string content)
@@ -589,29 +860,14 @@ public sealed class AudioStreamController : Component
         if (text == null || text.IsDestroyed)
             return;
         if (!string.Equals(text.Content.Value, content, StringComparison.Ordinal))
-            text.Content.SetValueSilently(content);
+            text.Content.Value = content;
     }
 
-    private static void Highlight(Button? button, bool on)
+    private static void SetColor(Text? text, in color tint)
     {
-        if (button == null || button.IsDestroyed)
-            return;
-        color normal = on ? DashTheme.Accent : DashTheme.Surface;
-        color hover = on ? DashTheme.AccentHover : DashTheme.SurfaceHover;
-        color pressed = on ? DashTheme.AccentPressed : DashTheme.SurfacePressed;
-        foreach (var driver in button.ColorDrivers)
-        {
-            if (driver == null || driver.IsDestroyed)
-                continue;
-            driver.NormalColor.SetValueSilently(normal);
-            driver.HighlightColor.SetValueSilently(hover);
-            driver.PressedColor.SetValueSilently(pressed);
-            driver.DisabledColor.SetValueSilently(DashTheme.Field);
-            driver.Apply();
-        }
+        if (text != null && !text.IsDestroyed && !text.Color.Value.Equals(tint))
+            text.Color.Value = tint;
     }
-
-    private static colorHDR ToHDR(in color value) => new colorHDR(value.r, value.g, value.b, value.a);
 
     private static float Clamp01(float value)
         => float.IsNaN(value) ? 0f : (value < 0f ? 0f : (value > 1f ? 1f : value));

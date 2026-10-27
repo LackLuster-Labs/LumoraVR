@@ -10,6 +10,7 @@ using Lumora.Core;
 using Lumora.Core.Assets;
 using Lumora.Core.Components.Assets;
 using Lumora.Core.Components.UI;
+using Lumora.Core.Localization;
 using Lumora.Core.Logging;
 using Lumora.Core.Math;
 
@@ -255,7 +256,7 @@ public abstract class ImportDialog : Component
     // file-browser pattern) so its children inherit the page rect. If we used
     // ui.VerticalLayout() instead, it'd create a child slot with the default
     // 100x100 centered RectTransform and squash everything inside it. - xlinka
-    protected UIBuilder SetupSection(UIBuilder ui, string title, bool backButton = true)
+    protected UIBuilder SetupSection(UIBuilder ui, LocaleText title, bool backButton = true)
     {
         var page = ui.Root;
         var vLayout = page.AttachComponent<VerticalLayout>();
@@ -369,33 +370,7 @@ public abstract class ImportDialog : Component
         _gridRowElement.PreferredHeight.Value = height;
     }
 
-    protected void SetupCheckbox(UIBuilder ui, Sync<bool> field, string label)
-    {
-        var row = ui.Root.AddSlot(label);
-        row.AttachComponent<RectTransform>();
-        var rLE = row.AttachComponent<LayoutElement>();
-        rLE.MinHeight.Value = 40f;
-        rLE.PreferredHeight.Value = 40f;
-        var rLayout = row.AttachComponent<HorizontalLayout>();
-        rLayout.Spacing.Value = 8f;
-        rLayout.PaddingLeft.Value = 4f;
-        rLayout.PaddingRight.Value = 4f;
-
-        var boxBuilder = new UIBuilder(row);
-        if (_fontProvider != null) boxBuilder.Font(_fontProvider);
-        boxBuilder.PushStyle().MinWidth(28f).PreferredWidth(28f).FlexibleWidth(0f);
-        boxBuilder.Checkbox(field.Value, (_, v) => { if (CanInteract) field.Value = v; });
-        boxBuilder.PopStyle();
-
-        boxBuilder.PushStyle().FlexibleWidth(1f);
-        var t = boxBuilder.Text(label, DashTheme.FontBody, ButtonText);
-        t.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
-        t.VerticalAlignment.Value = TextVerticalAlignment.Middle;
-        t.WordWrap.Value = true;
-        boxBuilder.PopStyle();
-    }
-
-    protected void GridButton(UIBuilder ui, string label, Action onClick, color? tint = null, bool primary = false)
+    protected void GridButton(UIBuilder ui, LocaleText label, Action onClick, color? tint = null, bool primary = false)
     {
         _gridButtonCount++;
         GrowGridRow();
@@ -403,69 +378,14 @@ public abstract class ImportDialog : Component
         ActionButton(ui, label, () => { if (CanInteract) onClick(); }, tint, primary);
     }
 
-    // One choice out of several: a heading, then a tile per option, the chosen one in the accent colour.
-    protected void SetupChoice<T>(UIBuilder ui, Sync<T> field, string label, IReadOnlyList<(T Value, string Name)> options)
-    {
-        var heading = ui.Root.AddSlot(label);
-        heading.AttachComponent<RectTransform>();
-        var hLE = heading.AttachComponent<LayoutElement>();
-        hLE.MinHeight.Value = 28f;
-        hLE.PreferredHeight.Value = 28f;
-        var headingBuilder = new UIBuilder(heading);
-        if (_fontProvider != null) headingBuilder.Font(_fontProvider);
-        var title = headingBuilder.Text(label, DashTheme.FontBody, SectionTitleColor);
-        title.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
-        title.VerticalAlignment.Value = TextVerticalAlignment.Middle;
-        FillRect(title.RectTransform!, 4f, 4f, 0f, 0f);
-
-        var tiles = ui.Root.AddSlot(label + " Options");
-        tiles.AttachComponent<RectTransform>();
-        int rows = (options.Count + GridItemsPerRow - 1) / GridItemsPerRow;
-        float height = rows * ButtonHeight + System.Math.Max(0, rows - 1) * GridItemSpacing;
-        var tLE = tiles.AttachComponent<LayoutElement>();
-        tLE.UseZeroMetrics.Value = true;
-        tLE.MinHeight.Value = height;
-        tLE.PreferredHeight.Value = height;
-        var grid = tiles.AttachComponent<GridLayout>();
-        grid.Columns.Value = GridItemsPerRow;
-        grid.Spacing.Value = GridItemSpacing;
-
-        var tileBuilder = new UIBuilder(tiles).SetStyle(ui.Style);
-        var drivers = new List<(T Value, ColorDriver Driver)>(options.Count);
-        void Show()
-        {
-            foreach (var (value, driver) in drivers)
-            {
-                if (driver.IsDestroyed)
-                    continue;
-                bool chosen = EqualityComparer<T>.Default.Equals(field.Value, value);
-                driver.NormalColor.Value = chosen ? DashTheme.Accent : ButtonFill;
-                driver.HighlightColor.Value = chosen ? DashTheme.AccentHover : DashTheme.SurfaceHover;
-                driver.PressedColor.Value = chosen ? DashTheme.AccentPressed : DashTheme.SurfacePressed;
-            }
-        }
-        foreach (var (value, name) in options)
-        {
-            var picked = value;
-            ActionButton(tileBuilder, name, () =>
-            {
-                if (!CanInteract) return;
-                field.Value = picked;
-                Show();
-            }, out var driver);
-            drivers.Add((value, driver));
-        }
-        Show();
-    }
-
     // Shared by wizard pages, advanced settings, and folder import actions.
-    internal static Button ActionButton(UIBuilder ui, string label, Action onClick, color? tint = null, bool primary = false)
+    internal static Button ActionButton(UIBuilder ui, LocaleText label, Action onClick, color? tint = null, bool primary = false)
         => ActionButton(ui, label, onClick, out _, tint, primary);
 
-    internal static Button ActionButton(UIBuilder ui, string label, Action onClick, out ColorDriver driver,
+    internal static Button ActionButton(UIBuilder ui, LocaleText label, Action onClick, out ColorDriver driver,
         color? tint = null, bool primary = false)
     {
-        var slot = ui.Next(label);
+        var slot = ui.Next(label.Fallback ?? string.Empty);
         var le = slot.GetComponent<LayoutElement>() ?? slot.AttachComponent<LayoutElement>();
         le.UseZeroMetrics.Value = true;
         le.MinHeight.Value = ButtonHeight;

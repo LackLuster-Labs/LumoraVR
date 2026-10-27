@@ -187,7 +187,7 @@ public sealed class CanvasTouchSource : Component
 
         ITouchSurface? best = null;
         TouchSurfaceHit bestHit = default;
-        world.CopyInteractionTargetsTo(_targets);
+        world.CopyLiveInteractionTargetsTo(_targets);
         for (int i = 0; i < _targets.Count; i++)
         {
             if (_targets[i] is not ITouchSurface surface || !surface.AcceptsPhysicalTouch)

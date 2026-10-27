@@ -30,6 +30,37 @@ public class AudioAnalyzer : Component
     private const double StaleSeconds = 0.25;
 
     public readonly SyncRef<AudioOutput> Output;
+    // Either an output or the source component that an output plays. Analysis always taps the output;
+    // reading a source itself would consume its stream. Output takes precedence when both are set. -xlinka
+    public readonly SyncRef<Component> Source = new();
+    private Component? _sourceSeen;
+    private AudioOutput? _sourceOutput;
+    private double _nextSourceSearch;
+
+    private AudioOutput? ResolveOutput()
+    {
+        if (Output.Target is { IsDestroyed: false } direct)
+            return direct;
+        var source = Source.Target;
+        if (source is AudioOutput output)
+            return output;
+        if (source == null || source.IsDestroyed)
+            return null;
+        double now = World?.Time.TotalTime ?? 0;
+        if (!ReferenceEquals(source, _sourceSeen) || now >= _nextSourceSearch)
+        {
+            _sourceSeen = source;
+            _sourceOutput = null;
+            _nextSourceSearch = now + 1.0;
+            foreach (var candidate in source.World.RootSlot.GetComponentsInChildren<AudioOutput>())
+                if (!candidate.IsDestroyed && ReferenceEquals(candidate.Source.Target, source))
+                {
+                    _sourceOutput = candidate;
+                    break;
+                }
+        }
+        return _sourceOutput is { IsDestroyed: false } ? _sourceOutput : null;
+    }
 
     // Any length (mixed radix); longer resolves finer frequencies and answers more slowly.
     [Range(AudioAnalysisSettings.MinFftSize, AudioAnalysisSettings.MaxFftSize, "0", exponential: true)]
@@ -54,6 +85,11 @@ public class AudioAnalyzer : Component
     public readonly Sync<float> Smoothing;
 
     private readonly StereoSample[] _drain = new StereoSample[DrainLength];
+    // The last stretch of what was heard, left and right averaged, for a script that wants the samples
+    // themselves rather than readings of them. As long as the largest transform the analysis takes.
+    private readonly float[] _recent = new float[AudioAnalysisSettings.MaxFftSize];
+    private int _recentAt;
+    private int _recentFilled;
     private OutputMonitorTap? _tap;
     private AudioAnalysis? _analysis;
     private long _onsetsSeen;
@@ -135,6 +171,35 @@ public class AudioAnalyzer : Component
 
     public float SpectralRolloff => _analysis?.Rolloff ?? 0f;
 
+    // Samples a second this machine hears at, 0 before it has listened.
+    public int SampleRate => _analysis?.SampleRate ?? 0;
+
+    // The latest samples heard, oldest first, as many as fit and have been heard. Returns how many.
+    public int CopyRecent(Span<float> destination)
+    {
+        int n = System.Math.Min(destination.Length, _recentFilled);
+        int start = (_recentAt - n + _recent.Length) % _recent.Length;
+        for (int i = 0; i < n; i++)
+            destination[i] = _recent[(start + i) % _recent.Length];
+        return n;
+    }
+
+    // The analysis's own spectrum, bin 0 at 0 Hz, as amplitudes: a sine of amplitude A on a bin reads A.
+    public ReadOnlySpan<float> SpectrumMagnitudes => _analysis != null ? _analysis.Spectrum.Magnitudes : ReadOnlySpan<float>.Empty;
+
+    // Hertz between neighbouring spectrum bins, 0 before it has listened.
+    public float SpectrumBinWidth => _analysis?.Spectrum.BinWidth ?? 0f;
+
+    public int CopySpectrumDecibels(Span<float> destination)
+    {
+        var analysis = _analysis;
+        if (analysis == null)
+            return 0;
+        int n = System.Math.Min(destination.Length, analysis.Spectrum.BinCount);
+        analysis.Spectrum.CopyDecibels(destination.Slice(0, n));
+        return n;
+    }
+
     public long BeatCount { get; private set; }
 
     public float LastBeatStrength { get; private set; }
@@ -192,7 +257,7 @@ public class AudioAnalyzer : Component
             _tap.Skip();
         _lastListen = now;
 
-        var output = Output.Target;
+        var output = ResolveOutput();
         var voice = output != null && !output.IsDestroyed ? output.Voice : null;
         _tap.Voice = voice;
 
@@ -206,6 +271,7 @@ public class AudioAnalyzer : Component
             {
                 _drain.AsSpan(0, quiet).Clear();
                 _analysis.Write(_drain.AsSpan(0, quiet));
+                Remember(_drain.AsSpan(0, quiet));
             }
         }
         else
@@ -215,6 +281,7 @@ public class AudioAnalyzer : Component
             while (budget > 0 && (read = _tap.Read(_drain)) > 0)
             {
                 _analysis.Write(_drain.AsSpan(0, read));
+                Remember(_drain.AsSpan(0, read));
                 budget -= read;
             }
         }
@@ -235,6 +302,17 @@ public class AudioAnalyzer : Component
                 Logging.Logger.Error($"Audio Analyzer: a beat handler threw: {ex.Message}");
             }
         }
+    }
+
+    private void Remember(ReadOnlySpan<StereoSample> heard)
+    {
+        int size = _recent.Length;
+        foreach (var sample in heard)
+        {
+            _recent[_recentAt] = (sample.left + sample.right) * 0.5f;
+            _recentAt = (_recentAt + 1) % size;
+        }
+        _recentFilled = System.Math.Min(size, _recentFilled + heard.Length);
     }
 
     private void StopListening()

@@ -58,6 +58,11 @@ public sealed class WorldLoadIndicator : Component
     private bool _visible;
     private bool _placed;
 
+    private static WorldLoadIndicator? _shown;
+
+    // The card stands in front of the view, so pictures of the world wait until it has gone. -xlinka
+    public static bool Showing => _shown != null;
+
     public static void Attach(World world)
     {
         if (world == null || world.IsDestroyed)
@@ -189,6 +194,14 @@ public sealed class WorldLoadIndicator : Component
         if (manager == null)
             return;
         var operation = Engine.Current?.WorldLoadingService?.CurrentOperation;
+        // A join waiting on a verified email: the card makes way for its pressable panel, in the same spot.
+        if (operation is { IsHeld: true, IsCancelled: false })
+        {
+            JoinHoldPanel.Show(operation);
+            if (_target != null || _visible)
+                Dismiss();
+            return;
+        }
         bool joining = operation != null && !operation.IsCancelled && !operation.IsFailed && !operation.IsComplete;
         var candidate = (joining ? operation!.World : null) ?? manager.LoadingWorld ?? manager.FocusedWorld;
         if (candidate != null && candidate != World && !candidate.IsDestroyed && _seen.Add(candidate))
@@ -333,7 +346,7 @@ public sealed class WorldLoadIndicator : Component
         float overall = busy ? MathF.Min(StageStart[at] + (StageStart[at + 1] - StageStart[at]) * within, 0.99f) : 1f;
         _progress = MathF.Max(_progress, overall);
 
-        _title!.Text.Value = FitName(target.WorldName?.Value ?? target.Name);
+        _title!.Text.Value = FitName(Management.WorldManager.DisplayName(target));
         _percent!.Text.Value = $"{(int)MathF.Floor(_progress * 100f)}%";
         _detail!.Text.Value = detail;
         for (int i = 0; i < _stages.Length; i++)
@@ -362,6 +375,13 @@ public sealed class WorldLoadIndicator : Component
         return name.Length <= 26 ? name : name[..25] + "…";
     }
 
+    public override void OnDestroy()
+    {
+        if (ReferenceEquals(_shown, this))
+            _shown = null;
+        base.OnDestroy();
+    }
+
     private void Dismiss()
     {
         _target = null;
@@ -374,6 +394,10 @@ public sealed class WorldLoadIndicator : Component
         if (_visible == visible && _plate?.ActiveSelf.Value == visible)
             return;
         _visible = visible;
+        if (visible)
+            _shown = this;
+        else if (ReferenceEquals(_shown, this))
+            _shown = null;
         if (_plate != null && !_plate.IsDestroyed)
             _plate.ActiveSelf.Value = visible;
         if (!visible)

@@ -215,7 +215,7 @@ public class MagnetSocket : Component, ICustomInspectorUI, IReparentBlock, IRele
     {
         if (magnet == null || magnet.IsDestroyed || IsDestroyed)
             return;
-        if (!ReferenceEquals(Attached.Target, magnet))
+        if (!ReferenceEquals(Attached.Target, magnet) && Attached.IsWriteAllowedQuietly())
             Attached.Target = magnet;
     }
 
@@ -225,6 +225,9 @@ public class MagnetSocket : Component, ICustomInspectorUI, IReparentBlock, IRele
         if (IsDestroyed)
             return;
         if (Attached.Target == null || !ReferenceEquals(Attached.Target, magnet))
+            return;
+        // Occupancy follows the children even when the grabbing user cannot update this cache. -xlinka
+        if (!Attached.IsWriteAllowedQuietly())
             return;
         // The setter reads null as "clear the ref"; null! only quiets the annotation.
         Attached.Target = null!;

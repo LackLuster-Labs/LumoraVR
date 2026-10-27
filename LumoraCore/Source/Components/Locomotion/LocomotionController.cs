@@ -181,6 +181,7 @@ public class LocomotionController : Component
         UpdateHead();
 
         HandleDesktopScaling();
+        LocomotionInputHelper.UpdateSprintToggle(_inputInterface!, delta);
         UpdateSlowWalk();
 
         _activeModule?.OnModuleUpdate(delta);
@@ -256,6 +257,9 @@ public class LocomotionController : Component
         if (_inputInterface.IsDashboardOpen)
             return;
         if (!ScalingEnabled.Value)
+            return;
+        // A detached camera zooms on the same ctrl + wheel, and growing a body it is not looking from is no use.
+        if (_inputState?.FreeCamActive == true)
             return;
 
         // The modifier is part of the binding now (stock: ctrl + wheel), so this is one read.
@@ -391,8 +395,21 @@ public class LocomotionController : Component
     // how many came in. Only on the machine this user is at.
     public int Install(Slot templates, bool clearExisting)
     {
+        var copy = InstallCopy(templates, clearExisting);
+        int count = 0;
+        if (copy != null)
+        {
+            foreach (var _ in copy.GetComponentsInChildren<LocomotionModule>())
+                count++;
+        }
+        return count;
+    }
+
+    // The same, handing back the copy, so whoever installed it can take it away again.
+    public Slot? InstallCopy(Slot templates, bool clearExisting)
+    {
         if (templates == null || templates.IsDestroyed || !(_userRoot?.IsLocalUserRoot ?? false))
-            return 0;
+            return null;
         using var engine = World?.DataModelPermissions?.EnterSystemBypass();
         var root = Slot.FindChildOrAdd(ModulesRootName);
         if (clearExisting)
@@ -402,12 +419,9 @@ public class LocomotionController : Component
                 child.Destroy();
         }
         var copy = templates.Duplicate(root);
-        int count = 0;
-        foreach (var _ in copy.GetComponentsInChildren<LocomotionModule>())
-            count++;
         _nextModuleLook = 0;
         RefreshModules();
-        return count;
+        return copy;
     }
 
     // Whether a module is both internally eligible (CanActivate) and permitted right now (world-mode
@@ -506,25 +520,32 @@ public class LocomotionController : Component
         bool freeCam = _inputState?.FreeCamActive ?? false;
         bool lookSuppressed = _inputState?.MouseLookSuppressed ?? false;
         bool inputSuppressed = _inputState?.DesktopInputSuppressed ?? false;
+        // Something pointing with the loose cursor (the context menu, the chat box) holds the view still.
+        bool viewHeld = _inputState?.ViewHeld ?? false;
 
-        if (_mouse == null || !_mouseCaptured || freeCam || lookSuppressed || inputSuppressed)
+        if (freeCam || lookSuppressed || inputSuppressed || viewHeld)
             return;
 
-        // Use Mouse.DirectDelta - now populated via GodotMouseDriver.HandleInputEvent
-        float2 mouseDelta = _mouse.DirectDelta.Value;
+        // The pad's look stick turns the view in the mouse's own units, under the same clamp, and whether or
+        // not the mouse is captured: a stick has no cursor to set free. It reads zero in a headset.
+        float2 look = float2.Zero;
+        if (_mouse != null && _mouseCaptured)
+            look += _mouse.DirectDelta.Value * MouseSensitivity;
+        if (_inputInterface != null)
+            look += _inputInterface.StickLook.Delta;
+        if (look == float2.Zero)
+            return;
 
-        _yaw -= mouseDelta.x * MouseSensitivity;
-        _pitch -= mouseDelta.y * MouseSensitivity;
+        _yaw -= look.x;
+        _pitch -= look.y;
         float maxPitchRad = MaxPitch * (float)System.Math.PI / 180f;
         _pitch = System.Math.Clamp(_pitch, -maxPitchRad, maxPitchRad);
     }
 
-    // Genuinely in third person, which is NOT the same as "the mouse is not driving the head".
-    // MouseLookSuppressed is overloaded: F5 sets it, and so does opening a context menu in FIRST
-    // person, because the menu takes the mouse for its own pointer. Keying the third-person body and
-    // head work off that flag meant opening a menu while standing in first person made this code turn
-    // the avatar to face the camera - which is exactly the "why does opening the context menu rotate
-    // me" report. Ask the camera state instead: external camera, and not the free-cam. -xlinka
+    // Genuinely in third person, which is NOT the same as "the mouse is not driving the head". The
+    // context menu used to raise MouseLookSuppressed in first person too, and keying the third-person body
+    // and head work off that flag turned the avatar to face the camera whenever a menu opened. Ask the
+    // camera state instead: external camera, and not the free-cam. -xlinka
     private bool IsThirdPerson =>
         _inputState?.ExternalCameraActive == true && _inputState?.FreeCamActive != true;
 

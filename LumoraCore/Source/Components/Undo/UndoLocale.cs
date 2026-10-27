@@ -24,6 +24,8 @@ public static class UndoLocale
     public static readonly LocaleText SpawnItem = LocaleText.Keyed("Undo.Step.SpawnItem", "Spawn Item");
     public static readonly LocaleText SpawnLight = LocaleText.Keyed("Undo.Step.SpawnLight", "Spawn Light");
     public static readonly LocaleText SpawnShape = LocaleText.Keyed("Undo.Step.SpawnShape", "Spawn Shape");
+    public static readonly LocaleText BrushStroke = LocaleText.Keyed("Undo.Step.BrushStroke", "Brush Stroke");
+    public static readonly LocaleText EraseStrokes = LocaleText.Keyed("Undo.Step.EraseStrokes", "Erase Strokes");
     public static readonly LocaleText SplitConvexHulls = LocaleText.Keyed("Undo.Step.SplitConvexHulls", "Split Into Convex Hulls");
     public static readonly LocaleText ImportShader = LocaleText.Keyed("Undo.Step.ImportShader", "Import Shader");
 

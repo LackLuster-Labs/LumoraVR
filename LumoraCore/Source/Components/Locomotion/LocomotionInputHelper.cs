@@ -42,7 +42,59 @@ public static class LocomotionInputHelper
         => input?.Actions?.Locomotion.Crouch.Held == true;
 
     public static bool ReadSprint(InputInterface input)
-        => input?.Actions?.Locomotion.Sprint.Held == true;
+        => input?.Actions?.Locomotion.Sprint.Held == true || _sprintLatched;
+
+    // The pad's click to run: on with a click, off with another, with crouch, or once the stick has walked and
+    // then sat back at rest for a moment, which is how running stops on every pad game. Held here rather than
+    // on a module so it carries across a switch between walking and flying, like the slow walk. One local
+    // user moves at a time, so one latch. -xlinka
+    private const float SprintRestSeconds = 0.3f;
+    private const float SprintRestMagnitude = 0.2f;
+    private static bool _sprintLatched;
+    private static bool _sprintMoved;
+    private static bool _sprintClickHeld;
+    private static float _sprintRest;
+
+    public static bool SprintLatched => _sprintLatched;
+
+    // Once a frame, by the controller moving the local user.
+    public static void UpdateSprintToggle(InputInterface input, float delta)
+    {
+        var loco = input?.Actions?.Locomotion;
+        if (loco == null)
+        {
+            _sprintLatched = false;
+            return;
+        }
+
+        bool click = loco.SprintToggle.Held;
+        if (click && !_sprintClickHeld)
+        {
+            _sprintLatched = !_sprintLatched;
+            _sprintMoved = false;
+            _sprintRest = 0f;
+        }
+        _sprintClickHeld = click;
+        if (!_sprintLatched)
+            return;
+
+        if (loco.Crouch.Held)
+        {
+            _sprintLatched = false;
+            return;
+        }
+        if (loco.Move.Value.Length >= SprintRestMagnitude)
+        {
+            _sprintMoved = true;
+            _sprintRest = 0f;
+            return;
+        }
+        if (!_sprintMoved)
+            return;
+        _sprintRest += delta;
+        if (_sprintRest >= SprintRestSeconds)
+            _sprintLatched = false;
+    }
 
     public static bool ReadSlowWalk(InputInterface input)
         => input?.Actions?.Locomotion.SlowWalk.Held == true;

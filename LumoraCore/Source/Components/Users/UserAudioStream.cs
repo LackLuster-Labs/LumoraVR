@@ -35,6 +35,11 @@ public class UserAudioStream : Component, IWorldAudioDataSource
     // not stopped by the host silencing this user's microphone.
     public readonly Sync<bool> IsVoiceCapture;
 
+    // Held by whoever owns the stream: nothing is captured or sent, and every peer stops playing what is
+    // left in its ring. Not the component's Enabled: a disabled component gets no update, so it could
+    // neither close the capture nor notice being switched back on. -xlinka
+    public readonly Sync<bool> Paused;
+
     // Which input to capture from. Null falls back to the system default, which is what a voice wants.
     private AudioInput? _preferredInput;
 
@@ -49,12 +54,14 @@ public class UserAudioStream : Component, IWorldAudioDataSource
     private AudioInput? _subscribedInput;
     private bool _subscribed;
     private bool _subscribedFiltered = true;
+    private bool _wasPaused;
 
     public UserAudioStream()
     {
         Stream = new SyncRef<AudioStream>(this);
         UseFilteredData = new Sync<bool>(this, true);
         IsVoiceCapture = new Sync<bool>(this, true);
+        Paused = new Sync<bool>(this, false);
     }
 
     // Local only: an input device is this machine's, so which one a stream captures from cannot be a
@@ -107,7 +114,12 @@ public class UserAudioStream : Component, IWorldAudioDataSource
 
         var stream = Stream.Target;
         _source = stream;
-        _sourceUsable = stream != null && !stream.IsDestroyed && Enabled.Value;
+        bool paused = Paused.Value;
+        // The tail a receiver still holds would otherwise play the moment the stream comes back.
+        if (paused && !_wasPaused && stream != null && !stream.IsDestroyed && !stream.IsLocal)
+            stream.ResetBuffer();
+        _wasPaused = paused;
+        _sourceUsable = stream != null && !stream.IsDestroyed && Enabled.Value && !paused;
 
         if (stream == null || stream.IsDestroyed)
         {
@@ -135,6 +147,7 @@ public class UserAudioStream : Component, IWorldAudioDataSource
     {
         bool voice = IsVoiceCapture.Value;
         bool muted = !Enabled.Value
+            || Paused.Value
             || Slot?.IsActive != true
             || (voice ? !AudioInput.IsVoiceCaptureAllowed(owner, World) : World?.IsFocused != true);
 

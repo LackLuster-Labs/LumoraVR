@@ -75,7 +75,7 @@ public sealed class PreserveAssetsUndoBatch : IUndoBatch, ISlotStripRecorder, IU
     // null means the caller should run the plain destroy instead - nothing has been changed at that point
     public static PreserveAssetsUndoBatch? Perform(Slot? root, Slot? relocateAssets = null)
     {
-        if (root == null || root.IsDestroyed || root.IsProtected || root.World == null)
+        if (root == null || root.IsDestroyed || root.IsProtected || root.World == null || !root.MayDestroy())
             return null;
         // Acquired up front: without somewhere to park emptied slots there is nothing to undo, and
         // finding that out halfway through the strip would leave a half-reversible mess.

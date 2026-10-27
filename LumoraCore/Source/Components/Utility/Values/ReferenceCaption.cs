@@ -21,6 +21,8 @@ public class ReferenceCaption<T> : Component where T : class, IWorldElement
     public readonly ReferenceCaptionCase<T> Otherwise = new();
     public readonly FieldDrive<string> Label;
     public readonly FieldDrive<colorHDR> Tint;
+    // The same tint onto a plain colour field: a button's or an image's, which take color.
+    public readonly FieldDrive<color> PlainTint;
     public readonly DriveRef<IAssetProvider<TextureAsset>> Icon;
 
     public ReferenceCaption()
@@ -30,6 +32,7 @@ public class ReferenceCaption<T> : Component where T : class, IWorldElement
         Cases = new SyncList<ReferenceCaptionCase<T>>();
         Label = new FieldDrive<string>(this) { LocalValueOnly = true };
         Tint = new FieldDrive<colorHDR>(this) { LocalValueOnly = true };
+        PlainTint = new FieldDrive<color>(this) { LocalValueOnly = true };
         Icon = new DriveRef<IAssetProvider<TextureAsset>>(this) { LocalValueOnly = true };
     }
 
@@ -51,6 +54,8 @@ public class ReferenceCaption<T> : Component where T : class, IWorldElement
         }
         Label.SetValue(shown.Label.Value);
         Tint.SetValue(shown.Tint.Value);
+        var tint = shown.Tint.Value;
+        PlainTint.SetValue(new color(tint.r, tint.g, tint.b, tint.a));
         Icon.SetValue(shown.Icon.Target);
     }
 }

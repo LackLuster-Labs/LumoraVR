@@ -29,6 +29,7 @@ internal static class ValueOpsRegistry
         typeof(float), typeof(double), typeof(int), typeof(long),
         typeof(float2), typeof(float3), typeof(float4), typeof(floatQ),
         typeof(color), typeof(colorHDR),
+        typeof(int2), typeof(int3), typeof(int4),
     };
 
     public static readonly HashSet<Type> StepTypes = new()
@@ -36,6 +37,7 @@ internal static class ValueOpsRegistry
         typeof(int), typeof(long), typeof(float), typeof(double),
         typeof(float2), typeof(float3), typeof(float4), typeof(floatQ),
         typeof(color), typeof(colorHDR),
+        typeof(int2), typeof(int3), typeof(int4),
     };
 }
 
@@ -133,6 +135,36 @@ internal static class ValueOps<T>
                 WrapScalar(v.x, lo.x, hi.x), WrapScalar(v.y, lo.y, hi.y),
                 WrapScalar(v.z, lo.z, hi.z), WrapScalar(v.w, lo.w, hi.w)));
         }
+        else if (typeof(T) == typeof(int2))
+        {
+            // Whole-number vectors blend through float and round each part, the way int does.
+            Blend = Cast3F<int2>((a, b, t) => new int2(Round(a.x, b.x, t), Round(a.y, b.y, t)));
+            Step = Cast2<int2>((a, b) => a + b);
+            Difference = Cast2<int2>((a, b) => a - b);
+            Clamp = Cast3<int2>((v, lo, hi) => new int2(ClampInt(v.x, lo.x, hi.x), ClampInt(v.y, lo.y, hi.y)));
+            Wrap = Cast3<int2>((v, lo, hi) => new int2((int)WrapScalar(v.x, lo.x, hi.x), (int)WrapScalar(v.y, lo.y, hi.y)));
+        }
+        else if (typeof(T) == typeof(int3))
+        {
+            Blend = Cast3F<int3>((a, b, t) => new int3(Round(a.x, b.x, t), Round(a.y, b.y, t), Round(a.z, b.z, t)));
+            Step = Cast2<int3>((a, b) => a + b);
+            Difference = Cast2<int3>((a, b) => a - b);
+            Clamp = Cast3<int3>((v, lo, hi) => new int3(ClampInt(v.x, lo.x, hi.x), ClampInt(v.y, lo.y, hi.y),
+                ClampInt(v.z, lo.z, hi.z)));
+            Wrap = Cast3<int3>((v, lo, hi) => new int3((int)WrapScalar(v.x, lo.x, hi.x), (int)WrapScalar(v.y, lo.y, hi.y),
+                (int)WrapScalar(v.z, lo.z, hi.z)));
+        }
+        else if (typeof(T) == typeof(int4))
+        {
+            Blend = Cast3F<int4>((a, b, t) => new int4(Round(a.x, b.x, t), Round(a.y, b.y, t), Round(a.z, b.z, t),
+                Round(a.w, b.w, t)));
+            Step = Cast2<int4>((a, b) => a + b);
+            Difference = Cast2<int4>((a, b) => a - b);
+            Clamp = Cast3<int4>((v, lo, hi) => new int4(ClampInt(v.x, lo.x, hi.x), ClampInt(v.y, lo.y, hi.y),
+                ClampInt(v.z, lo.z, hi.z), ClampInt(v.w, lo.w, hi.w)));
+            Wrap = Cast3<int4>((v, lo, hi) => new int4((int)WrapScalar(v.x, lo.x, hi.x), (int)WrapScalar(v.y, lo.y, hi.y),
+                (int)WrapScalar(v.z, lo.z, hi.z), (int)WrapScalar(v.w, lo.w, hi.w)));
+        }
         else if (typeof(T) == typeof(floatQ))
         {
             Blend = Cast3F<floatQ>(floatQ.Slerp);
@@ -167,6 +199,10 @@ internal static class ValueOps<T>
                 WrapScalar(v.b, lo.b, hi.b), WrapScalar(v.a, lo.a, hi.a)));
         }
     }
+
+    private static int Round(int a, int b, float t) => (int)System.Math.Round(a + (b - a) * t);
+
+    private static int ClampInt(int value, int low, int high) => System.Math.Max(low, System.Math.Min(high, value));
 
     // An empty range means no wrap. Taking the modulo of zero would divide by zero.
     private static float WrapScalar(float value, float low, float high)

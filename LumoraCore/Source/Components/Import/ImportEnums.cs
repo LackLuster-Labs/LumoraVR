@@ -52,3 +52,20 @@ public enum AudioImportForm
     Player,
     Orb,
 }
+
+// Where an import keeps its meshes, materials and textures: on the parts that draw them, in one Assets slot
+// under the model, or under the world's own Assets slot with everything else brought in that way.
+public enum ModelAssetPlacement
+{
+    WithParts,
+    UnderModel,
+    World,
+}
+
+// What an imported model is solid with: nothing, its exact mesh, or a fitted box, ball or capsule per part.
+public enum ModelColliderMode
+{
+    None,
+    Mesh,
+    Shapes,
+}

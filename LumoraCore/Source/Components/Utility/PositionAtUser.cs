@@ -37,6 +37,13 @@ public class PositionAtUser : Component
     private readonly List<Slot> _headBones = new();
     private readonly List<SkinnedMeshRenderer> _renderers = new();
     private readonly List<(SkinnedMeshRenderer Renderer, MeshDataAsset? Asset, int Bones, int Vertices)> _current = new();
+    private float _topAbove;
+    private ulong _topMeasuredAt = ulong.MaxValue;
+    private const ulong TopEvery = 6;
+    // Where the avatar's head stands from the tracked head. An avatar further off is posed every few frames and
+    // one that is a picture hardly at all, so the plate rides the tracked head, which moves every frame, at that
+    // lead, and the lead is measured again with the top of the head.
+    private float3 _headLead;
 
     public override void OnInit()
     {
@@ -168,10 +175,30 @@ public class PositionAtUser : Component
         if (head == null || head.IsDestroyed || parent == null)
             return;
 
+        // A plate over somebody behind the viewer or far past them follows less often; nobody sees it move.
+        ulong frame = World!.Time.UpdateIndex;
+        var view = Avatar.AvatarViewLod.Look(userRoot.Slot);
+        if (view.Level == Avatar.AvatarViewLod.Level.Hidden && !view.RunsThisFrame(frame))
+            return;
+
         float scale = MathF.Max(userRoot.GlobalScale, 0.01f);
         var avatar = userRoot.GetRegisteredComponent<Avatar.AvatarEquipManager>()?.EquippedAvatar;
-        var target = head.GlobalPosition;
-        target.y = MathF.Max(target.y + VerticalOffset.Value * scale, HeadTop(head, avatar) + 0.12f * scale);
+        var tracked = userRoot.HeadSlot;
+        bool picture = view.Level == Avatar.AvatarViewLod.Level.StandIn;
+        bool riding = view.Level is Avatar.AvatarViewLod.Level.Reduced or Avatar.AvatarViewLod.Level.Distant or Avatar.AvatarViewLod.Level.StandIn
+            && tracked != null && !tracked.IsDestroyed && !ReferenceEquals(tracked, head);
+        var target = riding ? tracked!.GlobalPosition + _headLead : head.GlobalPosition;
+        // The top of the head is every head bone and the skin hung on them. It turns with the head, so it is kept
+        // as a height above the head and walked again every few frames instead of every frame: a crowd's plates
+        // were a millisecond of bone walks a frame. -xlinka
+        if (!picture && (head != _measuredHead || avatar != _measuredAvatar || frame < _topMeasuredAt || frame - _topMeasuredAt >= TopEvery))
+        {
+            var bone = head.GlobalPosition;
+            _topAbove = HeadTop(head, avatar) - bone.y;
+            _topMeasuredAt = frame;
+            _headLead = tracked != null && !tracked.IsDestroyed ? bone - tracked.GlobalPosition : float3.Zero;
+        }
+        target.y = MathF.Max(target.y + VerticalOffset.Value * scale, target.y + _topAbove + 0.12f * scale);
         var local = parent.GlobalPointToLocal(target);
 
         if ((Slot!.LocalPosition.Value - local).LengthSquared > 1e-10f)

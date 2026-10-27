@@ -41,7 +41,7 @@ public class TouchRelay : Component
     // A relay is the toucher's own object, so a hostile client can spin it as fast as it can send
     // packets. One contact per frame is all a probe can honestly produce; this is the ceiling the
     // authority acts on no matter what arrives.
-    private const int MaxActivationsPerSecond = 120;
+    internal const int MaxActivationsPerSecond = 120;
 
     private const int PhaseBits = 7;
     private const int CounterMask = (1 << 24) - 1;

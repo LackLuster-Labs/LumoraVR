@@ -29,7 +29,8 @@ public class UVPanner : Component
     // Scroll back down the span instead of jumping to its start.
     public readonly Sync<bool> PingPong;
 
-    public readonly FieldDrive<float2> Offset;
+    // A write to the field from anything else moves StartOffset so the scroll carries on from there.
+    public readonly HoldingFieldDrive<float2> Offset;
 
     public UVPanner()
     {
@@ -37,7 +38,15 @@ public class UVPanner : Component
         StartOffset = new Sync<float2>(this, float2.Zero);
         Repeat = new Sync<float2>(this, float2.One);
         PingPong = new Sync<bool>(this, false);
-        Offset = new FieldDrive<float2>(this) { LocalValueOnly = true };
+        Offset = new HoldingFieldDrive<float2>(this) { LocalValueOnly = true, Holds = () => true };
+        Offset.SetupValueSetHook(Rebase);
+    }
+
+    private void Rebase(SyncField<float2> field, float2 value)
+    {
+        if (StartOffset.CanWrite)
+            StartOffset.Value = StartOffset.Value + (value - Position);
+        Offset.SetValue(value);
     }
 
     public float2 Position
@@ -64,10 +73,12 @@ public class UVPanner : Component
 
     // A span of zero or less would divide by zero, and there is no unwrapped answer worth handing back
     // either: the clock is wall-clock anchored, so the raw scroll is in the tens of billions and a float
-    // that large cannot tell one frame from the next. Wrap in double over a full tile instead. -xlinka
+    // that large cannot tell one frame from the next. Wrap in double over a full tile instead. A span with
+    // no end (a package's never-wrapping scroll is stored as the largest float) is the same full tile: a
+    // tiling texture scrolled one tile looks the same as one never wrapped. -xlinka
     private static float Advance(double seconds, float speed, float start, float repeat, bool pingPong)
     {
-        double span = repeat > 0f ? repeat : 1.0;
+        double span = repeat > 0f && repeat < float.MaxValue ? repeat : 1.0;
         double period = pingPong ? span * 2.0 : span;
         double wrapped = (seconds * speed + start) % period;
         if (wrapped < 0.0)

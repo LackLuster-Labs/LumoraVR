@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using Helio.UI;
+using Lumora.Core.Security;
 using Lumora.Warden;
 
 namespace Lumora.Core.Components;
@@ -56,10 +57,21 @@ public class ItemProtection : Component, IDataModelCopyProtection, ICustomInspec
     // this machine just asked for. Filled in HERE rather than left for the gate: a registered rule is
     // handed the request before the gate resolves the actor, so a rule would see nobody at all.
     public static bool AllowsSaveCopy(Slot? slot, User? actor, out string? reason)
-        => Allows(slot, actor, DataModelPermissionAction.SaveCopy, out reason);
+        => AllowsSealed(slot, actor, SealRule.SaveCopy, out reason) && Allows(slot, actor, DataModelPermissionAction.SaveCopy, out reason);
 
     public static bool AllowsExport(Slot? slot, User? actor, out string? reason)
-        => Allows(slot, actor, DataModelPermissionAction.Export, out reason);
+        => AllowsSealed(slot, actor, SealRule.Export, out reason) && Allows(slot, actor, DataModelPermissionAction.Export, out reason);
+
+    // An account's seal in or over the object answers first, and it binds the host as much as anyone (AvatarProtection).
+    // A seal still being checked refuses too: nothing on these paths can wait.
+    private static bool AllowsSealed(Slot? slot, User? actor, SealRule rule, out string? reason)
+    {
+        reason = null;
+        if (slot?.World == null || ItemSeals.CountIn(slot.World) == 0)
+            return true;
+        var account = actor != null ? actor.AccountId.Value : ItemSeals.ActingAccount(slot.World);
+        return ItemSeals.Judge(slot, account, rule, out reason) == SealVerdict.Allowed;
+    }
 
     private static bool Allows(Slot? slot, User? actor, DataModelPermissionAction action, out string? reason)
     {

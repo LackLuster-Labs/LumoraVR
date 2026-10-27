@@ -499,10 +499,17 @@ public sealed class WorldPortal : WorldLink
             if (hasFacing)
                 slot.GlobalRotation = facing;
 
-            var portal = slot.AttachComponent<WorldPortal>();
-            portal.DroppedBy.Value = droppedBy;
-            portal.ExpiresAt.Value = into.SessionSeconds + portal.Lifetime.Value;
-            fill(portal);
+            // The dropper's favourite portal when they have one, sent where this door was going.
+            FavouriteSpawn.Fill<WorldPortal>(slot, FavouriteKind.Portal, favourite =>
+            {
+                if (slot.IsDestroyed)
+                    return;
+                using var mine = into.EnterSpawnAllocation();
+                var portal = favourite ?? slot.AttachComponent<WorldPortal>();
+                portal.DroppedBy.Value = droppedBy;
+                portal.ExpiresAt.Value = into.SessionSeconds + portal.Lifetime.Value;
+                fill(portal);
+            });
         });
         return true;
     }

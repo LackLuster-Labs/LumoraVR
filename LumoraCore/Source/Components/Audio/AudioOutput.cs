@@ -118,7 +118,7 @@ public class AudioOutput : Component
     // than on the voice output: whatever they are carrying that makes noise is part of what I blocked.
     public bool ShouldBeEnabled
         => !IsDestroyed && Enabled.Value && Slot != null && Slot.IsActive && ResolvedSource != null
-           && ActiveUser?.IsAudioLocallyBlocked != true;
+           && ActiveUser is not { IsAudioLocallyBlocked: true } and not { IsBlockedByMe: true };
 
     public bool IsRegistered => Voice != null;
 

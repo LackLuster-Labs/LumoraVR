@@ -63,11 +63,66 @@ public class UserRoot : Component
 
     public Slot? ActiveRootOverride => RootOverride.Target is { IsDestroyed: false } space ? space : null;
 
+    // TRACKING SPACE OFFSET
+    //
+    // The tracking space sits off the root by two things added together: what the worn avatar asks for (a
+    // quadruped's view is not where a person's eyes are) and seated mode's lift, straight up the root. They are
+    // kept apart and the slot is only ever written as base plus lift, so neither stacks on the other and a lift
+    // toggled a hundred times is still one lift. A value something else wrote into the slot becomes the base.
+    // Only the user's own machine lifts; the slot replicates with the rest of the body, so everyone sees it.
+    // -xlinka
+    private Slot? _offsetSpace;
+    private float3 _offsetBase;
+    private float3 _offsetWritten;
+    private float _appliedLift;
+
+    // How much of the offset is seated mode's lift, in tracking-space metres, for every peer: something that
+    // reads the head against the tracking space (a quadruped's crouch) adds it back.
+    public readonly Sync<float> SeatedLift = new();
+
     public void SetAvatarTrackingOffset(float3 offset)
     {
         var space = TrackingSpaceSlot;
         if (space != Slot)
-            space.LocalPosition.Value = offset;
+            WriteTrackingOffset(space, offset, _appliedLift);
+    }
+
+    public void SetSeatedLift(float lift)
+    {
+        var space = TrackingSpaceSlot;
+        if (space == Slot)
+            return;
+        if (!float.IsFinite(lift) || lift < 0f)
+            lift = 0f;
+        if (ReferenceEquals(space, _offsetSpace) && lift == _appliedLift && space.LocalPosition.Value == _offsetWritten)
+            return;
+        // Engine placement of the user's own body, like the walk that moves the root: the root is minted by the
+        // host, and the link that makes it this user's lags a moment on join.
+        using (World?.DataModelPermissions?.EnterSystemBypass())
+            WriteTrackingOffset(space, null, lift);
+    }
+
+    private void WriteTrackingOffset(Slot space, float3? offset, float lift)
+    {
+        float3 current = space.LocalPosition.Value;
+        if (!ReferenceEquals(space, _offsetSpace))
+        {
+            // A space not written here yet carries no lift of ours.
+            _offsetSpace = space;
+            _offsetBase = current;
+        }
+        else if (current != _offsetWritten)
+        {
+            _offsetBase = current;
+        }
+        if (offset.HasValue)
+            _offsetBase = offset.Value;
+        _appliedLift = lift;
+        _offsetWritten = _offsetBase + float3.Up * lift;
+        if (current != _offsetWritten)
+            space.LocalPosition.Value = _offsetWritten;
+        if (IsLocalUserRoot && SeatedLift.Value != lift)
+            SeatedLift.Value = lift;
     }
 
     private bool _isRegistered = false;
@@ -92,7 +147,7 @@ public class UserRoot : Component
     // can be renamed or moved without breaking the lookup. - xlinka
 
     public Slot HeadSlot => GetBodyNodeSlot(ref _cachedHeadSlot, Input.BodyNode.Head)
-                            ?? FallbackChildLookup(ref _cachedHeadSlot, "Head");
+                            ?? FallbackChildLookup(ref _cachedHeadSlot, ref _headMiss, "Head");
 
     // The first context menu under this body, as found in the body's present structure. Scripts ask whether a
     // person's menu is open every frame, and each ask walked the whole body and the avatar on it.
@@ -114,16 +169,16 @@ public class UserRoot : Component
     }
 
     public Slot LeftHandSlot => GetBodyNodeSlot(ref _cachedLeftHandSlot, Input.BodyNode.LeftHand)
-                                ?? FallbackChildLookup(ref _cachedLeftHandSlot, "LeftHand");
+                                ?? FallbackChildLookup(ref _cachedLeftHandSlot, ref _leftHandMiss, "LeftHand");
 
     public Slot RightHandSlot => GetBodyNodeSlot(ref _cachedRightHandSlot, Input.BodyNode.RightHand)
-                                 ?? FallbackChildLookup(ref _cachedRightHandSlot, "RightHand");
+                                 ?? FallbackChildLookup(ref _cachedRightHandSlot, ref _rightHandMiss, "RightHand");
 
     public Slot LeftFootSlot => GetBodyNodeSlot(ref _cachedLeftFootSlot, Input.BodyNode.LeftFoot)
-                                ?? FallbackChildLookup(ref _cachedLeftFootSlot, "LeftFoot");
+                                ?? FallbackChildLookup(ref _cachedLeftFootSlot, ref _leftFootMiss, "LeftFoot");
 
     public Slot RightFootSlot => GetBodyNodeSlot(ref _cachedRightFootSlot, Input.BodyNode.RightFoot)
-                                 ?? FallbackChildLookup(ref _cachedRightFootSlot, "RightFoot");
+                                 ?? FallbackChildLookup(ref _cachedRightFootSlot, ref _rightFootMiss, "RightFoot");
 
     // Body component (avatar torso) - not a tracked device, still needs string lookup.
     public Slot BodySlot
@@ -195,16 +250,38 @@ public class UserRoot : Component
     // before the matching TrackedDevicePositioner registers, and for avatars
     // built by templates that don't use tracked-device positioners at all.
     // - xlinka
-    private Slot FallbackChildLookup(ref Slot cache, string name)
+    //
+    // A miss is remembered until a slot or a component comes or goes somewhere, or a second has passed: scripts
+    // ask for every person's feet each frame, hardly anybody has tracked feet, and every ask that found nothing
+    // searched three sets of children again. -xlinka
+    private struct LookupMiss
+    {
+        public int Structure;
+        public double At;
+    }
+
+    private LookupMiss _headMiss = new() { Structure = -1 };
+    private LookupMiss _leftHandMiss = new() { Structure = -1 };
+    private LookupMiss _rightHandMiss = new() { Structure = -1 };
+    private LookupMiss _leftFootMiss = new() { Structure = -1 };
+    private LookupMiss _rightFootMiss = new() { Structure = -1 };
+
+    private Slot FallbackChildLookup(ref Slot cache, ref LookupMiss miss, string name)
     {
         if (cache != null && !cache.IsDestroyed)
             return cache;
         if (IsDestroyed)
             return null!;
 
+        int structure = Slot.StructureEpoch;
+        double now = World?.Time.TotalTime ?? 0.0;
+        if (miss.Structure == structure && now >= miss.At && now - miss.At < 1.0)
+            return null!;
+
         cache = (Slot.FindChild("Body Nodes", recursive: false)?.FindChild(name, recursive: false) ??
                  Slot.FindChild(name, recursive: false) ??
                  Slot.FindChild("Avatar", recursive: false)?.FindChild(name, recursive: false))!;
+        miss = cache == null ? new LookupMiss { Structure = structure, At = now } : new LookupMiss { Structure = -1 };
         return cache!;
     }
 
@@ -748,6 +825,14 @@ public class UserRoot : Component
     {
         base.OnAwake();
         Slot?.RegisterUserRoot(this);
+        // A body is as big as its own user makes it, and goes under whatever its seat or carrier puts it under.
+        // No drive takes either, whoever wrote it: world content copying a value onto a root would otherwise
+        // shrink a visitor or hang them off its furniture, and keep doing it every frame. -xlinka
+        if (Slot != null)
+        {
+            Slot.LocalScale.MarkNonDrivable();
+            Slot.ParentSlotRef.MarkNonDrivable();
+        }
         // Where a user sees from is for that user alone to point: the host turns away any remote write that
         // aims it at something unless it comes from this root's own user. Clearing is never asked about. -xlinka
         ViewOverride.CheckRemoteSets(SentByOwnUser);
@@ -967,8 +1052,15 @@ public class UserRoot : Component
         // After the ear, because the voice output has to exclude it and the list is filled once.
         EnsureVoiceOutput();
 
+        // someone I blocked is drawn on none of my screens, plate, avatar and all; everyone else still sees them
+        Slot.SetLocallyHidden(ActiveUser?.IsBlockedByMe == true);
+
         if (_scaling)
             StepScale(delta);
+
+        // Userspace's pointer rig takes its devices out of the focused world's space, lift included.
+        if (IsLocalUserRoot && World is { IsUserspace: false })
+            SetSeatedLift(Input.SeatedMode.Lift);
 
         // Validate scale to prevent invalid transforms. These corrective writes run on EVERY peer (incl. an
         // observer holding a REMOTE user's root), and use the THROWING .Value/Scale setters - so a foreign-write

@@ -7,7 +7,7 @@ namespace Lumora.Core.Components.Utility;
 
 // Drives this slot's position and rotation with a slow random wander around its resting pose.
 //
-// Value noise, not a per-frame random walk: the offset is a pure function of the shared clock and the
+// Smooth noise, not a per-frame random walk: the offset is a pure function of the shared clock and the
 // seed, so every peer sees the same wander and nothing has to be replicated per frame. A random walk
 // would diverge immediately and could never be re-derived by a joining peer. -xlinka
 [ComponentCategory("Utility/Transforms")]
@@ -24,6 +24,13 @@ public class Jitter : Component
 
     // Changes the pattern without changing its character.
     public readonly Sync<int> Seed;
+
+    // Moves each axis along its pattern, in wanders. Jitters on one seed set a little apart in phase move as one
+    // wave passing through them, which is how a row of strips sways like a single flag.
+    public readonly Sync<float3> Phase;
+
+    // The rotation wanders about the parent's axes rather than the slot's own.
+    public readonly Sync<bool> TurnAboutParent;
 
     // The position the wander is applied on top of.
     public readonly Sync<float3> BasePosition;
@@ -43,6 +50,8 @@ public class Jitter : Component
         RotationMagnitude = new Sync<float3>(this, new float3(5f, 5f, 5f));
         Speed = new Sync<float3>(this, float3.One);
         Seed = new Sync<int>(this, 0);
+        Phase = new Sync<float3>(this, float3.Zero);
+        TurnAboutParent = new Sync<bool>(this, false);
         BasePosition = new Sync<float3>(this, float3.Zero);
         BaseRotation = new Sync<floatQ>(this, floatQ.Identity);
         Position = new FieldDrive<float3>(this) { LocalValueOnly = true };
@@ -69,12 +78,13 @@ public class Jitter : Component
     {
         double now = UtilityClock.Seconds(World);
         var speed = Speed.Value;
+        var phase = Phase.Value;
         int seed = Seed.Value;
 
         var wander = new float3(
-            SmoothNoise(now * speed.x, seed),
-            SmoothNoise(now * speed.y, seed + 8191),
-            SmoothNoise(now * speed.z, seed + 16381));
+            SmoothNoise(now * speed.x + phase.x, seed),
+            SmoothNoise(now * speed.y + phase.y, seed + 8191),
+            SmoothNoise(now * speed.z + phase.z, seed + 16381));
 
         if (Position.IsLinkValid)
             Position.SetValue(BasePosition.Value + wander * PositionMagnitude.Value);
@@ -82,23 +92,27 @@ public class Jitter : Component
         if (Rotation.IsLinkValid)
         {
             var degrees = wander * RotationMagnitude.Value;
-            var euler = degrees * (float)(System.Math.PI / 180.0);
-            Rotation.SetValue(BaseRotation.Value * floatQ.Euler(euler));
+            var turn = floatQ.Euler(degrees * (float)(System.Math.PI / 180.0));
+            Rotation.SetValue(TurnAboutParent.Value ? turn * BaseRotation.Value : BaseRotation.Value * turn);
         }
     }
 
-    // Value noise in [-1, 1]: hash the two integer samples either side and ease between them. Cheap,
-    // deterministic from the seed alone, and continuous, which is what separates a wander from a
-    // twitch.
+    // Gradient noise: every whole step of the input crosses zero on a slope hashed from the seed, and the curve
+    // eases from one slope into the next. Eased random levels stall flat at every step, which reads as a wander
+    // pausing; this never does. Deterministic from the seed alone and continuous, which is what separates a
+    // wander from a twitch. Scaled so the swing peaks at about the magnitude, now and then a little past it,
+    // and spends most of its time within a third of it. -xlinka
     private static float SmoothNoise(double t, int seed)
     {
         long cell = (long)System.Math.Floor(t);
         float fraction = (float)(t - cell);
-        float eased = fraction * fraction * (3f - 2f * fraction);
-        float a = Hash(cell, seed);
-        float b = Hash(cell + 1, seed);
-        return a + (b - a) * eased;
+        float eased = fraction * fraction * fraction * (fraction * (fraction * 6f - 15f) + 10f);
+        float a = Hash(cell, seed) * fraction;
+        float b = Hash(cell + 1, seed) * (fraction - 1f);
+        return (a + (b - a) * eased) * NoiseScale;
     }
+
+    private const float NoiseScale = 2.5f;
 
     private static float Hash(long cell, int seed)
     {

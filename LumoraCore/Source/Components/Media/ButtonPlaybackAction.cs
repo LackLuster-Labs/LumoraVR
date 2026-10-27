@@ -118,6 +118,15 @@ public sealed class ButtonPlaybackAction : Component
                 else
                     target.Play();
                 break;
+            case PlaybackAction.ToggleLoop:
+                target.Loop = !target.Loop;
+                break;
+            case PlaybackAction.EnableLoop:
+                target.Loop = true;
+                break;
+            case PlaybackAction.DisableLoop:
+                target.Loop = false;
+                break;
         }
     }
 }

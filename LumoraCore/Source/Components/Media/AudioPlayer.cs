@@ -605,8 +605,13 @@ public sealed class AudioPlayer : Component, IPlayable
         if (_plateMesh != null && !_plateMesh.IsDestroyed)
             _plateMesh.Size.SetValueSilently(new float2(width + PlateMargin * 2f, height + PlateMargin * 2f));
 
+        // Wholly behind the face. Centred on the plate, its front sat 5 mm in front of the controls, and
+        // the beam met the collider first: every button on the panel was dead and only the grab answered. -xlinka
         if (_plateCollider != null && !_plateCollider.IsDestroyed)
+        {
             _plateCollider.Size.SetValueSilently(new float3(width + PlateMargin * 2f, height + PlateMargin * 2f, 0.02f));
+            _plateCollider.Offset.SetValueSilently(new float3(0f, 0f, -0.01f));
+        }
 
         // The trace spans the panel and stands as tall as the panel's middle band, which is the part
         // the controls leave empty.

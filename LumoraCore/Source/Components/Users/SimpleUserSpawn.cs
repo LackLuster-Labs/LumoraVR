@@ -22,6 +22,8 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
     // and the User<->UserRoot link is set, then retried from OnUpdate. -xlinka
     private readonly HashSet<User> _pendingOwnedEquip = new();
     private readonly List<User> _retryScratch = new();
+    private readonly Dictionary<User, double> _respawnedAt = new();
+    private const double RespawnSpacing = 1.0;
 
     public override void OnAwake()
     {
@@ -104,6 +106,46 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
         }
     }
 
+    // A user whose body is gone or broken gets a new one at a spawn point. Whatever is left of the old one
+    // goes first, letting go of anything it held that is not theirs. Two asks close together (a Respawn press
+    // and the body watch noticing the same loss) build one body. -xlinka
+    public void Respawn(User user)
+    {
+        if (user == null || user.IsDestroyed || World == null || !World.IsAuthority)
+            return;
+        double now = World.TotalTime;
+        if (_respawnedAt.TryGetValue(user, out var last) && now - last < RespawnSpacing
+            && LocalBodyWatch.IsWhole(user, user.Root))
+            return;
+        _respawnedAt[user] = now;
+
+        LumoraLogger.Log($"SimpleUserSpawn: Respawning '{user.UserName.Value}'");
+        using (EnterUserSetup())
+        {
+            if (_userSlots.TryGetValue(user, out var tracked) && tracked != null && !tracked.IsDestroyed)
+                TakeDown(tracked, user);
+            var current = user.Root?.Slot;
+            if (current != null && !current.IsDestroyed && !ReferenceEquals(current, tracked))
+                TakeDown(current, user);
+        }
+        _userSlots.Remove(user);
+        BuildSharedScaffoldFor(user);
+    }
+
+    private static void TakeDown(Slot body, User user)
+    {
+        LetGoOfOthersThings(body, user);
+        body.Destroy();
+    }
+
+    // A new body arrived for this peer's own user: its hand tools and context menu go on it once its
+    // scaffold has synced in.
+    public void RebuildOwnedEquipment(User user)
+    {
+        if (user != null && ReferenceEquals(user, World?.LocalUser))
+            _pendingOwnedEquip.Add(user);
+    }
+
     // Build the local user's own equipment once its (host-built) scaffold has synced in and the
     // User<->UserRoot link is set. Re-queues for an OnUpdate retry if the scaffold/controllers/root aren't
     // ready or a transient join-window denial throws. -xlinka
@@ -131,6 +173,7 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
                 GetBuilder().BuildOwnedEquipment(root);
             }
             _pendingOwnedEquip.Remove(user);
+            FavouriteAvatar.Arrived(World);
         }
         catch (Exception)
         {
@@ -165,6 +208,7 @@ public class SimpleUserSpawn : Component, IWorldEventReceiver
     {
         if (user == null) return;
         _pendingOwnedEquip.Remove(user);
+        _respawnedAt.Remove(user);
         if (!World.IsAuthority) return;
         if (_userSlots.TryGetValue(user, out var slot))
         {

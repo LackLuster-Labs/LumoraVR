@@ -36,7 +36,8 @@ public class UserInputState : Component
     }
 
     // F5 third-person. Character keeps moving but mouse drives orbit
-    // instead of head look.
+    // instead of head look. The camera controller's flag alone; anything else
+    // that wants the view still asks with SetViewHeld.
     public bool MouseLookSuppressed { get; private set; }
 
     public void SetMouseLookSuppressed(bool value)
@@ -167,6 +168,36 @@ public class UserInputState : Component
         }
     }
 
+    // The view's own hold: the camera stays where it is and look input turns nothing, but the body still
+    // walks. Raised by whatever points with the loose cursor (the context menu, the chat box), in every
+    // desktop view, since moving the view would move the aim under the cursor; taking the whole desktop
+    // channel for that stopped the walk with it. -xlinka
+    private readonly object _viewLock = new();
+    private readonly HashSet<object> _viewRequests = new();
+
+    public bool ViewHeld
+    {
+        get
+        {
+            lock (_viewLock)
+                return _viewRequests.Count > 0;
+        }
+    }
+
+    public void SetViewHeld(object requester, bool value)
+    {
+        if (requester == null)
+            return;
+
+        lock (_viewLock)
+        {
+            if (value)
+                _viewRequests.Add(requester);
+            else
+                _viewRequests.Remove(requester);
+        }
+    }
+
     // Same multi-requester shape as the suppression set: raised by a hand tool while it is carrying something
     // on its laser, where the wheel pushes that object nearer or further. The third-person orbit reads it and
     // leaves the wheel alone, so reeling a held object in doesn't zoom the camera on the same notch. -xlinka
@@ -258,6 +289,8 @@ public class UserInputState : Component
     {
         lock (_suppressionLock)
             _suppressionRequests.Clear();
+        lock (_viewLock)
+            _viewRequests.Clear();
         lock (_movementLock)
             _movementRequests.Clear();
         lock (_wheelCaptureLock)
@@ -290,6 +323,7 @@ public class UserInputState : Component
     public static bool FocusedFreeCamActive => ForFocusedLocalUser?.FreeCamActive ?? false;
     public static bool FocusedMouseLookSuppressed => ForFocusedLocalUser?.MouseLookSuppressed ?? false;
     public static bool FocusedDesktopInputSuppressed => ForFocusedLocalUser?.DesktopInputSuppressed ?? false;
+    public static bool FocusedViewHeld => ForFocusedLocalUser?.ViewHeld ?? false;
     public static bool FocusedExternalCameraActive => ForFocusedLocalUser?.ExternalCameraActive ?? false;
     public static bool FocusedScrollWheelCaptured => ForFocusedLocalUser?.ScrollWheelCaptured ?? false;
     public static bool FocusedStickPressCaptured => ForFocusedLocalUser?.StickPressCaptured ?? false;

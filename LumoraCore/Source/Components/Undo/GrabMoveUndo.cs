@@ -81,6 +81,7 @@ internal sealed class GrabMoveUndo
         {
             var slot = move._grab.Slot;
             if (move._history.IsDestroyed || move._grab.IsDestroyed || slot == null || slot.IsDestroyed
+                || UndoTargets.ContainsWornAvatar(slot)
                 || (graveyard != null && slot.IsDescendantOf(graveyard)))
                 continue;
             var batch = move.IsCurrent ? move._pose.Commit(PoseTolerance) : move._atRelease;

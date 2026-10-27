@@ -132,18 +132,23 @@ public class Animator : Component, ICustomInspectorUI, IPlayable, IInspectorActi
     void IPlayable.Resume() => Playback.Resume();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Play() => Playback.Resume();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Pause() => Playback.Pause();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Stop() => Playback.Stop();
 
     [SyncMethod]
+    [ScriptMethod]
     public void Restart() => Playback.Play();
 
     [SyncMethod]
+    [ScriptMethod]
     public void TogglePlayback() => Playback.TogglePlayback();
 
     public override void OnAwake()

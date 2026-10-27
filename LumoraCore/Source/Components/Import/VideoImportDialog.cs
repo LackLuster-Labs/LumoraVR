@@ -134,7 +134,12 @@ public sealed class VideoImportDialog : ImportDialog
 
             var options = new VideoImportOptions(IsRemote(source), Layout.Value, Projection.Value);
             var captured = source;
-            _ = handler.ImportAsync(s, captured, options);
+            // The user's favourite player when they have one, which the handler then points at the video.
+            FavouriteSpawn.Fill<Media.VideoPlayer>(s, FavouriteKind.VideoPlayer, favourite =>
+            {
+                if (!s.IsDestroyed)
+                    _ = handler.ImportAsync(s, captured, options);
+            });
         }
 
         Slot.Destroy();

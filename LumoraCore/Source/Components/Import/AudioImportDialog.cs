@@ -882,7 +882,11 @@ public sealed class AudioImportDialog : ImportDialog
         }
         else
         {
-            player = slot.AttachComponent<AudioPlayer>();
+            // The user's favourite audio player when they have one, set to play this.
+            player = await FavouriteSpawn.FillAsync<AudioPlayer>(slot, FavouriteKind.AudioPlayer);
+            if (slot.IsDestroyed)
+                return;
+            player ??= slot.AttachComponent<AudioPlayer>();
             player.SetSource(uri);
             clip = player.Provider;
             if (player.Transport is { } transport)

@@ -367,9 +367,16 @@ public sealed class WorldOrb : WorldLink, IHeldActivatable
             using var own = into.EnterSpawnAllocation();
             var slot = root.AddSlot("World Orb: " + name);
             slot.GlobalPosition = InFrontOfLocalHead(into);
-            var orb = slot.AttachComponent<WorldOrb>();
-            orb.DisplayName.Value = name;
-            fill(orb);
+            // The user's favourite orb when they have one, pointed at this place.
+            FavouriteSpawn.Fill<WorldOrb>(slot, FavouriteKind.WorldOrb, favourite =>
+            {
+                if (slot.IsDestroyed)
+                    return;
+                using var mine = into.EnterSpawnAllocation();
+                var orb = favourite ?? slot.AttachComponent<WorldOrb>();
+                orb.DisplayName.Value = name;
+                fill(orb);
+            });
         });
         return true;
     }

@@ -71,6 +71,10 @@ public static class ValueZoneRegistry
         return list;
     }
 
+    // The zones under a name, without keeping a list for a name nothing has registered.
+    public static List<IValueZone>? Find(World world, string name)
+        => Tables.TryGetValue(world, out var table) && table.ByName.TryGetValue(name, out var list) ? list : null;
+
     public static void Add(World world, string name, IValueZone zone)
     {
         var list = ListFor(world, name);

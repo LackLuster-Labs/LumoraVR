@@ -23,6 +23,9 @@ public static class UndoGraveyard
         var graveyard = root.FindChild(SlotName, recursive: false);
         if (graveyard == null || graveyard.IsDestroyed)
         {
+            // Made in the maker's own allocation. In the world's byte a frozen world refuses even the host, and
+            // the half-made pen that refusal left behind took in what was parked next, on the host alone. -xlinka
+            using var own = world!.EnterLocalUserAllocation();
             graveyard = root.AddSlot(SlotName);
             graveyard.Persistent.Value = false;
             graveyard.ActiveSelf.Value = false;
@@ -81,6 +84,26 @@ public sealed class SlotExistenceUndoBatch : IUndoBatch, IUndoTargetQuery
         public floatQ LocalRotation;
         public float3 LocalScale;
         public bool WasActive;
+        public readonly List<Survivor> Survivors = new();
+    }
+
+    // What the park let out to the world root, and where it hung, so an undo can hang it back.
+    private readonly struct Survivor
+    {
+        public readonly Slot Slot;
+        public readonly Slot? Parent;
+        public readonly float3 LocalPosition;
+        public readonly floatQ LocalRotation;
+        public readonly float3 LocalScale;
+
+        public Survivor(Slot slot)
+        {
+            Slot = slot;
+            Parent = slot.Parent;
+            LocalPosition = slot.LocalPosition.Value;
+            LocalRotation = slot.LocalRotation.Value;
+            LocalScale = slot.LocalScale.Value;
+        }
     }
 
     private readonly List<Entry> _entries = new();
@@ -99,10 +122,16 @@ public sealed class SlotExistenceUndoBatch : IUndoBatch, IUndoTargetQuery
         _isDestroy = isDestroy;
     }
 
-    // Park the slots now (undoable destroy). Null if nothing could be parked.
+    // Park the slots now (undoable destroy). Null if nothing could be parked. A slot the actor may not
+    // destroy is left alone, for the caller's plain destroy to refuse: parking is only a move, so a guest
+    // could park someone else's thing, and the real destroy the park stood for was then refused when the
+    // step left the history, which left it in the pen for good, out of sight. -xlinka
     public static SlotExistenceUndoBatch? Destroy(World? world, IEnumerable<Slot> slots)
+        => Destroy(world, slots, UndoLocale.Destroy);
+
+    public static SlotExistenceUndoBatch? Destroy(World? world, IEnumerable<Slot> slots, LocaleText description)
     {
-        var batch = Create(world, slots, UndoLocale.Destroy, isDestroy: true);
+        var batch = Create(world, slots, description, isDestroy: true);
         if (batch == null)
             return null;
         return batch.Park() ? batch : null;
@@ -125,6 +154,8 @@ public sealed class SlotExistenceUndoBatch : IUndoBatch, IUndoTargetQuery
             // Parking the root would try to reparent the world under the graveyard and switch it off.
             // Both writes are refused, so the step would replay as nothing while reporting success. -xlinka
             if (slot.IsRootSlot)
+                continue;
+            if (isDestroy && !slot.MayDestroy())
                 continue;
             batch._entries.Add(new Entry
             {
@@ -164,8 +195,18 @@ public sealed class SlotExistenceUndoBatch : IUndoBatch, IUndoTargetQuery
         bool any = false;
         foreach (var entry in _entries)
         {
-            if (entry.Slot.IsDestroyed)
+            if (entry.Slot.IsDestroyed || UndoTargets.ContainsWornAvatar(entry.Slot))
                 continue;
+            // What the destroy would leave standing comes out first, as the destroy would let it out. When
+            // this machine cannot move one of those by itself, the delete is a real one: a park is a plain
+            // move nobody else answers, where every peer answers a destroy. The same when the actor may take
+            // the slot down but not move it, a moderator on someone else's thing.
+            if (!entry.Slot.ParentSlotRef.IsWriteAllowedQuietly() || !entry.Slot.ActiveSelf.IsWriteAllowedQuietly()
+                || !LetOutSurvivors(entry))
+            {
+                entry.Slot.Destroy();
+                continue;
+            }
             entry.Slot.SetParent(graveyard);
             entry.Slot.ActiveSelf.Value = false;
             any = true;
@@ -174,31 +215,60 @@ public sealed class SlotExistenceUndoBatch : IUndoBatch, IUndoTargetQuery
         return any;
     }
 
+    private static readonly List<Slot> SurvivorScratch = new();
+
+    private static bool LetOutSurvivors(Entry entry)
+    {
+        entry.Survivors.Clear();
+        if (!entry.Slot.CollectParkSurvivors(SurvivorScratch))
+            return false;
+        foreach (var survivor in SurvivorScratch)
+        {
+            entry.Survivors.Add(new Survivor(survivor));
+            Slot.LetOut(survivor);
+        }
+        SurvivorScratch.Clear();
+        return true;
+    }
+
+    // Back where the park found them, when they still stand where it left them and this machine may hang
+    // them there. A person who was let down stays standing.
+    private void HangBackSurvivors(Entry entry)
+    {
+        var root = _world.RootSlot;
+        foreach (var survivor in entry.Survivors)
+        {
+            var slot = survivor.Slot;
+            var parent = survivor.Parent;
+            if (slot == null || slot.IsDestroyed || parent == null || parent.IsDestroyed || !ReferenceEquals(slot.Parent, root)
+                || (slot.ActiveUserRoot is { } body && ReferenceEquals(body.Slot, slot)))
+                continue;
+            Slot.HangBack(slot, parent, survivor.LocalPosition, survivor.LocalRotation, survivor.LocalScale);
+        }
+        entry.Survivors.Clear();
+    }
+
     private bool Restore()
     {
         // All or nothing on the destination: a parent that has since been destroyed means this step
         // has nowhere valid to put its slots back.
         foreach (var entry in _entries)
         {
-            if (!entry.Slot.IsDestroyed && !UndoTargets.CanRestoreUnder(entry.OriginalParent))
+            if (!entry.Slot.IsDestroyed && UndoGraveyard.Holds(entry.Slot) && !UndoTargets.CanRestoreUnder(entry.OriginalParent))
                 return false;
         }
 
         bool any = false;
         foreach (var entry in _entries)
         {
-            if (entry.Slot.IsDestroyed)
+            if (entry.Slot.IsDestroyed || !UndoGraveyard.Holds(entry.Slot) || UndoTargets.ContainsWornAvatar(entry.Slot))
                 continue;
 
             var parent = entry.OriginalParent ?? _world.RootSlot;
             if (parent == null)
                 continue;
 
-            entry.Slot.SetParent(parent);
-            entry.Slot.LocalPosition.Value = entry.LocalPosition;
-            entry.Slot.LocalRotation.Value = entry.LocalRotation;
-            entry.Slot.LocalScale.Value = entry.LocalScale;
-            entry.Slot.ActiveSelf.Value = entry.WasActive;
+            PutBack(entry, parent);
             any = true;
         }
         if (any)
@@ -206,16 +276,61 @@ public sealed class SlotExistenceUndoBatch : IUndoBatch, IUndoTargetQuery
         return any;
     }
 
+    private void PutBack(Entry entry, Slot parent)
+    {
+        entry.Slot.SetParent(parent);
+        entry.Slot.LocalPosition.Value = entry.LocalPosition;
+        entry.Slot.LocalRotation.Value = entry.LocalRotation;
+        entry.Slot.LocalScale.Value = entry.LocalScale;
+        entry.Slot.ActiveSelf.Value = entry.WasActive;
+        HangBackSurvivors(entry);
+    }
+
+    // A parked slot's materials kept drawing on everything else that wears them (an orb deleted after painting
+    // with it), so the step leaving the history must not strip them off those surfaces long after the delete
+    // looked done. What is still worn outside goes to an assets slot. Anything else is one plain destroy, not
+    // a component-by-component strip of a whole parked avatar. -xlinka
     public void OnEvicted()
     {
         if (!_parked)
             return;
         foreach (var entry in _entries)
         {
-            if (!entry.Slot.IsDestroyed)
+            if (entry.Slot.IsDestroyed)
+                continue;
+            if (!UndoGraveyard.Holds(entry.Slot))
+                continue;
+            // Rights can change while a step waits, a role taken away. The destroy this park stood for is
+            // refused then, and the slot sat in the pen for good, out of sight on every peer. It goes back
+            // where it was instead, the honest end of a delete that did not happen; the world root when
+            // that is gone. A put-back this machine may not write either leaves it parked, with a warning.
+            if (!entry.Slot.MayDestroy())
+            {
+                GiveBack(entry);
+                continue;
+            }
+            if (entry.Slot.HasAssetsReferencedOutside())
+                entry.Slot.DestroyPreservingAssets();
+            else
                 entry.Slot.Destroy();
         }
         _parked = false;
+    }
+
+    private void GiveBack(Entry entry)
+    {
+        var parent = entry.OriginalParent is { IsDestroyed: false } original ? original : _world.RootSlot;
+        if (parent == null || entry.Slot.IsDestroyed)
+            return;
+        try
+        {
+            PutBack(entry, parent);
+            Logging.Logger.Log($"Undo: '{entry.Slot.Name.Value}' could no longer be destroyed by this user and was put back where it was.");
+        }
+        catch (System.UnauthorizedAccessException ex)
+        {
+            Logging.Logger.Warn($"Undo: '{entry.Slot.Name.Value}' can neither be destroyed nor put back by this user and stays parked: {ex.Message}");
+        }
     }
 }
 
@@ -259,6 +374,17 @@ public sealed class UserScaleUndoBatch : IUndoBatch
 // Shared rules for "can this step still put something back, and does it touch that slot".
 internal static class UndoTargets
 {
+    // Wearing changes the meaning of a world object. Old spawn/move steps cannot take the body away. -xlinka
+    public static bool ContainsWornAvatar(Slot slot)
+    {
+        foreach (var form in slot.GetComponentsInChildren<Avatar.AvatarForm>())
+        {
+            if (form.Wearer != null)
+                return true;
+        }
+        return false;
+    }
+
     // A null parent means the slot sat at the top of the world, which stays restorable.
     public static bool CanRestoreUnder(Slot? parent) => parent == null || !parent.IsDestroyed;
 

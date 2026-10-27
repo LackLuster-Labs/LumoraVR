@@ -7,6 +7,7 @@ using System.Linq;
 using Lumora.Nexus.Discovery;
 using Lumora.Core.Networking.Session;
 using Lumora.Nexus.Cloud;
+using Lumora.Core.Security.Integrity;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
 namespace Lumora.Core.Components.Network;
@@ -64,12 +65,31 @@ public class SessionBrowser : Component
     public override void OnAwake()
     {
         base.OnAwake();
+        GameIntegrity.Changed += OnBuildChanged;
     }
 
     public override void OnDestroy()
     {
+        GameIntegrity.Changed -= OnBuildChanged;
         StopScanning();
         base.OnDestroy();
+    }
+
+    // Only sessions on this game's own build are listed: another release, or other game files on either side,
+    // could never be joined. Waits for the startup integrity check on the feed threads that call it.
+    private static bool Listable(SessionListEntry entry) => BuildIdentity.Matches(entry.VersionHash);
+
+    // Something was loaded into this game: what was listed belongs to the old build, so start the list over.
+    // LAN hosts re-announce within seconds and the directory is asked again now.
+    private void OnBuildChanged()
+    {
+        lock (_sessionsLock)
+        {
+            _sessions.Clear();
+            _backendKeys.Clear();
+        }
+        _ownSessionKey = null;
+        _backendQuery?.RequestRefresh();
     }
 
     public override void OnUpdate(float delta)
@@ -104,6 +124,8 @@ public class SessionBrowser : Component
         _discovery.SessionFound += OnDiscoveryFound;
         _discovery.SessionLost += OnDiscoveryLost;
         _discovery.SessionUpdated += OnDiscoveryUpdated;
+        // Local network discovery off in the network settings: the browser only shows what the directory lists.
+        bool listenLocally = EngineSettings.LanDiscovery;
 
         // If we're hosting, ignore our own announcer so the discovery side doesn't surface our broadcast copy.
         // We list our own session directly from live metadata instead (RefreshOwnHostedSession). -xlinka
@@ -118,11 +140,13 @@ public class SessionBrowser : Component
             }
         }
 
-        _discovery.StartDiscovery(ignoreId);
+        if (listenLocally)
+            _discovery.StartDiscovery(ignoreId);
 
         // Second source: sessions published to the backend directory by hosts we will never hear on the
         // local network. It polls on its own thread and reports through the same upsert path.
-        _backendQuery = new BackendSessionDirectoryQuery(Lumora.Core.Networking.Session.Session.BackendSessionDirectoryUrl);
+        _backendQuery = new BackendSessionDirectoryQuery(Lumora.Core.Networking.Session.Session.BackendSessionDirectoryUrl,
+            () => BuildIdentity.TryGetHash(out var build) ? build : null);
         _backendQuery.OnResults += OnBackendResults;
         _backendQuery.Start();
 
@@ -192,6 +216,22 @@ public class SessionBrowser : Component
         }
     }
 
+    // A session the list may not hold: a friend's Friends session is only ever looked up by id, under this
+    // machine's sign-in, and stays out of the list after. Whatever is listed already answers first.
+    // Completes off the update. -xlinka
+    public async System.Threading.Tasks.Task<SessionListEntry?> FindSessionAsync(string sessionId)
+    {
+        var listed = GetSession(sessionId);
+        if (listed != null)
+            return listed;
+        var query = _backendQuery;
+        if (query == null || string.IsNullOrEmpty(sessionId))
+            return null;
+        var dto = await query.GetSessionAsync(sessionId, Lumora.Core.Networking.Session.Session.BackendAuthTokenProvider?.Invoke())
+            .ConfigureAwait(false);
+        return dto == null ? null : BuildEntry(dto);
+    }
+
     // --- Single choke point every source funnels through -------------------------------------------------
 
     // Insert or update a session in the aggregate, keyed by SessionId. Fires OnSessionFound for a brand-new
@@ -249,9 +289,17 @@ public class SessionBrowser : Component
 
     // --- LAN discovery feed ------------------------------------------------------------------------------
 
-    private void OnDiscoveryFound(DiscoveredSession discovered) => Upsert(CreateEntry(discovered));
+    private void OnDiscoveryFound(DiscoveredSession discovered) => UpsertLocal(CreateEntry(discovered));
 
-    private void OnDiscoveryUpdated(DiscoveredSession discovered) => Upsert(CreateEntry(discovered));
+    private void OnDiscoveryUpdated(DiscoveredSession discovered) => UpsertLocal(CreateEntry(discovered));
+
+    private void UpsertLocal(SessionListEntry entry)
+    {
+        if (Listable(entry))
+            Upsert(entry);
+        else
+            Remove(entry.SessionId);
+    }
 
     private void OnDiscoveryLost(string sessionId) => Remove(sessionId);
 
@@ -278,6 +326,8 @@ public class SessionBrowser : Component
             var entry = BuildEntry(listings[i]);
             if (entry == null)
                 continue;   // no session id or no dialable URL: nothing we could join
+            if (!Listable(entry))
+                continue;   // another build: just as unjoinable, and dropped like a listing that went away
 
             string key = entry.SessionId.ToLowerInvariant();
             if (key == _ownSessionKey)
@@ -365,6 +415,7 @@ public class SessionBrowser : Component
             Name = m.Name,
             Description = m.Description,
             HostUsername = m.HostUsername,
+            HostUserId = m.HostUserId ?? "",
             ActiveUsers = m.ActiveUsers,
             MaxUsers = m.MaxUsers,
             Visibility = m.Visibility,
@@ -373,6 +424,7 @@ public class SessionBrowser : Component
             ThumbnailUrl = m.ThumbnailUrl,
             ThumbnailBase64 = m.ThumbnailBase64,
             Tags = m.Tags != null ? new List<string>(m.Tags) : new List<string>(),
+            VersionHash = m.VersionHash ?? "",
             Source = SessionSource.Local
         };
     }
@@ -406,6 +458,7 @@ public class SessionBrowser : Component
             Name = dto.Name ?? "",
             Description = dto.Description ?? "",
             HostUsername = dto.HostUsername ?? "",
+            HostUserId = dto.HostUserId ?? "",
             ActiveUsers = dto.ActiveUsers,
             MaxUsers = dto.MaxUsers,
             Visibility = dto.AccessLevel,
@@ -414,58 +467,8 @@ public class SessionBrowser : Component
             ThumbnailUrl = dto.ThumbnailUrl ?? "",
             ThumbnailBase64 = null,
             Tags = dto.Tags != null ? new List<string>(dto.Tags) : new List<string>(),
+            VersionHash = dto.CompatibilityHash ?? "",
             Source = SessionSource.Internet
         };
-    }
-}
-
-// lets a user tell a machine on their own network from one on the internet, and lets join failures
-// land where they belong
-public enum SessionSource
-{
-    // or hosted by us
-    Local,
-
-    Internet
-}
-
-public class SessionListEntry
-{
-    public string SessionId { get; set; } = null!;
-
-    public string Name { get; set; } = null!;
-
-    public string Description { get; set; } = null!;
-
-    public string HostUsername { get; set; } = null!;
-
-    public int ActiveUsers { get; set; }
-
-    public int MaxUsers { get; set; }
-
-    public SessionVisibility Visibility { get; set; }
-
-    public Uri JoinUrl { get; set; } = null!;
-
-    // Every address the host advertised, JoinUrl among them. Joins hand over all of them: the first is
-    // usually the host's LAN card, which only answers inside the host's own network.
-    public List<Uri> JoinUrls { get; set; } = new();
-
-    public IReadOnlyList<Uri> AllJoinUrls
-        => JoinUrls.Count > 0 ? JoinUrls : JoinUrl != null ? new[] { JoinUrl } : Array.Empty<Uri>();
-
-    public string ThumbnailUrl { get; set; } = null!;
-
-    public string? ThumbnailBase64 { get; set; }
-
-    public List<string> Tags { get; set; } = new();
-
-    public SessionSource Source { get; set; } = SessionSource.Local;
-
-    public bool HasSpace => ActiveUsers < MaxUsers;
-
-    public override string ToString()
-    {
-        return $"{Name} ({ActiveUsers}/{MaxUsers}) - {HostUsername}";
     }
 }

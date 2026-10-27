@@ -187,7 +187,7 @@ public class BlinkLocomotion : SmoothLocomotionBase, ICustomInspectorUI
 
         if (InputBlocked)
         {
-            // Something else owns the sticks right now (the context menu, freecam). Drop the aim rather
+            // Something else owns the sticks right now (freecam, body calibration). Drop the aim rather
             // than committing a hop the user never asked for. A SEAT is not one of these: a seated user
             // aims normally and the hop stands them up on commit.
             EndAim();
@@ -225,7 +225,8 @@ public class BlinkLocomotion : SmoothLocomotionBase, ICustomInspectorUI
     }
 
     // Locomotion reads the aiming stick as centred while a set above it holds that stick (the laser scrolling
-    // whatever is under the beam). The thumb never let go, so the aim is dropped, not thrown. -xlinka
+    // whatever is under the beam, the context menu on that hand). The thumb never let go, so the aim is
+    // dropped, not thrown. -xlinka
     private bool AimStickHeldElsewhere()
     {
         if (_aimSide == Chirality.None)
@@ -255,8 +256,9 @@ public class BlinkLocomotion : SmoothLocomotionBase, ICustomInspectorUI
 
         var loco = input.Actions.Locomotion;
         float axis = System.Math.Clamp(loco.LeftStick.Value.x + loco.RightStick.Value.x, -1f, 1f);
-        // The per-hand sticks are a VR concept. Anything else that can turn (a pad's right stick)
-        // arrives on the ordinary turn axis, which only gets a look in when neither hand is pushing.
+        // The per-hand sticks are a VR concept. Anything else rebound onto Turn arrives on the ordinary
+        // turn axis, which only gets a look in when neither hand is pushing. A pad on a screen turns
+        // with Look, through the controller, like the mouse.
         if (axis == 0f)
             axis = loco.Turn.Value;
         Turn.Update(axis, delta);
