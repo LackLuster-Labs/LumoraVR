@@ -48,6 +48,24 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
     private bool _toolDrag;
     private IGizmoDragHost? _owningGizmo;
 
+    // A drag on something the beam hangs off (your own user root, a space you are standing in) moves the
+    // hand along with the target, so the handle read its own last write back as fresh hand motion and added
+    // it again every frame: a ring spun without end and an arrow slid you metres. While the laser rides the
+    // target, the ray is read with everything this handle has done to the target taken back out, so only
+    // the hand drives the drag. Whatever else moves the target meanwhile (a stick turn, a desktop look)
+    // stays in the ray, as it does on any other object. -xlinka
+    private bool _rayRides;
+    private float3 _carryOffset;
+    private floatQ _carryRotation = floatQ.Identity;
+    private float _carryScale = 1f;
+
+    // Set when the drag lands on the local user's own root: the target is that root, or the avatar being worn
+    // (see WornBy). Writes go through UserRoot, which knows the root's pose travels on a stream.
+    private UserRoot? _ownRoot;
+
+    // whether the drag writes the target's position or rotation, the two a worn avatar hands to its wearer
+    protected virtual bool PosesTarget => false;
+
     // AxisReference already points at the gizmo slot, so there is nothing extra to sync; the lookup is
     // cached because it is asked on every drag edge
     protected IGizmoDragHost? OwningGizmo
@@ -113,7 +131,12 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
     // With a DevTip, a handle is reachable through whatever it is annotating. It only exists while its gizmo
     // is up and its mode group is showing, and the whole point of it is to edit the object it is
     // buried in - being occluded by that object is the one behaviour it can never have. -xlinka
-    public bool PreferLaserHit(InteractionLaser laser) => DevToolItem.CanManipulateGizmos(laser);
+    public bool PreferLaserHit(InteractionLaser laser) => DevToolItem.CanManipulateGizmos(laser) && TargetIsEditable;
+
+    // Selecting someone is looking. A rig on another person's body, the avatar they wear or what they hold shows
+    // where it is and takes no drag, whatever the role would let through; the beam passes its handles. -xlinka
+    protected bool TargetIsEditable
+        => TargetSlot.Target is { IsDestroyed: false } target && !GizmoHelper.InAnotherPerson(target);
 
     // runs in the handle slot's local space, so the rig's distance scaling is carried by the transform
     // instead of being re-derived; the resulting point is measured back in world space because that is
@@ -123,7 +146,8 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
     {
         hit = default;
         var slot = Slot;
-        if (slot == null || slot.IsDestroyed || !DevToolItem.CanManipulateGizmos(laser))
+        // hidden while another handle is held: nothing on this screen to aim at
+        if (slot == null || slot.IsDestroyed || slot.IsLocallyHidden || !DevToolItem.CanManipulateGizmos(laser) || !TargetIsEditable)
             return false;
 
         var size = PickSize.Value;
@@ -205,7 +229,7 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
     public bool IsDragging => _grabber != null || _toolDrag;
 
     public bool CanGrab(Grabber grabber)
-        => _grabber == null && !_toolDrag && grabber != null && TargetSlot.Target is { IsDestroyed: false }
+        => _grabber == null && !_toolDrag && grabber != null && TargetIsEditable
            && DevToolItem.CanManipulateGizmos(ResolveLaser(grabber));
 
     public IGrabbable Grab(Grabber grabber, Slot holdSlot, bool suppressEvents = false)
@@ -217,6 +241,7 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
         _laser = ResolveLaser(grabber);
         OwningGizmo?.NotifyHandleDrag(true);
         var target = TargetSlot.Target!;
+        BeginCarry(target, _laser);
         OpenUndo(target);
         if (_laser != null)
             BeginDrag(target, _laser.RayOrigin, _laser.RayDirection);
@@ -245,7 +270,7 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
 
     public bool BeginToolDrag(InteractionLaser laser)
     {
-        if (IsDragging || !DevToolItem.CanManipulateGizmos(laser))
+        if (IsDragging || !DevToolItem.CanManipulateGizmos(laser) || !TargetIsEditable)
             return false;
         if (TargetSlot.Target is not { IsDestroyed: false } target)
             return false;
@@ -253,6 +278,7 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
         _toolDrag = true;
         _laser = laser;
         OwningGizmo?.NotifyHandleDrag(true);
+        BeginCarry(target, laser);
         OpenUndo(target);
         BeginDrag(target, laser.RayOrigin, laser.RayDirection);
         OnLocalGrabbed?.Invoke(this);
@@ -276,7 +302,7 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
     // batch it did not open, and the two drag paths (grip-grab, tool-primary) share one pair.
     protected virtual void OpenUndo(Slot target)
     {
-        _poseUndo = SlotTransformUndoBatch.Begin(target, DragDescription);
+        _poseUndo = SlotTransformUndoBatch.Begin(_ownRoot?.Slot ?? target, DragDescription);
     }
 
     protected virtual void CloseUndo()
@@ -291,7 +317,9 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
             return;
 
         var target = TargetSlot.Target;
-        if (target == null || target.IsDestroyed || _laser == null || !DevToolItem.CanManipulateGizmos(_laser))
+        // A target that went into somebody's hands mid-drag is theirs from that frame on.
+        if (target == null || target.IsDestroyed || _laser == null || !DevToolItem.CanManipulateGizmos(_laser)
+            || GizmoHelper.InAnotherPerson(target))
         {
             // Route through the owning session's release so the undo batch still commits.
             if (_grabber != null)
@@ -301,7 +329,97 @@ public abstract class TransformHandle : Component, IGrabbable, ILaserPointerTarg
             return;
         }
 
-        UpdateDrag(target, _laser.RayOrigin, _laser.RayDirection);
+        if (!_rayRides)
+        {
+            UpdateDrag(target, _laser.RayOrigin, _laser.RayDirection);
+            return;
+        }
+
+        var position = target.GlobalPosition;
+        var rotation = target.GlobalRotation;
+        float scale = UniformScale(target);
+        UpdateDrag(target, Uncarried(_laser.RayOrigin), (_carryRotation.Inverse * _laser.RayDirection).Normalized);
+        Carry(position, rotation, scale, target.GlobalPosition, target.GlobalRotation, UniformScale(target));
+    }
+
+    private void BeginCarry(Slot target, InteractionLaser? laser)
+    {
+        _ownRoot = target.GetComponent<UserRoot>() is { IsLocalUserRoot: true } root ? root
+            : PosesTarget ? WornBy(target) : null;
+        var moved = _ownRoot?.Slot ?? target;
+        _rayRides = laser?.Slot is { } source && source.IsDescendantOf(moved);
+        _carryOffset = float3.Zero;
+        _carryRotation = floatQ.Identity;
+        _carryScale = 1f;
+    }
+
+    // The avatar you wear, and the slot holding it, are posed from your tracking every frame: a pose written
+    // to either moved the gizmo and left the body where it stood. Turning or moving your avatar can only mean
+    // turning or moving you, so the user root takes the edit about the same pivot. -xlinka
+    private static UserRoot? WornBy(Slot target)
+    {
+        var root = target.World?.LocalUser?.Root;
+        if (root is not { IsDestroyed: false } || root.Slot is not { } body || !target.IsDescendantOf(body))
+            return null;
+        var equip = root.GetRegisteredComponent<Avatar.AvatarEquipManager>();
+        if (equip?.Slot is not { } holder)
+            return null;
+        if (ReferenceEquals(target, holder))
+            return root;
+        var worn = equip.EquippedAvatar;
+        return worn != null && (ReferenceEquals(worn, target) || (worn.IsDescendantOf(target) && target.IsDescendantOf(holder)))
+            ? root : null;
+    }
+
+    // Folds this frame's write into the running total: whatever rode the target from the old pose to the new one.
+    private void Carry(in float3 fromPosition, in floatQ fromRotation, float fromScale,
+        in float3 toPosition, in floatQ toRotation, float toScale)
+    {
+        if (fromScale <= 0f || toScale <= 0f)
+            return;
+        var turn = (toRotation * fromRotation.Inverse).Normalized;
+        float grow = toScale / fromScale;
+        _carryOffset = turn * _carryOffset * grow + (toPosition - turn * fromPosition * grow);
+        _carryRotation = (turn * _carryRotation).Normalized;
+        _carryScale *= grow;
+    }
+
+    // a point on the hand (the ray origin, a grabber) where it would be had this drag not moved what carries it
+    protected float3 Uncarried(in float3 point)
+        => _rayRides ? _carryRotation.Inverse * (point - _carryOffset) * (1f / _carryScale) : point;
+
+    private static float UniformScale(Slot slot)
+    {
+        var scale = slot.GlobalScale;
+        return (MathF.Abs(scale.x) + MathF.Abs(scale.y) + MathF.Abs(scale.z)) / 3f;
+    }
+
+    protected void MoveTarget(Slot target, in float3 position)
+    {
+        if (_ownRoot is not { IsDestroyed: false } root)
+            target.GlobalPosition = position;
+        else if (ReferenceEquals(root.Slot, target))
+            root.SetGlobalPosition(UserRoot.UserNode.Root, position);
+        else
+            root.ShiftBy(position - target.GlobalPosition);
+    }
+
+    // about the target's own origin, which is where the gizmo sits
+    protected void TurnTarget(Slot target, in floatQ rotation)
+    {
+        if (_ownRoot is not { IsDestroyed: false } root)
+        {
+            target.GlobalRotation = rotation;
+            return;
+        }
+        if (ReferenceEquals(root.Slot, target))
+        {
+            root.SetGlobalRotation(UserRoot.UserNode.Root, rotation);
+            return;
+        }
+        var pivot = target.GlobalPosition;
+        root.TurnBy((rotation * target.GlobalRotation.Inverse).Normalized);
+        root.ShiftBy(pivot - target.GlobalPosition);
     }
 
     public override void OnDestroy()

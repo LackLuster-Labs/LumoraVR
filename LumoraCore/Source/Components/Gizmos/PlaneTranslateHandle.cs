@@ -19,6 +19,8 @@ public class PlaneTranslateHandle : TransformHandle
 
     protected override Localization.LocaleText DragDescription => UndoLocale.Move;
 
+    protected override bool PosesTarget => true;
+
     protected override void BeginDrag(Slot target, float3 rayOrigin, float3 rayDirection)
     {
         _planeNormal = AxisWorld;
@@ -33,6 +35,6 @@ public class PlaneTranslateHandle : TransformHandle
             return;
         if (!RayPlane(rayOrigin, rayDirection, _planeOrigin, _planeNormal, out var hit))
             return; // beam swung parallel to the plane this frame - hold position
-        target.GlobalPosition = _startPosition + (hit - _startHit);
+        MoveTarget(target, _startPosition + (hit - _startHit));
     }
 }

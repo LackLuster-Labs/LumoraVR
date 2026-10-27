@@ -42,7 +42,7 @@ public class ScaleHandle : TransformHandle
     private float HandDistance(float3 rayOrigin)
     {
         var handSlot = ActiveGrabber?.Slot;
-        var from = handSlot != null && !handSlot.IsRemoved ? handSlot.GlobalPosition : rayOrigin;
+        var from = handSlot != null && !handSlot.IsRemoved ? Uncarried(handSlot.GlobalPosition) : rayOrigin;
         var delta = from - _center;
         return MathF.Sqrt(delta.LengthSquared);
     }

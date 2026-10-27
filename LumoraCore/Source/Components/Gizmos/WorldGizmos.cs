@@ -174,25 +174,28 @@ public sealed class WorldGizmos
             // back faces stacked onto whatever lay behind and ran past white, and the glow pass bloomed it
             // across the room, green worst of all.
             material.BlendMode.Value = BlendMode.Alpha;
-            material.FrontTintColor.Value = new colorHDR(tint.r, tint.g, tint.b, 1f);
+            // Never quite solid: the edge or corner being lined up still reads through a handle lying over it.
+            material.FrontTintColor.Value = new colorHDR(tint.r, tint.g, tint.b, tint.a);
             // Dimmed ghost when occluded, so handles stay findable behind the object they annotate.
-            material.BehindTintColor.Value = new colorHDR(tint.r, tint.g, tint.b, 0.28f);
+            material.BehindTintColor.Value = new colorHDR(tint.r, tint.g, tint.b, tint.a * 0.3f);
         }
         _materials[kind] = material;
         return material;
     }
 
-    // Saturated axis RGB for the handles (the pastel inspector axis colors read washed-out in-world).
+    // Saturated axis RGB for the handles (the pastel inspector axis colors read washed-out in-world). The
+    // pads and centre pieces sit right on the pivot, over the very spot being placed, so they are the
+    // lightest.
     private static color TintFor(GizmoMaterialKind kind) => kind switch
     {
-        GizmoMaterialKind.AxisX => new color(0.9f, 0.1f, 0.1f, 1f),
-        GizmoMaterialKind.AxisY => new color(0.1f, 0.8f, 0.1f, 1f),
-        GizmoMaterialKind.AxisZ => new color(0.15f, 0.35f, 0.95f, 1f),
-        GizmoMaterialKind.Center => new color(0.92f, 0.92f, 0.95f, 1f),
-        GizmoMaterialKind.PlaneYZ => new color(0.5f, 1f, 1f, 0.73f),
-        GizmoMaterialKind.PlaneXZ => new color(1f, 0.5f, 1f, 0.73f),
-        GizmoMaterialKind.PlaneXY => new color(1f, 1f, 0.5f, 0.73f),
-        _ => new color(0.75f, 0.75f, 0.8f, 0.73f),
+        GizmoMaterialKind.AxisX => new color(0.9f, 0.1f, 0.1f, 0.85f),
+        GizmoMaterialKind.AxisY => new color(0.1f, 0.8f, 0.1f, 0.85f),
+        GizmoMaterialKind.AxisZ => new color(0.15f, 0.35f, 0.95f, 0.85f),
+        GizmoMaterialKind.Center => new color(0.92f, 0.92f, 0.95f, 0.7f),
+        GizmoMaterialKind.PlaneYZ => new color(0.5f, 1f, 1f, 0.45f),
+        GizmoMaterialKind.PlaneXZ => new color(1f, 0.5f, 1f, 0.45f),
+        GizmoMaterialKind.PlaneXY => new color(1f, 1f, 0.5f, 0.45f),
+        _ => new color(0.75f, 0.75f, 0.8f, 0.55f),
     };
 
     // TARGET INDEX
@@ -212,6 +215,14 @@ public sealed class WorldGizmos
         if (_byTarget.TryGetValue(target, out var gizmo))
             DropOwner(gizmo);
         _byTarget.Remove(target);
+    }
+
+    // A gizmo letting go of its own entry: another rig put up on the same target since keeps its.
+    public void Untrack(Slot? target, SlotGizmo gizmo)
+    {
+        DropOwner(gizmo);
+        if (target != null && _byTarget.TryGetValue(target, out var tracked) && ReferenceEquals(tracked, gizmo))
+            _byTarget.Remove(target);
     }
 
     public SlotGizmo? Get(Slot? target)
@@ -384,6 +395,13 @@ public sealed class WorldGizmos
         if (_byComponent.TryGetValue(target, out var gizmo))
             DropComponentOwner(gizmo);
         _byComponent.Remove(target);
+    }
+
+    public void UntrackComponent(Component? target, ComponentGizmo gizmo)
+    {
+        DropComponentOwner(gizmo);
+        if (target != null && _byComponent.TryGetValue(target, out var tracked) && ReferenceEquals(tracked, gizmo))
+            _byComponent.Remove(target);
     }
 
     public ComponentGizmo? GetComponentGizmo(Component? target)

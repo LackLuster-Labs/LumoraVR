@@ -17,7 +17,7 @@ namespace Lumora.Core.Components.Gizmos;
 // explicit, because a slot with ten components would otherwise put ten overlapping wireframes on
 // screen the moment you clicked it.
 //
-// Nothing here runs per frame. The shape is emitted once and then rides the scene graph: the gizmo
+// No shape work runs per frame. The shape is emitted once and then rides the scene graph: the gizmo
 // slot mirrors the target's global pose, and a child slot carries the target's global SCALE so
 // component-local units (a collider Size, a light Range) draw at the right size inside a scaled
 // hierarchy without any of it being re-derived. A re-emit happens only when one of the fields the
@@ -118,8 +118,93 @@ public abstract class ComponentGizmo : ImplementableComponent, IComponentGizmo, 
     internal void DestroySelf()
     {
         Unwatch();
-        WorldGizmos.For(World)?.UntrackComponent(Target?.RawTarget);
+        WorldGizmos.For(World)?.UntrackComponent(Target?.RawTarget, this);
         Slot?.Destroy();
+    }
+
+    // Same rule as the slot gizmo: a target destroyed, parked by an undoable delete or cleared is gone,
+    // the owner (or the authority, once the owner has left) takes the rig down after whatever reported
+    // it, and everyone else only hides it here until that removal lands. -xlinka
+    private Component? _parkedComponent;
+    private bool _targetGone;
+    private bool _removalQueued;
+    private int _hierarchyEpoch = -1;
+
+    private void LoseTarget()
+    {
+        var target = _watchedComponent;
+        Unwatch();
+        WorldGizmos.For(World)?.UntrackComponent(target, this);
+        _parkedComponent = target is { IsDestroyed: false, Slot: { IsDestroyed: false } } ? target : null;
+        OnTargetGone();
+    }
+
+    private void OnTargetGone()
+    {
+        if (IsDestroyed)
+            return;
+        _targetGone = true;
+        Slot?.SetLocallyHidden(true);
+        if (MayTakeDown())
+            QueueRemoval();
+    }
+
+    private void ShowAgain()
+    {
+        if (!_targetGone)
+            return;
+        _targetGone = false;
+        Slot?.SetLocallyHidden(false);
+    }
+
+    private bool MayTakeDown()
+    {
+        var owner = Owner?.Target;
+        return owner != null ? ReferenceEquals(owner, World?.LocalUser) : World?.IsAuthority == true;
+    }
+
+    private void QueueRemoval()
+    {
+        if (_removalQueued || World == null)
+            return;
+        _removalQueued = true;
+        World.RunSynchronously(() =>
+        {
+            _removalQueued = false;
+            if (IsDestroyed || !_targetGone || !MayTakeDown())
+                return;
+            using (Owner?.Target == null ? World?.DataModelPermissions?.EnterSystemBypass() : null)
+                DestroySelf();
+        });
+    }
+
+    // A parking delete only moves the hierarchy, so this is the one thing here that runs per frame: an
+    // int compare until something somewhere is reparented.
+    public override void OnUpdate(float delta)
+    {
+        base.OnUpdate(delta);
+        int epoch = Slot.HierarchyEpoch;
+        if (epoch == _hierarchyEpoch)
+            return;
+        _hierarchyEpoch = epoch;
+
+        var slot = _watchedSlot;
+        if (slot != null)
+        {
+            if (slot.IsDestroyed || UndoGraveyard.Holds(slot))
+                LoseTarget();
+            return;
+        }
+        var parked = _parkedComponent;
+        if (parked == null)
+            return;
+        if (parked.IsDestroyed || parked.Slot is not { IsDestroyed: false } parkedSlot)
+            _parkedComponent = null;
+        else if (!UndoGraveyard.Holds(parkedSlot))
+        {
+            _parkedComponent = null;
+            HandleTargetChanged();
+        }
     }
 
     public override void OnAwake()
@@ -160,8 +245,11 @@ public abstract class ComponentGizmo : ImplementableComponent, IComponentGizmo, 
     {
         // Only the authority prunes: every peer sees the departure, and a peer that tried would just
         // have the delete refused. RawTarget because the leaving user's ref already reads null.
-        if (World?.IsAuthority == true && user != null && ReferenceEquals(user, Owner?.RawTarget))
-            DestroySelf();
+        if (World is { IsAuthority: true } world && user != null && ReferenceEquals(user, Owner?.RawTarget))
+        {
+            using (world.DataModelPermissions?.EnterSystemBypass())
+                DestroySelf();
+        }
     }
 
     public override void OnDestroy()
@@ -169,7 +257,7 @@ public abstract class ComponentGizmo : ImplementableComponent, IComponentGizmo, 
         if (Slot != null)
             Slot.SubtreeStructureChanged -= OnOwnStructureChanged;
         Unwatch();
-        WorldGizmos.For(World)?.UntrackComponent(Target?.RawTarget);
+        WorldGizmos.For(World)?.UntrackComponent(Target?.RawTarget, this);
         base.OnDestroy();
     }
 
@@ -183,16 +271,26 @@ public abstract class ComponentGizmo : ImplementableComponent, IComponentGizmo, 
         Unwatch();
         var registry = WorldGizmos.For(World);
         if (previous != null)
-            registry?.UntrackComponent(previous);
+            registry?.UntrackComponent(previous, this);
+        _parkedComponent = null;
 
         if (target == null)
         {
             _wire.Clear();
             _wireVersion++;
+            if (previous != null)
+                OnTargetGone();
             NotifyChanged();
             return;
         }
+        if (target.Slot is { } targetSlot && UndoGraveyard.Holds(targetSlot))
+        {
+            _parkedComponent = target;
+            OnTargetGone();
+            return;
+        }
 
+        ShowAgain();
         Watch(target);
         registry?.TrackComponent(target, this);
         EnsureShapeRoot();
@@ -221,6 +319,8 @@ public abstract class ComponentGizmo : ImplementableComponent, IComponentGizmo, 
             _watchedSlot = slot;
             slot.OnPrepareDestroy += OnTargetSlotDestroyed;
             slot.OnComponentRemoved += OnSlotComponentRemoved;
+            slot.ParentChanged += OnTargetSlotMoved;
+            slot.ActiveChanged += OnTargetSlotMoved;
         }
 
         var follow = FollowSlot;
@@ -266,6 +366,8 @@ public abstract class ComponentGizmo : ImplementableComponent, IComponentGizmo, 
         {
             _watchedSlot.OnPrepareDestroy -= OnTargetSlotDestroyed;
             _watchedSlot.OnComponentRemoved -= OnSlotComponentRemoved;
+            _watchedSlot.ParentChanged -= OnTargetSlotMoved;
+            _watchedSlot.ActiveChanged -= OnTargetSlotMoved;
         }
         _watchedSlot = null;
 
@@ -283,12 +385,18 @@ public abstract class ComponentGizmo : ImplementableComponent, IComponentGizmo, 
 
     private void OnTargetTransformChanged(Slot slot) => FollowTarget();
 
-    private void OnTargetSlotDestroyed(Slot slot) => DestroySelf();
+    private void OnTargetSlotDestroyed(Slot slot) => LoseTarget();
+
+    private void OnTargetSlotMoved(Slot slot)
+    {
+        if (UndoGraveyard.Holds(slot))
+            LoseTarget();
+    }
 
     private void OnSlotComponentRemoved(Slot slot, Component component)
     {
         if (ReferenceEquals(component, _watchedComponent))
-            DestroySelf();
+            LoseTarget();
     }
 
     // deferred and coalesced: a field change can arrive mid-decode, and an edit writing four fields at
@@ -332,9 +440,10 @@ public abstract class ComponentGizmo : ImplementableComponent, IComponentGizmo, 
     // one node fight, so nothing downstream of here touches the gizmo slot's transform.
     private void FollowTarget()
     {
+        // A rig destroyed this frame keeps its watches until its OnDestroy, later in the same update.
         var slot = _followSlot;
         var gizmoSlot = Slot;
-        if (slot == null || slot.IsDestroyed || gizmoSlot == null || gizmoSlot.IsRemoved)
+        if (slot == null || slot.IsDestroyed || gizmoSlot == null || gizmoSlot.IsRemoved || IsDestroyed)
             return;
 
         var position = slot.GlobalPosition;

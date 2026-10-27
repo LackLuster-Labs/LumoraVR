@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using Lumora.Core.Components.UI;
+using Lumora.Core.Networking.Session;
 using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core.Components.Gizmos;
@@ -25,6 +26,9 @@ public class GizmoModeMenuSource : ContextMenuItemSource
     private static readonly float[] GizmoFill = { 0.20f, 0.17f, 0.30f, 0.92f };
     private static readonly float[] ItemFill = { 0.16f, 0.15f, 0.24f, 0.92f };
     private static readonly float[] ClearFill = { 0.42f, 0.16f, 0.18f, 0.94f };
+    private static readonly float[] AskFill = { 0.13f, 0.24f, 0.30f, 0.92f };
+
+    private static readonly Localization.LocaleText SelectParentLabel = Localization.LocaleText.Keyed("Gizmo.SelectParent", "Select Parent");
 
     public GizmoModeMenuSource()
     {
@@ -53,12 +57,50 @@ public class GizmoModeMenuSource : ContextMenuItemSource
             });
         }
 
+        if (AskItem(tool) is { } ask)
+            page.AddItem(ask);
+
         for (int i = first; i < page.Items.Count; i++)
             page.Items[i].Group = ContextMenuGroup.Tool;
     }
 
-    // The selection's gizmo: its modes, its space, and clearing the selection. Empty while nothing is
-    // selected anywhere in the world.
+    // The selection is part of somebody who has not said yes to this hand's user: asking them sits on the root ring,
+    // next to the gizmo it would make live. Grey while an ask is open or a no or a wait stands; gone with a yes. Never
+    // for their root itself, which stays theirs either way. -xlinka
+    private ContextMenuItem? AskItem(Interaction.DevToolItem tool)
+    {
+        var world = World;
+        var me = world?.LocalUser;
+        var selected = tool.SelectedSlot.Target;
+        var person = SessionEditConsent.PersonOf(selected, me);
+        if (world == null || me == null || person == null || ReferenceEquals(selected, person.Root?.Slot))
+            return null;
+        var state = SessionEditConsent.StateOf(me, person);
+        if (state == EditAskState.Granted)
+            return null;
+        return new ContextMenuItem
+        {
+            Label = RingLabel(state),
+            Detail = SessionPermissionsPanel.DisplayName(person),
+            FillColor = AskFill,
+            IsEnabled = state == EditAskState.None,
+            OnPressed = _ =>
+            {
+                if (!person.IsDestroyed && !world.IsDestroyed)
+                    SessionEditConsent.Ask(world, person);
+            },
+        };
+    }
+
+    private static string RingLabel(EditAskState state) => (state switch
+    {
+        EditAskState.None => EditConsentLocale.AskItem,
+        EditAskState.Pending => EditConsentLocale.AskedItem,
+        _ => EditConsentLocale.WaitItem,
+    }).Resolve();
+
+    // The selection's gizmo: its modes, its space, a step up to its parent, and clearing the selection. Empty
+    // while nothing is selected anywhere in the world.
     private ContextMenuPage GizmoPage()
     {
         var modes = new ContextMenuPage("Gizmo");
@@ -83,9 +125,34 @@ public class GizmoModeMenuSource : ContextMenuItemSource
             });
         }
 
+        var tool = Tool.Target;
+
+        // One level up, for a part picked by pointing at it. The ring stays up so a climb of several levels is
+        // several presses, and the item goes grey at the top: the world root is never a step.
+        if (gizmo != null && tool != null && Interaction.DevToolItem.CanSelectParent(gizmo))
+        {
+            modes.AddItem(new ContextMenuItem
+            {
+                Label = SelectParentLabel.Resolve(),
+                Detail = gizmo.TargetSlot?.Parent?.Name.Value,
+                FillColor = ItemFill,
+                KeepsOpen = true,
+                OnPressed = _ => { if (!tool.IsDestroyed) tool.SelectParent(gizmo); },
+                Refresh = item =>
+                {
+                    bool can = !tool.IsDestroyed && Interaction.DevToolItem.CanSelectParent(gizmo);
+                    var detail = can ? gizmo.TargetSlot?.Parent?.Name.Value : null;
+                    if (item.IsEnabled == can && item.Detail == detail)
+                        return false;
+                    item.IsEnabled = can;
+                    item.Detail = detail;
+                    return true;
+                },
+            });
+        }
+
         // Deselect Mine only when there is something of YOURS to clear; without that check the item sits
         // there doing nothing while somebody else's selection is the only one in the room.
-        var tool = Tool.Target;
         if (GizmoHelper.HasLocalGizmos(World))
         {
             modes.AddItem(new ContextMenuItem

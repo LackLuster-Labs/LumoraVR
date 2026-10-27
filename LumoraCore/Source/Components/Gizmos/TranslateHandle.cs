@@ -19,6 +19,8 @@ public class TranslateHandle : TransformHandle
 
     protected override Localization.LocaleText DragDescription => UndoLocale.Move;
 
+    protected override bool PosesTarget => true;
+
     protected override void BeginDrag(Slot target, float3 rayOrigin, float3 rayDirection)
     {
         _axis = AxisWorld;
@@ -35,6 +37,6 @@ public class TranslateHandle : TransformHandle
         float param = ClosestLineParam(_lineOrigin, _axis, rayOrigin, rayDirection);
         if (float.IsNaN(param))
             return; // beam swung parallel to the axis this frame - hold position
-        target.GlobalPosition = _startPosition + _axis * (param - _startParam);
+        MoveTarget(target, _startPosition + _axis * (param - _startParam));
     }
 }

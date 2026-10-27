@@ -36,6 +36,14 @@ public class CameraGizmo : ComponentGizmo
         fields.Add(camera.OrthographicSize);
         fields.Add(camera.NearClip);
         fields.Add(camera.FarClip);
+        fields.Add(camera.RotationOffset);
+    }
+
+    // The lens's own turn from its slot (see Camera.RotationOffset); the volume and pads follow it.
+    private static floatQ Turn(Camera camera)
+    {
+        var q = camera.RotationOffset.Value;
+        return q.x == 0f && q.y == 0f && q.z == 0f && q.w == 0f ? floatQ.Identity : q.Normalized;
     }
 
     protected override void BuildWire(GizmoWireBuilder wire)
@@ -46,15 +54,16 @@ public class CameraGizmo : ComponentGizmo
         float near = MathF.Max(camera.NearClip.Value, MinimumClip);
         float far = MathF.Max(camera.FarClip.Value, near + MinimumClip);
         float aspect = camera.AspectRatio > 0f ? camera.AspectRatio : DefaultAspect;
+        var turn = Turn(camera);
 
         if (camera.Projection.Value == ProjectionType.Orthographic)
         {
-            wire.OrthoVolume(float3.Zero, float3.Backward, float3.Up, float3.Right,
+            wire.OrthoVolume(float3.Zero, turn * float3.Backward, turn * float3.Up, turn * float3.Right,
                 MathF.Max(camera.OrthographicSize.Value, MinimumClip) * 0.5f, aspect, near, far);
         }
         else
         {
-            wire.Frustum(float3.Zero, float3.Backward, float3.Up, float3.Right,
+            wire.Frustum(float3.Zero, turn * float3.Backward, turn * float3.Up, turn * float3.Right,
                 camera.FieldOfView.Value, aspect, near, far);
         }
 
@@ -89,8 +98,11 @@ public class CameraGizmo : ComponentGizmo
 
         // On the bottom edge of each rectangle rather than the middle: the centre of a near plane is
         // usually inside the camera's own body.
-        PlaceHandle(_near, float3.Backward * near - new float3(0f, HalfHeight(camera, near), 0f));
-        PlaceHandle(_far, float3.Backward * far - new float3(0f, HalfHeight(camera, far), 0f));
+        var turn = Turn(camera);
+        _near.LocalAxis.Value = turn * float3.Backward;
+        _far.LocalAxis.Value = turn * float3.Backward;
+        PlaceHandle(_near, turn * (float3.Backward * near - new float3(0f, HalfHeight(camera, near), 0f)));
+        PlaceHandle(_far, turn * (float3.Backward * far - new float3(0f, HalfHeight(camera, far), 0f)));
     }
 
     private static float HalfHeight(Camera camera, float distance)

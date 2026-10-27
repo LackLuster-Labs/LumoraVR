@@ -137,22 +137,79 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
         UnsubscribeBoundsSources();
         var registry = WorldGizmos.For(World);
         if (previous != null)
-            registry?.Untrack(previous);
+            registry?.Untrack(previous, this);
+        _parkedTarget = null;
 
         if (target == null || target.IsDestroyed)
         {
             _boundsAnimated = false;
+            DropCompanions(deferred: false);
+            if (previous != null)
+                OnTargetGone(TargetSlotRef?.RawTarget == null);
+            NotifyChanged();
+            return;
+        }
+        if (UndoGraveyard.Holds(target))
+        {
+            _boundsAnimated = false;
+            _parkedTarget = target;
+            OnTargetGone(refCleared: false);
             NotifyChanged();
             return;
         }
 
+        ShowAgain();
         SubscribeTarget(target);
         registry?.Track(target, this);
         EnsureChromeSlots();
         RecomputeBounds();
         FollowTarget();
         ApplyChromeVisibility();
+        RaiseCompanions(target);
         NotifyChanged();
+    }
+
+    // COMPANIONS
+    //
+    // A selected text brings its own gizmo up with this one, pencil and all, so changing what a sign says
+    // needs no inspector. Only the owner's machine does it, and only the rigs raised here are taken down
+    // again: one somebody opened from an inspector header stays until they close it. -xlinka
+    private readonly List<ComponentGizmo> _companions = new();
+
+    private void RaiseCompanions(Slot target)
+    {
+        DropCompanions(deferred: false);
+        if (!_buildsChrome || World?.LocalUser is not { } local || !ReferenceEquals(Owner?.Target, local))
+            return;
+        // Another person's text is theirs to write: looking at it brings no pencil.
+        if (GizmoHelper.InAnotherPerson(target))
+            return;
+        foreach (var text in target.GetComponents<TextRenderer>())
+        {
+            if (text.IsDestroyed || text.IsLocalElement || GizmoHelper.HasComponentGizmo(text))
+                continue;
+            if (GizmoHelper.SpawnComponentGizmo(text) is { } gizmo)
+                _companions.Add(gizmo);
+        }
+    }
+
+    // Deferred from a destroy: this rig is on its way out inside somebody's update, and the companion is a
+    // slot of its own that goes cleanly on the next one.
+    private void DropCompanions(bool deferred)
+    {
+        if (_companions.Count == 0)
+            return;
+        var local = World?.LocalUser;
+        foreach (var gizmo in _companions)
+        {
+            if (gizmo == null || gizmo.IsDestroyed || local == null || !ReferenceEquals(gizmo.Owner?.Target, local))
+                continue;
+            if (deferred)
+                World?.RunSynchronously(() => { if (!gizmo.IsDestroyed) gizmo.DestroySelf(); });
+            else
+                gizmo.DestroySelf();
+        }
+        _companions.Clear();
     }
 
     // MANIPULATION HANDLES: a combined rig of three translate arrows, three rotation rings and a
@@ -175,8 +232,10 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
     private readonly List<TransformHandle> _handles = new();
     private GizmoModeToolbar? _modeToolbar;
 
-    // Sized to read comfortably at 1m: 0.15 total arrow, 0.25 ring, 0.05 cube.
-    private const float ArrowShaftRadius = 0.007f;
+    // Sized to read comfortably at 1m: 0.15 total arrow, 0.25 ring, 0.05 cube. Shafts and tips are kept
+    // slim; the pick boxes are what the beam aims at, and they stay fat.
+    private const float ArrowShaftRadius = 0.0055f;
+    private const float ArrowTipRadius = 0.017f;
     private const float ArrowShaftLength = 0.12f;
     private const float ArrowTipLength = 0.03f;
     private const float RingRadius = 0.25f;
@@ -196,8 +255,91 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
         if ((previous > 0) != (_draggingHandles > 0))
         {
             UpdateModeToolbarVisibility();
+            ApplyDragFocus();
             NotifyChanged();
         }
+    }
+
+    // DRAG FOCUS: while a handle is held the rest of the rig gets out of the way of what is being placed.
+    // The other handles hide, the held one goes thin and see-through, and the hook drops the box to a faint
+    // outline. Only on the screen of whoever is dragging: hidden slots and per-renderer instance values are
+    // this machine's, so nothing is written to the rig, nobody else's view changes, and someone dragging a
+    // handle on another user's gizmo needs no right to edit it. -xlinka
+    private const float HeldAlpha = 0.55f;
+    private readonly List<Slot> _focusHidden = new();
+    private readonly List<MeshRenderer> _focusThinned = new();
+    private readonly List<TransformHandle> _receivedHandles = new();
+
+    private void ApplyDragFocus()
+    {
+        ClearDragFocus();
+        if (_draggingHandles <= 0)
+            return;
+
+        var handles = RigHandles();
+        TransformHandle? held = null;
+        foreach (var handle in handles)
+        {
+            if (handle is { IsDestroyed: false, IsDragging: true })
+            {
+                held = handle;
+                break;
+            }
+        }
+        if (held == null)
+            return;
+
+        foreach (var handle in handles)
+        {
+            if (handle.IsDestroyed || handle.Slot is not { IsRemoved: false } slot)
+                continue;
+            if (!ReferenceEquals(handle, held))
+            {
+                slot.SetLocallyHidden(true);
+                _focusHidden.Add(slot);
+                continue;
+            }
+            foreach (var renderer in slot.GetComponentsInChildren<MeshRenderer>())
+            {
+                renderer.SetInstanceParams(HeldLook(renderer));
+                _focusThinned.Add(renderer);
+            }
+        }
+    }
+
+    private void ClearDragFocus()
+    {
+        foreach (var slot in _focusHidden)
+        {
+            if (!slot.IsDestroyed)
+                slot.SetLocallyHidden(false);
+        }
+        foreach (var renderer in _focusThinned)
+        {
+            if (!renderer.IsDestroyed)
+                renderer.SetInstanceParams(new float4(1f, 1f, 1f, 1f));
+        }
+        _focusHidden.Clear();
+        _focusThinned.Clear();
+    }
+
+    // Shafts and connectors are authored along +Y and keep their length; a ring keeps its radius and loses
+    // depth; cubes and pads shrink about their own centre.
+    private static float4 HeldLook(MeshRenderer renderer) => renderer.Mesh.Target switch
+    {
+        Meshes.ArrowMesh or Meshes.CylinderMesh => new float4(0.4f, 1f, 0.4f, HeldAlpha),
+        Meshes.TorusMesh => new float4(1f, 0.5f, 1f, HeldAlpha),
+        _ => new float4(0.6f, 0.6f, 0.6f, HeldAlpha),
+    };
+
+    // A peer that only received this rig never built the list, and can still drag its handles.
+    private List<TransformHandle> RigHandles()
+    {
+        if (_handles.Count > 0)
+            return _handles;
+        _receivedHandles.Clear();
+        Slot?.FindChild("Handles", recursive: false)?.GetComponentsInChildren(_receivedHandles);
+        return _receivedHandles;
     }
 
     private void BuildHandles(Slot? target)
@@ -284,7 +426,7 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
         var arrow = meshSlot.AttachComponent<Meshes.ArrowMesh>();
         arrow.ShaftRadius.Value = ArrowShaftRadius;
         arrow.ShaftLength.Value = ArrowShaftLength;
-        arrow.TipRadius.Value = 0.02f;
+        arrow.TipRadius.Value = ArrowTipRadius;
         arrow.TipLength.Value = ArrowTipLength;
         arrow.Segments.Value = 12;
         AttachVisual(meshSlot, arrow, material);
@@ -489,19 +631,47 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
     }
 
     // CONSTANT APPARENT SIZE: scale = max(user scale, viewer distance), so editor chrome stays usable
-    // whether the thing is at arm's length or across the room. Rewriting that scale every frame is a
-    // datamodel write (and a sync delta) every frame for a value that barely moves, so it only lands
-    // when the viewer has actually closed or opened the distance by a couple of percent. Below that
-    // the difference is under a pixel. -xlinka
+    // whether the thing is at arm's length or across the room. The size is each viewer's own: every peer
+    // sizes the rig for its own head through a drive held on this machine only, so the write never goes
+    // on the wire and a size another peer sends for the rig is ignored. A plain write would hand every
+    // peer the writer's size. A write still costs a transform push, so it only lands when the viewer has
+    // closed or opened the distance by a couple of percent. Below that the difference is under a
+    // pixel. -xlinka
     private const float ScaleDeadband = 0.02f;
     private float _chromeDistance = -1f;
     private float _chromeUserScale = -1f;
     private Slot? _headSlot;
+    private Slot? _sizedRoot;
+    private FieldDrive<float3>? _sizeDrive;
+
+    // A peer that only received the rig finds its handles root by name once it has landed.
+    private FieldDrive<float3>? SizeDrive()
+    {
+        if (_sizedRoot is { IsRemoved: false })
+            return _sizeDrive;
+        ReleaseSizeDrive();
+        var root = _handlesRoot is { IsRemoved: false } built ? built : Slot?.FindChild("Handles", recursive: false);
+        if (root == null || root.IsRemoved)
+            return null;
+        _sizedRoot = root;
+        _sizeDrive = FieldDrive<float3>.CreateLocal(this);
+        _sizeDrive.LocalValueOnly = true;
+        _sizeDrive.DriveTarget(root.LocalScale);
+        _chromeDistance = -1f;
+        return _sizeDrive;
+    }
+
+    private void ReleaseSizeDrive()
+    {
+        _sizeDrive?.Dispose();
+        _sizeDrive = null;
+        _sizedRoot = null;
+    }
 
     private void UpdateChromeScale()
     {
-        var root = _handlesRoot;
-        if (root == null || root.IsRemoved)
+        var drive = SizeDrive();
+        if (drive == null || !drive.IsLinkValid)
             return;
 
         var userRoot = World?.LocalUser?.Root;
@@ -519,14 +689,17 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
         float distance = MathF.Sqrt(delta.LengthSquared);
         float userScale = userRoot.Slot?.GlobalScale.x ?? 1f;
 
+        // A full state for the rig lands on a driven field too, so the deadband only holds while the
+        // field still carries this machine's size.
         if (_chromeDistance > 0f
             && MathF.Abs(distance - _chromeDistance) <= _chromeDistance * ScaleDeadband
-            && MathF.Abs(userScale - _chromeUserScale) <= _chromeUserScale * ScaleDeadband)
+            && MathF.Abs(userScale - _chromeUserScale) <= _chromeUserScale * ScaleDeadband
+            && MathF.Abs(drive.DrivenValue.x - MathF.Max(_chromeUserScale, _chromeDistance)) < 1e-5f)
             return;
 
         _chromeDistance = distance;
         _chromeUserScale = userScale;
-        root.LocalScale.Value = float3.One * MathF.Max(userScale, distance);
+        drive.SetValue(float3.One * MathF.Max(userScale, distance));
     }
 
     // BOUNDS: measured ONCE in the target's own local space and cached. Local space is the whole
@@ -667,7 +840,7 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
     {
         var target = TargetSlotRef?.Target;
         var gizmoSlot = Slot;
-        if (target == null || target.IsDestroyed || gizmoSlot == null)
+        if (target == null || target.IsDestroyed || gizmoSlot == null || _targetGone)
             return;
         if (!EnsureChromeSlots())
             return;
@@ -721,6 +894,8 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
         target.SubtreeStructureChanged += OnTargetStructureChanged;
         target.SlotName.OnChanged += OnTargetRenamed;
         target.OnPrepareDestroy += OnTargetDestroyed;
+        target.ParentChanged += OnTargetMoved;
+        target.ActiveChanged += OnTargetMoved;
     }
 
     private void UnsubscribeTarget()
@@ -731,6 +906,8 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
         _watchedTarget.SubtreeStructureChanged -= OnTargetStructureChanged;
         _watchedTarget.SlotName.OnChanged -= OnTargetRenamed;
         _watchedTarget.OnPrepareDestroy -= OnTargetDestroyed;
+        _watchedTarget.ParentChanged -= OnTargetMoved;
+        _watchedTarget.ActiveChanged -= OnTargetMoved;
         _watchedTarget = null;
     }
 
@@ -740,14 +917,99 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
 
     private void OnTargetRenamed(string newName) => NotifyChanged(); // the name label re-reads the target
 
-    private void OnTargetDestroyed(Slot slot) => DestroySelf();
+    private void OnTargetDestroyed(Slot slot) => LoseTarget();
+
+    // Parking moves the target, or a slot above it, under the switched-off graveyard, and the target hears
+    // it as an active change. An inactive target under a parked ancestor hears nothing; OnUpdate catches it.
+    private void OnTargetMoved(Slot slot)
+    {
+        if (UndoGraveyard.Holds(slot))
+            LoseTarget();
+    }
+
+    // TARGET GONE: a delete mostly parks the object in the undo graveyard, alive, instead of destroying
+    // it, so a rig that watched for a destroy alone stayed up on every screen. Gone is destroyed, parked or
+    // the ref cleared. Only the owner takes the rig down, with a plain destroy run after whatever reported
+    // the loss: inside a peer's destroy this machine acts as the system, and a guest's removal of someone
+    // else's rig from there is refused by the host and scored against that guest. Every other peer hides
+    // it here, writes nothing and waits for the owner's removal; with the owner gone the authority takes
+    // it down. -xlinka
+    private bool _targetGone;
+    private bool _removalQueued;
+    private bool _parking;
+    private Slot? _parkedTarget;
+    private int _hierarchyEpoch = -1;
+
+    private void LoseTarget()
+    {
+        var target = _watchedTarget;
+        UnsubscribeTarget();
+        UnsubscribeBoundsSources();
+        WorldGizmos.For(World)?.Untrack(target, this);
+        _boundsAnimated = false;
+        _parkedTarget = target is { IsDestroyed: false } ? target : null;
+        OnTargetGone(refCleared: false);
+    }
+
+    // A cleared ref on a rig nobody owns is a parked rig on its way to the pool, not a loss.
+    private void OnTargetGone(bool refCleared)
+    {
+        if (_parking || IsDestroyed || (refCleared && Owner?.RawTarget == null))
+            return;
+        _targetGone = true;
+        ClearDragFocus();
+        Slot?.SetLocallyHidden(true);
+        if (MayTakeDown())
+            QueueRemoval();
+    }
+
+    private void ShowAgain()
+    {
+        if (!_targetGone)
+            return;
+        _targetGone = false;
+        Slot?.SetLocallyHidden(false);
+    }
+
+    private bool MayTakeDown()
+    {
+        var owner = Owner?.Target;
+        return owner != null ? ReferenceEquals(owner, World?.LocalUser) : World?.IsAuthority == true;
+    }
+
+    private void QueueRemoval()
+    {
+        if (_removalQueued || World == null)
+            return;
+        _removalQueued = true;
+        World.RunSynchronously(() =>
+        {
+            _removalQueued = false;
+            if (IsDestroyed || !_targetGone || !MayTakeDown())
+                return;
+            // the owner's own removal is an ordinary destroy; clearing up after one who left is engine
+            // work, the way a leaver's body goes
+            using (Owner?.Target == null ? World?.DataModelPermissions?.EnterSystemBypass() : null)
+                DestroySelf();
+        });
+    }
+
+    private bool HierarchyMoved()
+    {
+        int epoch = Slot.HierarchyEpoch;
+        if (epoch == _hierarchyEpoch)
+            return false;
+        _hierarchyEpoch = epoch;
+        return true;
+    }
 
     // the gizmo slot is the single transform writer; the hook only lays out local-space children under
     // it (two writers on the same node fought - rotation lost every round)
     private void FollowTarget()
     {
+        // A rig destroyed this frame keeps its watches until its OnDestroy, later in the same update.
         var target = TargetSlotRef.Target;
-        if (target == null || target.IsDestroyed || Slot == null)
+        if (target == null || target.IsDestroyed || Slot == null || Slot.IsRemoved || IsDestroyed || _targetGone)
             return;
         Slot.GlobalPosition = target.GlobalPosition;
         Slot.GlobalRotation = IsLocalSpace.Value ? target.GlobalRotation : floatQ.Identity;
@@ -861,8 +1123,18 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
     internal void Park()
     {
         _draggingHandles = 0;
+        ClearDragFocus();
         LinkedInspector.Target = null!;
-        TargetSlotRef.Target = null!; // the ref handler unwires the watches and untracks
+        _parking = true;
+        try
+        {
+            TargetSlotRef.Target = null!; // the ref handler unwires the watches and untracks
+        }
+        finally
+        {
+            _parking = false;
+        }
+        ShowAgain();
         Owner.Target = null!;
         for (int i = 0; i < _handles.Count; i++)
         {
@@ -913,7 +1185,7 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
         UnsubscribeTarget();
         UnsubscribeBoundsSources();
         var registry = WorldGizmos.For(World);
-        registry?.Untrack(TargetSlotRef?.RawTarget);
+        registry?.Untrack(TargetSlotRef?.RawTarget, this);
         registry?.Unpark(this);
         Slot?.Destroy();
     }
@@ -943,9 +1215,17 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
     public override void OnUserLeft(User user)
     {
         // Only the authority prunes: every peer sees the departure, and a peer that tried would just
-        // have the delete refused. RawTarget because the leaving user's ref already reads null.
-        if (World?.IsAuthority == true && user != null && ReferenceEquals(user, Owner?.RawTarget))
-            DestroySelf();
+        // have the delete refused. RawTarget because the leaving user's ref already reads null. A rig the
+        // leaver parked for reuse names nobody, so it goes by the byte it was minted in.
+        if (World is not { IsAuthority: true } world || user == null || Slot is not { IsDestroyed: false } slot)
+            return;
+        bool parkedRig = Owner?.RawTarget == null && TargetSlotRef?.RawTarget == null;
+        byte minted = slot.ReferenceID.GetUserByte();
+        if (ReferenceEquals(user, Owner?.RawTarget) || (parkedRig && RefIDConstants.IsValidUserByte(minted) && user.HoldsByte(minted)))
+        {
+            using (world.DataModelPermissions?.EnterSystemBypass())
+                DestroySelf();
+        }
     }
 
     public override void OnUpdate(float delta)
@@ -953,15 +1233,25 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
         base.OnUpdate(delta);
         UpdateControlPreference();
 
-        // The gizmo dies with its target. OnPrepareDestroy covers the normal path; this catches a slot
-        // pulled out from under us without one. A null watch is a parked rig or a ref that has not
-        // resolved yet, not a dead target - both just cost nothing until something changes.
+        // The gizmo goes with its target. OnPrepareDestroy covers a destroy; this catches a slot pulled
+        // out from under us without one, and a delete that parked it, which only moves the hierarchy. A
+        // null watch is a parked rig, a ref that has not resolved yet or a lost target, and costs nothing
+        // until something moves; a lost target that undo puts back is watched again.
         var target = _watchedTarget;
         if (target == null)
-            return;
-        if (target.IsDestroyed)
         {
-            DestroySelf();
+            var parked = _parkedTarget;
+            if (parked != null && HierarchyMoved() && (parked.IsDestroyed || !UndoGraveyard.Holds(parked)))
+            {
+                _parkedTarget = null;
+                if (!parked.IsDestroyed)
+                    HandleTargetChanged();
+            }
+            return;
+        }
+        if (target.IsDestroyed || (HierarchyMoved() && UndoGraveyard.Holds(target)))
+        {
+            LoseTarget();
             return;
         }
 
@@ -987,12 +1277,15 @@ public class SlotGizmo : ImplementableComponent, IGizmo, IGizmoDragHost
 
     public override void OnDestroy()
     {
+        ClearDragFocus();
+        ReleaseSizeDrive();
+        DropCompanions(deferred: true);
         if (Slot != null)
             Slot.SubtreeStructureChanged -= OnOwnStructureChanged;
         UnsubscribeTarget();
         UnsubscribeBoundsSources();
         var registry = WorldGizmos.For(World);
-        registry?.Untrack(TargetSlotRef?.RawTarget);
+        registry?.Untrack(TargetSlotRef?.RawTarget, this);
         registry?.Unpark(this);
         base.OnDestroy();
     }

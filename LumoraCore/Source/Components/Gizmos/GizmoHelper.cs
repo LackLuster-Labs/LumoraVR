@@ -25,6 +25,14 @@ public static class GizmoHelper
         return owner;
     }
 
+    // Somebody else's body, the avatar they wear or what they hold, while they have not said yes to this machine's
+    // user. Anyone may select it to look at it; nothing on a gizmo moves it, whatever their role would let through.
+    // With their yes the handles work like on anything else, bar their root itself, which is never anyone else's.
+    public static bool InAnotherPerson(Slot? slot)
+        => slot?.ActiveUserRoot is { } root && !root.IsLocalUserRoot
+            && (root.ActiveUser is not { } person || ReferenceEquals(root.Slot, slot)
+                || !Networking.Session.SessionEditConsent.Allows(person, slot.World?.LocalUser));
+
     public static SlotGizmo SpawnGizmoFor(Slot targetSlot)
     {
         targetSlot = ReplicatedOwner(targetSlot)!;
@@ -169,6 +177,37 @@ public static class GizmoHelper
         return removed;
     }
 
+    // Every rig this machine's user has up on a slot or on anything inside it, taken down. Each machine drops only
+    // its own: another user's rig is theirs to take down, and their machine runs this as well. -xlinka
+    public static int DismissWithin(Slot? root)
+    {
+        var world = root?.World;
+        var registry = WorldGizmos.For(world);
+        var localUser = world?.LocalUser;
+        if (root == null || root.IsDestroyed || registry == null || localUser == null)
+            return 0;
+
+        int removed = 0;
+        foreach (var gizmo in registry.OwnedBy(localUser))
+        {
+            if (!Within(gizmo.TargetSlot, root))
+                continue;
+            Dismiss(gizmo, world);
+            removed++;
+        }
+        foreach (var gizmo in registry.ComponentGizmosOwnedBy(localUser))
+        {
+            if (!Within(gizmo.TargetComponent?.Slot, root))
+                continue;
+            gizmo.DestroySelf();
+            removed++;
+        }
+        return removed;
+    }
+
+    private static bool Within(Slot? slot, Slot root)
+        => slot != null && !slot.IsDestroyed && (ReferenceEquals(slot, root) || slot.IsDescendantOf(root));
+
     // PER-COMPONENT GIZMOS
     //
     // Explicit only. Selecting a slot puts up the slot gizmo and nothing else; a component gizmo
@@ -225,7 +264,9 @@ public static class GizmoHelper
     {
         if (component == null)
             return;
-        WorldGizmos.For(component.World)?.GetComponentGizmo(component)?.DestroySelf();
+        var gizmo = WorldGizmos.For(component.World)?.GetComponentGizmo(component);
+        if (gizmo != null && (ReferenceEquals(gizmo.Owner?.Target, component.World?.LocalUser) || component.World?.IsAuthority == true))
+            gizmo.DestroySelf();
     }
 
     public static bool HasComponentGizmo(Component? component)
@@ -244,7 +285,8 @@ public static class GizmoHelper
         return SpawnComponentGizmo(component);
     }
 
-    // Park what we own so the next selection can rent it back; destroy anything else outright.
+    // Park what we own so the next selection can rent it back; the authority destroys anyone else's
+    // outright. A guest leaves another user's rig alone, since that destroy is refused.
     private static void Dismiss(SlotGizmo gizmo, World? world)
     {
         if (gizmo == null || gizmo.IsDestroyed)
@@ -256,6 +298,10 @@ public static class GizmoHelper
             gizmo.Park();
             if (registry != null && registry.Park(gizmo))
                 return;
+        }
+        else if (world?.IsAuthority != true)
+        {
+            return;
         }
         gizmo.DestroySelf();
     }

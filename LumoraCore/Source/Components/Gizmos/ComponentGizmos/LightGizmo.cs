@@ -37,6 +37,14 @@ public class LightGizmo : ComponentGizmo
         fields.Add(light.Type);
         fields.Add(light.Range);
         fields.Add(light.SpotAngle);
+        fields.Add(light.RotationOffset);
+    }
+
+    // The light's own turn from its slot (see Light.RotationOffset); the shapes and pads follow it.
+    private static floatQ Turn(Light light)
+    {
+        var q = light.RotationOffset.Value;
+        return q.x == 0f && q.y == 0f && q.z == 0f && q.w == 0f ? floatQ.Identity : q.Normalized;
     }
 
     protected override void BuildWire(GizmoWireBuilder wire)
@@ -54,14 +62,14 @@ public class LightGizmo : ComponentGizmo
             case LightType.Spot:
             {
                 float radius = range * MathF.Tan(ClampAngle(light.SpotAngle.Value) * DegreesToRadians);
-                wire.Cone(float3.Zero, float3.Backward, radius, range, segments: 32, ribs: 4);
+                wire.Cone(float3.Zero, Turn(light) * float3.Backward, radius, range, segments: 32, ribs: 4);
                 break;
             }
 
             default:
                 // A directional light has no reach to draw, only a direction. Fixed length: it is a
                 // pointer, and scaling it by anything would imply a falloff that does not exist.
-                wire.Arrow(float3.Zero, float3.Backward, DirectionalLength, DirectionalLength * 0.2f);
+                wire.Arrow(float3.Zero, Turn(light) * float3.Backward, DirectionalLength, DirectionalLength * 0.2f);
                 break;
         }
     }
@@ -97,9 +105,10 @@ public class LightGizmo : ComponentGizmo
 
             case LightType.Spot:
             {
-                _range!.LocalAxis.Value = float3.Backward;
+                var turn = Turn(light);
+                _range!.LocalAxis.Value = turn * float3.Backward;
                 _range.DistancePerUnit.Value = 1f;
-                PlaceHandle(_range, float3.Backward * range);
+                PlaceHandle(_range, turn * (float3.Backward * range));
 
                 float angle = ClampAngle(light.SpotAngle.Value);
                 float radians = angle * DegreesToRadians;
@@ -109,9 +118,9 @@ public class LightGizmo : ComponentGizmo
                 // tangent's slope is nothing like constant across the range.
                 float cos = MathF.Cos(radians);
                 float perDegree = range * DegreesToRadians / MathF.Max(cos * cos, 1e-4f);
-                _spotAngle!.LocalAxis.Value = float3.Right;
+                _spotAngle!.LocalAxis.Value = turn * float3.Right;
                 _spotAngle.DistancePerUnit.Value = perDegree;
-                PlaceHandle(_spotAngle, new float3(radius, 0f, 0f) + float3.Backward * range);
+                PlaceHandle(_spotAngle, turn * (new float3(radius, 0f, 0f) + float3.Backward * range));
                 break;
             }
 

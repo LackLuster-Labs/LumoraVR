@@ -19,6 +19,8 @@ public class FreeTranslateHandle : TransformHandle
 
     protected override Localization.LocaleText DragDescription => UndoLocale.Move;
 
+    protected override bool PosesTarget => true;
+
     protected override void BeginDrag(Slot target, float3 rayOrigin, float3 rayDirection)
     {
         // View-facing plane through the gizmo center, frozen for the whole drag.
@@ -34,6 +36,6 @@ public class FreeTranslateHandle : TransformHandle
             return;
         if (!RayPlane(rayOrigin, rayDirection, _planeOrigin, _planeNormal, out var hit))
             return;
-        target.GlobalPosition = _startPosition + (hit - _startHit);
+        MoveTarget(target, _startPosition + (hit - _startHit));
     }
 }

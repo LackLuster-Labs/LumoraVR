@@ -41,6 +41,8 @@ public class RotateHandle : TransformHandle
 
     protected override Localization.LocaleText DragDescription => UndoLocale.Rotate;
 
+    protected override bool PosesTarget => true;
+
     protected override void BeginDrag(Slot target, float3 rayOrigin, float3 rayDirection)
     {
         _axis = AxisWorld;
@@ -61,7 +63,7 @@ public class RotateHandle : TransformHandle
             return;
         if (!TryReadAngle(rayOrigin, rayDirection, out float angle))
             return; // beam parallel to the ring plane this frame - hold rotation
-        target.GlobalRotation = floatQ.AxisAngleRad(_axis, angle - _startAngle) * _startRotation;
+        TurnTarget(target, floatQ.AxisAngleRad(_axis, angle - _startAngle) * _startRotation);
     }
 
     private bool TryReadAngle(float3 rayOrigin, float3 rayDirection, out float angle)
@@ -84,7 +86,7 @@ public class RotateHandle : TransformHandle
     {
         hit = default;
         var slot = Slot;
-        if (slot == null || slot.IsDestroyed || !DevToolItem.CanManipulateGizmos(laser))
+        if (slot == null || slot.IsDestroyed || slot.IsLocallyHidden || !DevToolItem.CanManipulateGizmos(laser) || !TargetIsEditable)
             return false;
 
         var normal = (slot.GlobalRotation * float3.Up).Normalized;
