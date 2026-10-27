@@ -571,6 +571,7 @@ public static partial class PackageMemberMapper
         style.StencilID.Value = ui.StencilID.Value;
         style.StencilWriteMask.Value = ui.StencilWriteMask.Value;
         style.StencilReadMask.Value = ui.StencilReadMask.Value;
+        CarryUITextLookMats(ui, style);
         return style;
     }
 

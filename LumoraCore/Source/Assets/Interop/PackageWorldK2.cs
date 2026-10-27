@@ -77,6 +77,8 @@ public static partial class PackageMemberMapper
         {
             ["CreateOverrideOnWrite"] = HandledK2,
             ["ClearOnUserLeave"] = HandledK2,
+            // The entries come across in their places with their values and no user (ApplyPerUser).
+            ["_overrides"] = "Overrides",
         };
         table["PerUserBoolTally"] = new(StringComparer.Ordinal)
         {
@@ -156,9 +158,12 @@ public static partial class PackageMemberMapper
     //
     // Entries the package does not keep (PersistentOverrides off) belong to the session that made them. A
     // user who left never comes back as the same user, so their entry is dead either way; dropping it on
-    // leave keeps it out of a save, where its user reference would point at nobody. The stored entries
-    // themselves are not brought over: they name users of the session the package was saved in, by
-    // account ids of the platform it came from, and match nobody here. -xlinka
+    // leave keeps it out of a save, where its user reference would point at nobody.
+    //
+    // The stored entries come across in their places with their values and no user: the users they name belong
+    // to the session the package was saved in and match nobody here. An entry is still worth its place: an author
+    // keeps one that names nobody for a drive or a variable to fill in as the object runs (the user wearing it,
+    // and that user's own value), and those find it by its place. -xlinka
     private static void ApplyPerUser(Sync<bool> clearOnUserLeave, Sync<PerUserWrite> writes, DataTreeDictionary data)
     {
         writes.Value = StoredBool(data, "CreateOverrideOnWrite", false) ? PerUserWrite.SetsOwn : PerUserWrite.SetsDefault;

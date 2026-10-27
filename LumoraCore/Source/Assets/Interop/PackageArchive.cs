@@ -38,6 +38,7 @@ public sealed class PackageArchive : IDisposable
     private readonly Dictionary<string, ZipArchiveEntry> _assets = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, ZipArchiveEntry>> _variants = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _metadataKinds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ZipArchiveEntry> _metadata = new(StringComparer.Ordinal);
 
     public string SourcePath { get; private set; } = string.Empty;
 
@@ -91,10 +92,39 @@ public sealed class PackageArchive : IDisposable
 
     public byte[] ReadAsset(string signature)
     {
-        using var stream = OpenAsset(signature);
-        using var buffer = new MemoryStream();
-        stream.CopyTo(buffer);
-        return buffer.ToArray();
+        var key = signature.ToLowerInvariant();
+        if (!_assets.TryGetValue(key, out var entry))
+            throw new KeyNotFoundException($"Package has no asset '{signature}'");
+        return ReadEntry(entry);
+    }
+
+    // One pre-baked variant of an asset, by its identifier as VariantsOf lists it; null when there is none.
+    public byte[]? ReadVariant(string signature, string variant)
+    {
+        if (!_variants.TryGetValue(signature.ToLowerInvariant(), out var set) || !set.TryGetValue(variant, out var entry))
+            return null;
+        return ReadEntry(entry);
+    }
+
+    // An asset's JSON sidecar, or null when it has none.
+    public byte[]? ReadMetadata(string signature) =>
+        _metadata.TryGetValue(signature.ToLowerInvariant(), out var entry) ? ReadEntry(entry) : null;
+
+    // Straight into an array of the entry's own length. Copying through a growing buffer and then out of it
+    // held each payload three times over on its way in.
+    private static byte[] ReadEntry(ZipArchiveEntry entry)
+    {
+        using var stream = entry.Open();
+        long length = entry.Length;
+        if (length <= 0 || length > Array.MaxLength)
+        {
+            using var buffer = new MemoryStream();
+            stream.CopyTo(buffer);
+            return buffer.ToArray();
+        }
+        var bytes = new byte[length];
+        stream.ReadExactly(bytes);
+        return bytes;
     }
 
     // Just the leading bytes, for sniffing a container format without inflating a 40 MB texture.
@@ -151,7 +181,9 @@ public sealed class PackageArchive : IDisposable
             else if (name.StartsWith(MetadataFolder, StringComparison.OrdinalIgnoreCase))
             {
                 var kind = Path.GetExtension(name).TrimStart('.');
-                _metadataKinds[Path.GetFileNameWithoutExtension(name).ToLowerInvariant()] = kind;
+                var signature = Path.GetFileNameWithoutExtension(name).ToLowerInvariant();
+                _metadataKinds[signature] = kind;
+                _metadata[signature] = entry;
             }
         }
     }

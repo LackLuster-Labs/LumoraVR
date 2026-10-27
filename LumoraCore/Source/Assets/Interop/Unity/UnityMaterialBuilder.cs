@@ -46,9 +46,9 @@ public static class UnityMaterialBuilder
     // otherwise be read from leftovers, and a material keeps every property of every shader it ever had.
     private static readonly Dictionary<string, string> SdkShaders = new(StringComparer.OrdinalIgnoreCase)
     {
-        ["0b7113dea2069fc4e8943843eff19f70"] = "VRChat/Mobile/Standard Lite",
-        ["affc81f3d164d734d8f13053effb1c5c"] = "VRChat/Mobile/Toon Lit",
-        ["e765db0afa7ecfc44ade2e4e2491f65a"] = "VRChat/Mobile/Toon Standard",
+        ["0b7113dea2069fc4e8943843eff19f70"] = "SDK/Mobile/Standard Lite",
+        ["affc81f3d164d734d8f13053effb1c5c"] = "SDK/Mobile/Toon Lit",
+        ["e765db0afa7ecfc44ade2e4e2491f65a"] = "SDK/Mobile/Toon Standard",
     };
 
     // The name a material's shader goes by: a built-in by its fixed id, the declaration at the top of a

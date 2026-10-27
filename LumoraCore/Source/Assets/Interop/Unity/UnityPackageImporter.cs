@@ -415,14 +415,14 @@ public static class UnityPackageImporter
             Uri? uri = null;
             try
             {
-                // A GIF is its first frame on a material; our picture path would otherwise play it as a strip.
+                // A GIF is its first frame on a material; our picture path would otherwise load all of it as a frame sheet.
                 if (asset.Extension == ".gif")
                     uri = await FirstFrameAsync(asset, localDB).ConfigureAwait(false);
                 if (uri == null && localDB != null)
                 {
                     var local = await localDB.ImportLocalAssetAsync(asset.File, LocalDB.ImportLocation.Copy).ConfigureAwait(false);
                     if (!string.IsNullOrEmpty(local))
-                        uri = new Uri(local);
+                        uri = new Uri(await TextureStorage.ForTransferAsync(localDB, local).ConfigureAwait(false));
                 }
                 uri ??= new Uri(asset.File);
             }
@@ -459,7 +459,7 @@ public static class UnityPackageImporter
         if (asset.File == null || localDB == null)
             return null;
         var bytes = await File.ReadAllBytesAsync(asset.File).ConfigureAwait(false);
-        var rgba = GifDecoder.DecodeStrip(bytes, out int w, out int h, out _, out _, maxFrames: 1);
+        var rgba = GifDecoder.DecodeFirstFrame(bytes, out int w, out int h);
         if (rgba == null || w <= 0 || h <= 0)
             return null;
         var local = await localDB.SaveAssetAsync(Lumora.Core.Photos.PhotoEncoder.Png(rgba, w, h), ".png").ConfigureAwait(false);

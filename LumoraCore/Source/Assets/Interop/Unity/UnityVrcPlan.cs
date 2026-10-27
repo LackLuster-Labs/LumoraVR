@@ -352,7 +352,7 @@ public sealed class UnityVrcPlan
         if (entry.On.IsEmpty && entry.Off.IsEmpty)
         {
             if (!silent)
-                Skip(parameter.StartsWith("VRC", StringComparison.Ordinal) ? "VRChat's own pose and locomotion settings" : "menu switches no animation layer answers");
+                Skip(parameter.StartsWith("VRC", StringComparison.Ordinal) ? "the avatar SDK's own pose and locomotion settings" : "menu switches no animation layer answers");
             Lumora.Core.Logging.Logger.Debug($"UnityPackage: menu '{path}' sets '{parameter}', which no layer reads");
             return;
         }

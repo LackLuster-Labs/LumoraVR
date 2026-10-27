@@ -2,8 +2,10 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 
@@ -20,6 +22,7 @@ public sealed class UnityAnimatorProgram
 {
     private const int Magic1 = 0x3141554c; // LUA1
     private const int Magic2 = 0x3241554c; // LUA2
+    private const int Magic3 = 0x3341554c; // LUA3
     private const int MaxBytes = 48 * 1024 * 1024;
     private const int MaxTexts = 16384;
 
@@ -345,12 +348,34 @@ public sealed class UnityAnimatorProgram
         writer.Write(_texts.Count);
         foreach (var (guid, text) in _texts) { writer.Write(guid); writer.Write(text); }
         if (stream.Length > MaxBytes) throw new InvalidDataException("Animator asset exceeds 48 MB.");
+        // Curves and controller text contain repeated names and keys; keep their exact bytes in a bounded
+        // compressed envelope so every peer need not download the expanded text. -xlinka
+        var packed = new byte[8 + (int)stream.Length];
+        if (BrotliEncoder.TryCompress(stream.GetBuffer().AsSpan(0, (int)stream.Length), packed.AsSpan(8),
+            out int length, quality: 5, window: 22) && length + 8 < stream.Length)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(packed, Magic3);
+            BinaryPrimitives.WriteInt32LittleEndian(packed.AsSpan(4), (int)stream.Length);
+            Array.Resize(ref packed, length + 8);
+            return packed;
+        }
         return stream.ToArray();
     }
 
     public static UnityAnimatorProgram FromBytes(byte[] bytes)
     {
         if (bytes.Length > MaxBytes) throw new InvalidDataException("Animator asset exceeds 48 MB.");
+        if (bytes.Length >= 8 && BinaryPrimitives.ReadInt32LittleEndian(bytes) == Magic3)
+        {
+            int length = BinaryPrimitives.ReadInt32LittleEndian(bytes.AsSpan(4));
+            if (length < 4 || length > MaxBytes)
+                throw new InvalidDataException("Animator expanded length exceeds the limit.");
+            var plain = new byte[length];
+            if (!BrotliDecoder.TryDecompress(bytes.AsSpan(8), plain, out int decoded) || decoded != length
+                || BinaryPrimitives.ReadInt32LittleEndian(plain) != Magic2)
+                throw new InvalidDataException("Invalid compressed animator asset.");
+            bytes = plain;
+        }
         using var stream = new MemoryStream(bytes, false);
         using var reader = new BinaryReader(stream, Encoding.UTF8);
         int magic = reader.ReadInt32();

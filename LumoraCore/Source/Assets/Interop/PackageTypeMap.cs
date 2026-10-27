@@ -42,6 +42,10 @@ public static partial class PackageTypeMap
         AliasesK6(Aliases);
         AliasesK7(Aliases);
         AliasesK8(Aliases);
+        AliasesRendering(Aliases);
+        AliasesUi(Aliases);
+        AliasesMats(Aliases);
+        AliasesFace(Aliases);
     }
 
     static partial void AliasesK1(Dictionary<string, string> aliases);
@@ -52,6 +56,9 @@ public static partial class PackageTypeMap
     static partial void AliasesK6(Dictionary<string, string> aliases);
     static partial void AliasesK7(Dictionary<string, string> aliases);
     static partial void AliasesK8(Dictionary<string, string> aliases);
+    static partial void AliasesRendering(Dictionary<string, string> aliases);
+    static partial void AliasesUi(Dictionary<string, string> aliases);
+    static partial void AliasesFace(Dictionary<string, string> aliases);
 
     // Package components that are not attached: another part of ours carries what they did, or they do nothing
     // in a world here; and the ones that send to node graphs, joined into those graphs instead (PackageNodeGraphs).
@@ -72,32 +79,17 @@ public static partial class PackageTypeMap
         // variants a package spells differently need an entry, and each target below is a component that
         // actually exists here - an alias pointing at a name we do not have is worse than no alias,
         // because it turns a component we CAN build into a reported loss.
-        // NOT PBS_DualSided, deliberately. In a package it is PBS_Metallic with Culling=Off and the exact
-        // same member names; ours is a genuinely two-sided material with FrontAlbedoTexture and
-        // BackAlbedoTexture. Pointing one at the other attached a component that could not receive a
-        // single texture the package sent, so the whole garment came in WHITE - and silently, because a
-        // member that does not match is skipped rather than reported. The package sends Culling=Off, so
-        // PBS_Metallic comes out double-sided on its own. -xlinka
+        // NOT the dual-sided materials, deliberately: ours give each side textures of their own, and a package's
+        // dual-sided type is one surface lit from both sides. Pointing one at the other attached a component
+        // that could not receive a single texture the package sent, so the whole garment came in WHITE. The
+        // PBS families with an effect of their own (two-sided, rim, intersect and the rest) map in
+        // PackageMaterials. -xlinka
         // The package's user follower; ours of the same name is the nameplate's, which only follows the user
         // whose root it sits under and so stood still on a world slot.
         ["PositionAtUser"] = "PlaceAtUser",
-        ["PBS_DualSidedMetallic"] = "PBS_Metallic",
-        ["PBS_DualSidedSpecular"] = "PBS_Specular",
-        ["PBS_TriplanarMetallic"] = "PBS_Triplanar",
-        ["PBS_VertexColorSpecular"] = "PBS_VertexColor",
-        ["PBS_VertexColorMetallic"] = "PBS_VertexColor",
-        ["PBSLerpMetallic"] = "PBS_Metallic",
-        ["PBS_RimMetallic"] = "PBS_Metallic",
         // PBS_ColorMaskMetallic is NOT here any more: it resolves to our own component of the same
         // shape by the assembly scan, four tint slots and all. -xlinka
         //
-        // APPROXIMATION, not an equivalent. The package's intersection shader has a depth term we cannot
-        // run, but the albedo, normal and specular underneath are the same members, so this keeps the
-        // surface and loses the effect.
-        ["PBS_IntersectSpecular"] = "PBS_Specular",
-        // APPROXIMATION of the same kind: the triplanar surface comes through, its specular colour does not.
-        // Left unmapped, every renderer wearing it had no material at all and did not draw.
-        ["PBS_TriplanarSpecular"] = "PBS_Triplanar",
         // XiexeToonMaterial resolves to our own component of the same name now - it used to fall
         // back to the plain ToonMaterial, which is a different and simpler shading model.
         // PARTICLES. The package's particle modules and ours cover the same features under different
@@ -295,7 +287,10 @@ public static partial class PackageTypeMap
         // The package format's forward-migration shims for older particle data: LegacyGravityAdapter,
         // LegacyTrailsRibbonAdapter, LegacyDistributionAdapter and the rest, plus the nested
         // ConeEmitter+LegacyDirectionConverter.
-        return simple.StartsWith("Legacy", StringComparison.Ordinal)
+        // The colour reinterpret adapter on trail colours is one too: the field it drives is saved holding the
+        // converted colour already and nothing writes the adapter's own value, so the field reads the same here.
+        // A Legacy-named type that has a counterpart here (the spawn point's glow marker) is not one of them.
+        return (simple.StartsWith("Legacy", StringComparison.Ordinal) && !Aliases.ContainsKey(simple))
             || simple.EndsWith("+LegacyDirectionConverter", StringComparison.Ordinal);
     }
 
@@ -458,6 +453,20 @@ public static partial class PackageTypeMap
         ["ColorProfile"] = typeof(Math.ColorProfile),
         ["Uri"] = typeof(Uri),
         ["float3x3"] = typeof(Math.float3x3),
+        ["float4x4"] = typeof(Math.float4x4),
+        ["int2"] = typeof(Math.int2),
+        ["int3"] = typeof(Math.int3),
+        ["int4"] = typeof(Math.int4),
+        ["bool2"] = typeof(Math.bool2),
+        ["bool3"] = typeof(Math.bool3),
+        ["bool4"] = typeof(Math.bool4),
+        ["float2x2"] = typeof(Math.float2x2),
+        ["Rect"] = typeof(Math.Rect),
+        ["char"] = typeof(char),
+        ["decimal"] = typeof(decimal),
+        ["DateTime"] = typeof(DateTime),
+        // Nine coefficients either way; theirs are colours, ours plain linear RGB (PackageMemberMapper).
+        ["SphericalHarmonicsL2"] = typeof(Math.SphericalHarmonicsL2),
     };
 
     // Package types whose argument is an asset where ours takes the provider of one.
@@ -506,13 +515,18 @@ public static partial class PackageTypeMap
             return typeof(Slot);
         if (simple == "User")
             return typeof(User);
-        return FindType(simple) ?? ArgumentK3(raw, simple);
+        // A generic component as the argument is closed over its own arguments, or it stays open and the outer
+        // one cannot close.
+        if (FindType(simple) is { } found)
+            return found.ContainsGenericParameters ? Close(found, GenericArguments(raw, raw: true), false) : found;
+        return ArgumentK3(raw, simple) ?? ArgumentUi(raw, simple);
     }
 
     private static Type? AssetType(string name) => name switch
     {
         "Material" => typeof(MaterialAsset),
         "ITexture2D" or "Texture2D" or "ITexture" => typeof(TextureAsset),
+        "VideoTexture" => typeof(VideoTexture),
         "AudioClip" => typeof(AudioClip),
         _ => null,
     };

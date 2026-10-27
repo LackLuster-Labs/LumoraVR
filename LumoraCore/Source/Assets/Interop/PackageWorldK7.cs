@@ -208,7 +208,7 @@ internal static class WorldK7
             dropped.Add(proxy.Id);
             dropped.Add(drive.Id);
             if (proxy.Ref("Drive") is { } target && graphs.Members.TryGetValue(target, out var member) && !member.Owner.IsDestroyed
-                && PackageNodeIndex.MemberOf(member.Owner, member.Member, member.Index) is IField<string> text)
+                && PackageNodeIndex.MemberOf(member.Owner, member.Member, member.Index, member.Within) is IField<string> text)
                 text.Value = string.Empty;
         }
         if (dropped.Count > 0)

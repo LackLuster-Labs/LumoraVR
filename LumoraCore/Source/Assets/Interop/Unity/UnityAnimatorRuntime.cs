@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.InteropServices;
 using Lumora.Core.Math;
 
 namespace Lumora.Core.Assets.Interop.Unity;
@@ -20,7 +21,13 @@ namespace Lumora.Core.Assets.Interop.Unity;
 // touch a property standing in with the stream's own value. A blend tree adds its children by their
 // weights, a direct tree by raw parameter values unless it normalises them. An additive layer adds each
 // clip's change from its reference pose. A mask keeps a layer off transforms and body parts it does not
-// name. Humanoid muscles go back to rest each frame instead of holding. -xlinka
+// name. Humanoid muscles go back to rest each frame instead of holding.
+//
+// A frame that would come out exactly as the last one did is not worked out again. After a frame in which
+// nothing was entered, left, blended or moved, the runtime asks whether the frames after it would match as
+// long as no parameter changes: no layer between states, every motion still at its time (flat curves, a
+// clip that does not loop and has played through, a time parameter), no way out of a state that time alone
+// opens. Until a parameter differs, Rest only runs the clocks on, the same sums Advance does. -xlinka
 public sealed class UnityAnimatorRuntime
 {
     public struct LayerState
@@ -79,6 +86,13 @@ public sealed class UnityAnimatorRuntime
 
     private readonly float[][] _weights = new float[34][];
 
+    // The parameters as the last full frame started from, and each layer's clock while it rests.
+    private readonly float[] _restValues;
+    private readonly float[] _restSpeed, _restLength;
+    private bool _stirred, _steady;
+    // The last full frame moved nothing, and the next ones would not either while the parameters hold.
+    public bool Resting { get; private set; }
+
     public UnityAnimatorRuntime(UnityAnimatorProgram program) : this(program.Graph) { }
 
     public UnityAnimatorRuntime(UnityAnimatorGraph graph)
@@ -104,6 +118,9 @@ public sealed class UnityAnimatorRuntime
         Array.Fill(_ref, -1);
         for (int i = 0; i < _weights.Length; i++)
             _weights[i] = new float[System.Math.Max(1, graph.MaxTreeChildren)];
+        _restValues = new float[Values.Length];
+        _restSpeed = new float[Layers.Length];
+        _restLength = new float[Layers.Length];
     }
 
     public int Parameter(string name) => Graph.ParameterIndex.GetValueOrDefault(name, -1);
@@ -116,15 +133,28 @@ public sealed class UnityAnimatorRuntime
     {
         Events.Clear();
         Driven.Clear();
+        Resting = false;
+        _stirred = false;
+        // Settling is only looked into once the parameters have held from one frame to the next, so an avatar
+        // whose parameters move every frame never pays for the look.
+        _steady = Unmoved();
+        Values.AsSpan().CopyTo(_restValues);
         for (int p = 0; p < PlayableWeights.Length; p++)
+        {
+            _stirred |= _playableBlends[p].Duration > 0f;
             Step(ref _playableBlends[p], ref PlayableWeights[p], delta);
+        }
         for (int i = 0; i < Layers.Length; i++)
+        {
+            _stirred |= _layerBlends[i].Duration > 0f;
             Step(ref _layerBlends[i], ref LayerWeights[i], delta);
+        }
         for (int i = 0; i < Layers.Length; i++)
         {
             var layer = Graph.Layers[i];
             if (layer.Synced >= 0 && layer.Synced < Layers.Length)
             {
+                _stirred |= Layers[i].Current != Layers[layer.Synced].Current || Layers[i].Previous != Layers[layer.Synced].Previous;
                 Layers[i] = Layers[layer.Synced];
                 continue;
             }
@@ -134,14 +164,26 @@ public sealed class UnityAnimatorRuntime
                 int start = Enter(layer.Machine, 0);
                 if (start < 0)
                     continue;
+                _stirred = true;
                 state.Current = start;
                 state.Time = state.Before = 0;
                 OnEnter(i, start);
             }
             state.Before = state.Time;
-            state.Time = Advance(Graph.States[state.Current], state.Time, delta);
+            // The same sum as Advance(state, time, delta), with the speed and length kept for Settles: a tree's
+            // length can mean weighing it, which is the dearest part of a frame.
+            var playing = Graph.States[state.Current];
+            if (playing.TimeParameter >= 0)
+                state.Time = Values[playing.TimeParameter];
+            else
+            {
+                _restSpeed[i] = Speed(playing);
+                _restLength[i] = Length(playing.Motion, 0);
+                state.Time = state.Time + delta * _restSpeed[i] / _restLength[i];
+            }
             if (state.Previous >= 0)
             {
+                _stirred = true;
                 state.PreviousTime = Advance(Graph.States[state.Previous], state.PreviousTime, delta);
                 state.Elapsed += delta;
                 if (state.Elapsed >= state.Duration)
@@ -154,8 +196,136 @@ public sealed class UnityAnimatorRuntime
             }
             int taken = Pick(i, state);
             if (taken >= 0)
+            {
+                _stirred = true;
                 Start(i, ref state, taken);
+            }
         }
+        _stirred |= Driven.Count > 0 || Events.Count > 0;
+    }
+
+    // A frame the last one already showed: the clocks run on as Advance runs them and nothing else moves.
+    // False when the runtime is not resting or a parameter changed since, and the frame has to be worked out.
+    public bool Rest(float delta)
+    {
+        if (!Resting)
+            return false;
+        if (!Unmoved())
+        {
+            Resting = false;
+            return false;
+        }
+        Events.Clear();
+        Driven.Clear();
+        for (int i = 0; i < Layers.Length; i++)
+        {
+            var layer = Graph.Layers[i];
+            if (layer.Synced >= 0 && layer.Synced < Layers.Length)
+            {
+                Layers[i] = Layers[layer.Synced];
+                continue;
+            }
+            ref var state = ref Layers[i];
+            if (state.Current < 0)
+                continue;
+            var current = Graph.States[state.Current];
+            state.Before = state.Time;
+            state.Time = current.TimeParameter >= 0 ? Values[current.TimeParameter] : state.Time + delta * _restSpeed[i] / _restLength[i];
+        }
+        return true;
+    }
+
+    private bool Unmoved()
+        => MemoryMarshal.Cast<float, int>(Values.AsSpan()).SequenceEqual(MemoryMarshal.Cast<float, int>(_restValues.AsSpan()));
+
+    // Whether the frames after this one come out the same while no parameter changes: no layer between two
+    // states, every motion that shows holding still where its clock is going, and no way out of a state that
+    // the clock alone opens. Each layer's speed and length are the ones Advance just used, which hold while
+    // the parameters do.
+    private bool Settles()
+    {
+        for (int i = 0; i < Layers.Length; i++)
+        {
+            var layer = Graph.Layers[i];
+            var state = Layers[i];
+            if (state.Previous >= 0)
+                return false;
+            if (state.Current < 0)
+                continue;
+            var current = Graph.States[state.Current];
+            bool synced = layer.Synced >= 0 && layer.Synced < Layers.Length;
+            double rate = current.TimeParameter >= 0 ? 0
+                : synced ? (double)Speed(current) / Length(current.Motion, 0)
+                : (double)_restSpeed[i] / _restLength[i];
+            if (!double.IsFinite(rate))
+                return false;
+            float weight = LayerWeights[i] * PlayableWeights[System.Math.Clamp(layer.Playable, 0, PlayableWeights.Length - 1)];
+            if (weight > 0f && rate != 0)
+            {
+                int motion = current.Motion;
+                if (layer.SyncedMotions != null)
+                    motion = layer.SyncedMotions.TryGetValue(state.Current, out int syncedMotion) ? syncedMotion : -1;
+                float offset = current.CycleOffsetParameter >= 0 ? Values[current.CycleOffsetParameter] : current.CycleOffset;
+                if (!Still(motion, state.Time + offset, rate, 0))
+                    return false;
+            }
+            if (synced)
+                continue;
+            bool loops = Loops(current.Motion, 0);
+            if (Opens(layer.Any, state, rate, loops, any: true) || Opens(current.Transitions, state, rate, loops, any: false))
+                return false;
+        }
+        return true;
+    }
+
+    // A motion that gives the same pose from here on while its clock runs at this rate: flat curves, a clip
+    // that does not loop and has played through, a tree whose weighted children all hold.
+    private bool Still(int motion, double time, double rate, int depth)
+    {
+        if (motion < 0 || depth > 32 || rate == 0 || Graph.MotionStatic[motion])
+            return true;
+        if (Graph.IsClip(motion))
+            return !Graph.Clips[motion].Loop && (rate > 0 ? time >= 1.0 : time <= 0.0);
+        var tree = Graph.TreeOf(motion);
+        var weights = _weights[depth];
+        Weigh(tree, weights);
+        for (int i = 0; i < tree.Children.Length; i++)
+            if (weights[i] != 0f && tree.Children[i] >= 0
+                && !Still(tree.Children[i], time * tree.TimeScale[i] + tree.CycleOffset[i], rate * tree.TimeScale[i], depth + 1))
+                return false;
+        return true;
+    }
+
+    // Whether a transition in this list could be taken on a later frame with the parameters as they are, read
+    // the way First reads them.
+    private bool Opens(int[] list, LayerState state, double rate, bool loops, bool any)
+    {
+        bool solo = false;
+        foreach (int id in list)
+        {
+            var t = Graph.Transitions[id];
+            if (t.Solo && !t.Muted) { solo = true; break; }
+        }
+        foreach (int id in list)
+        {
+            var t = Graph.Transitions[id];
+            if (t.Muted || solo && !t.Solo)
+                continue;
+            if (any && !t.CanTransitionToSelf && t.Destination == state.Current)
+                continue;
+            if (t.Conditions.Length == 0 && !t.HasExitTime)
+                continue;
+            if (!Conditions(t))
+                continue;
+            if (!t.HasExitTime)
+                return true;
+            // A clock standing still meets the exit time every frame or never; one running forward meets it
+            // while it is still ahead, or each time round a loop.
+            if (rate == 0 ? ExitReady(t.ExitTime, state.Time, state.Time, loops)
+                : rate < 0 || loops && t.ExitTime < 1f || state.Time < t.ExitTime || state.Time == 0 && t.ExitTime == 0)
+                return true;
+        }
+        return false;
     }
 
     private static void Step(ref Blend blend, ref float weight, float delta)
@@ -700,6 +870,7 @@ public sealed class UnityAnimatorRuntime
         foreach (int b in _lastExtras)
             if (_written[b] != _frame && _extraStamp[b] != _frame)
                 Compare(b);
+        Resting = _steady && !_stirred && Changed.Count == 0 && Unmoved() && Settles();
     }
 
     private void Compare(int b)

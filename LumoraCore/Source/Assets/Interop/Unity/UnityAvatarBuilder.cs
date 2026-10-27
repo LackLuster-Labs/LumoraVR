@@ -36,6 +36,7 @@ public static partial class UnityAvatarBuilder
         if (unit < 1e-6f)
             unit = 1f;
         var nodes = assembly?.Nodes ?? new NodeIndex(nodeRoot, meta, 1f / unit, candidate.NodesByPath);
+        MoveRehungNodes(candidate, nodes);
         if (assembly == null)
             ApplyPoseOverrides(candidate, nodes, unit);
         if (asAvatar)
@@ -164,6 +165,57 @@ public static partial class UnityAvatarBuilder
 
     private static floatQ Fill(floatQ q, float? x, float? y, float? z, float? w)
         => new floatQ(x ?? q.x, y ?? q.y, z ?? q.z, w ?? q.w).Normalized;
+
+    // An unpacked prefab can hang one of the model's own nodes under another object than the file does: a
+    // hair armature dragged onto the head bone. Its path then names no node of ours and it is found by its
+    // name alone, still under the file's parent, so the hair stayed put while the head moved. It goes under
+    // the object the project put it under, where it stands (dragging keeps the world pose). -xlinka
+    private static void MoveRehungNodes(UnityImportCandidate candidate, NodeIndex nodes)
+    {
+        // Only nodes of the model's own, looked up without making anything: a renamed object is not one.
+        Slot? Own(UnityNodeRef node)
+        {
+            if (node.Part != null || node.Path == null)
+                return null;
+            if (nodes.ByPath(node.Path) is { } byPath)
+                return byPath;
+            int slash = node.Path.LastIndexOf('/');
+            return nodes.ByName(slash >= 0 ? node.Path[(slash + 1)..] : node.Path) is { } byName && !nodes.IsAdded(byName) ? byName : null;
+        }
+        // A node the hierarchy still has at the file's own path was not moved, whatever else shares its name
+        // (an empty the project named after a bone to hold its jiggle settings); nor is a name used twice.
+        var stays = new HashSet<Slot>();
+        var names = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var node in candidate.NodesByPath.Values)
+        {
+            if (node.Path == null)
+                continue;
+            if (nodes.ByPath(node.Path) is { } kept)
+                stays.Add(kept);
+            var leaf = node.Path[(node.Path.LastIndexOf('/') + 1)..];
+            names[leaf] = names.GetValueOrDefault(leaf) + 1;
+        }
+        int moved = 0;
+        foreach (var node in candidate.NodesByPath.Values)
+        {
+            if (node.Path == null || node.Parent == null || nodes.ByPath(node.Path) != null)
+                continue;
+            if (names.GetValueOrDefault(node.Path[(node.Path.LastIndexOf('/') + 1)..]) != 1)
+                continue;
+            if (Own(node) is not { } slot || stays.Contains(slot) || Own(node.Parent) is not { } parent)
+                continue;
+            parent = nodes.Inside(parent);
+            var own = slot.Parent;
+            while (own?.Parent != null && (own.SlotName.Value ?? "").Contains("$AssimpFbx$", StringComparison.Ordinal))
+                own = own.Parent;
+            if (own == null || ReferenceEquals(own, parent) || ReferenceEquals(parent, slot) || parent.IsDescendantOf(slot))
+                continue;
+            slot.SetParent(parent, preserveGlobalTransform: true);
+            moved++;
+        }
+        if (moved > 0)
+            Logger.Debug($"UnityPackage: {moved} model nodes moved under the objects the project hung them from");
+    }
 
     private static void ApplyAvatar(UnityImportCandidate candidate, Slot model, NodeIndex nodes, UnityModelMeta meta, UnityImportResult result, float unit)
     {
@@ -643,6 +695,8 @@ public static partial class UnityAvatarBuilder
         public Slot? PathTop { get; private set; }
 
         public Slot? ByName(string name) => _byName.TryGetValue(name, out var slot) ? slot : null;
+
+        public Slot? ByPath(string path) => _byPath.TryGetValue(path, out var slot) ? slot : null;
 
         public Slot? ById(long id) => _byId.TryGetValue(id, out var slot) ? slot : null;
 

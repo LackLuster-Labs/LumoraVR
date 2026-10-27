@@ -54,6 +54,9 @@ public sealed class PackageImportResult
 
     public int MeshesConverted { get; set; }
     public int TexturesImported { get; set; }
+
+    // Pictures whose own compressed chain came with the package and went straight into the GPU cache.
+    public int TexturesPrecompressed { get; set; }
     public int AssetsFailed { get; set; }
 
     // The package's node graphs: scripts made from them, how many of those run, and the nodes carried or not,
@@ -84,7 +87,7 @@ public sealed class PackageImportResult
 //
 // Scripted behaviour becomes scripts (PackageNodeGraphs), and the slots that existed only to hold its nodes
 // are pruned. -xlinka
-public static class PackageObjectImporter
+public static partial class PackageObjectImporter
 {
     public static async Task<PackageImportResult> ImportAsync(string file, Slot parent)
     {
@@ -96,6 +99,10 @@ public static class PackageObjectImporter
         }
 
         var world = parent.World;
+        long started = System.Diagnostics.Stopwatch.GetTimestamp();
+        // An import allocates like a world arriving (an avatar's came to gigabytes), and nothing gave that back
+        // once its loads were done, so it gets the same one collection after it settles.
+        GcPacer.WorldArriving();
         // Reading and decoding the archive is the import's longest single step, ten seconds on a package
         // of a few hundred thousand slots, and it never touches the world. -xlinka
         await WorldContext.ToBackground();
@@ -137,7 +144,10 @@ public static class PackageObjectImporter
         var bindPoses = new Dictionary<string, Dictionary<string, float4x4>>(StringComparer.OrdinalIgnoreCase);
         var bindOrder = new Dictionary<string, float4x4[]>(StringComparer.OrdinalIgnoreCase);
         var meshBounds = new Dictionary<string, BoundingBox>(StringComparer.OrdinalIgnoreCase);
-        var assetUrls = await ConvertAssetsAsync(archive, graph, result, bindPoses, bindOrder, meshBounds).ConfigureAwait(false);
+        var shapeNames = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase);
+        var graphRead = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+        var assetUrls = await ConvertAssetsAsync(archive, graph, result, bindPoses, bindOrder, meshBounds, shapeNames).ConfigureAwait(false);
+        var assetsConverted = System.Diagnostics.Stopwatch.GetElapsedTime(started);
 
         await WorldContext.ToWorld();
         if (parent.IsDestroyed)
@@ -171,8 +181,12 @@ public static class PackageObjectImporter
             context.MeshBindOrder[pair.Key] = pair.Value;
         foreach (var pair in meshBounds)
             context.MeshBounds[pair.Key] = pair.Value;
+        foreach (var pair in shapeNames)
+            context.MeshShapeNames[pair.Key] = pair.Value;
         var root = parent.AddSlot(CleanName(record.Name));
-        if (!await BuildSlotAsync(objectNode, root, context))
+        bool built = await BuildSlotAsync(objectNode, root, context);
+        var treeBuilt = System.Diagnostics.Stopwatch.GetElapsedTime(started);
+        if (!built)
         {
             // Nothing in the whole package survived the strip - do not leave an empty slot behind.
             root.Destroy();
@@ -182,19 +196,26 @@ public static class PackageObjectImporter
 
         await AttachLooseAssetsAsync(graph, root, context);
         WorldK7.LinkTemplateLists(context.TemplateLists, context.ById, context.Graphs);
+        context.RefLinks.RemoveAll(link => WorldUi.TakePaletteLink(context.Graphs, link.Reference, link.TargetId));
         await ResolveLinksAsync(context);
+        PackageMemberMapper.FinishMats(context.ById.Values);
+        FinishShapeNames(context);
+        FinishVisemes(context);
+        FinishExpressions(context);
         FinishFontChains(context);
         FinishCanvases(context);
         FinishLodGroups(context);
         FinishLights(context);
         FinishMenus(context);
         FinishLocomotion(context);
+        WorldUi.Finish(root, context.Locomotion);
         WorldK2.FinishBenches(context.Benches);
         await PaceAsync(context);
         BuildSkeletons(root, context);
         WireParticleLook(context);
         await PaceAsync(context);
         FinishAvatar(root, objectNode, context);
+        FinishEyes(root, context);
         FinishWorldScope(root);
         await PaceAsync(context);
         if (context.Graphs.Wanted)
@@ -204,6 +225,7 @@ public static class PackageObjectImporter
             await PaceAsync(context);
         }
         WorldK7.FinishTemplateLists(context.TemplateLists, context.ById);
+        DropDeadCopies(context);
 
         // The root's saved Position is wherever the object happened to be standing in the world it was
         // packaged from, and it is meaningless here. The dova dog package carries (-4.27, 12.60,
@@ -214,18 +236,24 @@ public static class PackageObjectImporter
         // scaled 1.25 and yawed about 101 degrees) and dropping them would arrive at the right place
         // wearing the wrong pose. Only the position is stale. -xlinka
         float3 packagedPosition = root.LocalPosition.Value;
-        if (packagedPosition != float3.Zero)
+        if (PackageWorldLanding.IsWorld(context.TypeNames))
+            PackageWorldLanding.Land(root, parent);
+        else if (packagedPosition != float3.Zero)
         {
             root.LocalPosition.Value = float3.Zero;
             Logger.Debug($"Package import: dropped the packaged root position {packagedPosition} so it lands on the import anchor (the dialog panel) instead.");
         }
 
         result.Root = root;
+        Security.ItemSeals.ProtectImported(root);
         Logger.Log($"Package import: {result.SlotsCreated} slots, {result.ComponentsAttached} components, "
-                 + $"{result.MeshesConverted} meshes, {result.TexturesImported} textures "
+                 + $"{result.MeshesConverted} meshes, {result.TexturesImported} textures ({result.TexturesPrecompressed} came compressed) "
                  + $"({result.SlotsPruned} slots pruned, {result.SlotsConflicting} orphan/userspace trees dropped, "
                  + $"{result.ComponentsStripped} stripped, {result.ComponentsSkipped} skipped); "
-                 + $"references {result.ReferencesResolved} wired, {result.ReferencesDangling} dangling");
+                 + $"references {result.ReferencesResolved} wired, {result.ReferencesDangling} dangling; "
+                 + $"{System.Diagnostics.Stopwatch.GetElapsedTime(started).TotalSeconds:0.0} s: graph {graphRead.TotalSeconds:0.0}, assets "
+                 + $"{(assetsConverted - graphRead).TotalSeconds:0.0}, tree {(treeBuilt - assetsConverted).TotalSeconds:0.0}, the rest "
+                 + $"{(System.Diagnostics.Stopwatch.GetElapsedTime(started) - treeBuilt).TotalSeconds:0.0}");
         Logger.Debug($"Package import: {result.SkeletonsBuilt} skeleton(s) built for skinned meshes");
         if (result.ParticlesTextured > 0 || result.ParticlesMeshed > 0 || result.ParticleModulesWired > 0)
             Logger.Debug($"Package import: particles - {result.ParticleModulesWired} modules wired, "
@@ -234,7 +262,90 @@ public static class PackageObjectImporter
         LogRendererWiring(result.Root);
         await PaceAsync(context);
         LogMaterialReferences(result.Root, context);
+        LogDanglingReferences(context);
         return result;
+    }
+
+    // Copies that can never copy anything. One whose source and target both failed to land has nothing to read
+    // and nowhere to write: its ends were plumbing read and dropped, or members that do nothing here (a
+    // renderer's motion vector mode). One whose source sat on a part that did not come across reads a value that
+    // can no longer change, and its target was stored holding what the copy last wrote, so the target keeps that
+    // and the copy goes. Kept, either sits inert and reports losses that are really its ends'. -xlinka
+    private static void DropDeadCopies(BuildContext context)
+    {
+        var failed = new Dictionary<Component, List<ISyncRef>>(ReferenceEqualityComparer.Instance);
+        foreach (var reference in context.RefFailures.Keys)
+        {
+            if (reference.Target != null || CopyHolding(reference) is not { } copy)
+                continue;
+            if (!failed.TryGetValue(copy, out var held))
+                failed[copy] = held = new List<ISyncRef>(2);
+            held.Add(reference);
+        }
+        if (failed.Count == 0)
+            return;
+
+        var stored = new Dictionary<ISyncRef, string>(ReferenceEqualityComparer.Instance);
+        foreach (var link in context.RefLinks)
+            stored[link.Reference] = link.TargetId;
+
+        int neither = 0, settled = 0;
+        foreach (var (copy, held) in failed)
+        {
+            bool dead = held.Count >= 2;
+            if (!dead && held.Count == 1
+                && (held[0] as Lumora.Core.Networking.Sync.ISyncMember)?.Name == "Source"
+                && stored.TryGetValue(held[0], out var sourceId) && context.Graphs.Unattached.ContainsKey(sourceId)
+                && copy.GetType().GetField("Target")?.GetValue(copy) is ISyncRef { Target: not null })
+            {
+                dead = true;
+                settled++;
+            }
+            else if (dead)
+                neither++;
+            if (!dead)
+                continue;
+            foreach (var reference in held)
+                context.RefFailures.Remove(reference);
+            context.Result.ReferencesDangling -= held.Count;
+            copy.Destroy();
+        }
+        if (neither + settled > 0)
+            Logger.Debug($"Package import: dropped {neither} copies with neither end here and {settled} copies of a part that did not come across");
+    }
+
+    private static Component? CopyHolding(ISyncRef reference)
+    {
+        var owner = (reference as Lumora.Core.Networking.Sync.SyncElement)?.Parent;
+        while (owner is Lumora.Core.Networking.Sync.SyncElement { Parent: { } up } && owner is not Component)
+            owner = up;
+        if (owner is not Component { IsDestroyed: false } copy || !copy.GetType().IsGenericType)
+            return null;
+        var open = copy.GetType().GetGenericTypeDefinition();
+        return open == typeof(Components.Utility.CopyValue<>) || open == typeof(Components.Utility.CopyReference<>) ? copy : null;
+    }
+
+    // Every reference that stayed unset, grouped by the member holding it and why, ids taken out, so a dangling
+    // count can be read as a list of causes rather than a number. -xlinka
+    private static void LogDanglingReferences(BuildContext context)
+    {
+        if (context.RefFailures.Count == 0)
+            return;
+        var groups = new Dictionary<string, int>(StringComparer.Ordinal);
+        foreach (var (reference, why) in context.RefFailures)
+        {
+            var member = reference as Lumora.Core.Networking.Sync.ISyncMember;
+            var owner = (reference as Lumora.Core.Networking.Sync.SyncElement)?.Parent;
+            while (owner is Lumora.Core.Networking.Sync.SyncElement { Parent: { } up } && owner is not Component)
+                owner = up;
+            string reason = System.Text.RegularExpressions.Regex.Replace(why, "target [0-9a-fA-F-]+", "target");
+            string key = $"{owner?.GetType().Name ?? "?"}.{member?.Name ?? "?"}: {reason}";
+            groups[key] = groups.GetValueOrDefault(key) + 1;
+        }
+        var ordered = new List<KeyValuePair<string, int>>(groups);
+        ordered.Sort((a, b) => b.Value.CompareTo(a.Value));
+        foreach (var (key, count) in ordered)
+            Logger.Debug($"Package import: dangling x{count} {key}");
     }
 
     // Meshes and materials do NOT live in the slot tree. The graph root carries a separate top-level
@@ -945,10 +1056,12 @@ public static class PackageObjectImporter
                 return binds != null && binds.TryGetValue(bone.SlotName.Value, out bind);
             }
 
+            var skeletonNames = SkeletonNamesAsMeshBinds(bones, renderer, order, binds);
+
             foreach (var bone in bones)
             {
                 float4x4 rest;
-                string boneName = bone.SlotName.Value;
+                string boneName = skeletonNames.GetValueOrDefault(bone, bone.SlotName.Value);
 
                 if (TryBind(bone, out var bind))
                 {
@@ -987,6 +1100,82 @@ public static class PackageObjectImporter
     // The same table in the mesh's own bone ORDER, which is what the renderer's Bones list is parallel to.
     private static float4x4[]? BindOrderFor(SkinnedMeshRenderer renderer, BuildContext context)
         => MeshUrlOf(renderer) is string url ? context.MeshBindOrder.GetValueOrDefault(url) : null;
+
+    // The skin finds its bones by the names the mesh gives them, while the package pairs mesh bones with slots by
+    // position. A slot renamed or reordered after export then pulled its vertices onto another bone: the attic flag
+    // numbers its strip roots in a different order from its mesh, and its top edge tore into spikes. So a bone whose
+    // own name would bind somewhere else, or nowhere, takes the mesh's name for it in the skeleton. A bone that
+    // already binds right keeps its slot's name, and a rename that would leave two bones one name is not made.
+    // -xlinka
+    private static Dictionary<Slot, string> SkeletonNamesAsMeshBinds(List<Slot> bones, SkinnedMeshRenderer renderer,
+        float4x4[]? order, Dictionary<string, float4x4>? binds)
+    {
+        var names = new Dictionary<Slot, string>();
+        foreach (var bone in bones)
+            names[bone] = bone.SlotName.Value;
+        if (order == null || binds == null)
+            return names;
+
+        // The bind table keeps names by bone; the order keeps poses by position. A pose only one name carries says
+        // which name sits at that position.
+        var meshNames = new Dictionary<Slot, string>();
+        int limit = System.Math.Min(order.Length, renderer.Bones.Count);
+        for (int i = 0; i < limit; i++)
+        {
+            var bone = renderer.Bones[i];
+            if (bone == null || bone.IsDestroyed)
+                continue;
+            string? found = null;
+            bool alike = false;
+            foreach (var (name, pose) in binds)
+            {
+                if (pose != order[i])
+                    continue;
+                alike = found != null;
+                found = name;
+                if (alike)
+                    break;
+            }
+            if (found != null && !alike)
+                meshNames[bone] = found;
+        }
+
+        var bySlotName = new Lumora.Core.Assets.BoneNameMatcher();
+        for (int b = 0; b < bones.Count; b++)
+            bySlotName.Add(bones[b].SlotName.Value, b);
+        for (int b = 0; b < bones.Count; b++)
+        {
+            var bone = bones[b];
+            if (!meshNames.TryGetValue(bone, out var meshName) || meshName == bone.SlotName.Value)
+                continue;
+            if (!bySlotName.TryResolve(meshName, out int lands, out _) || !ReferenceEquals(bones[lands], bone))
+                names[bone] = meshName;
+        }
+
+        bool undone = true;
+        while (undone)
+        {
+            undone = false;
+            var uses = new Dictionary<string, int>(StringComparer.Ordinal);
+            foreach (var name in names.Values)
+                uses[name] = uses.GetValueOrDefault(name) + 1;
+            foreach (var bone in bones)
+            {
+                if (names[bone] != bone.SlotName.Value && uses[names[bone]] > 1)
+                {
+                    names[bone] = bone.SlotName.Value;
+                    undone = true;
+                }
+            }
+        }
+        int renamed = 0;
+        foreach (var (bone, name) in names)
+            if (name != bone.SlotName.Value)
+                renamed++;
+        if (renamed > 0)
+            Logger.Debug($"Package import: {renamed} bones of '{renderer.Slot.SlotName.Value}' named as its mesh names them");
+        return names;
+    }
 
     private static string? MeshUrlOf(SkinnedMeshRenderer renderer)
         => ((renderer.MeshAsset.Target as StaticAssetProvider<MeshDataAsset>)?.URL.Value)?.OriginalString;
@@ -1102,9 +1291,11 @@ public static class PackageObjectImporter
                       + $"it has {renderer.Materials.Count} material(s) and will draw nothing");
         }
 
+        // A canvas's own chunk renderers are not the package's: the canvas fills their mesh and materials when
+        // it lays itself out, which for a canvas under an inactive slot is the moment the slot comes on. -xlinka
         foreach (var renderer in meshRenderers)
         {
-            if (renderer.Mesh.Target == null || renderer.Materials.Count > 0)
+            if (renderer.Mesh.Target == null || renderer.Materials.Count > 0 || renderer.Mesh.Target is Helio.UI.LocalMeshSource)
                 continue;
             Logger.Warn($"Package import: renderer '{PathOf(renderer.Slot)}' has mesh "
                       + $"{renderer.Mesh.Target.GetType().Name} but NO material; it would draw as an "
@@ -1444,6 +1635,19 @@ public static class PackageObjectImporter
         public readonly Dictionary<string, Dictionary<string, float4x4>> MeshBindPoses =
             new(StringComparer.OrdinalIgnoreCase);
 
+        // Each converted mesh's shape names in mesh order, by the local asset URL. A package names a shape by its
+        // index in a renderer's weights; the mesh only says which shape that is once it has loaded.
+        public readonly Dictionary<string, string[]> MeshShapeNames = new(StringComparer.OrdinalIgnoreCase);
+
+        // The package's voice-driven mouths, with what they stored, named once the field links exist, and the
+        // named-shape drivers a mouth can drive through, read and not attached.
+        public readonly List<(VisemeWeightDriver Driver, DataTreeDictionary Data)> Visemes = new();
+        public readonly List<DataTreeDictionary> NamedShapeDrivers = new();
+
+        // Face tracking onto named mouth shapes, and the package's eye parts, read into our face drivers.
+        public readonly List<(MouthExpressionDriver Driver, DataTreeDictionary Data)> Expressions = new();
+        public readonly List<(string Type, DataTreeDictionary Data)> EyeParts = new();
+
         // When this frame's share of the world thread runs out.
         public long FrameEnd;
 
@@ -1585,6 +1789,13 @@ public static class PackageObjectImporter
         // The package's list REPLACES whatever the list holds: anything already in it is a stray entry made
         // between attach and now, and positions matter (materials pair with submeshes by index). -xlinka
         var cleared = new HashSet<object>(ReferenceEqualityComparer.Instance);
+        var gaps = new Dictionary<string, int>(StringComparer.Ordinal);
+        int listStale = 0;
+        void Gap(PendingLink link, string why)
+        {
+            string key = $"{link.Owner.GetType().Name}.{(link.List as Lumora.Core.Networking.Sync.ISyncMember)?.Name ?? "?"}[]: {why}";
+            gaps[key] = gaps.GetValueOrDefault(key) + 1;
+        }
         foreach (var link in context.Links)
         {
             await PaceAsync(context);
@@ -1594,9 +1805,19 @@ public static class PackageObjectImporter
             {
                 try { link.List.GetType().GetMethod("Clear", Type.EmptyTypes)?.Invoke(link.List, null); } catch { }
             }
+            // An entry stored with the id of somebody's field, as for a single reference below: the id went on to
+            // something else and the package loads the entry empty itself. The hole is kept all the same.
+            if (!context.ById.ContainsKey(link.TargetId) && context.Graphs.Members.ContainsKey(link.TargetId)
+                && ListTargetType(link.List) is { } held && HoldsWholeThings(held))
+            {
+                listStale++;
+                try { AppendEmptySlot(link.List); } catch { }
+                continue;
+            }
             if (!context.ById.TryGetValue(link.TargetId, out var target) || target.IsDestroyed)
             {
                 context.Result.ReferencesDangling++;
+                Gap(link, target == null ? "target was never built (stripped, skipped or on a dropped slot)" : "target was built and then destroyed (pruned slot)");
 
                 // A GAP IN A MATERIAL LIST IS NOT THE SAME AS A SHORTER LIST.
                 //
@@ -1617,22 +1838,41 @@ public static class PackageObjectImporter
                 else
                 {
                     context.Result.ReferencesDangling++;
+                    Gap(link, $"target is a {target.GetType().Name}, which this list does not take");
                     try { AppendEmptySlot(link.List); } catch { }
                 }
             }
-            catch { context.Result.ReferencesDangling++; }
+            catch
+            {
+                context.Result.ReferencesDangling++;
+                Gap(link, "target threw on assignment");
+            }
         }
+        foreach (var (key, count) in gaps)
+            Logger.Debug($"Package import: dangling x{count} {key}");
+        if (listStale > 0)
+            Logger.Debug($"Package import: {listStale} list entr(ies) stored naming a field; empty in the package too");
 
         // Then references to a field: what a driver drives, what a button flips, which material slot a press
         // swaps. A package names the field by its own id, kept with its owner and its name when the owner was
         // built, and ours is the member of that name, or the entry of that list. -xlinka
+        int stale = 0;
         foreach (var pending in toMembers)
         {
             await PaceAsync(context);
             if (pending.Reference is Lumora.Core.Networking.Sync.SyncElement { IsDisposed: true })
                 continue;
             var record = context.Graphs.Members[pending.TargetId];
-            var member = record.Owner.IsDestroyed ? null : PackageNodeIndex.MemberOf(record.Owner, record.Member, record.Index)
+            // A reference that holds a whole thing (a texture, a component, a slot) stored with the id of somebody's
+            // field names something it could never hold: the id was handed on to something else, and the package
+            // loads it empty itself. Not a loss here.
+            if (pending.Reference is not PackageMemberMapper.IMemberOwnerReference && HoldsWholeThings(pending.Reference.TargetType))
+            {
+                stale++;
+                continue;
+            }
+            var member = record.Owner.IsDestroyed ? null : PackageNodeIndex.MemberOf(record.Owner, record.Member, record.Index, record.Within)
+                ?? (record.Within == null ? PackageMemberMapper.DriveTargetOf(record.Owner, record.Member, record.Index) : null)
                 ?? (pending.Reference is PackageMemberMapper.IMemberOwnerReference ? record.Owner : null);
             if (member == null)
             {
@@ -1658,6 +1898,28 @@ public static class PackageObjectImporter
                 context.RefFailures[pending.Reference] = $"field {record.Member} threw on assignment: {ex.Message}";
             }
         }
+        if (stale > 0)
+            Logger.Debug($"Package import: {stale} reference(s) stored naming a field where they hold a whole thing; empty in the package too");
+    }
+
+    private static bool HoldsWholeThings(Type wanted)
+        => typeof(Component).IsAssignableFrom(wanted) || wanted == typeof(Slot) || wanted == typeof(User)
+            || (wanted.IsGenericType && wanted.GetGenericTypeDefinition() == typeof(IAssetProvider<>));
+
+    // What an entry of a reference list holds: an asset list's providers, a reference list's targets.
+    private static Type? ListTargetType(object list)
+    {
+        for (var type = list.GetType(); type != null; type = type.BaseType)
+        {
+            if (!type.IsGenericType)
+                continue;
+            var definition = type.GetGenericTypeDefinition();
+            if (definition == typeof(SyncAssetList<>))
+                return typeof(IAssetProvider<>).MakeGenericType(type.GetGenericArguments()[0]);
+            if (definition == typeof(SyncRefList<>))
+                return type.GetGenericArguments()[0];
+        }
+        return null;
     }
 
     // A package keeps the ring an entry leads to on a component beside the entry; ours keeps it on the entry.
@@ -1730,6 +1992,8 @@ public static class PackageObjectImporter
             rect.AnchorMax.Value = new float2(0.5f, 0.5f);
             rect.OffsetMin.Value = -half;
             rect.OffsetMax.Value = half;
+            // The size stays on the canvas too, so whatever drives it there (a mirror's shape) drives ours.
+            canvas.Size.Value = new float2(values[0] > 0f ? values[0] * unitScale : 0f, values[1] > 0f ? values[1] * unitScale : 0f);
         }
     }
 
@@ -1860,8 +2124,8 @@ public static class PackageObjectImporter
         }
     }
 
-    // A walk takes its pace from the character settings beside it. One that flies or floats is not a walk, and
-    // ours has nothing that flies, so it does not come across as one.
+    // A walk takes its pace from the character settings beside it. One that flies comes across as our walk flying
+    // (WorldUi.Flies); one that moves any other way has no counterpart and does not come across.
     private static void FinishLocomotion(BuildContext context)
     {
         foreach (var (slot, type, data) in context.Locomotion)
@@ -1871,7 +2135,7 @@ public static class PackageObjectImporter
             if (type == "PhysicalLocomotion")
             {
                 if ((data.TryGetNode("Mode") as DataTreeDictionary)?.TryGetNode("Data") is DataTreeValue { Value: string mode }
-                    && mode != "GroundTraction")
+                    && mode != "GroundTraction" && !WorldUi.Flies(walk, mode))
                 {
                     Logger.Log($"Package import: '{slot.SlotName.Value}' moves by {mode}, which no locomotion here does; left out");
                     walk.Destroy();
@@ -2159,6 +2423,12 @@ public static class PackageObjectImporter
                 context.SpriteTextures[spriteId] = textureId;
             if (passData != null && resolution.SimpleName == "ContextMenuSubmenu")
                 context.Submenus.Add((slot, passData));
+            if (passData != null && resolution.SimpleName == "DynamicBlendShapeDriver")
+                context.NamedShapeDrivers.Add(passData);
+            if (passData != null && resolution.SimpleName is "EyeManager" or "EyeLinearDriver")
+                context.EyeParts.Add((resolution.SimpleName, passData));
+            if (passData != null && resolution.SimpleName == "PlatformColorPalette")
+                WorldUi.CollectPalette(context.Graphs, passData);
             if (passData != null && resolution.SimpleName is "CharacterController" or "PhysicalLocomotion")
                 context.Locomotion.Add((slot, resolution.SimpleName, passData));
             if (passData != null && resolution.SimpleName is "SnapPlane" or "MultiUserAvatarAnchor")
@@ -2238,6 +2508,16 @@ public static class PackageObjectImporter
             target = plain;
         Component? component = null;
 
+        // A second avatar root beside the first is never the one worn: each socket takes the first part that
+        // fits. It keeps a scale of one, and wearing it put the avatar on at its raw model's size, up to two
+        // hundred times too big. References to it go to the first. -xlinka
+        if (target == typeof(AvatarForm) && slot.GetComponent<AvatarForm>() is { } firstForm)
+        {
+            if ((data.TryGetNode("ID") as DataTreeValue)?.Value?.ToString() is { Length: > 0 } secondId)
+                context.ById[secondId] = firstForm;
+            return false;
+        }
+
         try
         {
             // Anything we have a counterpart for is attached; the member mapper then carries across
@@ -2265,6 +2545,7 @@ public static class PackageObjectImporter
         if ((data.TryGetNode("ID") as DataTreeValue)?.Value?.ToString() is string id && id.Length > 0)
             context.ById[id] = component;
         context.Graphs.RecordMembers(component, data);
+        WorldUi.RecordUnsaved(context.Graphs, component, data);
 
         if (component is Components.ParticleSystem particles)
             context.ParticleSystems.Add((particles, data));
@@ -2276,8 +2557,13 @@ public static class PackageObjectImporter
             context.Lights.Add(light);
         if (component is LodGroup lods && resolution.SimpleName == "LODGroup")
             context.LodGroups.Add((lods, data));
+        if (component is VisemeWeightDriver visemes)
+            context.Visemes.Add((visemes, data));
+        if (component is MouthExpressionDriver expressions)
+            context.Expressions.Add((expressions, data));
 
         CopyMembers(component, data, context);
+        WorldUi.RecordListEntries(context.ById, component, data);
         ApplyOldSaveDefaults(component, resolution.SimpleName, context);
         context.Result.ComponentsAttached++;
         return true;
@@ -2289,7 +2575,8 @@ public static class PackageObjectImporter
         PackageArchive archive, DataTreeDictionary graph, PackageImportResult result,
         Dictionary<string, Dictionary<string, float4x4>> bindPoses,
         Dictionary<string, float4x4[]> bindOrder,
-        Dictionary<string, BoundingBox> meshBounds)
+        Dictionary<string, BoundingBox> meshBounds,
+        Dictionary<string, string[]> shapeNames)
     {
         await WorldContext.ToBackground();
 
@@ -2311,11 +2598,59 @@ public static class PackageObjectImporter
         }
 
         var unreadable = new Dictionary<string, int>(StringComparer.Ordinal);
-        foreach (var signature in wanted)
+
+        // Read in order, since the archive is one stream, and converted on several threads at once. One at a
+        // time, a world of a thousand meshes spent seconds re-encoding them before a single slot was built.
+        // The queue holds a few payloads ahead of the converters, so the bytes in flight stay small. -xlinka
+        int converters = Engine.UseConstrainedResources ? 2 : System.Math.Clamp(Environment.ProcessorCount - 2, 2, 8);
+        var queue = System.Threading.Channels.Channel.CreateBounded<(string Signature, byte[] Bytes)>(converters * 2);
+        var workers = new Task[converters];
+        for (int i = 0; i < converters; i++)
+        {
+            workers[i] = Task.Run(async () =>
+            {
+                await foreach (var (signature, bytes) in queue.Reader.ReadAllAsync().ConfigureAwait(false))
+                    await ConvertAssetAsync(signature, bytes).ConfigureAwait(false);
+            });
+        }
+        try
+        {
+            foreach (var signature in wanted)
+            {
+                byte[] bytes;
+                try
+                {
+                    lock (archive)
+                        bytes = archive.ReadAsset(signature);
+                }
+                catch (Exception ex)
+                {
+                    lock (map)
+                        result.AssetsFailed++;
+                    Logger.Warn($"Package import: asset {signature[..System.Math.Min(12, signature.Length)]} failed: {ex.Message}");
+                    continue;
+                }
+                await queue.Writer.WriteAsync((signature, bytes)).ConfigureAwait(false);
+            }
+        }
+        finally
+        {
+            queue.Writer.Complete();
+            await Task.WhenAll(workers).ConfigureAwait(false);
+        }
+        await localDb.SaveRecordsAsync().ConfigureAwait(false);
+
+        foreach (var (what, count) in unreadable)
+        {
+            result.AssetsFailed += count;
+            Logger.Warn($"Package import: {count} asset(s) are {what}; whatever uses them comes in without them");
+        }
+        return map;
+
+        async Task ConvertAssetAsync(string signature, byte[] bytes)
         {
             try
             {
-                var bytes = archive.ReadAsset(signature);
                 var kind = SniffKind(bytes, archive.MetadataKind(signature));
                 // Baked cubemaps and procedural textures are in the package's own raw format; they come in
                 // as pictures our image path reads.
@@ -2329,7 +2664,8 @@ public static class PackageObjectImporter
                     else
                     {
                         var what = "raw bitmaps that do not convert (" + problem + ")";
-                        unreadable[what] = unreadable.GetValueOrDefault(what) + 1;
+                        lock (map)
+                            unreadable[what] = unreadable.GetValueOrDefault(what) + 1;
                     }
                 }
                 switch (kind)
@@ -2340,10 +2676,11 @@ public static class PackageObjectImporter
                         // pipeline - cached, peer-transferred, decoded by the standard path.
                         var mesh = PackageMeshReader.Read(bytes);
                         var encoded = PhosMeshSerializer.Serialize(mesh);
-                        var url = new Uri(await localDb.SaveAssetAsync(encoded, ".lmesh").ConfigureAwait(false));
-                        map[signature] = url;
-                        meshBounds[url.OriginalString] = mesh.CalculateBoundingBox();
+                        var url = new Uri(await localDb.SaveAssetAsync(encoded, ".lmesh", writeIndex: false).ConfigureAwait(false));
+                        var bounds = mesh.CalculateBoundingBox();
 
+                        float4x4[]? order = null;
+                        Dictionary<string, float4x4>? binds = null;
                         if (mesh.BoneCount > 0)
                         {
                             // BY INDEX FIRST, by name only as a fallback. The renderer's Bones list is
@@ -2354,17 +2691,34 @@ public static class PackageObjectImporter
                             // so every one of them missed, fell back to its slot transform while its
                             // siblings used bind-derived rests, and the model tore itself apart across
                             // four hundred metres. -xlinka
-                            var order = new float4x4[mesh.BoneCount];
-                            var binds = new Dictionary<string, float4x4>(StringComparer.Ordinal);
+                            order = new float4x4[mesh.BoneCount];
+                            binds = new Dictionary<string, float4x4>(StringComparer.Ordinal);
                             for (int i = 0; i < mesh.BoneCount; i++)
                             {
                                 order[i] = mesh.GetBoneBindPose(i);
                                 binds[mesh.GetBoneName(i)] = order[i];
                             }
-                            bindPoses[url.OriginalString] = binds;
-                            bindOrder[url.OriginalString] = order;
                         }
-                        result.MeshesConverted++;
+                        string[]? shapes = null;
+                        if (mesh.BlendShapeCount > 0)
+                        {
+                            shapes = new string[mesh.BlendShapeCount];
+                            for (int i = 0; i < shapes.Length; i++)
+                                shapes[i] = mesh.BlendShapes[i].Name;
+                        }
+                        lock (map)
+                        {
+                            map[signature] = url;
+                            meshBounds[url.OriginalString] = bounds;
+                            if (shapes != null)
+                                shapeNames[url.OriginalString] = shapes;
+                            if (order != null)
+                            {
+                                bindPoses[url.OriginalString] = binds!;
+                                bindOrder[url.OriginalString] = order;
+                            }
+                            result.MeshesConverted++;
+                        }
                         break;
                     }
                     case null:
@@ -2372,25 +2726,29 @@ public static class PackageObjectImporter
                     default:
                     {
                         // Textures and audio are the creator's original files and go in untouched.
-                        map[signature] = new Uri(await localDb.SaveAssetAsync(bytes, kind).ConfigureAwait(false));
-                        if (kind is ".png" or ".jpg" or ".webp" or ".gif" or ".bmp" or ".exr" or ".tga" or ".dds" or ".psd" or ".tif" or ".hdr")
-                            result.TexturesImported++;
+                        var url = new Uri(await localDb.SaveAssetAsync(bytes, kind, writeIndex: false).ConfigureAwait(false));
+                        bool picture = kind is ".png" or ".jpg" or ".webp" or ".gif" or ".bmp" or ".exr" or ".tga" or ".dds" or ".psd" or ".tif" or ".hdr";
+                        bool chained = picture && await PackageTextureChains.TryFileAsync(archive, signature, bytes, url.OriginalString, localDb)
+                            .ConfigureAwait(false);
+                        lock (map)
+                        {
+                            map[signature] = url;
+                            if (picture)
+                                result.TexturesImported++;
+                            if (chained)
+                                result.TexturesPrecompressed++;
+                        }
                         break;
                     }
                 }
             }
             catch (Exception ex)
             {
-                result.AssetsFailed++;
+                lock (map)
+                    result.AssetsFailed++;
                 Logger.Warn($"Package import: asset {signature[..System.Math.Min(12, signature.Length)]} failed: {ex.Message}");
             }
         }
-        foreach (var (what, count) in unreadable)
-        {
-            result.AssetsFailed += count;
-            Logger.Warn($"Package import: {count} asset(s) are {what}; whatever uses them comes in without them");
-        }
-        return map;
     }
 
     // The metadata kind says a payload is a picture when its bytes do not: TGA has no signature at the front.

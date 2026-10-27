@@ -34,6 +34,10 @@ public static partial class PackageMemberMapper
         MemberAliasesK6(MemberAliases);
         MemberAliasesK7(MemberAliases);
         MemberAliasesK8(MemberAliases);
+        MemberAliasesRendering(MemberAliases);
+        MemberAliasesUi(MemberAliases);
+        MemberAliasesMats(MemberAliases);
+        EnumAliasesMats(EnumValueAliases);
     }
 
     static partial void MemberAliasesK1(Dictionary<string, Dictionary<string, string>> table);
@@ -44,6 +48,10 @@ public static partial class PackageMemberMapper
     static partial void MemberAliasesK6(Dictionary<string, Dictionary<string, string>> table);
     static partial void MemberAliasesK7(Dictionary<string, Dictionary<string, string>> table);
     static partial void MemberAliasesK8(Dictionary<string, Dictionary<string, string>> table);
+    static partial void MemberAliasesRendering(Dictionary<string, Dictionary<string, string>> table);
+    static partial void MemberAliasesUi(Dictionary<string, Dictionary<string, string>> table);
+    static partial void ApplyUi(Component component, DataTreeDictionary data, Action<ISyncRef, string> queueReference,
+        Action<object, string, IReadOnlyList<string>> queueReferenceList, Func<Uri, Uri?> remapUrl);
 
     static partial void ApplyK1(Component component, DataTreeDictionary data, Action<ISyncRef, string> queueReference,
         Action<object, string, IReadOnlyList<string>> queueReferenceList, Func<Uri, Uri?> remapUrl);
@@ -139,6 +147,7 @@ public static partial class PackageMemberMapper
             ["AvatarScale"] = new(StringComparer.Ordinal) { ["DefaultScale"] = "Scale", ["SetOnEquip"] = "ApplyOnEquip" },
             ["BlinkLocomotion"] = new(StringComparer.Ordinal) { ["RangeExp"] = "RangeExponent", ["Drag"] = "ArcDrag" },
             ["Seat"] = new(StringComparer.Ordinal) { ["TransformRestoreMode"] = "RestoreMode" },
+            ["LocomotionAnimationSuppressor"] = new(StringComparer.Ordinal) { ["SuppressFeetSimulation"] = "SuppressFeet" },
             ["SeatReleaseOnMove"] = new(StringComparer.Ordinal)
             {
                 ["ReleaseOnBinaryAction"] = "ReleaseOnJump",
@@ -373,7 +382,10 @@ public static partial class PackageMemberMapper
         Func<Uri, Uri?> remapUrl)
     {
         if (component is DynamicBoneChain chain)
+        {
             ApplyDynamicChain(chain, data, queueReferenceList);
+            RestBonesAsStored(data, queueReference, remapUrl);
+        }
         if (component is LocalViewOverride view)
             ApplyViewOverride(view, data, remapUrl);
         if (component is ParticleForce force)
@@ -384,6 +396,8 @@ public static partial class PackageMemberMapper
             ApplyReflectionProbe(probe, data);
         if (component is Components.Audio.AudioClipPlayer player)
             ApplyClipPlayback(player, data);
+        if (component is Components.Utility.CopyGlobalTransform copier)
+            ApplyCopyChannels(copier, data);
         // The package's reference proxy is part of the object it sits on; ours by default is a card the
         // inspector hands out, which deletes its slot once dropped or left alone.
         if (component is ReferenceProxy referenceProxy)
@@ -396,6 +410,8 @@ public static partial class PackageMemberMapper
             ApplyAnchor(seat, data);
         if (component is Components.Avatar.SeatReleaseOnMove release)
             ApplyAnchorRelease(release, data);
+        if (component is ImageProvider picture)
+            ApplyPicture(picture, data);
         ApplyK1(component, data, queueReference, queueReferenceList, remapUrl);
         ApplyK2(component, data, queueReference, queueReferenceList, remapUrl);
         ApplyK3(component, data, queueReference, queueReferenceList, remapUrl);
@@ -404,6 +420,9 @@ public static partial class PackageMemberMapper
         ApplyK6(component, data, queueReference, queueReferenceList, remapUrl);
         ApplyK7(component, data, queueReference, queueReferenceList, remapUrl);
         ApplyK8(component, data, queueReference, queueReferenceList, remapUrl);
+        ApplyRendering(component, data, queueReference, queueReferenceList, remapUrl);
+        ApplyUi(component, data, queueReference, queueReferenceList, remapUrl);
+        ApplyMats(component, data);
         // Index our members by name once, then walk the STORED members - that way an alias can point
         // a differently-named member at the right one, which a walk over our members alone cannot do.
         var ours = new Dictionary<string, ISyncMember>(StringComparer.Ordinal);
@@ -445,6 +464,11 @@ public static partial class PackageMemberMapper
             }
 
             matched++;
+            // The package named this member, so what it holds is an answer, an empty link included, as it is for a
+            // member a save names. A component's own default target must not take a link over in the frames before
+            // the queued references land: a jitter aimed at its slot carried a flag's strips metres off. -xlinka
+            if (member is SyncElement stored)
+                stored.ValueCameFromData = true;
             try
             {
                 Assign(member, node, ourName, name, queueReference, queueReferenceList, remapUrl);
@@ -477,8 +501,9 @@ public static partial class PackageMemberMapper
             leftOffsetField.Value = plainOffsetField.Value;
         }
 
-        // A projection's transform works on its own panorama coordinates, which keep the package's rows.
-        if (component is MaterialProvider && component is not Projection360Material)
+        // A projection's transform works on its own panorama coordinates, which keep the package's rows, and a
+        // triplanar one on positions, which no V mirror touches.
+        if (component is MaterialProvider && component is not Projection360Material and not PBS_TriplanarSurface)
             FlipTextureTransforms(ours);
         return matched;
     }
@@ -494,6 +519,55 @@ public static partial class PackageMemberMapper
         ("OffsetTextureScale", "OffsetTextureOffset"),
         ("LeftEyeTextureScale", "LeftEyeTextureOffset"),
         ("RightEyeTextureScale", "RightEyeTextureOffset"),
+        // Colour masks, splat maps, two-layer blends and the per-map transforms of the multi-UV surface.
+        ("ColorMaskScale", "ColorMaskOffset"),
+        ("ColorMapScale", "ColorMapOffset"),
+        ("LerpTextureScale", "LerpTextureOffset"),
+        ("Texture0Scale", "Texture0Offset"),
+        ("Texture1Scale", "Texture1Offset"),
+        ("AlbedoScale", "AlbedoOffset"),
+        ("SecondaryAlbedoScale", "SecondaryAlbedoOffset"),
+        ("EmissionMapScale", "EmissionMapOffset"),
+        ("SecondaryEmissionMapScale", "SecondaryEmissionMapOffset"),
+        ("NormalMapScale", "NormalMapOffset"),
+        ("OcclusionMapScale", "OcclusionMapOffset"),
+        ("MetallicMapScale", "MetallicMapOffset"),
+        ("SpecularMapScale", "SpecularMapOffset"),
+        // A pixelation's resolution mask and a depth projection's colour and depth pictures.
+        ("ResolutionTextureScale", "ResolutionTextureOffset"),
+        ("ColorTextureScale", "ColorTextureOffset"),
+        ("DepthTextureScale", "DepthTextureOffset"),
+        // Distance-lerp textures, refraction and blur normals, the blur's spread mask, and the toon material's maps.
+        ("NearTextureScale", "NearTextureOffset"),
+        ("FarTextureScale", "FarTextureOffset"),
+        ("NormalTextureScale", "NormalTextureOffset"),
+        ("SpreadTextureScale", "SpreadTextureOffset"),
+        ("MainTextureScale", "MainTextureOffset"),
+        ("MetallicGlossMapScale", "MetallicGlossMapOffset"),
+        ("ThicknessMapScale", "ThicknessMapOffset"),
+        ("ShadowRampMaskScale", "ShadowRampMaskOffset"),
+        // The overlay materials' front and behind pictures.
+        ("FrontTextureScale", "FrontTextureOffset"),
+        ("BehindTextureScale", "BehindTextureOffset"),
+        ("FrontNearTextureScale", "FrontNearTextureOffset"),
+        ("FrontFarTextureScale", "FrontFarTextureOffset"),
+        ("BehindNearTextureScale", "BehindNearTextureOffset"),
+        ("BehindFarTextureScale", "BehindFarTextureOffset"),
+    };
+
+    // A polar mapping works its coordinates from the mesh UV into a space of its own, kept upright, so the
+    // transforms that apply after it are left as stored when the material has it on.
+    private static readonly Dictionary<string, string> PolarFlags = new(StringComparer.Ordinal)
+    {
+        ["FrontTextureScale"] = "PolarUVmapping",
+        ["BehindTextureScale"] = "PolarUVmapping",
+        ["FrontNearTextureScale"] = "PolarUVmapping",
+        ["FrontFarTextureScale"] = "PolarUVmapping",
+        ["BehindNearTextureScale"] = "PolarUVmapping",
+        ["BehindFarTextureScale"] = "PolarUVmapping",
+        ["NearTextureScale"] = "PolarUVmapping",
+        ["FarTextureScale"] = "PolarUVmapping",
+        ["LerpTextureScale"] = "LerpTexturePolarUV",
     };
 
     private static void FlipTextureTransforms(Dictionary<string, ISyncMember> ours)
@@ -503,8 +577,32 @@ public static partial class PackageMemberMapper
             if (!ours.TryGetValue(scaleName, out var scaleMember) || scaleMember is not Sync<float2> scale
                 || !ours.TryGetValue(offsetName, out var offsetMember) || offsetMember is not Sync<float2> offset)
                 continue;
+            if (PolarFlags.TryGetValue(scaleName, out var polarName) && ours.TryGetValue(polarName, out var polarMember)
+                && polarMember is Sync<bool> { Value: true })
+                continue;
             offset.Value = new float2(offset.Value.x, 1f - scale.Value.y - offset.Value.y);
         }
+    }
+
+    // The texture transform pair one of a material's members belongs to, by our member names, where the import
+    // turned the pair over as above: a script's write or drive into either has to be turned over the same way.
+    internal static bool FlippedUvPair(Component component, string member, out string scale, out string offset)
+    {
+        scale = offset = string.Empty;
+        if (component is not MaterialProvider || component is Projection360Material or PBS_TriplanarSurface)
+            return false;
+        foreach (var (scaleName, offsetName) in UvTransforms)
+        {
+            if (member != scaleName && member != offsetName)
+                continue;
+            if (PolarFlags.TryGetValue(scaleName, out var polarName)
+                && component.GetType().GetField(polarName)?.GetValue(component) is Sync<bool> { Value: true })
+                return false;
+            scale = scaleName;
+            offset = offsetName;
+            return true;
+        }
+        return false;
     }
 
     // A record's own members by name: a case of a caption, an input of a combiner. Each one goes through the
@@ -671,6 +769,27 @@ public static partial class PackageMemberMapper
         player.Loop.Value = loop;
         player.Speed.Value = speed;
         player.Playback.SetLoadedState(play, loop ? PlaybackLoopMode.Loop : PlaybackLoopMode.Once, position, speed);
+    }
+
+    // A package copier holds a channel when that channel's drive has a target; ours has a switch per channel,
+    // position and rotation on by default. Rotation-only copiers are how an animal's legs bend with a humanoid
+    // chain, and with position left on every leg bone was dragged onto the bone it only meant to turn with:
+    // a dog's hind legs stood inside its front ones. -xlinka
+    private static void ApplyCopyChannels(Components.Utility.CopyGlobalTransform copier, DataTreeDictionary data)
+    {
+        bool? Holds(string name)
+        {
+            if (data.TryGetNode(name) is not DataTreeDictionary member)
+                return null;
+            var id = (member.TryGetNode("Data") as DataTreeValue)?.Value?.ToString();
+            return !string.IsNullOrEmpty(id) && !IsNullId(id);
+        }
+        if (Holds("_posDrive") is bool position)
+            copier.CopyPosition.Value = position;
+        if (Holds("_rotDrive") is bool rotation)
+            copier.CopyRotation.Value = rotation;
+        if (Holds("_scaleDrive") is bool scale)
+            copier.CopyScale.Value = scale;
     }
 
     private static void ApplyGravityForce(ParticleForce force, DataTreeDictionary data)
@@ -1086,6 +1205,13 @@ public static partial class PackageMemberMapper
                 if (target == typeof(int)) { value = Convert.ToInt32(scalar.Value, CultureInfo.InvariantCulture); return true; }
                 if (target == typeof(long)) { value = Convert.ToInt64(scalar.Value, CultureInfo.InvariantCulture); return true; }
                 if (target == typeof(byte)) { value = Convert.ToByte(scalar.Value, CultureInfo.InvariantCulture); return true; }
+                if (target == typeof(sbyte)) { value = Convert.ToSByte(scalar.Value, CultureInfo.InvariantCulture); return true; }
+                if (target == typeof(short)) { value = Convert.ToInt16(scalar.Value, CultureInfo.InvariantCulture); return true; }
+                if (target == typeof(ushort)) { value = Convert.ToUInt16(scalar.Value, CultureInfo.InvariantCulture); return true; }
+                if (target == typeof(uint)) { value = Convert.ToUInt32(scalar.Value, CultureInfo.InvariantCulture); return true; }
+                if (target == typeof(ulong)) { value = Convert.ToUInt64(scalar.Value, CultureInfo.InvariantCulture); return true; }
+                if (target == typeof(decimal)) { value = Convert.ToDecimal(scalar.Value, CultureInfo.InvariantCulture); return true; }
+                if (target == typeof(char)) { value = Convert.ToChar(scalar.Value, CultureInfo.InvariantCulture); return true; }
                 if (target == typeof(Uri) && scalar.Value is string)
                 {
                     // A URL inside the package points at package storage, which means nothing once the
@@ -1103,17 +1229,43 @@ public static partial class PackageMemberMapper
             return false;
         }
 
+        if (target == typeof(SphericalHarmonicsL2))
+            return TryHarmonics(node, out value);
+
+        // A 4x4 matrix is four rows of four. It stays in the package's space: only the package's own graphs
+        // keep one, and they work in that space.
+        if (target == typeof(float4x4) && node is DataTreeList { Count: 4 } rows)
+        {
+            var m = new float[4][];
+            for (int r = 0; r < 4; r++)
+            {
+                var row = rows[r] is DataTreeDictionary held ? held.TryGetNode("Data") : rows[r];
+                m[r] = row is DataTreeList entries ? ReadNumbers(entries) : Array.Empty<float>();
+                if (m[r].Length < 4)
+                    return false;
+            }
+            value = new float4x4(new float4(m[0][0], m[1][0], m[2][0], m[3][0]), new float4(m[0][1], m[1][1], m[2][1], m[3][1]),
+                new float4(m[0][2], m[1][2], m[2][2], m[3][2]), new float4(m[0][3], m[1][3], m[2][3], m[3][3]));
+            return true;
+        }
+
         // Vectors and colours: an array of numbers, with any trailing non-numeric entry ignored.
         if (node is DataTreeList numbers)
         {
             var parts = ReadNumbers(numbers);
             // Our colours are sRGB values. A package colour names its profile last; a Linear one is
-            // converted, or it came in at the wrong brightness (a 1.68 linear light ran at about twice
-            // its power). Values above 1 keep the same curve.
+            // converted to sRGB the way the package's own renderer converts it: on the curve below 1, and
+            // a channel of 1 or more left as it is, which that renderer then reads as sRGB. So a sky
+            // tinted 2.2 shows at 5.7 there, and a 1.69 light colour at 3.3. Taking those up the curve
+            // too drew the sky, and the ambient light read off it, 2.57 times too dark (measured on the
+            // package's stored ambient against the sky it came from). -xlinka
             if ((target == typeof(color) || target == typeof(colorHDR)) && parts.Length >= 3 && IsLinearProfile(numbers))
             {
                 for (int i = 0; i < 3; i++)
-                    parts[i] = parts[i] < 0f ? -ColorSpace.LinearToGamma(-parts[i]) : ColorSpace.LinearToGamma(parts[i]);
+                {
+                    if (System.Math.Abs(parts[i]) < 1f)
+                        parts[i] = parts[i] < 0f ? -ColorSpace.LinearToGamma(-parts[i]) : ColorSpace.LinearToGamma(parts[i]);
+                }
             }
             if (!TryBuildVector(parts, target, out value))
                 return false;
@@ -1175,6 +1327,12 @@ public static partial class PackageMemberMapper
         if (target == typeof(floatQ) && p.Length >= 4) { value = new floatQ(p[0], p[1], p[2], p[3]); return true; }
         if (target == typeof(color) && p.Length >= 3) { value = new color(p[0], p[1], p[2], p.Length > 3 ? p[3] : 1f); return true; }
         if (target == typeof(colorHDR) && p.Length >= 3) { value = new colorHDR(p[0], p[1], p[2], p.Length > 3 ? p[3] : 1f); return true; }
+        if (target == typeof(int2) && p.Length >= 2) { value = new int2(Whole(p[0]), Whole(p[1])); return true; }
+        if (target == typeof(int3) && p.Length >= 3) { value = new int3(Whole(p[0]), Whole(p[1]), Whole(p[2])); return true; }
+        if (target == typeof(int4) && p.Length >= 4) { value = new int4(Whole(p[0]), Whole(p[1]), Whole(p[2]), Whole(p[3])); return true; }
+        if (target == typeof(bool2) && p.Length >= 2) { value = new bool2(p[0] != 0f, p[1] != 0f); return true; }
+        if (target == typeof(bool3) && p.Length >= 3) { value = new bool3(p[0] != 0f, p[1] != 0f, p[2] != 0f); return true; }
+        if (target == typeof(bool4) && p.Length >= 4) { value = new bool4(p[0] != 0f, p[1] != 0f, p[2] != 0f, p[3] != 0f); return true; }
 
         return false;
     }

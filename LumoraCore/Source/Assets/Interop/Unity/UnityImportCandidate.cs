@@ -101,8 +101,9 @@ public sealed class UnityImportCandidate
     // Instance: game object id -> the name the placement gave it; renderer id -> shape index -> weight 0..100.
     public readonly Dictionary<long, string> NamesById = new();
     public readonly Dictionary<long, SortedDictionary<int, float>> ShapeWeights = new();
-    // Hierarchy: game object name -> switched on.
+    // Hierarchy: game object name -> switched on; renderer's game object name -> shape index -> weight 0..100.
     public readonly Dictionary<string, bool> ActiveByName = new(StringComparer.Ordinal);
+    public readonly Dictionary<string, SortedDictionary<int, float>> ShapeWeightsByName = new(StringComparer.Ordinal);
     // The other model files placed inside it (outfits, eyes, props), each with its own overrides.
     public readonly List<UnityModelPart> Parts = new();
     // Objects the project added, made whether or not anything points at them, parents first.
@@ -799,6 +800,15 @@ public static class UnityCandidateFinder
                     foreach (var m in materials.Items)
                         list.Add(m.Ref.Guid);
                 bool enabled = (d["m_Enabled"]?.Int(1) ?? 1) != 0;
+                // Every weight the renderer was saved at, zeros too: they win over the file's own defaults.
+                // Weapons hidden behind "off" shapes at 100 showed in every hand without them.
+                SortedDictionary<int, float>? weights = null;
+                if (d.ClassId == SkinnedMeshRendererClass && d["m_BlendShapeWeights"] is UnitySeq saved && saved.Items.Count > 0)
+                {
+                    weights = new SortedDictionary<int, float>();
+                    for (int i = 0; i < saved.Items.Count; i++)
+                        weights[i] = saved.Items[i].Float();
+                }
                 var file = mesh != null ? _archive.Find(mesh) : null;
                 bool fromModel = file?.File != null && ModelExtensions.Contains(file.Extension);
                 if (!fromModel && d.ClassId == MeshRendererClass)
@@ -819,10 +829,14 @@ public static class UnityCandidateFinder
                         inside.Part.MaterialsById[id] = slots;
                         if (!enabled)
                             inside.Part.EnabledById[id] = false;
+                        if (weights != null)
+                            inside.Part.ShapeWeights[id] = weights;
                     }
                     continue;
                 }
                 candidate.MaterialsByName[name] = list;
+                if (weights != null)
+                    candidate.ShapeWeightsByName[name] = weights;
                 candidate.Renderers++;
                 if (!enabled)
                     candidate.ActiveByName[name] = false;

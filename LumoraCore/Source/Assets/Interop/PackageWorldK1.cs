@@ -51,14 +51,13 @@ public static partial class PackageTypeMap
         aliases["Joint"] = "GrabHinge";
         aliases["CharacterParenter"] = "UserCarrier";
         aliases["ChildrenSaveBlocker"] = "ChildrenSaveBlock";
+        // While somebody holds the object, the ways a held thing is filed away (the held menu's save, the
+        // inventory's save of what is in hand) refuse it. A world save takes it like anything else.
+        aliases["GrabbableSaveBlock"] = "GrabSaveBlock";
         // A buzz zone and the hand-speed response the package keeps beside it are one zone here
         // (PackageMemberMapper.ApplyK1); the second of them on a slot goes as a zone allows one per slot.
         aliases["HapticVolume"] = "HapticZone";
         aliases["VelocityHapticFilter"] = "HapticZone";
-
-        // We keep no two-number integer values. A pair set by a button is a set per number, on the fields the
-        // pair stood for (PackageMemberMapper.ApplyK1).
-        ClosedAliases["ButtonValueSet<int2>"] = typeof(PressSetValue<int>);
     }
 }
 
@@ -100,9 +99,6 @@ public static partial class PackageMemberMapper
         WorldK1.Alias(table, "HapticZone", ("VelocitySmoothTime", WorldK1.Taken), ("StartVelocity", WorldK1.Taken),
             ("EndVelocity", WorldK1.Taken), ("StartIntensity", WorldK1.Taken), ("EndIntensity", WorldK1.Taken), ("Power", WorldK1.Taken),
             ("Intensity", WorldK1.Taken));
-        // A render texture's size is one pair there and two numbers here. A field that pointed at the pair lands
-        // on the width, which is how a button that set the pair finds the texture (ApplyK1).
-        WorldK1.Alias(table, "RenderTextureProvider", ("Size", "Width"));
     }
 
     static partial void ApplyK1(Component component, DataTreeDictionary data, Action<ISyncRef, string> queueReference,
@@ -139,22 +135,16 @@ public static partial class PackageMemberMapper
             case GrabSpawner spawner when data.TryGetNode("ActivateRoot") != null:
                 WorldK1.Instancer(spawner, data);
                 break;
-            case PressSetValue<int> press when WorldK1.Stored(data, "SetValue") is DataTreeList pair:
-                WorldK1.ValuePair(press, pair, data, queueReference);
-                break;
             case GrabHinge hinge when data.TryGetNode("PositionTwistThresholdAngle") != null:
                 WorldK1.Joint(hinge, data);
                 break;
             case HapticZone zone:
                 WorldK1.Haptic(zone, data);
                 break;
-            case RenderTextureProvider texture when WorldK1.Stored(data, "Size") is DataTreeList size:
-                var wh = ReadNumbers(size);
-                if (wh.Length >= 2 && wh[0] >= 1f && wh[1] >= 1f)
-                {
-                    texture.Width.Value = (int)wh[0];
-                    texture.Height.Value = (int)wh[1];
-                }
+            case Components.Interaction.GrabSaveBlock saveBlock:
+                saveBlock.BlockInventorySave.Value = true;
+                saveBlock.BlockWhileHeld.Value = false;
+                saveBlock.BlockWorldSave.Value = false;
                 break;
         }
     }
@@ -363,31 +353,6 @@ public static partial class PackageMemberMapper
                 kept.EndIntensity.Value = endIntensity;
             if (Number(data, "Power") is { } power)
                 kept.Power.Value = power;
-        }
-
-        // A button that set a pair of whole numbers: this one sets the first, a second beside it the other, each
-        // on the field the pair stood for.
-        public static void ValuePair(PressSetValue<int> press, DataTreeList pair, DataTreeDictionary data, Action<ISyncRef, string> queueReference)
-        {
-            var values = ReadNumbers(pair);
-            if (values.Length < 2 || press.Slot == null)
-                return;
-            press.Value.Value = (int)values[0];
-            var second = press.Slot.AttachComponent<PressSetValue<int>>();
-            second.Value.Value = (int)values[1];
-            if (Id(data, "TargetValue") is not { } id)
-                return;
-            queueReference(new Resolved(target =>
-            {
-                IWorldElement? owner = target;
-                while (owner is SyncElement member && owner is not Component)
-                    owner = member.Parent;
-                if (owner is not RenderTextureProvider texture || press.IsDestroyed || second.IsDestroyed)
-                    return false;
-                press.TargetValue.Target = texture.Width;
-                second.TargetValue.Target = texture.Height;
-                return true;
-            }), id);
         }
 
         // A reference the importer resolves like any other, its target handed on: for a member that lands on more

@@ -63,7 +63,7 @@ internal static class UnityCubemapSource
         byte[]? rgba;
         int w, h;
         if (GifDecoder.IsGif(bytes))
-            rgba = GifDecoder.DecodeStrip(bytes, out w, out h, out _, out _, maxFrames: 1);
+            rgba = GifDecoder.DecodeFirstFrame(bytes, out w, out h);
         else
             rgba = TextureVariantStore.DecodeRgba(bytes, out w, out h);
         if (rgba == null || w <= 0 || h <= 0)

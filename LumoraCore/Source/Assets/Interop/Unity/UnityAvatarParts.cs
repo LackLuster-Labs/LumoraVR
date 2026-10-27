@@ -133,7 +133,8 @@ public static partial class UnityAvatarBuilder
         foreach (var (part, file, meta, names) in assembly.Models)
         {
             var saved = part?.ShapeWeights ?? assembly.Candidate.ShapeWeights;
-            if (saved.Count == 0 && !meta.ShapeDefaults)
+            var byName = part == null ? assembly.Candidate.ShapeWeightsByName : null;
+            if (saved.Count == 0 && byName is not { Count: > 0 } && !meta.ShapeDefaults)
                 continue;
             if (file.File == null)
                 continue;
@@ -152,6 +153,13 @@ public static partial class UnityAvatarBuilder
                 foreach (var (index, weight) in weights)
                     map[index] = weight;
             }
+            if (byName != null)
+                foreach (var (name, weights) in byName)
+                {
+                    if (assembly.Nodes.ByName(name) is not { } slot || byRenderer.ContainsKey(slot))
+                        continue;
+                    byRenderer[slot] = new Dictionary<int, float>(weights);
+                }
             if (meta.ShapeDefaults)
                 foreach (var slot in names.Keys)
                     if (names.TryGetValue(slot, out var n) && order.ContainsKey(n))

@@ -39,6 +39,7 @@ public static partial class PackageTypeMap
         aliases["Panner2D"] = "UVPanner";
         aliases["Panner1D"] = "ValuePanner";
         aliases["Wobbler3D"] = "Jitter";
+        aliases["Wiggler"] = "Jitter";
 
         aliases["BoundingBoxDriver"] = "BoundsDriver";
         aliases["Float2Driver"] = "Float2Compose";
@@ -143,7 +144,9 @@ public static partial class PackageMemberMapper
             ("_repeat", "Repeat"));
         MergeK3(table, "ValuePanner", ("_target", "Target"), ("_speed", "Speed"), ("_preOffset", "StartOffset"), ("_offset", "Offset"),
             ("_repeat", "Repeat"));
-        MergeK3(table, "Jitter", ("Target", "Position"), ("Offset", HandledK3), ("Magnitude", "PositionMagnitude"), ("Seed", HandledK3));
+        // The wobbler's seed and the wiggler's are both a phase here, which is also what a graph driving one writes.
+        MergeK3(table, "Jitter", ("Target", "Position"), ("Offset", HandledK3), ("Magnitude", HandledK3), ("Seed", "Phase"),
+            ("_target", "Rotation"), ("_offset", "BaseRotation"), ("_speed", "Speed"), ("_magnitude", HandledK3), ("_seed", "Phase"));
 
         MergeK3(table, "BoundsDriver", ("BoundedSource", "Source"));
         MergeK3(table, "Float3ToFloat2Remap", ("X", HandledK3), ("Y", HandledK3));
@@ -204,6 +207,9 @@ public static partial class PackageMemberMapper
                 break;
             case Jitter jitter when data.TryGetNode("Magnitude") != null:
                 WorldK3.ApplyWobble(jitter, data, queueReference, remapUrl);
+                break;
+            case Jitter jitter when data.TryGetNode("_magnitude") != null:
+                WorldK3.ApplyWiggle(jitter, data, remapUrl);
                 break;
             case RangeMap3D map when data.TryGetNode("AllowReverseMapping") != null:
                 WorldK3.ApplyMapper3D(map, data, queueReference);
@@ -394,27 +400,53 @@ public static partial class PackageMemberMapper
             }), target);
         }
 
-        // The package wobbles one float3 on simplex noise around a base; ours wanders a position on value noise
-        // around one. The rotation half of ours is left still and undriven. The base mirrors the way the field it
-        // sits under does, which is only known once the target is.
+        // The package wobbles one float3 on noise around a base; ours wanders a position around one, its rotation half
+        // left still and undriven. Every wobbler there reads the same noise and its seed only shifts it along, so ours
+        // share one pattern and take the seed as their phase (the member map): wobblers seeded close together, like
+        // the strips of one flag, move together. Base and swing mirror the way the field they drive does, which is
+        // only known once the target is, so both are read as stored rather than by their names. Neither half takes
+        // its default target in the frames before the references land: aimed at its own slot, the wobble carried a
+        // flag's strips metres apart and left them there. -xlinka
         public static void ApplyWobble(Jitter jitter, DataTreeDictionary data, Action<ISyncRef, string> queueReference,
             Func<Uri, Uri?> remapUrl)
         {
             jitter.RotationMagnitude.Value = float3.Zero;
             jitter.Rotation.ValueCameFromData = true;
-            var seed = StoredValue(data, "Seed", float3.Zero, remapUrl);
-            jitter.Seed.Value = HashCode.Combine(seed.x, seed.y, seed.z);
-            var offset = StoredValue(data, "Offset", float3.Zero, remapUrl);
+            jitter.Position.ValueCameFromData = true;
+            jitter.Seed.Value = 0;
+            var offset = AsStored(data, "Offset", remapUrl);
+            var magnitude = AsStored(data, "Magnitude", remapUrl);
             jitter.BasePosition.Value = offset;
+            jitter.PositionMagnitude.Value = magnitude;
             if (StoredId(data, "Target") is { } target)
             {
                 queueReference(new Arrival(element =>
                 {
-                    if (!jitter.IsDestroyed)
-                        jitter.BasePosition.Value = MirrorFor(element, offset);
+                    if (jitter.IsDestroyed)
+                        return;
+                    jitter.BasePosition.Value = MirrorFor(element, offset);
+                    jitter.PositionMagnitude.Value = MirrorFor(element, magnitude);
                 }), target);
             }
         }
+
+        // The package's wiggler turns a rotation on the same noise about the parent's axes, in degrees, over a base it
+        // keeps; ours is the jitter's rotation half with the position left alone, its seed a phase as above. One aimed
+        // at nothing drives nothing, as there.
+        public static void ApplyWiggle(Jitter jitter, DataTreeDictionary data, Func<Uri, Uri?> remapUrl)
+        {
+            jitter.PositionMagnitude.Value = float3.Zero;
+            jitter.Position.ValueCameFromData = true;
+            jitter.Rotation.ValueCameFromData = true;
+            jitter.TurnAboutParent.Value = true;
+            jitter.Seed.Value = 0;
+            jitter.RotationMagnitude.Value = PackageHandedness.Axial(AsStored(data, "_magnitude", remapUrl));
+        }
+
+        // A float3 as the package stored it, with no mirror by name.
+        private static float3 AsStored(DataTreeDictionary data, string name, Func<Uri, Uri?> remapUrl)
+            => StoredK3(data, name) is { } node && TryConvert(node, typeof(float3), out var value, remapUrl, string.Empty)
+                && value is float3 stored ? stored : float3.Zero;
 
         // A mapper onto a position or direction holds its two ends in package space; they cross the mirror the way
         // the field they drive does.

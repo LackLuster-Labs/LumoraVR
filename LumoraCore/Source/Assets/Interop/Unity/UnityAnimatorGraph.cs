@@ -181,6 +181,8 @@ public sealed class UnityAnimatorGraph
     public readonly List<Layer> Layers = new();
     // Drivers, tracking controls, layer and playable controls and audio, by behaviour index.
     public readonly List<object> Behaviours = new();
+    // Whether any state carries a parameter driver: what the owning machine sets and sends to everyone.
+    public bool HasDrivers;
     public int[] MuscleBindings = Array.Empty<int>();
     public int[] ParameterBindings = Array.Empty<int>();
     public int[] Playables = Array.Empty<int>();
@@ -188,6 +190,8 @@ public sealed class UnityAnimatorGraph
     // Per motion: whether anything in it loops, and its length when no blend can change it (NaN when one can).
     public bool[] MotionLoops = Array.Empty<bool>();
     public float[] MotionLength = Array.Empty<float>();
+    // Per motion: whether every curve under it is flat, so playing it gives the same pose at any time.
+    public bool[] MotionStatic = Array.Empty<bool>();
 
     private readonly Dictionary<string, int> _motions = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<long, int> _stateIndex = new();
@@ -290,7 +294,11 @@ public sealed class UnityAnimatorGraph
         foreach (var layer in _controller.Layers)
             Layers.Add(CompileLayer(layer));
         for (int i = 0; i < Behaviours.Count; i++)
+        {
             Behaviours[i] = CompileBehaviour(Behaviours[i]);
+            if (Behaviours[i] is Driver)
+                HasDrivers = true;
+        }
 
         Measure();
         MuscleBindings = Enumerable.Range(0, Bindings.Count).Where(i => Bindings[i].Muscle).ToArray();
@@ -583,10 +591,12 @@ public sealed class UnityAnimatorGraph
         int count = Clips.Count + Trees.Count;
         MotionLoops = new bool[count];
         MotionLength = new float[count];
+        MotionStatic = new bool[count];
         for (int i = 0; i < Clips.Count; i++)
         {
             MotionLoops[i] = Clips[i].Loop;
             MotionLength[i] = MathF.Max(Clips[i].Length, 1f / 60f);
+            MotionStatic[i] = Clips[i].Constant || Clips[i].Length <= 0f;
         }
         var done = new bool[Trees.Count];
         for (int t = 0; t < Trees.Count; t++)
@@ -600,7 +610,7 @@ public sealed class UnityAnimatorGraph
         done[t] = true;
         int index = Clips.Count + t;
         var tree = Trees[t];
-        bool loops = false;
+        bool loops = false, still = true;
         float length = float.NaN;
         bool fixedLength = true;
         for (int i = 0; i < tree.Children.Length; i++)
@@ -612,6 +622,7 @@ public sealed class UnityAnimatorGraph
                 if (!IsClip(child))
                     MeasureTree(child - Clips.Count, done, depth + 1);
                 loops |= MotionLoops[child];
+                still &= MotionStatic[child];
                 childLength = MotionLength[child];
             }
             float scale = MathF.Abs(tree.TimeScale[i]) > 1e-4f ? MathF.Abs(tree.TimeScale[i]) : 1f;
@@ -622,6 +633,7 @@ public sealed class UnityAnimatorGraph
                 length = childLength;
         }
         MotionLoops[index] = loops;
+        MotionStatic[index] = still;
         MotionLength[index] = fixedLength && !float.IsNaN(length) ? MathF.Max(length, 1f / 60f) : tree.Children.Length == 0 ? 1f : float.NaN;
     }
 

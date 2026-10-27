@@ -237,7 +237,26 @@ public static partial class PackageMemberMapper
             foreach (var (name, node) in data.Children)
             {
                 if (node is DataTreeDictionary member && member.TryGetNode("ID") is DataTreeValue { Value: string memberId } && memberId.Length > 0)
+                {
                     members[memberId] = (id, name);
+                    // A copy into one entry of a list, or into a field of a record in it (a gradient's stop colour),
+                    // is a copy into the list: the entries' ids answer for it.
+                    if (member.TryGetNode("Data") is DataTreeList entries)
+                    {
+                        foreach (var entry in entries.Children)
+                        {
+                            if (entry is not DataTreeDictionary item)
+                                continue;
+                            if (item.TryGetNode("ID") is DataTreeValue { Value: string entryId } && entryId.Length > 0)
+                                members.TryAdd(entryId, (id, name));
+                            foreach (var inner in (item.TryGetNode("Data") as DataTreeDictionary ?? item).Children.Values)
+                            {
+                                if (inner is DataTreeDictionary field && field.TryGetNode("ID") is DataTreeValue { Value: string fieldId } && fieldId.Length > 0)
+                                    members.TryAdd(fieldId, (id, name));
+                            }
+                        }
+                    }
+                }
             }
         }
 
