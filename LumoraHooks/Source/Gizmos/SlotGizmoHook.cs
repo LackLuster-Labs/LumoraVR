@@ -39,6 +39,14 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
 	// Selection reads cyan, like the classic editor look.
 	private static readonly Color BoundsColor = new(0f, 1f, 1f, 0.9f);
 
+	// While a handle is held the box drops to a faint outline: the extent is still there to judge by, and it
+	// stops drawing over whatever is being lined up.
+	private static readonly Color BoundsHeldColor = new(0f, 1f, 1f, 0.25f);
+
+	// The box stands this share of its largest half extent off the bounds on every side. Drawn exactly on the
+	// bounds, a boxy object's own edges sat under the cyan lines and fought them for the same depth.
+	private const float BoundsPad = 0.015f;
+
 	public static IHook<SlotGizmo> Constructor()
 	{
 		return new SlotGizmoHook();
@@ -89,6 +97,10 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
 			}
 			_boundsMesh.Visible = visible;
 		}
+
+		var boundsColor = Owner.IsInteracting ? BoundsHeldColor : BoundsColor;
+		if (_boundsMaterial != null && _boundsMaterial.AlbedoColor != boundsColor)
+			_boundsMaterial.AlbedoColor = boundsColor;
 
 		EnsureNameLabel();
 		if (_nameLabel != null && GodotObject.IsInstanceValid(_nameLabel))
@@ -168,6 +180,8 @@ public sealed class SlotGizmoHook : ComponentHook<SlotGizmo>
 			Mathf.Max((max.X - min.X) * 0.5f, MinExtent),
 			Mathf.Max((max.Y - min.Y) * 0.5f, MinExtent),
 			Mathf.Max((max.Z - min.Z) * 0.5f, MinExtent));
+		float pad = Mathf.Max(half.X, Mathf.Max(half.Y, half.Z)) * BoundsPad;
+		half += new Vector3(pad, pad, pad);
 
 		_boundsImmediateMesh.ClearSurfaces();
 

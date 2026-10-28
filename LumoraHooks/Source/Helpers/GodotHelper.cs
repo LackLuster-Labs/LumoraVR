@@ -20,8 +20,13 @@ public static class GodotHelper
         if (slotHook == null)
             return null!;
 
+        // Asked for so something can be hung under it, which then follows the node's pose.
         if (forceGenerate)
-            return slotHook.ForceGetNode3D();
+        {
+            var node = slotHook.ForceGetNode3D();
+            slotHook.HoldPoseForAttachments();
+            return node;
+        }
 
         return slotHook.GeneratedNode3D;
     }

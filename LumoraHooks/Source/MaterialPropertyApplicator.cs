@@ -362,6 +362,14 @@ internal static class MaterialPropertyApplicator
         || property.EndsWith("TextureRight", StringComparison.Ordinal)
         || property == "ColorMask";
 
+    // The uniform a property lands on: a custom or Poiyomi shader's own name, otherwise the mapped one, worked
+    // out once per pair. Every update of a material with a sampler ask came through here for each picture.
+    private static readonly ConcurrentDictionary<(MaterialType Type, string Property), string> _uniforms = new();
+
+    internal static string UniformName(MaterialType materialType, string property)
+        => materialType is MaterialType.Custom or MaterialType.Poiyomi ? property
+            : _uniforms.GetOrAdd((materialType, property), static key => MapShaderProperty(key.Type, key.Property));
+
     private static string MapShaderProperty(MaterialType materialType, string property)
     {
         bool isUnlit = materialType is MaterialType.Unlit or MaterialType.UI_Unlit or MaterialType.UI_StencilWrite or MaterialType.UI_StencilTest or MaterialType.UI_Text or MaterialType.UI_TextStencil or MaterialType.Text;

@@ -569,11 +569,16 @@ public sealed partial class ParticleSystemHook : ComponentHook<LumoraParticleSys
             return;
 
         var view = ViewPosition();
-        UpdateStrand(ref _trails, trails, "ParticleTrails", visible, in view);
-        UpdateStrand(ref _ribbons, ribbons, "ParticleRibbons", visible, in view);
+        var trailsLook = Owner.TrailsLook;
+        var ribbonsLook = Owner.RibbonsLook;
+        UpdateStrand(ref _trails, trails, "ParticleTrails", visible, in view,
+            trailsLook?.Material.Asset?.GodotMaterial as Material, trailsLook?.GenerateLightingData.Value ?? false);
+        UpdateStrand(ref _ribbons, ribbons, "ParticleRibbons", visible, in view,
+            ribbonsLook?.Material.Asset?.GodotMaterial as Material, ribbonsLook?.GenerateLightingData.Value ?? false);
     }
 
-    private void UpdateStrand(ref StrandSurface? surface, ParticleStrandOutput? output, string name, bool visible, in float3 view)
+    private void UpdateStrand(ref StrandSurface? surface, ParticleStrandOutput? output, string name, bool visible, in float3 view,
+        Material? authored, bool lighting)
     {
         if (output == null)
         {
@@ -590,6 +595,7 @@ public sealed partial class ParticleSystemHook : ComponentHook<LumoraParticleSys
         }
 
         surface.ApplyMaterial(Owner.EmissionStrength.Value, Owner.RenderQueue.Value, Owner.StrandTexture.Target);
+        surface.ApplyAuthored(authored, lighting);
         surface.Visible = visible;
         if (!visible)
             return;

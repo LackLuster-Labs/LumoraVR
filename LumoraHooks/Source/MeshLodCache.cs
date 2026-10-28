@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Godot;
 using Lumora.Core.Assets;
 using Lumora.Core.Phos;
@@ -80,11 +81,15 @@ public sealed class MeshLodSet
 
 public static class MeshLodCache
 {
+    // Blobs and their sidecars are sealed and named by a keyed hash of the geometry key, with no extension.
+    // Files from before that carry the plain key and these extensions; they still read, and the background
+    // pass seals them.
     public const string Extension = ".lvlod";
+    public const string NameScope = "meshlod";
 
-    // The blob's name is a hash, so nothing else on disk says which asset it came from. The sidecar is
-    // the only readable record of that, and of what the bake actually produced.
+    // The sidecar records which asset a blob came from and what the bake produced, sealed like the blob.
     public const string MetadataExtension = ".lvlodmeta";
+    public const string MetadataScope = "meshlodmeta";
 
     // Under a couple of thousand triangles the simplifier has almost nothing to remove and the levels it
     // does emit save less than the extra index buffers cost to keep resident.
@@ -220,14 +225,30 @@ public static class MeshLodCache
         }
     }
 
-    public static string BlobPath(string directory, string key) => Path.Combine(directory, key + Extension);
+    public static string BlobPath(string directory, string key)
+    {
+        Lumora.Core.Persistence.LocalEncryption.WireSealedStorage();
+        return Path.Combine(directory, Lumora.Nexus.Storage.SealedKeys.NameFor(NameScope, key));
+    }
 
-    // RESOLVE
+    public static void RegisterSealing()
+    {
+        Lumora.Core.Assets.CacheSealing.Add("mesh LOD", async (pace, ct) =>
+        {
+            var directory = GetDirectory();
+            var blobs = await Lumora.Core.Assets.CacheSealing.SealFolderAsync(directory, Extension, NameScope, pace, ct).ConfigureAwait(false);
+            var sidecars = await Lumora.Core.Assets.CacheSealing.SealFolderAsync(directory, MetadataExtension, MetadataScope, pace, ct).ConfigureAwait(false);
+            return (blobs.Files + sidecars.Files, blobs.Bytes + sidecars.Bytes);
+        });
+    }
 
-    // Cache first, simplifier second, and the result is written back either way - including an empty one.
+    // BAKE
+
+    // Callers try TryLoad first. The simplifier's result is written back either way - including an empty one.
     // A mesh the simplifier refuses (seams on every edge, so no collapse is cheap enough) would otherwise
-    // pay the full generation cost on every single load, forever, to learn the same nothing.
-    public static MeshLodSet? Resolve(
+    // pay the full generation cost on every single load, forever, to learn the same nothing. Up to seconds for
+    // a big mesh, so it runs on a variant worker.
+    public static MeshLodSet? Bake(
         string? directory,
         string key,
         IReadOnlyList<global::Godot.Collections.Array> surfaces,
@@ -235,9 +256,6 @@ public static class MeshLodCache
     {
         if (surfaces == null || surfaces.Count == 0)
             return null;
-
-        if (!string.IsNullOrEmpty(directory) && TryLoad(directory!, key, surfaces.Count, out var cached))
-            return cached;
 
         var start = DateTime.UtcNow;
         var generated = Generate(surfaces);
@@ -306,9 +324,13 @@ public static class MeshLodCache
         try
         {
             if (!File.Exists(path))
-                return false;
+            {
+                path = Path.Combine(directory, key + Extension);
+                if (!File.Exists(path))
+                    return false;
+            }
 
-            using var stream = File.OpenRead(path);
+            using var stream = Lumora.Nexus.Storage.SealedFile.OpenAny(path);
             using var reader = new BinaryReader(stream);
 
             if (reader.ReadUInt32() != Magic || reader.ReadUInt16() != ContainerVersion)
@@ -361,14 +383,17 @@ public static class MeshLodCache
     public static void Store(string directory, string key, MeshLodSet set, string sourceLabel, double bakeMs)
     {
         var path = BlobPath(directory, key);
+        string? temp = null;
         try
         {
             Directory.CreateDirectory(directory);
+            SweepOnce(directory);
 
             // Write beside the target then move into place: a crash mid-write must not leave a truncated
-            // blob that a later run would load as a LOD chain.
-            var temp = path + ".tmp";
-            using (var stream = File.Create(temp))
+            // blob that a later run would load as a LOD chain. The beside file is this write's own, since two
+            // assets with the same geometry bake the same key at the same time.
+            temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            using (var stream = Lumora.Nexus.Storage.SealedFile.Create(temp))
             using (var writer = new BinaryWriter(stream))
             {
                 writer.Write(Magic);
@@ -388,18 +413,54 @@ public static class MeshLodCache
                 }
             }
             File.Move(temp, path, true);
+            temp = null;
 
             WriteSidecar(directory, key, set, sourceLabel, bakeMs);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && File.Exists(path))
+        {
+            // The same geometry baked by another asset landed first and is being read: it is this same chain.
         }
         catch (Exception ex)
         {
             LumoraLogger.Warn($"MeshLodCache: could not cache LOD blob '{path}': {ex.Message}");
         }
+        finally
+        {
+            if (temp != null)
+            {
+                try { File.Delete(temp); } catch { }
+            }
+        }
+    }
+
+    private static int _swept;
+
+    // What a killed run left half-written beside the blobs, once a run. Only old ones: another instance on this
+    // folder may be mid-write.
+    private static void SweepOnce(string directory)
+    {
+        if (Interlocked.Exchange(ref _swept, 1) != 0)
+            return;
+        try
+        {
+            var cutoff = DateTime.UtcNow - TimeSpan.FromHours(1);
+            foreach (var file in Directory.EnumerateFiles(directory, "*.tmp"))
+            {
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(file) < cutoff)
+                        File.Delete(file);
+                }
+                catch { }
+            }
+        }
+        catch { }
     }
 
     private static void WriteSidecar(string directory, string key, MeshLodSet set, string sourceLabel, double bakeMs)
     {
-        var path = Path.Combine(directory, key + MetadataExtension);
+        var path = Path.Combine(directory, Lumora.Nexus.Storage.SealedKeys.NameFor(MetadataScope, key));
         try
         {
             var text = new System.Text.StringBuilder();
@@ -415,7 +476,7 @@ public static class MeshLodCache
                 text.Append("surface").Append(i).Append("=levels:").Append(surface?.Count ?? 0)
                     .Append(" indices:").Append(surface?.IndexTotal ?? 0).Append('\n');
             }
-            File.WriteAllText(path, text.ToString());
+            Lumora.Nexus.Storage.SealedFile.WriteAllBytes(path, System.Text.Encoding.UTF8.GetBytes(text.ToString()));
         }
         catch (Exception ex)
         {

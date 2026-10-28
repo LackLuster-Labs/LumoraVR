@@ -8,14 +8,25 @@ using Lumora.Core.Media;
 namespace Lumora.Godot.Hooks.Video;
 
 // Where a decoder hands its picture. The hook implements this and owns the GPU texture, so a backend
-// never has to know whether it is feeding a material, a UI quad or nothing at all. Both calls happen
+// never has to know whether it is feeding a material, a UI quad or nothing at all. Everything here runs
 // on the main thread from inside the backend's Tick. -xlinka
+//
+// A planar 4:2:0 picture is one R8 texture, pitch x (lumaLines + chromaLines): the brightness rows, then the
+// colour rows with U on the left half and V on the right half. width and height are the visible picture,
+// which may be smaller than the planes.
 public interface IVideoFrameTarget
 {
-    // rgba is tightly packed RGBA8 rows, at least width*height*4 bytes; anything past that is padding
-    // the target ignores. The backend may still own the array, so the target copies out of it before
-    // returning.
-    void SubmitFrame(byte[] rgba, int width, int height);
+    // Seconds the viewer needs between pictures, read once a tick: below zero none (nobody can see it), zero
+    // every decoded frame. A backend that uploads off the main thread paces itself by it; sound never is.
+    double FrameInterval { get; }
+
+    // A picture the backend already put on the card. The target owns the texture from here and frees it once
+    // a newer one replaces it.
+    void PresentPlanes(Rid texture, int width, int height, int pitch, int lumaLines, int chromaLines);
+
+    // The same picture in memory, for when the card cannot take it off the main thread. The target copies
+    // out of it before returning.
+    void SubmitPlanes(ReadOnlySpan<byte> planes, int width, int height, int pitch, int lumaLines, int chromaLines);
 
     // For a backend that already owns a Godot texture and would only lose time being read back into
     // ours. The object must stay the same for the life of the backend.
@@ -46,7 +57,8 @@ public interface IVideoDecoderBackend : IDisposable
     void SetAudioSink(IVideoAudioSink? sink);
 
     // Main thread, once per frame: publish a decoded frame if one is waiting and apply whatever the
-    // last UpdateState asked for. Nothing else touches Godot.
+    // last UpdateState asked for. Nothing else touches a scene object; a backend may make device
+    // textures on its own threads.
     void Tick(IVideoFrameTarget target);
 
     void Stop();

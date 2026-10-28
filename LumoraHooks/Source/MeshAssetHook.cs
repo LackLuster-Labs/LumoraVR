@@ -154,8 +154,8 @@ public class MeshAssetHook : AssetHook, IMeshAssetHook
 
         // Everything up to here is plain array conversion, so it stays on the caller's thread; only the
         // AddSurfaceFromArrays at the end touches the RenderingServer and has to be deferred to the main
-        // thread. A URL mesh reaches us from the asset load thread, which is where we want the LOD bake
-        // too - it costs tens of milliseconds and must never land on the frame loop. -xlinka
+        // thread. The LOD bake costs tens of milliseconds to seconds and must never land on the frame loop.
+        // -xlinka
         if (!ShouldBakeLods(mesh))
         {
             if (applyImmediately)
@@ -165,24 +165,121 @@ public class MeshAssetHook : AssetHook, IMeshAssetHook
             return true;
         }
 
+        // A chain already on disk is a file read and comes straight back on the load thread. A bake goes to the
+        // variant workers, ahead of the texture ladders: an import's static meshes all missed together and baked
+        // as wide as the thread pool would go, at the frame's own priority. The finished upload is committed from
+        // the pool, so the mesh build after it never runs on a low-priority thread holding the renderer's locks.
+        // -xlinka
         string label = DescribeSource();
-        if (IsMainThread())
+        string? directory = MeshLodCache.GetDirectory();
+        bool main = IsMainThread();
+        string? key = main ? null : MeshLodCache.BuildKey(mesh);
+        if (key != null && !string.IsNullOrEmpty(directory) && MeshLodCache.TryLoad(directory!, key, upload.Surfaces.Count, out var cached))
         {
-            System.Threading.Tasks.Task.Run(() =>
-            {
-                upload.Lods = ResolveLods(mesh, upload, label);
-                Commit(upload);
-            });
+            upload.Lods = cached;
+            Commit(upload);
             return true;
         }
 
-        upload.Lods = ResolveLods(mesh, upload, label);
-        Commit(upload);
+        var cancel = System.Threading.LazyInitializer.EnsureInitialized(ref _bakeCancel, () => new System.Threading.CancellationTokenSource());
+        VariantWorkers.Run("LOD chain of " + label, _ =>
+        {
+            if (_unloaded)
+                return;
+            key ??= MeshLodCache.BuildKey(mesh);
+            upload.Lods = main && !string.IsNullOrEmpty(directory) && MeshLodCache.TryLoad(directory!, key, upload.Surfaces.Count, out var hit)
+                ? hit
+                : MeshLodCache.Bake(directory, key, upload.Surfaces, label);
+        }, urgent: true, cancel.Token).ContinueWith(done =>
+        {
+            // A bake that threw (the workers log it) still shows the mesh, just without levels.
+            _ = done.Exception;
+            if (done.IsCanceled)
+                ReleaseSurfaces(upload);
+            else
+                Commit(upload);
+        }, System.Threading.Tasks.TaskScheduler.Default);
         return true;
     }
 
-    private void Commit(MeshUpload upload) =>
+    // Cancelled on unload, so a bake still waiting for a worker never starts for a mesh that is gone.
+    private System.Threading.CancellationTokenSource? _bakeCancel;
+
+    // A first build away from the main thread is put together where it is: packing the surfaces for the GPU was
+    // the main thread's whole share of a mesh, and an import of a thousand meshes queued seconds of it behind the
+    // frame. The skinned path has always built its meshes on a worker. The main thread only takes the finished
+    // mesh, unless one already landed for this asset, in which case the surfaces go into that one so nothing
+    // holding it is left on a mesh nobody updates. -xlinka
+    private void Commit(MeshUpload upload)
+    {
+        if (_godotMesh == null && !IsMainThread())
+        {
+            var built = BuildFresh(upload);
+            if (built != null)
+            {
+                MainThreadWork.Post("mesh adopt " + DescribeSource(), () => AdoptBuilt(upload, built));
+                return;
+            }
+        }
         MainThreadWork.Post("mesh upload " + DescribeSource(), () => ApplyUpload(upload));
+    }
+
+    private ArrayMesh? BuildFresh(MeshUpload upload)
+    {
+        if (_unloaded)
+            return null;
+        try
+        {
+            var mesh = new ArrayMesh();
+            AddSurfaces(mesh, upload);
+            return mesh;
+        }
+        catch (System.Exception ex)
+        {
+            Lumora.Core.Logging.Logger.Warn($"MeshAssetHook: worker build failed for {DescribeSource()}, building on the main thread: {ex.Message}");
+            return null;
+        }
+    }
+
+    private void AdoptBuilt(MeshUpload upload, ArrayMesh built)
+    {
+        if (_unloaded || upload.Serial < _appliedSerial)
+        {
+            built.Dispose();
+            ReleaseSurfaces(upload);
+            return;
+        }
+        if (_godotMesh != null)
+        {
+            built.Dispose();
+            ApplyUpload(upload);
+            return;
+        }
+        _appliedSerial = upload.Serial;
+        ClearDeferred(upload.Source);
+        _godotMesh = built;
+        _surfaceSubmeshes = upload.SurfaceSubmeshes.Count > 0 ? upload.SurfaceSubmeshes.ToArray() : null;
+        ReleaseSurfaces(upload);
+        ReportDropped(upload);
+    }
+
+    // The binding swaps a null argument for a fresh wrapper and holds nothing while the native call runs, so
+    // optimised code can finalize it mid-add and the native side reads freed memory (Release-only crashes on
+    // this worker). Shared empties and a kept-alive LOD dictionary close that. -xlinka
+    private static readonly global::Godot.Collections.Array<global::Godot.Collections.Array> NoBlendShapes = new();
+    private static readonly global::Godot.Collections.Dictionary NoLods = new();
+
+    private static void AddSurfaces(ArrayMesh mesh, MeshUpload upload)
+    {
+        for (int i = 0; i < upload.Surfaces.Count; i++)
+        {
+            var lods = upload.Lods?.For(i)?.ToGodot();
+            mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, upload.Surfaces[i], NoBlendShapes, lods ?? NoLods,
+                (upload.PointSurfaces.Contains(i) ? PointQuadSurface.Format : 0) | MeshUVChannels.FormatFor(upload.Surfaces[i]));
+            System.GC.KeepAlive(lods);
+            System.GC.KeepAlive(upload.Surfaces[i]);
+        }
+    }
 
     // LOD levels are attached when a surface is created and there is no API to add them afterwards, so a
     // "render now, swap in the levels later" split would have to clear and re-add every surface. Clearing
@@ -190,14 +287,6 @@ public class MeshAssetHook : AssetHook, IMeshAssetHook
     // overrides, which is how you get a world that finishes loading and then turns default-grey. So the
     // levels are resolved before the one and only build. On a cache hit that costs a file read; on a miss
     // the mesh appears a few frames later than it would have, on a thread nobody is waiting on. -xlinka
-    private MeshLodSet? ResolveLods(PhosMesh mesh, MeshUpload upload, string label)
-    {
-        if (_unloaded) return null;
-        var directory = MeshLodCache.GetDirectory();
-        var key = MeshLodCache.BuildKey(mesh);
-        return MeshLodCache.Resolve(directory, key, upload.Surfaces, label);
-    }
-
     private bool ShouldBakeLods(PhosMesh mesh)
     {
         if (!MeshLodCache.IsBakeableAsset(asset))
@@ -289,18 +378,17 @@ public class MeshAssetHook : AssetHook, IMeshAssetHook
             _godotMesh.ClearSurfaces();
         }
 
-        for (int i = 0; i < upload.Surfaces.Count; i++)
-        {
-            var lods = upload.Lods?.For(i)?.ToGodot();
-            _godotMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, upload.Surfaces[i], null, lods,
-                (upload.PointSurfaces.Contains(i) ? PointQuadSurface.Format : 0) | MeshUVChannels.FormatFor(upload.Surfaces[i]));
-        }
+        AddSurfaces(_godotMesh, upload);
         _surfaceSubmeshes = upload.SurfaceSubmeshes.Count > 0 ? upload.SurfaceSubmeshes.ToArray() : null;
 
         // The surface owns its copy of the vertex data now; the staging arrays hold native storage that
         // otherwise waits for a finalizer. -xlinka
         ReleaseSurfaces(upload);
+        ReportDropped(upload);
+    }
 
+    private void ReportDropped(MeshUpload upload)
+    {
         if (upload.Dropped > 0)
         {
             if (!_loggedSurfaceOverflow)
@@ -525,6 +613,7 @@ public class MeshAssetHook : AssetHook, IMeshAssetHook
         // A bake that is still running will finish and post its apply; the flag is what stops it
         // resurrecting a mesh for an asset that is gone.
         _unloaded = true;
+        System.Threading.Interlocked.Exchange(ref _bakeCancel, null)?.Cancel();
         lock (_deferGate)
         {
             _deferredMesh = null;

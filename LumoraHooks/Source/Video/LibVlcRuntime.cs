@@ -87,7 +87,11 @@ public static class LibVlcRuntime
                     // access violation inside the runtime, seconds into any fMP4 stream. -xlinka
                     try
                     {
-                        string logDir = ProjectSettings.GlobalizePath("user://logs");
+                        // Beside the rest of this run's data: a run on a folder of its own (LUMORA_DATA_DIR) must not
+                        // write into the everyday install's logs.
+                        string logDir = Lumora.Core.Persistence.PathResolver.IsInitialized
+                            ? Lumora.Core.Persistence.PathResolver.LogsPath
+                            : ProjectSettings.GlobalizePath("user://logs");
                         Directory.CreateDirectory(logDir);
                         LogFilePath = Path.Combine(logDir, "libvlc.log");
                         _instance.SetLogFile(LogFilePath);

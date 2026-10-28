@@ -27,10 +27,27 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
     // libVLC will scale to whatever we write back in the format callback.
     private const int MaxDimension = 4096;
 
-    // "RV32" is libVLC's 32-bit RGB, which on a little-endian machine is B,G,R,X in memory. Godot has
-    // no BGRA image format, so the display callback swizzles into R,G,B,A on libVLC's own thread
-    // rather than costing the main thread a full-frame pass. -xlinka
-    private static readonly byte[] ChromaRv32 = { (byte)'R', (byte)'V', (byte)'3', (byte)'2' };
+    // PICTURES COME OUT AS PLANES.
+    //
+    // "I420" is the decoder's own 4:2:0 layout: a byte of brightness a pixel and a byte of each colour
+    // difference a 2x2 block, a byte and a half a pixel where 32-bit RGB took four. Every frame crosses to
+    // the video card from the main thread, and at 1080p that crossing was most of three milliseconds a
+    // frame; the planes are under half the bytes, and the card puts the colour back together itself. The
+    // swizzle libVLC's thread used to do on every RGB frame goes too. -xlinka
+    private static readonly byte[] ChromaI420 = { (byte)'I', (byte)'4', (byte)'2', (byte)'0' };
+
+    // AND THEY GO UP FROM THE DECODER'S OWN THREAD.
+    //
+    // libVLC writes each picture into engine memory (VideoFrameBuffer) and its display callback makes the
+    // card's copy right there, as a fresh device texture: the device takes texture creation from any thread
+    // and runs the copy on its transfer queue. The main thread only swaps the new texture in, a few
+    // microseconds where the upload from the main thread was most of a millisecond at 1080p (measured: 0.90 ms
+    // through a managed array, 0.19 ms from engine memory, 0.01 ms swapping in a texture made elsewhere).
+    // Uploads are paced by what the viewer can see (IVideoFrameTarget.FrameInterval); a picture skipped while
+    // unseen goes up the moment the screen is seen again, from a pool thread when the decoder is paused. If the
+    // device ever refuses a texture from here, the picture goes up from the main thread as before. -xlinka
+    private const double CatchUpAfterSeconds = 0.05;
+    private const double PaceSlack = 0.85;
 
     private static readonly string[] LiveSchemes = { "rtsp", "rtmp", "rtmps", "rtp", "udp", "mms", "mmsh", "srt", "rist" };
 
@@ -51,22 +68,53 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
     private Media? _media;
     private MediaPlayer? _player;
 
-    private readonly byte[]?[] _buffers = new byte[2][];
-    private readonly GCHandle[] _pins = new GCHandle[2];
-    // Buffers a format change replaced. They stay pinned until the player is gone: the decoder may
-    // still be finishing a picture in one of them, and a write into memory the GC has since reused
-    // is a crash inside the runtime, not here. -xlinka
-    private readonly List<GCHandle> _retiredPins = new();
-    private readonly IntPtr[] _pointers = new IntPtr[2];
-    private int _writeIndex;
-    private int _readIndex;
-    private bool _frameReady;
+    // The one picture buffer. libVLC holds the gate from its lock callback to its unlock callback while it
+    // writes the picture, and every read takes it, so nothing reads a half-written frame.
+    private VideoFrameBuffer? _frame;
+    private readonly SemaphoreSlim _frameGate = new(1, 1);
+    // Buffers a format change replaced. They live until the player is gone: the decoder may still be
+    // finishing a picture in one of them, and a write into freed memory is a crash inside the runtime,
+    // not here. -xlinka
+    private readonly List<VideoFrameBuffer> _retiredFrames = new();
+
+    private RenderingDevice? _device;
+    private readonly RDTextureView _deviceView = new();
+    private volatile bool _deviceRefused;
+    private bool _uploadedAny;
+    private long _paceTicks;
+    private long _lastUploadTicks;
+    private long _lastDisplayTicks;
+    private volatile bool _unsent;
+    private volatile bool _catchUpQueued;
+    // A paused decoder shows its held picture again every few frames (about 14 a second, measured). One copy
+    // of it on the card is enough until the position or the play state changes.
+    private volatile bool _paused;
+    private volatile bool _pausedPictureSent;
+
+    private struct DeviceFrame
+    {
+        public Rid Texture;
+        public int Width;
+        public int Height;
+        public int Pitch;
+        public int LumaLines;
+        public int ChromaLines;
+    }
+
+    // Handover to the main thread: the newest device picture not taken yet, the ones it replaced (freed on
+    // the main thread, the only place the device frees anything), and a flag for a picture that has to go
+    // up from the main thread.
+    private readonly object _publishSync = new();
+    private DeviceFrame _published;
+    private bool _hasPublished;
+    private readonly List<Rid> _superseded = new();
+    private bool _mainFrameReady;
+    private bool _closed;
 
     private int _frameWidth;
     private int _frameHeight;
     private int _visibleWidth;
     private int _visibleHeight;
-    private byte[] _cropScratch = Array.Empty<byte>();
     private volatile bool _sizeKnown;
 
     private IVideoAudioSink? _sink;
@@ -113,6 +161,7 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
     private volatile bool _errored;
     private volatile bool _restarting;
     private volatile bool _disposed;
+    private volatile bool _stopping;
     private volatile bool _applyAudioTrack;
     private volatile bool _isLive;
     private bool _declaredLive;
@@ -152,6 +201,10 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
     private float _clockError;
 
     private string _source = string.Empty;
+    // A stored video's decrypting stream and the callbacks libVLC reads it through. Kept until the media
+    // and player are gone, which still call into them.
+    private MediaInput? _input;
+    private System.IO.Stream? _inputStream;
 
     public LibVlcBackend()
     {
@@ -228,6 +281,7 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
         _remote = isStream || LooksRemote(_source);
         _audioFirstSeenTicks = 0;
         _readyAudioOnly = false;
+        _device = RenderingServer.GetRenderingDevice();
 
         _libvlc = LibVlcRuntime.Instance;
         if (_libvlc == null)
@@ -266,8 +320,25 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
             if (maxHeight > 0)
                 options.Add($":adaptive-maxheight={maxHeight}");
 
-            var fromType = LooksRemote(_source) ? FromType.FromLocation : FromType.FromPath;
-            _media = new Media(_libvlc, _source, fromType, options.ToArray());
+            if (IsStored(_source))
+            {
+                // Sealed in the asset database: libVLC pulls through read and seek callbacks on a decrypting
+                // stream, a chunk at a time, and nothing plain ever lands on disk. -xlinka
+                var stream = Lumora.Core.Engine.Current?.LocalDB?.OpenRead(_source);
+                if (stream == null)
+                {
+                    Fail("the stored video could not be opened");
+                    return;
+                }
+                _inputStream = stream;
+                _input = new StreamMediaInput(stream);
+                _media = new Media(_libvlc, _input, options.ToArray());
+            }
+            else
+            {
+                var fromType = LooksRemote(_source) ? FromType.FromLocation : FromType.FromPath;
+                _media = new Media(_libvlc, _source, fromType, options.ToArray());
+            }
 
             _player = new MediaPlayer(_media);
             _player.EnableKeyInput = false;
@@ -314,8 +385,9 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
 
             // The parse verdict only decides audio-only for local files. On a remote source it is a
             // second connection to the same stream that nothing reads, and on a live one that is a
-            // second seat on the broadcast for nothing.
-            if (_remote)
+            // second seat on the broadcast for nothing. A stored video's callbacks share one stream, and a
+            // parse would open it a second time underneath the player.
+            if (_remote || _input != null)
                 _parseDone = true;
             else
                 _ = ParseAsync(_media);
@@ -423,47 +495,174 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
 
     private void PublishFrame(IVideoFrameTarget target)
     {
-        // The lock is held across the copy on purpose: it is one memcpy of a single frame, and
-        // blocking libVLC's display thread for that long is cheaper than the third buffer a
-        // lock-free handover would need at 4K. -xlinka
         if (_visibleWidth == 0 && _sizeKnown)
             ReadVisibleSize();
 
+        double interval = target.FrameInterval;
+        long pace = interval < 0.0 ? -1 : (long)(interval * PaceSlack * System.Diagnostics.Stopwatch.Frequency);
+        Volatile.Write(ref _paceTicks, pace);
+
+        DeviceFrame frame;
+        bool haveDevice;
+        bool haveMain;
+        lock (_publishSync)
+        {
+            frame = _published;
+            haveDevice = _hasPublished;
+            _published = default;
+            _hasPublished = false;
+            haveMain = _mainFrameReady;
+            _mainFrameReady = false;
+            FreeSuperseded();
+        }
+
         int width;
         int height;
-        lock (_frameSync)
+        if (haveDevice)
         {
-            if (!_frameReady) return;
-            _frameReady = false;
-            var buffer = _buffers[_readIndex];
-            if (buffer == null || _frameWidth <= 0 || _frameHeight <= 0) return;
-
-            int bufferWidth = _frameWidth;
-            int bufferHeight = _frameHeight;
-            width = _visibleWidth > 0 && _visibleWidth <= bufferWidth ? _visibleWidth : bufferWidth;
-            height = _visibleHeight > 0 && _visibleHeight <= bufferHeight ? _visibleHeight : bufferHeight;
-
-            if (width == bufferWidth)
+            VisibleSize(frame.Width, frame.Height, out width, out height);
+            // The planes go over whole; the target crops to the visible picture when it samples them.
+            target.PresentPlanes(frame.Texture, width, height, frame.Pitch, frame.LumaLines, frame.ChromaLines);
+        }
+        else if (haveMain && _frameGate.Wait(0))
+        {
+            try
             {
-                // Rows are contiguous, so the padding under the picture is simply not submitted.
-                target.SubmitFrame(buffer, width, height);
+                var buffer = _frame;
+                if (buffer == null) return;
+                VisibleSize(buffer.Width, buffer.Height, out width, out height);
+                target.SubmitPlanes(buffer.Span, width, height, buffer.Pitch, buffer.LumaLines, buffer.ChromaLines);
             }
-            else
+            finally
             {
-                int rowBytes = width * 4;
-                int pitch = bufferWidth * 4;
-                if (_cropScratch.Length < rowBytes * height)
-                    _cropScratch = new byte[rowBytes * height];
-                for (int y = 0; y < height; y++)
-                    Buffer.BlockCopy(buffer, y * pitch, _cropScratch, y * rowBytes, rowBytes);
-                target.SubmitFrame(_cropScratch, width, height);
+                _frameGate.Release();
             }
+        }
+        else
+        {
+            if (haveMain)
+                lock (_publishSync) _mainFrameReady = true;
+            QueueCatchUp(pace);
+            return;
         }
         if (!_firstFrameSeen)
         {
             _firstFrameSeen = true;
             _firstFrameTicks = System.Diagnostics.Stopwatch.GetTimestamp();
             LumoraLogger.Debug($"LibVlcBackend: first frame {width}x{height} from {Describe(_source)}");
+        }
+    }
+
+    private void VisibleSize(int bufferWidth, int bufferHeight, out int width, out int height)
+    {
+        width = _visibleWidth > 0 && _visibleWidth <= bufferWidth ? _visibleWidth : bufferWidth;
+        height = _visibleHeight > 0 && _visibleHeight <= bufferHeight ? _visibleHeight : bufferHeight;
+    }
+
+    // Under _publishSync, main thread.
+    private void FreeSuperseded()
+    {
+        if (_superseded.Count == 0) return;
+        foreach (var texture in _superseded)
+            _device?.FreeRid(texture);
+        _superseded.Clear();
+    }
+
+    // A picture held back while nobody could see it, and the decoder has gone quiet (paused, or stalled):
+    // nothing else will bring it up, so a pool thread does, the same way the display callback would.
+    private void QueueCatchUp(long pace)
+    {
+        if (!_unsent || pace < 0 || _catchUpQueued || _disposed) return;
+        long since = System.Diagnostics.Stopwatch.GetTimestamp() - Volatile.Read(ref _lastDisplayTicks);
+        if (since < CatchUpAfterSeconds * System.Diagnostics.Stopwatch.Frequency) return;
+        _catchUpQueued = true;
+        ThreadPool.UnsafeQueueUserWorkItem(static backend =>
+        {
+            try
+            {
+                if (!backend._disposed && backend._unsent)
+                    backend.Upload(System.Diagnostics.Stopwatch.GetTimestamp());
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Warn($"LibVlcBackend: picture catch-up failed: {ex.Message}");
+            }
+            finally
+            {
+                backend._catchUpQueued = false;
+            }
+        }, this, preferLocal: false);
+    }
+
+    // libVLC's display thread or a pool thread. Makes the card's copy of the current picture and hands it to
+    // the main thread, or flags it for the main thread when the device will not take it from here.
+    private void Upload(long now)
+    {
+        _frameGate.Wait();
+        try
+        {
+            var buffer = _frame;
+            if (buffer == null || _disposed || _stopping) return;
+            _unsent = false;
+            _uploadedAny = true;
+            if (_paused)
+                _pausedPictureSent = true;
+            Volatile.Write(ref _lastUploadTicks, now);
+
+            var device = _device;
+            if (device != null && !_deviceRefused)
+            {
+                Rid texture = default;
+                try
+                {
+                    texture = device.TextureCreate(buffer.Format, _deviceView, buffer.Layers);
+                }
+                catch (Exception ex)
+                {
+                    LumoraLogger.Warn($"LibVlcBackend: frame texture failed: {ex.Message}");
+                }
+                GC.KeepAlive(buffer);
+                if (texture.IsValid)
+                {
+                    Publish(new DeviceFrame
+                    {
+                        Texture = texture,
+                        Width = buffer.Width,
+                        Height = buffer.Height,
+                        Pitch = buffer.Pitch,
+                        LumaLines = buffer.LumaLines,
+                        ChromaLines = buffer.ChromaLines,
+                    });
+                    return;
+                }
+                _deviceRefused = true;
+                LumoraLogger.Warn("LibVlcBackend: the device refused a frame texture from the decoder thread; pictures go up from the main thread");
+            }
+            lock (_publishSync)
+                _mainFrameReady = true;
+        }
+        finally
+        {
+            _frameGate.Release();
+        }
+    }
+
+    private void Publish(in DeviceFrame frame)
+    {
+        lock (_publishSync)
+        {
+            if (_closed)
+            {
+                // Made after teardown started: nobody will take it, and the device frees on the main thread.
+                var device = _device;
+                var texture = frame.Texture;
+                Callable.From(() => device?.FreeRid(texture)).CallDeferred();
+                return;
+            }
+            if (_hasPublished)
+                _superseded.Add(_published.Texture);
+            _published = frame;
+            _hasPublished = true;
         }
     }
 
@@ -797,6 +996,9 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
 
     public void Stop()
     {
+        // player.Stop below blocks this thread until libVLC's threads are done; from here they leave the
+        // device alone, so nothing they wait on can be waiting on this thread.
+        _stopping = true;
         StopReleaseThread();
         DropQueuedAudio();
         StopInternal();
@@ -818,8 +1020,12 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
 
         var player = _player;
         var media = _media;
+        var input = _input;
+        var inputStream = _inputStream;
         _player = null;
         _media = null;
+        _input = null;
+        _inputStream = null;
         _sink = null;
 
         if (player != null)
@@ -834,16 +1040,29 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
             player.Vout -= OnVout;
         }
 
-        // Off the frame thread, and strictly ordered: the buffers stay pinned until the player that
+        // Pictures already on the card and not shown yet are the device's to free, on this thread.
+        lock (_publishSync)
+        {
+            _closed = true;
+            if (_hasPublished)
+                _superseded.Add(_published.Texture);
+            _hasPublished = false;
+            FreeSuperseded();
+        }
+
+        // Off the frame thread, and strictly ordered: the buffers stay alive until the player that
         // writes into them is gone. The callback delegates are captured here so the GC cannot take
         // them while libVLC still holds the function pointers. -xlinka
-        var pins = _pins;
-        List<GCHandle> retired;
+        List<VideoFrameBuffer> frames;
         lock (_frameSync)
         {
-            retired = new List<GCHandle>(_retiredPins);
-            _retiredPins.Clear();
+            frames = new List<VideoFrameBuffer>(_retiredFrames);
+            if (_frame != null)
+                frames.Add(_frame);
+            _retiredFrames.Clear();
         }
+        var view = _deviceView;
+        var gate = _frameGate;
         var callbacks = new object[]
         {
             _formatCb, _videoCleanupCb, _lockCb, _unlockCb, _displayCb,
@@ -856,6 +1075,8 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
                 player?.Stop();
                 player?.Dispose();
                 media?.Dispose();
+                input?.Dispose();
+                inputStream?.Dispose();
             }
             catch (Exception ex)
             {
@@ -863,16 +1084,15 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
             }
             finally
             {
-                for (int i = 0; i < pins.Length; i++)
+                // A catch-up upload may still be reading the picture; it holds the gate while it does. A
+                // gate that never comes back leaks the buffers rather than free memory still in use.
+                if (gate.Wait(2000))
                 {
-                    if (pins[i].IsAllocated)
-                        pins[i].Free();
+                    foreach (var frame in frames)
+                        frame.Dispose();
+                    gate.Release();
                 }
-                foreach (var pin in retired)
-                {
-                    if (pin.IsAllocated)
-                        pin.Free();
-                }
+                view.Dispose();
                 GC.KeepAlive(callbacks);
             }
         });
@@ -887,85 +1107,95 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
         width = (uint)w;
         height = (uint)h;
 
-        Marshal.Copy(ChromaRv32, 0, chroma, 4);
-        pitches = (uint)(w * 4);
-        lines = (uint)h;
+        // Brightness rows padded to 32 bytes, as the decoder's own copies like them. Both colour planes take the
+        // same stride, U starting at the left of each colour row and V half way along it, so the whole picture is
+        // one texture (see VideoFrameBuffer).
+        int pitch = (w + 31) & ~31;
+        int lumaLines = (h + 1) & ~1;
+        int chromaLines = lumaLines / 2;
+        Marshal.Copy(ChromaI420, 0, chroma, 4);
+        pitches = (uint)pitch;
+        System.Runtime.CompilerServices.Unsafe.Add(ref pitches, 1) = (uint)pitch;
+        System.Runtime.CompilerServices.Unsafe.Add(ref pitches, 2) = (uint)pitch;
+        lines = (uint)lumaLines;
+        System.Runtime.CompilerServices.Unsafe.Add(ref lines, 1) = (uint)chromaLines;
+        System.Runtime.CompilerServices.Unsafe.Add(ref lines, 2) = (uint)chromaLines;
 
-        AllocateBuffers(w, h);
+        AllocateBuffer(w, h, pitch, lumaLines, chromaLines);
         _sizeKnown = true;
         return 1;
     }
 
     private void OnVideoCleanup(ref IntPtr opaque)
     {
-        lock (_frameSync)
-            _frameReady = false;
+        lock (_publishSync)
+            _mainFrameReady = false;
     }
 
+    // lock, unlock and display arrive on libVLC's one video output thread, lock and unlock around the copy of
+    // each picture into our buffer; the gate taken here is given back in OnVideoUnlock.
     private IntPtr OnVideoLock(IntPtr opaque, IntPtr planes)
     {
-        // lock/unlock/display all arrive on libVLC's one video output thread, so the write index is
-        // only ever read and advanced there; the frame lock exists for the handover to the main thread.
-        IntPtr pointer = _pointers[_writeIndex];
+        _frameGate.Wait();
+        var buffer = _frame!;
+        IntPtr pointer = buffer.Pointer;
+        IntPtr colour = pointer + buffer.Pitch * buffer.LumaLines;
         Marshal.WriteIntPtr(planes, 0, pointer);
+        Marshal.WriteIntPtr(planes, IntPtr.Size, colour);
+        Marshal.WriteIntPtr(planes, 2 * IntPtr.Size, colour + buffer.Pitch / 2);
         return pointer;
     }
 
-    private void OnVideoUnlock(IntPtr opaque, IntPtr picture, IntPtr planes)
-    {
-    }
+    private void OnVideoUnlock(IntPtr opaque, IntPtr picture, IntPtr planes) => _frameGate.Release();
 
     private void OnVideoDisplay(IntPtr opaque, IntPtr picture)
     {
-        int index = _writeIndex;
-        var buffer = _buffers[index];
-        if (buffer == null) return;
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        Interlocked.Increment(ref _framesDisplayed);
+        Volatile.Write(ref _lastDisplayTicks, now);
+        if (_disposed || _stopping || (_paused && _pausedPictureSent)) return;
 
-        SwizzleBgrxToRgba(buffer);
-
-        lock (_frameSync)
+        // A picture the main thread has not taken yet means it is running slower than the video: this one
+        // would only replace it unseen, and a stalled main thread would pile textures up on the card. The
+        // first picture of a size always goes up, so the texture is valid from the start.
+        bool waiting;
+        lock (_publishSync)
+            waiting = _hasPublished || _mainFrameReady;
+        long pace = Volatile.Read(ref _paceTicks);
+        if (waiting || (_uploadedAny && (pace < 0 || (pace > 0 && now - Volatile.Read(ref _lastUploadTicks) < pace))))
         {
-            _readIndex = index;
-            _writeIndex = index ^ 1;
-            _frameReady = true;
-            _framesDisplayed++;
+            _unsent = true;
+            return;
         }
+        Upload(now);
     }
 
-    private static void SwizzleBgrxToRgba(byte[] buffer)
+    // Format callback, libVLC's video output thread.
+    private void AllocateBuffer(int width, int height, int pitch, int lumaLines, int chromaLines)
     {
-        var pixels = MemoryMarshal.Cast<byte, uint>(buffer.AsSpan());
-        for (int i = 0; i < pixels.Length; i++)
+        _frameGate.Wait();
+        try
         {
-            uint p = pixels[i];
-            pixels[i] = 0xFF000000u | ((p & 0x000000FFu) << 16) | (p & 0x0000FF00u) | ((p >> 16) & 0x000000FFu);
-        }
-    }
-
-    private void AllocateBuffers(int width, int height)
-    {
-        lock (_frameSync)
-        {
-            if (_frameWidth == width && _frameHeight == height && _buffers[0] != null)
+            if (_frame != null && _frame.Matches(width, height, pitch, lumaLines))
                 return;
-
-            for (int i = 0; i < _pins.Length; i++)
+            var buffer = new VideoFrameBuffer(width, height, pitch, lumaLines, chromaLines);
+            lock (_frameSync)
             {
-                if (_pins[i].IsAllocated)
-                    _retiredPins.Add(_pins[i]);
-                var buffer = new byte[width * height * 4];
-                _buffers[i] = buffer;
-                _pins[i] = GCHandle.Alloc(buffer, GCHandleType.Pinned);
-                _pointers[i] = _pins[i].AddrOfPinnedObject();
+                if (_frame != null)
+                    _retiredFrames.Add(_frame);
+                _frame = buffer;
+                _frameWidth = width;
+                _frameHeight = height;
+                _visibleWidth = 0;
+                _visibleHeight = 0;
             }
-
-            _frameWidth = width;
-            _frameHeight = height;
-            _visibleWidth = 0;
-            _visibleHeight = 0;
-            _writeIndex = 0;
-            _readIndex = 0;
-            _frameReady = false;
+            _uploadedAny = false;
+            lock (_publishSync)
+                _mainFrameReady = false;
+        }
+        finally
+        {
+            _frameGate.Release();
         }
     }
 
@@ -1130,6 +1360,7 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
 
     private void OnPlaying(object? sender, EventArgs e)
     {
+        _paused = false;
         if (_pendingAudioTrack.HasValue)
             _applyAudioTrack = true;
         _playCooloffUntil = global::Godot.Time.GetTicksMsec() / 1000.0 + PlayCooloffSeconds;
@@ -1144,6 +1375,9 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
         double now = global::Godot.Time.GetTicksMsec() / 1000.0;
         double reported = e.Time / 1000.0;
         if (reported < 0.0) return;
+        // A position reported while paused (a seek landing) means a different picture to show.
+        if (_paused)
+            _pausedPictureSent = false;
         if (_firstReportAfterSeek)
         {
             // The first report after a seek is the old position on its way out, not the new one.
@@ -1172,7 +1406,12 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
     private double EstimatedPosition(double now, float speed)
         => _lastReportedPosition + (now - _lastReportedAt) * speed;
 
-    private void OnPaused(object? sender, EventArgs e) => _sink?.Flush();
+    private void OnPaused(object? sender, EventArgs e)
+    {
+        _pausedPictureSent = false;
+        _paused = true;
+        _sink?.Flush();
+    }
 
     private void OnStopped(object? sender, EventArgs e) => _sink?.Flush();
 
@@ -1201,8 +1440,10 @@ public sealed class LibVlcBackend : IVideoDecoderBackend
         if (string.IsNullOrEmpty(source)) return false;
         int scheme = source.IndexOf("://", StringComparison.Ordinal);
         if (scheme <= 0) return false;
-        return !source.StartsWith("file://", StringComparison.OrdinalIgnoreCase);
+        return !source.StartsWith("file://", StringComparison.OrdinalIgnoreCase) && !IsStored(source);
     }
+
+    private static bool IsStored(string source) => source.StartsWith("local://", StringComparison.Ordinal);
 
     private static bool IsLiveScheme(string source)
     {

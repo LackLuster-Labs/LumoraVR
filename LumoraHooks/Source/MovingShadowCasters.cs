@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Godot;
 using Lumora.Core;
 using LumoraLogger = Lumora.Core.Logging.Logger;
@@ -206,13 +207,17 @@ internal static class MovingShadowCasters
                 proxy.Shadows[0].Visible = visible;
                 proxy.Shadows[1].Visible = visible;
             }
-            if (band >= 0)
-                Follow(proxy, band);
+            if (band >= 0 && !Follow(proxy, band))
+                _dropProxies.Add(source);
         }
         foreach (var source in _dropProxies)
         {
             if (_proxies.Remove(source, out var proxy))
+            {
+                if (GodotObject.IsInstanceValid(source) && source.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off)
+                    source.CastShadow = proxy.Original;
                 proxy.Free();
+            }
             _countChanged = true;
         }
 
@@ -228,8 +233,9 @@ internal static class MovingShadowCasters
     }
 
     // The copy catches up with the object: where it is, what it looks like, and whether it casts at all.
-    // Writes only what changed, since every write tells the lights around it to render again.
-    private static void Follow(Proxy proxy, int band)
+    // Writes only what changed, since every write tells the lights around it to render again. False when the
+    // object now casts in a way no copy can, and has to cast for itself again.
+    private static bool Follow(Proxy proxy, int band)
     {
         var source = proxy.Source;
         var shadow = proxy.Shadows[band];
@@ -240,6 +246,8 @@ internal static class MovingShadowCasters
             proxy.Original = source.CastShadow;
             source.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
         }
+        if (!CopyCastsAlike(source, proxy.Original))
+            return false;
 
         if (!ReferenceEquals(shadow.Mesh, source.Mesh))
             shadow.Mesh = source.Mesh;
@@ -259,6 +267,59 @@ internal static class MovingShadowCasters
             proxy.Applied[band] = xf;
             shadow.GlobalTransform = xf;
         }
+        return true;
+    }
+
+    // A copy casts shadow-only, and the platform has no setting that is shadow-only AND double-sided, so a copy
+    // casts with its material's culling. That is the same shadow for anything but a DoubleSided caster wearing
+    // a material that culls: the far side of its shadow would go missing the moment it moved. -xlinka
+    private static bool CopyCastsAlike(MeshInstance3D mesh, GeometryInstance3D.ShadowCastingSetting cast)
+    {
+        if (cast != GeometryInstance3D.ShadowCastingSetting.DoubleSided)
+            return true;
+        int surfaces = mesh.Mesh?.GetSurfaceCount() ?? 0;
+        for (int i = 0; i < surfaces; i++)
+        {
+            if (!DrawsBothSides(mesh.GetActiveMaterial(i)))
+                return false;
+        }
+        return true;
+    }
+
+    // Culling lives in the shader source as a render_mode, read once per shader.
+    private static readonly ConditionalWeakTable<Shader, StrongBox<bool>> _bothSides = new();
+
+    private static bool DrawsBothSides(Material? material)
+    {
+        if (material is BaseMaterial3D native)
+            return native.CullMode == BaseMaterial3D.CullModeEnum.Disabled;
+        if (material is not ShaderMaterial { Shader: { } shader })
+            return false;
+        if (!_bothSides.TryGetValue(shader, out var known))
+        {
+            known = new StrongBox<bool>(RendersBothSides(shader.Code));
+            _bothSides.AddOrUpdate(shader, known);
+        }
+        return known.Value;
+    }
+
+    private static bool RendersBothSides(string? code)
+    {
+        if (string.IsNullOrEmpty(code))
+            return false;
+        for (int at = code.IndexOf("render_mode", System.StringComparison.Ordinal); at >= 0;
+             at = code.IndexOf("render_mode", at + 11, System.StringComparison.Ordinal))
+        {
+            int line = code.LastIndexOf('\n', at) + 1;
+            if (code.IndexOf("//", line, at - line, System.StringComparison.Ordinal) >= 0)
+                continue;
+            int end = code.IndexOf(';', at);
+            if (end < 0)
+                return false;
+            if (code.IndexOf("cull_disabled", at, end - at, System.StringComparison.Ordinal) >= 0)
+                return true;
+        }
+        return false;
     }
 
     private static void Activate(Mover mover, double now)
@@ -291,6 +352,8 @@ internal static class MovingShadowCasters
                 continue;
             }
             if (mesh.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off || mesh.Mesh == null || mesh.Skin != null)
+                continue;
+            if (!CopyCastsAlike(mesh, mesh.CastShadow))
                 continue;
             // Plain world geometry only: every camera sees the bands, so anything drawn for fewer keeps
             // casting itself.
@@ -371,10 +434,15 @@ internal static class MovingShadowCasters
         {
             if (--proxy.Users > 0)
                 continue;
-            _proxies.Remove(proxy.Source);
-            _countChanged = true;
-            if (GodotObject.IsInstanceValid(proxy.Source) && proxy.Source.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off)
-                proxy.Source.CastShadow = proxy.Original;
+            // A copy already handed back (Follow) may have been replaced since; only the live one owns the
+            // object's cast setting.
+            if (_proxies.TryGetValue(proxy.Source, out var live) && ReferenceEquals(live, proxy))
+            {
+                _proxies.Remove(proxy.Source);
+                _countChanged = true;
+                if (GodotObject.IsInstanceValid(proxy.Source) && proxy.Source.CastShadow == GeometryInstance3D.ShadowCastingSetting.Off)
+                    proxy.Source.CastShadow = proxy.Original;
+            }
             proxy.Free();
         }
         mover.Proxies.Clear();

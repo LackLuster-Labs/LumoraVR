@@ -21,17 +21,34 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
     // owns is created once in Initialize and never replaced, so applying on receipt is enough. -xlinka
     private LodVisibilityRange _lodRange = LodVisibilityRange.Unbounded;
 
+    private LodVisibilityRange _drawRange = LodVisibilityRange.Unbounded;
+    private float _appliedDrawDistance;
+
     public void SetLodVisibilityRange(in LodVisibilityRange range)
     {
         if (_lodRange.Equals(range))
             return;
         _lodRange = range;
-        _lodRange.ApplyTo(_meshInstance);
+        ApplyRanges();
+    }
+
+    private LodVisibilityRange VisibleRange => LodVisibilityRange.Tightest(_lodRange, _drawRange);
+
+    private void ApplyRanges()
+    {
+        var range = VisibleRange;
+        range.ApplyTo(_meshInstance);
         if (_twin != null && _twin.Alive)
-            _lodRange.ApplyTo(_twin.Instance);
+            range.ApplyTo(_twin.Instance);
     }
 
     private MeshInstance3D _meshInstance = null!;
+
+    // The instance this renderer draws through, for a picture of the avatar it is on (AvatarPictures). Null
+    // while it is not built and bound, or not meant to be drawn.
+    internal MeshInstance3D? PictureSource
+        => MeshInstanceAlive && _meshApplied && Owner.Enabled && (Owner.Slot?.IsActive ?? false) && !Owner.LocallyHiddenWhole
+            && _meshInstance.Mesh != null ? _meshInstance : null;
 
     // Both the mesh instance and the skeleton are platform nodes that can be freed underneath us - by a
     // teardown, or by SkeletonHook rebuilding its skeleton - and a null check does NOT catch a freed
@@ -54,6 +71,10 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
     // True once the real (component) material asset has been put on the surface. Stays false while we're showing
     // the neutral fallback, so the update loop keeps retrying until the PBS asset finishes loading. -xlinka
     private bool _realMaterialApplied;
+    private bool _appliedSimple;
+
+    // What the instance was last told to cast. A fresh MeshInstance3D casts, which is also the renderer's default.
+    private GeometryInstance3D.ShadowCastingSetting _appliedShadow = GeometryInstance3D.ShadowCastingSetting.On;
 
     // Async mesh-build state: a worker-thread build is in flight (don't double-dispatch), plus the asset + vertex
     // count we last successfully applied so a lingering dirty flag can't trigger an endless rebuild loop. -xlinka
@@ -165,12 +186,38 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
             _meshInstance.Visible = visible;
             if (_twin != null && _twin.Alive)
                 _twin.Instance.Visible = visible;
+
+            // The renderer's cast setting never reached the instance, so every skinned mesh cast a shadow
+            // whatever it was set to, and switching an avatar's shadows off saved nothing. The twin stays
+            // off either way; the real instance is the one that casts for the wearer. -xlinka
+            var shadow = Owner.LocalShadowCulled ? GeometryInstance3D.ShadowCastingSetting.Off : ShadowSetting(Owner.ShadowCastMode.Value);
+            if (shadow != _appliedShadow)
+            {
+                _meshInstance.CastShadow = shadow;
+                _appliedShadow = shadow;
+            }
+
+            // Someone else's avatar is not drawn past the viewer's avatar draw distance, inside whatever band
+            // a LOD group gives it. A hard cut with a few metres of give: a fade would turn every material on
+            // the body see-through on its way out. -xlinka
+            float draw = Owner.LocalDrawDistance;
+            if (draw != _appliedDrawDistance)
+            {
+                _appliedDrawDistance = draw;
+                _drawRange = draw > 0f ? new LodVisibilityRange(0f, 0f, draw, System.MathF.Max(2f, draw * 0.05f), false) : LodVisibilityRange.Unbounded;
+                ApplyRanges();
+            }
         }
 
         // Update material if changed (target reassigned), or keep retrying while the real asset is still loading
         // so the neutral fallback gets replaced the moment the PBS material is valid (MAT-3 race fix). -xlinka
         bool materialsChanged = Owner.MaterialsChanged;
         Owner.MaterialsChanged = false;
+        if (Owner.LocalSimpleShading != _appliedSimple)
+        {
+            _appliedSimple = Owner.LocalSimpleShading;
+            materialsChanged = true;
+        }
         if (materialsChanged | Owner.Material.GetWasChangedAndClear())
         {
             _realMaterialApplied = false;
@@ -209,6 +256,14 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
             Owner.BlendWeightsChanged = false;
         }
     }
+
+    private static GeometryInstance3D.ShadowCastingSetting ShadowSetting(ShadowCastMode mode) => mode switch
+    {
+        ShadowCastMode.Off => GeometryInstance3D.ShadowCastingSetting.Off,
+        ShadowCastMode.ShadowOnly => GeometryInstance3D.ShadowCastingSetting.ShadowsOnly,
+        ShadowCastMode.DoubleSided => GeometryInstance3D.ShadowCastingSetting.DoubleSided,
+        _ => GeometryInstance3D.ShadowCastingSetting.On,
+    };
 
     // What each weight was last set to, for the per-frame path. A blink moves two weights of three
     // hundred and every one of them used to go across to the platform on every change. Anything that
@@ -291,6 +346,8 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         var materialAsset = provider?.Asset;
         if (!loading && materialAsset != null && materialAsset.GodotMaterial is Material godotMaterial)
         {
+            if (_appliedSimple && provider is PoiyomiMaterial toon)
+                godotMaterial = AvatarFallbackMaterial.For(toon);
             SetSurfaceMaterial(surface, godotMaterial);
             _loadingSkin.Clear(index);
             return true;
@@ -470,6 +527,42 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         RefreshEyeViewTwin();
     }
 
+    // BONES ARE LOOKED UP BY THE DATAMODEL'S NAMES.
+    //
+    // A bind list names bones the way the datamodel does, and the skeleton does not always carry that name:
+    // Godot refuses some, and the skeleton hook gives those bones another (SkeletonHook.GodotBoneName). So a
+    // name goes through the hook that built the skeleton, which knows both, and a bone slot is found by the
+    // slot itself before its name is tried. Without our own hook the skeleton is asked for the name Godot
+    // would have been given. -xlinka
+    private SkeletonHook? OwnSkeletonHook
+        => _skeletonHook != null && _skeleton != null && ReferenceEquals(_skeletonHook.GetSkeleton(), _skeleton) ? _skeletonHook : null;
+
+    private int FindSkeletonBone(string? boneName)
+    {
+        if (string.IsNullOrEmpty(boneName) || _skeleton == null)
+            return -1;
+        if (OwnSkeletonHook is { } hook)
+            return hook.GetBoneIndex(boneName);
+        return _skeleton.FindBone(SkeletonHook.GodotBoneName(boneName));
+    }
+
+    private int FindSkeletonBone(Lumora.Core.Slot? boneSlot, string? boneName)
+    {
+        if (boneSlot != null && OwnSkeletonHook is { } hook && hook.GetBoneIndex(boneSlot) is int index and >= 0)
+            return index;
+        return FindSkeletonBone(boneName);
+    }
+
+    // The name a bind list knows a skeleton bone by: the skeleton's own, or the datamodel's where Godot
+    // made the skeleton carry another.
+    private string BindNameOf(int bone)
+    {
+        string skeletonName = _skeleton.GetBoneName(bone);
+        if (OwnSkeletonHook?.GetBoneSourceName(bone) is { } source && SkeletonHook.GodotBoneName(source) != source)
+            return source;
+        return skeletonName;
+    }
+
     private void BuildBoneIndexMap()
     {
         _boneIndexMap.Clear();
@@ -480,10 +573,12 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         // Mapping priority: BoneNames, then Bones slot refs, then the SkeletonBuilder's order, else 1:1.
         if (Owner.BoneNames.Count > 0)
         {
+            int missing = 0;
+            string firstMissing = string.Empty;
             for (int meshBoneIdx = 0; meshBoneIdx < Owner.BoneNames.Count; meshBoneIdx++)
             {
                 string boneName = Owner.BoneNames[meshBoneIdx];
-                int skelBoneIdx = _skeleton.FindBone(boneName);
+                int skelBoneIdx = FindSkeletonBone(boneName);
 
                 if (skelBoneIdx >= 0)
                 {
@@ -492,9 +587,12 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
                 else
                 {
                     _boneIndexMap[meshBoneIdx] = 0;
-                    LumoraLogger.Warn($"SkinnedMeshHook: Bone '{boneName}' not found in skeleton, mapping to bone 0");
+                    if (missing++ == 0)
+                        firstMissing = boneName;
                 }
             }
+            if (missing > 0)
+                LumoraLogger.Warn($"SkinnedMeshHook: {missing} of {Owner.BoneNames.Count} bones not in the skeleton (first '{firstMissing}'), mapped to bone 0");
             LumoraLogger.Debug($"SkinnedMeshHook: Built bone map from names - {_boneIndexMap.Count} mappings");
             return;
         }
@@ -506,8 +604,7 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
                 var boneSlot = Owner.Bones[meshBoneIdx];
                 if (boneSlot != null)
                 {
-                    string boneName = boneSlot.SlotName.Value;
-                    int skelBoneIdx = _skeleton.FindBone(boneName);
+                    int skelBoneIdx = FindSkeletonBone(boneSlot, boneSlot.SlotName.Value);
 
                     if (skelBoneIdx >= 0)
                     {
@@ -532,8 +629,8 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
             var skelBuilder = Owner.Skeleton.Target;
             for (int meshBoneIdx = 0; meshBoneIdx < skelBuilder.BoneNames.Count; meshBoneIdx++)
             {
-                string boneName = skelBuilder.BoneNames[meshBoneIdx];
-                int skelBoneIdx = _skeleton.FindBone(boneName);
+                var boneSlot = meshBoneIdx < skelBuilder.BoneSlots.Count ? skelBuilder.BoneSlots[meshBoneIdx] : null;
+                int skelBoneIdx = FindSkeletonBone(boneSlot, skelBuilder.BoneNames[meshBoneIdx]);
 
                 if (skelBoneIdx >= 0)
                 {
@@ -793,17 +890,17 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         if (hasBlendShapes)
         {
             int beforeSurfaces = _arrayMesh.GetSurfaceCount();
-            _arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, blendShapes);
+            _arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, blendShapes, NoLods);
             if (_arrayMesh.GetSurfaceCount() == beforeSurfaces)
             {
                 LumoraLogger.Warn($"SkinnedMeshHook: blend-shape surface rejected on slot '{Owner.Slot?.SlotName?.Value}' ({shapeCount} shapes) - rendering without morphs so the mesh still shows.");
                 _arrayMesh.ClearBlendShapes();
-                _arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+                _arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, NoBlendShapes, NoLods);
             }
         }
         else
         {
-            _arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays);
+            _arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, NoBlendShapes, NoLods);
         }
 
         // The surface holds its own copies; these only hand back their native storage when told to.
@@ -947,6 +1044,14 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
             MainThreadWork.Post("skinned mesh", () => FinalizeMeshFromAsset(built, shapes, surfaces, mesh, asset, hidden, hideVersion));
         });
     }
+
+    // Every surface add passes these instead of leaving the blend shapes or LODs out. Left out, the binding makes
+    // a fresh empty one per call and hands over only its native handle, so nothing holds the wrapper during the
+    // call. In an optimized build a collection in the middle of a big surface add finalized it, its storage was
+    // freed while the native side still read it, and the process died (0xC0000005, release builds only, one run
+    // in two with a crowd arriving). These live for good and are only ever read, from any thread. -xlinka
+    private static readonly global::Godot.Collections.Array<global::Godot.Collections.Array> NoBlendShapes = new();
+    private static readonly global::Godot.Collections.Dictionary NoLods = new();
 
     // PURE mesh-resource build - no scene tree, no Owner/data-model writes - so it is safe on a worker thread.
     // Produces the Godot ArrayMesh from the Phos asset. shapeCount returns the blendshape count actually applied
@@ -1220,7 +1325,7 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
                 int before = arrayMesh.GetSurfaceCount();
                 if (shapes <= 0)
                 {
-                    arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, flags: uvFormat);
+                    arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, NoBlendShapes, NoLods, uvFormat);
                     return arrayMesh.GetSurfaceCount() > before;
                 }
 
@@ -1267,7 +1372,7 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
                     blendShapes.Add(shapeArray);
                 }
 
-                arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, blendShapes, flags: uvFormat);
+                arrayMesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, arrays, blendShapes, NoLods, uvFormat);
                 return arrayMesh.GetSurfaceCount() > before;
             }
             finally
@@ -1334,10 +1439,12 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         _meshInstance.Mesh = _arrayMesh;
         old?.Dispose();
 
-        // Skinned + blendshape meshes deform past the REST-pose AABB Godot computes for culling; a generous extra
-        // cull margin keeps the instance from being frustum-culled while animated. -xlinka
+        // Godot's cull box for a skinned instance follows the skeleton (a copy's hips moved 3 m and the renderer
+        // found all its instances at the new spot, none at the old), so the margin only covers what bones do not
+        // carry: morphs. The old 4 m floor dragged every avatar into each probe face, shadow cascade and the view
+        // behind the camera within reach of it. -xlinka
         var restAabb = _arrayMesh.GetAabb();
-        _meshInstance.ExtraCullMargin = System.Math.Max(restAabb.Size.Length(), 4f);
+        _meshInstance.ExtraCullMargin = restAabb.Size.Length();
 
         // A skinned avatar is a DYNAMIC mesh, but Godot defaults a MeshInstance3D to GI_MODE_STATIC, which bakes the
         // rest pose into global illumination. Once the avatar is equipped and posed/moving, that static GI no longer
@@ -1458,6 +1565,35 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
             ? _skeleton.GlobalTransform.Origin
             : Vector3.Zero;
 
+    // The joint resting nearest to a point, and of the joints nearly as near the one closest to the root: a neck
+    // rides the chest beside it rather than a strand of hair that happens to hang there.
+    private int NearestRestBone(Vector3 at)
+    {
+        int count = _skeleton.GetBoneCount();
+        float nearest = float.MaxValue;
+        for (int b = 0; b < count; b++)
+            nearest = System.Math.Min(nearest, _skeleton.GetBoneGlobalRest(b).Origin.DistanceTo(at));
+        float reach = nearest * 2f + 1e-4f;
+        int best = 0, bestDepth = int.MaxValue;
+        float bestDistance = float.MaxValue;
+        for (int b = 0; b < count; b++)
+        {
+            float distance = _skeleton.GetBoneGlobalRest(b).Origin.DistanceTo(at);
+            if (distance > reach)
+                continue;
+            int depth = 0;
+            for (int p = _skeleton.GetBoneParent(b); p >= 0 && depth < 256; p = _skeleton.GetBoneParent(p))
+                depth++;
+            if (depth < bestDepth || (depth == bestDepth && distance < bestDistance))
+            {
+                best = b;
+                bestDepth = depth;
+                bestDistance = distance;
+            }
+        }
+        return best;
+    }
+
     // Map every mesh bone (in the asset's bone table) to its skeleton bone BY NAME and stamp the asset's bind
     // pose, so the surface's mesh-space bone indices resolve to the right skeleton bone on the GPU. -xlinka
     private void BuildAndAssignSkinFromAsset(MeshDataAsset asset)
@@ -1473,24 +1609,30 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         // the toe verts get yanked to the origin. Ambiguous matches are refused, not guessed.
         var matcher = new Lumora.Core.Assets.BoneNameMatcher();
         for (int b = 0; b < _skeleton.GetBoneCount(); b++)
-            matcher.Add(_skeleton.GetBoneName(b), b);
+            matcher.Add(BindNameOf(b), b);
 
         var skin = new Skin();
         skin.SetBindCount(asset.BoneCount);
         int unresolved = 0;
+        string firstUnresolved = string.Empty;
         int fuzzy = 0;
         for (int i = 0; i < asset.BoneCount; i++)
         {
             string boneName = asset.GetBoneName(i) ?? string.Empty;
+            var bind = asset.GetBoneBindPose(i).ToGodot();
             if (!matcher.TryResolve(boneName, out int skelBone, out var kind))
             {
-                // Nothing plausible in the skeleton -> collapsing to bone 0 yanks its verts to the root
-                // (spikes). Usually an FBX pivot ("_$AssimpFbx$") or a genuinely absent bone. Log it
-                // instead of failing silently. -xlinka
+                // Nothing plausible in the skeleton (an FBX pivot, a bone the rig never had). Its own bind pose on
+                // some other joint throws its verts across the room: a streak from the body to wherever that joint's
+                // space puts them. So they ride a joint resting beside where this bone rested (NearestRestBone),
+                // held where they are at rest. -xlinka
                 unresolved++;
+                skelBone = NearestRestBone(bind.AffineInverse().Origin);
+                if (unresolved == 1)
+                    firstUnresolved = $"'{boneName}' rides '{_skeleton.GetBoneName(skelBone)}'";
                 if (unresolved <= 8)
-                    LumoraLogger.Warn($"SkinnedMeshHook: bind bone '{boneName}' not in skeleton - collapsing to bone 0 (will deform wrong).");
-                skelBone = 0;
+                    LumoraLogger.Debug($"SkinnedMeshHook: bind bone '{boneName}' not in skeleton - its verts ride '{_skeleton.GetBoneName(skelBone)}', resting beside it.");
+                bind = _skeleton.GetBoneGlobalRest(skelBone).AffineInverse();
             }
             else if (kind != Lumora.Core.Assets.BoneNameMatcher.MatchKind.Exact)
             {
@@ -1499,12 +1641,12 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
                     LumoraLogger.Debug($"SkinnedMeshHook: bind bone '{boneName}' matched '{_skeleton.GetBoneName(skelBone)}' by {kind} - names differ, joint is the same.");
             }
             skin.SetBindBone(i, skelBone);
-            skin.SetBindPose(i, asset.GetBoneBindPose(i).ToGodot());
+            skin.SetBindPose(i, bind);
         }
         if (fuzzy > 8)
             LumoraLogger.Debug($"SkinnedMeshHook: {fuzzy} bind bones matched by name normalization.");
         if (unresolved > 0)
-            LumoraLogger.Warn($"SkinnedMeshHook: {unresolved}/{asset.BoneCount} bind bones unresolved against skeleton '{_skeleton.Name}' ({_skeleton.GetBoneCount()} bones).");
+            LumoraLogger.Warn($"SkinnedMeshHook: {unresolved}/{asset.BoneCount} bind bones unresolved against skeleton '{_skeleton.Name}' ({_skeleton.GetBoneCount()} bones); first {firstUnresolved}; each rides the joint nearest where it rested.");
 
         // Skinning canary (one-time per build): at rest, GlobalBoneRest * BindPose must be ~identity (origin ~0,
         // basis det ~1) or that bone's verts deform. Scan ALL bones and flag the bad ones BY NAME - this catches a
@@ -1512,7 +1654,7 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         int badBones = 0;
         for (int i = 0; i < asset.BoneCount; i++)
         {
-            int skelBone = _skeleton.FindBone(asset.GetBoneName(i) ?? string.Empty);
+            int skelBone = FindSkeletonBone(asset.GetBoneName(i));
             if (skelBone < 0) continue;
             var check = _skeleton.GetBoneGlobalRest(skelBone) * asset.GetBoneBindPose(i).ToGodot();
             float originErr = check.Origin.Length();
@@ -1521,15 +1663,26 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
             {
                 badBones++;
                 if (badBones <= 16)
-                    LumoraLogger.Warn($"SkinnedMeshHook[skin-check]: BONE '{asset.GetBoneName(i)}' rest*bind NOT identity - originErr={originErr:F3} detErr={detErr:F3} (its verts deform).");
+                    LumoraLogger.Debug($"SkinnedMeshHook[skin-check]: BONE '{asset.GetBoneName(i)}' rest*bind NOT identity - originErr={originErr:F3} detErr={detErr:F3} (its verts deform).");
             }
         }
-        if (badBones > 0)
+        // Once per mesh a run: the same skin built again for every viewer, copy and rebuild said the same thing
+        // over again, bone by bone, a thousand lines an evening.
+        if (badBones > 0 && SkinChecked(asset))
             LumoraLogger.Warn($"SkinnedMeshHook[skin-check]: {badBones}/{asset.BoneCount} bones FAIL rest*bind==identity on mesh '{Owner.Slot?.SlotName.Value}'.");
         else
             LumoraLogger.Debug($"SkinnedMeshHook[skin-check]: all {asset.BoneCount} bones OK at rest on mesh '{Owner.Slot?.SlotName.Value}'.");
 
         _meshInstance.Skin = skin;
+    }
+
+    private static readonly HashSet<string> _skinChecked = new();
+
+    private static bool SkinChecked(MeshDataAsset asset)
+    {
+        string key = asset.AssetURL?.OriginalString ?? asset.GetHashCode().ToString();
+        lock (_skinChecked)
+            return _skinChecked.Add(key);
     }
 
     // EYE-VIEW TWIN
@@ -1578,7 +1731,7 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         // A bone this skeleton does not carry (a stale registration, or the override sits on a slot the
         // importer never made a bone) is nothing to collapse, and a twin with nothing to collapse is a
         // second draw of the whole body for no reason.
-        if (collapsed.Count == 0)
+        if (collapsed.Count == 0 || !MeshTouchesCollapsed(collapsed))
         {
             DestroyEyeViewTwin(logIt: true);
             return;
@@ -1592,6 +1745,62 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
         // frame on, and one frame of the inside of the head is exactly the flash this exists to remove.
         _twin.FinishPoses();
         MirrorTwinAppearance();
+    }
+
+    // Whether any vertex of this mesh hangs off a collapsed bone or a bone under one. Only such a mesh has
+    // anything for the eyes not to see; clothes, a tail or a body without the head on it got a twin all the
+    // same, so every mesh of the worn avatar was skinned twice a frame and posed on a skeleton of its own.
+    // A mesh it cannot read counts as touching, which keeps the twin. -xlinka
+    private bool MeshTouchesCollapsed(List<int> collapsed)
+    {
+        var skin = MeshInstanceAlive ? _meshInstance.Skin : null;
+        var mesh = _appliedAsset?.MeshData;
+        if (skin == null || mesh == null || !mesh.HasBoneBindings || !SkeletonAlive)
+            return true;
+
+        int bones = _skeleton.GetBoneCount();
+        var hidden = new bool[bones];
+        foreach (int index in collapsed)
+        {
+            if (index >= 0 && index < bones)
+                hidden[index] = true;
+        }
+        // Parents come before their children in the bone table, so one pass carries a collapse down the tree.
+        for (int b = 0; b < bones; b++)
+        {
+            int parent = _skeleton.GetBoneParent(b);
+            if (parent >= 0 && hidden[parent])
+                hidden[b] = true;
+        }
+
+        int binds = skin.GetBindCount();
+        var bindHidden = new bool[binds];
+        bool any = false;
+        for (int i = 0; i < binds; i++)
+        {
+            int bone = skin.GetBindBone(i);
+            if (bone >= 0 && bone < bones && hidden[bone])
+                any = bindHidden[i] = true;
+        }
+        if (!any)
+            return false;
+
+        var bindings = mesh.RawBoneBindings;
+        int count = System.Math.Min(mesh.VertexCount, bindings?.Length ?? 0);
+        for (int v = 0; v < count; v++)
+        {
+            var b = bindings![v];
+            if (Hits(b.boneIndices.x, b.boneWeights.x) || Hits(b.boneIndices.y, b.boneWeights.y)
+                || Hits(b.boneIndices.z, b.boneWeights.z) || Hits(b.boneIndices.w, b.boneWeights.w))
+                return true;
+        }
+        return false;
+
+        bool Hits(float index, float weight)
+        {
+            int i = (int)index;
+            return weight > 0f && i >= 0 && i < binds && bindHidden[i];
+        }
     }
 
     private bool CreateEyeViewTwin()
@@ -1676,7 +1885,7 @@ public class SkinnedMeshHook : ComponentHook<SkinnedMeshRenderer>, ILodRangeTarg
             twin.Skin = skin;
         twin.ExtraCullMargin = _meshInstance.ExtraCullMargin;
         twin.Visible = _meshInstance.Visible;
-        _lodRange.ApplyTo(twin);
+        VisibleRange.ApplyTo(twin);
 
         int surfaces = _arrayMesh.GetSurfaceCount();
         for (int surface = 0; surface < surfaces; surface++)

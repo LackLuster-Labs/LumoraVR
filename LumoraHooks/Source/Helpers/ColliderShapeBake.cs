@@ -28,6 +28,9 @@ internal sealed class ColliderShapeBake
     private MeshForm _meshForm;
     private int _hullVersion = -1;
     private int _hullCount = -1;
+    // The last cook came out empty for the inputs above: every triangle without area, such as a part scaled to zero
+    // to hide it. Kept as surely as a shape is, or the same nothing was cooked again on every move of the part.
+    private bool _cookedEmpty;
 
     private List<float3>? _points;
     private List<float3>? _hull;
@@ -40,6 +43,7 @@ internal sealed class ColliderShapeBake
         Shape = null;
         _meshSource = null;
         _meshClearCount = -1;
+        _cookedEmpty = false;
         _meshForm = MeshForm.None;
         _hullVersion = -1;
         _hullCount = -1;
@@ -67,6 +71,74 @@ internal sealed class ColliderShapeBake
         return primitive;
     }
 
+    // Whether Build would cook a mesh into a new shape now, rather than keep the one it holds. Cooking is the
+    // costly part of a collider arriving, so a caller can hold it back to a later frame. -xlinka
+    public bool WouldCook(Collider collider, Vector3 scale, bool simulated)
+    {
+        if (collider is not Lumora.Core.Components.MeshCollider meshCollider)
+            return false;
+        PhosMesh? mesh = ConvexHullPointSource.GetMesh(meshCollider.Mesh.Target);
+        if (mesh == null || mesh.VertexCount == 0)
+            return false;
+        var form = meshCollider.Convex.Value ? MeshForm.Convex : simulated ? MeshForm.Hulled : MeshForm.Trimesh;
+        int totalIndexCount = 0;
+        foreach (var submesh in mesh.Submeshes)
+        {
+            if (submesh.Topology == PhosTopology.Triangles)
+                totalIndexCount += submesh.IndexCount;
+        }
+        if ((Shape != null || _cookedEmpty) && ReferenceEquals(_meshSource, mesh.RawPositions) && _meshClearCount == mesh.ClearCount
+            && _meshIndexCount == totalIndexCount && _scale == scale && _meshForm == form)
+            return false;
+        return !(KeyOf(meshCollider, scale, form) is { } key && Cooked(key) != null);
+    }
+
+    // A COOKED LOADED MESH IS SHARED.
+    //
+    // A mesh loaded from an address is the same geometry wherever its address and import options are the same,
+    // and so is its cooked shape: a world's repeated props each cooked the same trimesh, and every collider
+    // cooked its mesh all over again after an asset reload, 160 to 200 ms on the main thread for one big one.
+    // Held weakly, so a shape goes with the last collider using it. A generated mesh changes in place and is
+    // never shared. -xlinka
+    private readonly record struct CookKey(string Url, object? Variant, Vector3 Scale, MeshForm Form, int Indices);
+
+    private static readonly Dictionary<CookKey, System.WeakReference<Shape3D>> _cooked = new();
+
+    private static CookKey? KeyOf(Lumora.Core.Components.MeshCollider collider, Vector3 scale, MeshForm form)
+    {
+        if (collider.Mesh.Target is not MeshProvider { Asset: { AssetURL: { } url, MeshData: { } data } asset })
+            return null;
+        // A plain web link can point at something else after a reload; everything else names fixed bytes.
+        if ((url.Scheme == System.Uri.UriSchemeHttp || url.Scheme == System.Uri.UriSchemeHttps) && !url.AbsolutePath.Contains("/content/"))
+            return null;
+        int indices = 0;
+        foreach (var submesh in data.Submeshes)
+        {
+            if (submesh.Topology == PhosTopology.Triangles)
+                indices += submesh.IndexCount;
+        }
+        return new CookKey(url.OriginalString, asset.TargetVariant, scale, form, indices);
+    }
+
+    private static Shape3D? Cooked(CookKey key)
+        => _cooked.TryGetValue(key, out var weak) && weak.TryGetTarget(out var shape) && GodotObject.IsInstanceValid(shape) ? shape : null;
+
+    private static void KeepCooked(CookKey key, Shape3D shape)
+    {
+        if (_cooked.Count >= 512)
+        {
+            var dead = new List<CookKey>();
+            foreach (var pair in _cooked)
+            {
+                if (!pair.Value.TryGetTarget(out var held) || !GodotObject.IsInstanceValid(held))
+                    dead.Add(pair.Key);
+            }
+            foreach (var gone in dead)
+                _cooked.Remove(gone);
+        }
+        _cooked[key] = new System.WeakReference<Shape3D>(shape);
+    }
+
     private Shape3D? BuildMesh(Lumora.Core.Components.MeshCollider collider, Vector3 scale, bool simulated, out bool changed)
     {
         changed = false;
@@ -87,27 +159,35 @@ internal sealed class ColliderShapeBake
                 totalIndexCount += submesh.IndexCount;
         }
 
-        if (Shape != null && ReferenceEquals(_meshSource, mesh.RawPositions) && _meshClearCount == mesh.ClearCount
+        if ((Shape != null || _cookedEmpty) && ReferenceEquals(_meshSource, mesh.RawPositions) && _meshClearCount == mesh.ClearCount
             && _meshIndexCount == totalIndexCount && _scale == scale && _meshForm == form)
             return Shape;
 
         var positions = mesh.RawPositions;
-        Shape3D? built = form switch
-        {
-            MeshForm.Convex => ConvexOf(positions, vertexCount, scale),
-            MeshForm.Hulled => HullOf(mesh, scale),
-            _ => TrimeshOf(mesh, totalIndexCount, scale),
-        };
+        var key = KeyOf(collider, scale, form);
+        Shape3D? built = key is { } known ? Cooked(known) : null;
         if (built == null)
-            return Shape;
-
-        Shape = built;
-        changed = true;
+        {
+            built = form switch
+            {
+                MeshForm.Convex => ConvexOf(positions, vertexCount, scale),
+                MeshForm.Hulled => HullOf(mesh, scale),
+                _ => TrimeshOf(mesh, totalIndexCount, scale),
+            };
+            if (built != null && key is { } fresh)
+                KeepCooked(fresh, built);
+        }
         _meshSource = positions;
         _meshIndexCount = totalIndexCount;
         _meshClearCount = mesh.ClearCount;
         _scale = scale;
         _meshForm = form;
+        _cookedEmpty = built == null;
+        if (built == null)
+            return Shape;
+
+        Shape = built;
+        changed = true;
         _hullVersion = -1;
         return Shape;
     }

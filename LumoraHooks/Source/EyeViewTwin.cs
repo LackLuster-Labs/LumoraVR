@@ -60,11 +60,15 @@ public sealed class EyeViewTwin
         }
     }
 
-    public void FollowPose(int boneIndex, in Vector3 position, in Quaternion rotation, in Vector3 scale)
+    public void FollowPose(int boneIndex, in Vector3 position, in Quaternion rotation, in Vector3 scale,
+        bool writePosition, bool writeRotation, bool writeScale)
     {
-        Skeleton.SetBonePosePosition(boneIndex, position);
-        Skeleton.SetBonePoseRotation(boneIndex, rotation);
-        Skeleton.SetBonePoseScale(boneIndex, scale);
+        if (writePosition)
+            Skeleton.SetBonePosePosition(boneIndex, position);
+        if (writeRotation)
+            Skeleton.SetBonePoseRotation(boneIndex, rotation);
+        if (writeScale)
+            Skeleton.SetBonePoseScale(boneIndex, scale);
     }
 
     // Zero, not tiny: the children inherit the zero basis and land on the bone's origin, which is what

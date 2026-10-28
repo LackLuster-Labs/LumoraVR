@@ -57,6 +57,8 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
     private int _penY;
     private int _rowHeight;
     private int _cacheGeneration;
+    // Where this font's glyphs are kept between hooks and sessions (FontGlyphCache); null until a font loads.
+    private string? _glyphKey;
 
     public bool IsValid => _font != null;
     public TextureAsset? AtlasTexture => _atlasTexture;
@@ -69,6 +71,7 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
         _font = null;
         _fontPath = path;
         _ownsFont = false;
+        _glyphKey = null;
         _glyphs.Clear();
         ResetAtlas();
 
@@ -94,6 +97,7 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
                 Lumora.Core.Logging.Logger.Debug($"FontAssetHook: loaded imported FontFile from '{resPath}'");
                 RequireDistanceField();
                 ConfigureMsdf();
+                _glyphKey = FontGlyphCache.KeyFor(resPath!, _rasterSize, _msdfPixelRange, _msdfIntended);
                 return;
             }
             GD.PrintErr($"FontAssetHook: ResourceLoader.Load returned null for '{resPath}'");
@@ -127,6 +131,71 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
         }
 
         ConfigureMsdf();
+        if (_font != null)
+            _glyphKey = FontGlyphCache.KeyFor(path, _rasterSize, _msdfPixelRange, _msdfIntended);
+        WarmCommonGlyphs();
+    }
+
+    // A font from the asset database arrives as bytes: its file there is sealed, so the renderer never gets a
+    // path to it. Dynamic fonts only (TrueType, OpenType, WOFF); a bitmap font is a text file plus pictures and
+    // has no single blob to hand over. -xlinka
+    public void LoadFromData(byte[] data, string name)
+    {
+        if (_ownsFont) _font?.Dispose();
+        _font = null;
+        _fontPath = name;
+        _ownsFont = false;
+        _glyphKey = null;
+        _glyphs.Clear();
+        ResetAtlas();
+
+        if (data == null || data.Length == 0)
+        {
+            GD.PrintErr($"FontAssetHook: no font data for '{name}'");
+            return;
+        }
+
+        _font = new FontFile();
+        _ownsFont = true;
+        _font.Data = data;
+        if (_font.GetFaceCount() <= 0)
+        {
+            _font.Dispose();
+            _font = null;
+            _ownsFont = false;
+            GD.PrintErr($"FontAssetHook: '{name}' is not a font this renderer reads");
+            return;
+        }
+
+        _font.MultichannelSignedDistanceField = true;
+        _font.MsdfPixelRange = DistanceRange;
+        _font.MsdfSize = DistanceEm;
+        ConfigureMsdf();
+        _glyphKey = FontGlyphCache.KeyFor(name, _rasterSize, _msdfPixelRange, _msdfIntended);
+        WarmCommonGlyphs();
+    }
+
+    // A FONT THAT ARRIVES WITH SOMEBODY IS DRAWN BEFORE IT IS USED.
+    //
+    // Each glyph is made into a distance field the first time a canvas lays text out in it, on the main thread,
+    // a few milliseconds a glyph: a guest's watch face in its own font, thirty-odd characters, held the frame
+    // for a quarter of a second the moment they arrived. This runs on the loading thread before anything can
+    // use the font, so the printable ASCII range is drawn into the font's own cache here and the first layout
+    // only copies glyphs into the atlas. Glyphs already kept from an earlier session are skipped. Only a font
+    // this hook loaded from its file: a shared imported font is in use elsewhere. -xlinka
+    private void WarmCommonGlyphs()
+    {
+        if (_font == null || !_ownsFont)
+            return;
+        var sizeKey = new Vector2I(_rasterSize, 0);
+        for (int codepoint = 0x21; codepoint <= 0x7E; codepoint++)
+        {
+            if (_glyphKey != null && FontGlyphCache.TryGet(_glyphKey, codepoint, out _))
+                continue;
+            int glyphIndex = GetGlyphIndex(codepoint, _rasterSize);
+            if (glyphIndex != 0)
+                _font.RenderGlyph(0, sizeKey, glyphIndex);
+        }
     }
 
     // An imported font is drawn as a distance field whatever its import file says. The editor writes a fresh
@@ -170,10 +239,10 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
     // Confirm whether the font actually produced a distance field (varying RGB) vs coverage (flat white RGB with
     // detail in alpha). The raw dynamic rasterizer can silently ignore the MSDF request, so we never run the
     // distance reconstruction on coverage data. Runs once, on the first real glyph. -xlinka
-    private void DetermineMsdf(Image source, Rect2 sourceRect)
+    private void DetermineMsdf(byte[] rgba, int width, int height)
     {
         _msdfDetermined = true;
-        _isMsdf = _msdfIntended && HasVaryingRgb(source, sourceRect);
+        _isMsdf = _msdfIntended && HasVaryingRgb(rgba, width, height);
 
         if (_atlasTexture != null)
         {
@@ -184,29 +253,19 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
         Lumora.Core.Logging.Logger.Debug($"FontAssetHook: MSDF intended={_msdfIntended} produced={_isMsdf} rasterSize={_rasterSize} pixelRange={_msdfPixelRange}");
     }
 
-    private static bool HasVaryingRgb(Image source, Rect2 sourceRect)
+    private static bool HasVaryingRgb(byte[] rgba, int w, int h)
     {
-        int x0 = (int)Math.Floor(sourceRect.Position.X);
-        int y0 = (int)Math.Floor(sourceRect.Position.Y);
-        int w = (int)Math.Ceiling(sourceRect.Size.X);
-        int h = (int)Math.Ceiling(sourceRect.Size.Y);
-        int sw = source.GetWidth();
-        int sh = source.GetHeight();
-
         // Coverage glyphs are flat white in RGB (shape lives in alpha); an MSDF has per-channel distances, so
         // any pixel whose channels differ or dip below full is proof of a real distance field. -xlinka
         int stepY = Math.Max(1, h / 8);
         int stepX = Math.Max(1, w / 8);
         for (int j = 0; j < h; j += stepY)
         {
-            int sy = y0 + j;
-            if (sy < 0 || sy >= sh) continue;
             for (int i = 0; i < w; i += stepX)
             {
-                int sx = x0 + i;
-                if (sx < 0 || sx >= sw) continue;
-                var c = source.GetPixel(sx, sy);
-                if (c.R != c.G || c.G != c.B || c.R < 0.99f)
+                int p = (j * w + i) * 4;
+                byte r = rgba[p], g = rgba[p + 1], b = rgba[p + 2];
+                if (r != g || g != b || r < 253)
                     return true;
             }
         }
@@ -255,6 +314,12 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
 
         EnsureAtlas();
 
+        if (_glyphKey != null && FontGlyphCache.TryGet(_glyphKey, codepoint, out var kept))
+        {
+            PlaceKeptGlyph(codepoint, kept);
+            return;
+        }
+
         int glyphIndex = GetGlyphIndex(codepoint, _rasterSize);
         if (glyphIndex == 0 && codepoint != '?')
         {
@@ -262,12 +327,14 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
             // The _glyphs cache means it fires once per codepoint per font. -xlinka
             Lumora.Core.Logging.Logger.Debug($"FontAssetHook: no glyph for U+{codepoint:X4} in '{_fontPath}'");
             StoreMissingGlyph(codepoint);
+            Keep(codepoint, new FontGlyphCache.Glyph { Kind = FontGlyphCache.Missing });
             return;
         }
 
         if (glyphIndex == 0)
         {
             StoreBlankGlyph(codepoint);
+            Keep(codepoint, new FontGlyphCache.Glyph { Kind = FontGlyphCache.Blank, Advance = _glyphs[codepoint].Metrics.Advance });
             return;
         }
 
@@ -284,6 +351,7 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
         if (width == 0 || height == 0)
         {
             StoreBlankGlyph(codepoint, advance.X);
+            Keep(codepoint, new FontGlyphCache.Glyph { Kind = FontGlyphCache.Blank, Advance = _glyphs[codepoint].Metrics.Advance });
             return;
         }
 
@@ -300,20 +368,61 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
             return;
         }
 
-        sourceImage.Convert(Image.Format.Rgba8);
-        if (!_msdfDetermined)
+        if (ReadGlyphRegion(sourceImage, sourceRect, width, height, out var rgba, out int regionX, out int regionY, out int regionWidth, out int regionHeight))
         {
-            DetermineMsdf(sourceImage, sourceRect);
+            BlitGlyph(rgba, regionWidth, regionHeight, dstX + regionX, dstY + regionY);
+            Keep(codepoint, new FontGlyphCache.Glyph
+            {
+                Kind = FontGlyphCache.Drawn,
+                Advance = advance.X,
+                OffsetX = glyphOffset.X,
+                OffsetY = glyphOffset.Y,
+                Width = width,
+                Height = height,
+                RegionX = regionX,
+                RegionY = regionY,
+                RegionWidth = regionWidth,
+                RegionHeight = regionHeight,
+                Pixels = rgba,
+            });
         }
-        CopyGlyph(sourceImage, sourceRect, dstX, dstY, width, height);
         ScheduleUpload();
+        StoreDrawnGlyph(codepoint, advance.X, glyphOffset.X, glyphOffset.Y, width, height, dstX, dstY);
+    }
 
+    private void Keep(int codepoint, FontGlyphCache.Glyph glyph)
+    {
+        if (_glyphKey != null)
+            FontGlyphCache.Put(_glyphKey, codepoint, glyph);
+    }
+
+    // A glyph this font made before, in this session or an earlier one: placed from its kept pixels.
+    private void PlaceKeptGlyph(int codepoint, FontGlyphCache.Glyph kept)
+    {
+        if (kept.Kind == FontGlyphCache.Missing)
+        {
+            StoreMissingGlyph(codepoint);
+            return;
+        }
+        if (kept.Kind == FontGlyphCache.Blank || kept.Pixels == null
+            || !Reserve(kept.Width, kept.Height, out int dstX, out int dstY))
+        {
+            StoreBlankGlyph(codepoint, kept.Advance);
+            return;
+        }
+        BlitGlyph(kept.Pixels, kept.RegionWidth, kept.RegionHeight, dstX + kept.RegionX, dstY + kept.RegionY);
+        ScheduleUpload();
+        StoreDrawnGlyph(codepoint, kept.Advance, kept.OffsetX, kept.OffsetY, kept.Width, kept.Height, dstX, dstY);
+    }
+
+    private void StoreDrawnGlyph(int codepoint, float advance, float offsetX, float offsetY, int width, int height, int dstX, int dstY)
+    {
         // Metrics are stored at _rasterSize coordinates; TryGetGlyph scales on read. Quad size
         // matches the atlas region (width x height), so UV-to-quad ratio is 1:1. - xlinka
         var metrics = new GlyphMetrics
         {
-            Advance = advance.X,
-            Offset = new float2(glyphOffset.X, -glyphOffset.Y - height),
+            Advance = advance,
+            Offset = new float2(offsetX, -offsetY - height),
             Size = new float2(width, height)
         };
 
@@ -328,23 +437,42 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
         _cacheGeneration++;
     }
 
+    // The font's height, ascent and descent at the raster size, read once. Every line of every text asked the
+    // font server for them again, and an imported menu's first layout spent a fifth of its time in those calls.
+    private float _rawHeight = float.NaN, _rawAscent = float.NaN, _rawDescent = float.NaN;
+    private FontFile? _metricsFont;
+    private int _metricsSize;
+
+    private void EnsureLineMetrics()
+    {
+        if (ReferenceEquals(_metricsFont, _font) && _metricsSize == _rasterSize && !float.IsNaN(_rawHeight))
+            return;
+        _metricsFont = _font;
+        _metricsSize = _rasterSize;
+        _rawHeight = _font!.GetHeight(_rasterSize);
+        _rawAscent = _font.GetAscent(_rasterSize);
+        _rawDescent = _font.GetDescent(_rasterSize);
+    }
+
     public float GetLineHeight(float displaySize)
     {
         if (_font == null) return displaySize;
-        float raw = _font.GetHeight(_rasterSize);
-        return raw * displaySize / _rasterSize;
+        EnsureLineMetrics();
+        return _rawHeight * displaySize / _rasterSize;
     }
 
     public float GetAscent(float displaySize)
     {
         if (_font == null) return displaySize * 0.8f;
-        return _font.GetAscent(_rasterSize) * displaySize / _rasterSize;
+        EnsureLineMetrics();
+        return _rawAscent * displaySize / _rasterSize;
     }
 
     public float GetDescent(float displaySize)
     {
         if (_font == null) return displaySize * 0.2f;
-        return _font.GetDescent(_rasterSize) * displaySize / _rasterSize;
+        EnsureLineMetrics();
+        return _rawDescent * displaySize / _rasterSize;
     }
 
     public float GetKerning(int leftCodepoint, int rightCodepoint, float displaySize)
@@ -493,43 +621,62 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
         Lumora.Core.Logging.Logger.Debug($"FontAssetHook: atlas for '{_fontPath}' grew to {size} ({_glyphs.Count} glyphs)");
     }
 
-    private void CopyGlyph(Image source, Rect2 sourceRect, int dstX, int dstY, int width, int height)
+    // The glyph's rectangle is read in one piece. Asking for it a pixel at a time was a call into the platform
+    // for each of the nine thousand or so pixels of a distance-field glyph, and an imported menu's first draw
+    // spent half a second on it. The font's own image is shared with the font server, so only the copy of the
+    // rectangle is converted, never the image itself. -xlinka
+    // The glyph's pixels as RGBA, and where they sit inside its width x height box.
+    private static bool ReadGlyphRegion(Image source, Rect2 sourceRect, int width, int height, out byte[] rgba,
+        out int regionX, out int regionY, out int regionWidth, out int regionHeight)
+    {
+        rgba = Array.Empty<byte>();
+        int srcX = (int)Math.Floor(sourceRect.Position.X);
+        int srcY = (int)Math.Floor(sourceRect.Position.Y);
+        int x0 = Math.Max(0, srcX);
+        int y0 = Math.Max(0, srcY);
+        int x1 = Math.Min(source.GetWidth(), srcX + width);
+        int y1 = Math.Min(source.GetHeight(), srcY + height);
+        regionX = x0 - srcX;
+        regionY = y0 - srcY;
+        regionWidth = x1 - x0;
+        regionHeight = y1 - y0;
+        if (x1 <= x0 || y1 <= y0)
+            return false;
+
+        using (var region = source.GetRegion(new Rect2I(x0, y0, regionWidth, regionHeight)))
+        {
+            if (region.GetFormat() != Image.Format.Rgba8)
+                region.Convert(Image.Format.Rgba8);
+            rgba = region.GetData();
+        }
+        return rgba.Length >= regionWidth * regionHeight * 4;
+    }
+
+    private void BlitGlyph(byte[] rgba, int w, int h, int atlasX, int atlasY)
     {
         if (_atlasPixels == null)
         {
             return;
         }
 
-        int srcX = (int)Math.Floor(sourceRect.Position.X);
-        int srcY = (int)Math.Floor(sourceRect.Position.Y);
-        int srcWidth = source.GetWidth();
-        int srcHeight = source.GetHeight();
-
-        for (int y = 0; y < height; y++)
+        if (!_msdfDetermined)
         {
-            int sy = srcY + y;
-            if (sy < 0 || sy >= srcHeight)
-            {
-                continue;
-            }
+            DetermineMsdf(rgba, w, h);
+        }
 
-            for (int x = 0; x < width; x++)
+        for (int y = 0; y < h; y++)
+        {
+            int src = y * w * 4;
+            int dst = ((atlasY + y) * _atlasSize + atlasX) * 4;
+            for (int x = 0; x < w; x++, src += 4, dst += 4)
             {
-                int sx = srcX + x;
-                if (sx < 0 || sx >= srcWidth)
-                {
-                    continue;
-                }
-
-                var color = source.GetPixel(sx, sy);
-                int dst = ((dstY + y) * _atlasSize + dstX + x) * 4;
                 if (_isMsdf)
                 {
                     // Keep the 3-channel distance field in RGB; the shader rebuilds the glyph from their median.
                     // Alpha carries no shape, so leave it opaque. - xlinka
-                    _atlasPixels[dst + 0] = ToByte(color.R);
-                    _atlasPixels[dst + 1] = ToByte(color.G);
-                    _atlasPixels[dst + 2] = ToByte(color.B);
+                    _atlasPixels[dst + 0] = rgba[src + 0];
+                    _atlasPixels[dst + 1] = rgba[src + 1];
+                    _atlasPixels[dst + 2] = rgba[src + 2];
                     _atlasPixels[dst + 3] = 255;
                 }
                 else
@@ -539,7 +686,7 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
                     _atlasPixels[dst + 0] = 255;
                     _atlasPixels[dst + 1] = 255;
                     _atlasPixels[dst + 2] = 255;
-                    _atlasPixels[dst + 3] = ToByte(color.A);
+                    _atlasPixels[dst + 3] = rgba[src + 3];
                 }
             }
         }
@@ -567,11 +714,6 @@ public sealed class FontAssetHook : AssetHook, IFontAssetHook
         {
             _atlasTexture.SetImageData(_atlasPixels, _atlasSize, _atlasSize, true);
         }
-    }
-
-    private static byte ToByte(float value)
-    {
-        return (byte)Math.Clamp((int)MathF.Round(value * 255f), 0, 255);
     }
 
     private readonly record struct GlyphEntry(GlyphMetrics Metrics, MathRect UVRect, bool Missing);

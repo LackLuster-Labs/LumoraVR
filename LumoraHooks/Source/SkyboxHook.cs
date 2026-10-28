@@ -29,12 +29,14 @@ public sealed class SkyboxHook : ComponentHook<Skybox>
     private const string CubemapShaderPath = "res://Shaders/Sky_Cubemap.gdshader";
     private const string GradientShaderPath = "res://Shaders/GradientSkybox.gdshader";
     private const string PanoramaShaderPath = "res://Shaders/Sky_Panorama.gdshader";
+    private const string AtmosphereShaderPath = "res://Shaders/Sky_Atmosphere.gdshader";
 
     private global::Godot.Environment _environment = null!;
     private Sky _sky = null!;
     private ShaderMaterial _cubemapMaterial = null!;
     private ShaderMaterial? _gradientMaterial;
     private ShaderMaterial? _panoramaMaterial;
+    private ShaderMaterial? _atmosphereMaterial;
     private ShaderMaterial _showing = null!;
     private bool _claimed;
     private bool _shaderMissingLogged;
@@ -86,6 +88,7 @@ public sealed class SkyboxHook : ComponentHook<Skybox>
         var showing = Owner.SkyMaterial switch
         {
             GradientSkyMaterial gradient => ApplyGradient(gradient),
+            AtmosphereSkyMaterial atmosphere => ApplyAtmosphere(atmosphere),
             Projection360Material picture when picture.Cubemap.Target != null
                 => ApplyCubemap(picture.Cubemap.Asset, picture.Exposure.Value, picture.Tint.Value),
             Projection360Material picture when picture.Texture.Target != null => ApplyPanorama(picture),
@@ -132,6 +135,24 @@ public sealed class SkyboxHook : ComponentHook<Skybox>
 
     // The uniforms GradientSkyboxHook sets, from the material. Colours go over raw: this shader and the
     // material's surface shader both take them as sRGB and linearise them, so the two agree.
+    // The same uniforms the material's own surface shader takes, off the same sun (ResolveSun), so an orb
+    // wearing it and the sky agree.
+    private ShaderMaterial ApplyAtmosphere(AtmosphereSkyMaterial sky)
+    {
+        var material = _atmosphereMaterial ??= CreateSkyMaterial(AtmosphereShaderPath);
+        sky.ResolveSun(out var towardSun, out var sunColor, out var intensity);
+        material.SetShaderParameter("atmosphere_thickness", sky.AtmosphereThickness.Value);
+        SetColor(material, "sky_tint", sky.SkyTint.Value);
+        SetColor(material, "ground_color", sky.GroundColor.Value);
+        material.SetShaderParameter("exposure", sky.Exposure.Value);
+        material.SetShaderParameter("sun_direction", new Vector3(towardSun.x, towardSun.y, towardSun.z));
+        SetColor(material, "sun_color", sunColor);
+        material.SetShaderParameter("sun_intensity", intensity);
+        material.SetShaderParameter("sun_size", sky.SunSize.Value);
+        material.SetShaderParameter("sun_disc", (int)sky.SunQuality.Value);
+        return material;
+    }
+
     private ShaderMaterial ApplyGradient(GradientSkyMaterial gradient)
     {
         var material = _gradientMaterial ??= CreateSkyMaterial(GradientShaderPath);
@@ -234,11 +255,13 @@ public sealed class SkyboxHook : ComponentHook<Skybox>
         _cubemapMaterial?.Dispose();
         _gradientMaterial?.Dispose();
         _panoramaMaterial?.Dispose();
+        _atmosphereMaterial?.Dispose();
         _environment = null!;
         _sky = null!;
         _cubemapMaterial = null!;
         _gradientMaterial = null;
         _panoramaMaterial = null;
+        _atmosphereMaterial = null;
         _showing = null!;
 
         SkyEnvironment.ReleaseNodeIfUnused();

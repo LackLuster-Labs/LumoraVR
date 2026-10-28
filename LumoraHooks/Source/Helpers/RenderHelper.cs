@@ -76,6 +76,27 @@ public static class RenderHelper
     private static readonly object _selectiveLock = new();
     private static int _selectiveBitsInUse;
 
+    // The lent bits a camera films some objects alone on (Camera.SelectiveRender). Such a bit is drawn by that
+    // camera and by no other view, eyes included: the listed objects keep their own bands for everyone else, and
+    // one on a band no eye draws (the hidden band, a camera's own stage) shows in that camera's picture alone.
+    // A bit lent for leaving objects out is the opposite and stays in every other view. -xlinka
+    private static int _filmedAloneBits;
+
+    public static uint FilmedAloneBits => unchecked((uint)System.Threading.Volatile.Read(ref _filmedAloneBits));
+
+    public static void SetFilmedAlone(int mask, bool alone)
+    {
+        if (mask == 0)
+            return;
+        lock (_selectiveLock)
+        {
+            _filmedAloneBits = alone ? _filmedAloneBits | mask : _filmedAloneBits & ~mask;
+        }
+    }
+
+    // A view's mask without the bits other cameras film alone; own is the bit this view films alone, if any.
+    public static uint WithoutFilmedAlone(uint mask, int own = 0) => mask & ~(FilmedAloneBits & ~unchecked((uint)own));
+
     // Returns a single-bit mask, or 0 when every bit is taken.
     public static int AllocateSelectiveLayer()
     {
@@ -100,6 +121,7 @@ public static class RenderHelper
         lock (_selectiveLock)
         {
             _selectiveBitsInUse &= ~mask;
+            _filmedAloneBits &= ~mask;
         }
     }
 

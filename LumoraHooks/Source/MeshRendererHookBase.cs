@@ -10,7 +10,7 @@ using LumoraLogger = Lumora.Core.Logging.Logger;
 
 namespace Lumora.Godot.Hooks;
 
-public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTarget
+public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTarget, IDrawnInstance, IPlacedRenderer
     where T : MeshRenderer
     where U : Node3D
 {
@@ -27,9 +27,12 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
     // Unbounded UI ordering (Owner.PerSurfaceOrdering): one MeshInstance3D per mesh surface, each ordered by a
     // distinct SortingOffset so draw order isn't capped by Godot's 256-level render_priority. -xlinka
     private readonly System.Collections.Generic.List<MeshInstance3D> _perSurfaceInstances = new();
-    private const float PerSurfaceSortStride = 1024f;
+    private const float PerSurfaceSortStride = Lumora.Core.Components.MeshRenderer.PerSurfaceSortStride;
 
     protected abstract bool UseMeshInstance { get; }
+
+    // The instance is placed from the slot's world transform (Place), never by the node it hangs under.
+    protected override bool ReadsNodePose => !UseMeshInstance;
 
     protected bool meshWasChanged { get; private set; }
 
@@ -51,6 +54,12 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
     // Inherit the override at creation instead.
     private void ApplyInheritedRenderLayer(VisualInstance3D visual)
     {
+        // A view band (MeshRenderer.ViewLayers) is this renderer's own and outranks anything above it.
+        if (Owner.ViewLayers != 0)
+        {
+            visual.Layers = Helpers.RenderHelper.ForWorld(Owner.World, (uint)Owner.ViewLayers);
+            return;
+        }
         uint layers = visual.Layers;
         for (var slot = Owner.Slot; slot != null; slot = slot.Parent)
         {
@@ -76,21 +85,35 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         {
             if (MeshRenderer == null)
             {
-                var gameObject = new Node3D();
-                gameObject.Name = "MeshRenderer";
-                attachedNode.AddChild(gameObject);
-
                 if (UseMeshInstance)
                 {
+                    // The instance hangs under the slot's node, so the node's visibility, the layer walks and the
+                    // capture scans all still find it, but it is top-level and placed from the slot's world
+                    // transform: no node above it is moved for it, and a slot carrying only renderers leaves its
+                    // node where it is. One node a renderer instead of a holder and an instance. -xlinka
                     meshInstance = new MeshInstance3D();
+                    meshInstance.Name = "MeshRenderer";
+                    meshInstance.TopLevel = true;
                     ApplyInheritedRenderLayer(meshInstance);
-                    gameObject.AddChild(meshInstance);
+                    attachedNode.AddChild(meshInstance);
+                    MeshRenderer = (meshInstance as U)!;
                     _rangeApplied = false;
                     _instanceParamsStale = true;
+                    WatchSlot(true);
+                    Place(true);
                 }
-
-                MeshRenderer = (gameObject as U)!;
+                else
+                {
+                    var gameObject = new Node3D();
+                    gameObject.Name = "MeshRenderer";
+                    attachedNode.AddChild(gameObject);
+                    MeshRenderer = (gameObject as U)!;
+                }
                 OnAttachRenderer();
+            }
+            else if (_placeStale && Owner.Slot.IsActive)
+            {
+                Place(true);
             }
 
             // On a joiner this hook often drains BEFORE its mesh provider has uploaded geometry, so the
@@ -175,16 +198,30 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
             // check exists to prevent.
             // A soft body on the same slot draws its deformed copy of this mesh itself; see
             // MeshRenderer.SetLocallyHiddenMesh.
-            bool enabled = Owner.Enabled && HasAnyMaterial() && !Owner.IsLocallyHidden;
-            if (meshInstance != null && meshInstance.Visible != enabled)
-            {
-                meshInstance.Visible = enabled;
-            }
+            ApplyVisible();
 
             // See MeshRenderer.ExtraCullMargin: vertex-shader-displaced UI needs grown cull bounds.
             if (meshInstance != null && meshInstance.ExtraCullMargin != Owner.ExtraCullMargin)
             {
                 meshInstance.ExtraCullMargin = Owner.ExtraCullMargin;
+            }
+
+            // A band given back returns the instances to the public layer and whatever they inherit over it.
+            if (Owner.ViewLayers != _viewLayersApplied)
+            {
+                _viewLayersApplied = Owner.ViewLayers;
+                if (meshInstance != null)
+                {
+                    meshInstance.Layers = (uint)Helpers.RenderHelper.PUBLIC_LAYER;
+                    ApplyInheritedRenderLayer(meshInstance);
+                }
+                foreach (var surface in _perSurfaceInstances)
+                {
+                    if (!GodotObject.IsInstanceValid(surface))
+                        continue;
+                    surface.Layers = (uint)Helpers.RenderHelper.PUBLIC_LAYER;
+                    ApplyInheritedRenderLayer(surface);
+                }
             }
 
             bool renderQueueApplied = false;
@@ -221,6 +258,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
                 if (!renderQueueApplied)
                     ApplyRenderQueue();
                 _instanceParamsStale = true;
+                ApplyVisible();
             }
 
             ApplyInstanceParams();
@@ -239,6 +277,9 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
 
         BatchedBy?.RendererChanged();
     }
+
+    private static readonly global::Godot.Collections.Array<global::Godot.Collections.Array> SplitNoBlendShapes = new();
+    private static readonly global::Godot.Collections.Dictionary SplitNoLods = new();
 
     // See MeshRenderer.SetInstanceParams. Written again on a fresh instance and after a material swap, since
     // the platform files an instance value against the material it wears.
@@ -307,8 +348,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         if (meshInstance == null || meshInstance.Mesh == null)
             return false;
         var aabb = meshInstance.GetAabb();
-        var basis = meshInstance.GlobalTransform.Basis;
-        float scale = Mathf.Max(basis.X.Length(), Mathf.Max(basis.Y.Length(), basis.Z.Length()));
+        float scale = LargestScale(_hasPlaced ? _placed.Basis : meshInstance.GlobalTransform.Basis);
         size = Mathf.Max(aabb.Size.X, Mathf.Max(aabb.Size.Y, aabb.Size.Z)) * scale;
         return size > 0f;
     }
@@ -323,6 +363,8 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         var effective = LodVisibilityRange.Tightest(
             in _lodRange,
             LodVisibilityRange.To(Owner.MaxViewDistance, Owner.ViewDistanceFadeMargin));
+        if (effective.Equals(LodVisibilityRange.Unbounded))
+            effective = AutoRange();
         if (_rangeApplied && _appliedRange.Equals(effective))
             return;
         _appliedRange = effective;
@@ -331,6 +373,36 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         foreach (var inst in _perSurfaceInstances)
             effective.ApplyTo(inst);
     }
+
+    // NOTHING TO SEE PAST A PIXEL. A renderer nobody gave a distance (no view distance of its own, no LOD band)
+    // stops drawing where it would cover about a pixel: its bounding sphere under a two-thousandth of the distance
+    // to it, which is a pixel at 1440p over a 75 degree view and about one and a half in a headset. Never on a
+    // person, a panel or a private interface, nor anything drawn on a band or in an order of its own. -xlinka
+    private const float AutoRangeRatio = 2000f;
+    private float _autoRangeScale;
+    private Aabb _customBounds;
+
+    private LodVisibilityRange AutoRange()
+    {
+        _autoRangeScale = 0f;
+        if (meshInstance == null || meshInstance.Mesh is not { } mesh || !_hasPlaced)
+            return LodVisibilityRange.Unbounded;
+        var slot = Owner.Slot;
+        if (slot == null || slot.ActiveUserRoot != null || Owner.World is not { IsUserspace: false }
+            || Owner.Mesh.Target is Helio.UI.LocalMeshSource || Owner.PerSurfaceOrdering || Owner.HasOverlayOrder
+            || Owner.ViewLayers != 0)
+            return LodVisibilityRange.Unbounded;
+        var bounds = _customBounds.Size != Vector3.Zero ? _customBounds : mesh.GetAabb();
+        float scale = LargestScale(_placed.Basis);
+        float radius = bounds.Size.Length() * 0.5f * scale;
+        if (!(radius > 0f) || float.IsInfinity(radius))
+            return LodVisibilityRange.Unbounded;
+        _autoRangeScale = scale;
+        return LodVisibilityRange.To(radius * AutoRangeRatio + radius, 0f);
+    }
+
+    private static float LargestScale(in Basis basis)
+        => Mathf.Max(basis.X.Length(), Mathf.Max(basis.Y.Length(), basis.Z.Length()));
 
     // Unbounded UI ordering. When Owner.PerSurfaceOrdering is set (Helio's opt-in mode), render each surface of
     // the chunk mesh as its OWN MeshInstance3D with a distinct SortingOffset (= SortingOrder * stride + surface
@@ -371,14 +443,21 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
             else
             {
                 inst = new MeshInstance3D();
+                inst.TopLevel = true;
+                inst.IgnoreOcclusionCulling = !_occludable;
                 ApplyInheritedRenderLayer(inst);
                 parent?.AddChild(inst);
                 _perSurfaceInstances.Add(inst);
                 _rangeApplied = false;
+                if (_hasPlaced)
+                    inst.Transform = _placed;
             }
 
+            // Held across the native add: a temporary the binding is handed can be finalized mid-call. -xlinka
             var single = new ArrayMesh();
-            single.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, combined.SurfaceGetArrays(i));
+            var surfaceArrays = combined.SurfaceGetArrays(i);
+            single.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, surfaceArrays, SplitNoBlendShapes, SplitNoLods);
+            System.GC.KeepAlive(surfaceArrays);
             inst.Mesh = single;
 
             // Duplicate so forcing a uniform render_priority doesn't mutate the chunk's shared/cloned material -
@@ -391,7 +470,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
                 inst.SetSurfaceOverrideMaterial(0, mat);
             }
 
-            inst.SortingOffset = baseKey + i;
+            inst.SortingOffset = i == 0 && Owner.LeadSurfaceSortingOffset is float lead ? lead : baseKey + i;
             // Scrolled UI chunks displace verts in the vertex shader; grow the cull bounds or Godot culls the
             // instance at glancing angles/up close while displaced pixels should still be visible. The value
             // is in the mesh's own local units - see MeshRenderer.ExtraCullMargin. These instances render in
@@ -421,7 +500,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         get
         {
             if (meshInstance == null || _surfaceStillLoading || Owner.HasInstanceParams || Owner.HasOverlayOrder
-                || Owner.PerSurfaceOrdering || _perSurfaceInstances.Count > 0)
+                || Owner.PerSurfaceOrdering || _perSurfaceInstances.Count > 0 || Owner.ViewLayers != 0)
                 return false;
             int count = GetSurfaceCount();
             for (int i = 0; i < count; i++)
@@ -439,18 +518,95 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         }
     }
 
-    // The instance this renderer draws through and the node holding it, for a body that places the instance on
-    // the render server itself while it moves (RigidBodyHook). None while it draws one instance per surface.
-    internal bool TryGetDrawn(out Node3D holder, out MeshInstance3D instance)
+    // The instance this renderer draws through, for a body that places it on the render server itself while it
+    // moves (RigidBodyHook). None while it draws one instance per surface.
+    internal bool TryGetDrawn(out MeshInstance3D instance)
     {
-        holder = (MeshRenderer as Node3D)!;
         instance = meshInstance;
-        return holder != null && instance != null && GodotObject.IsInstanceValid(holder) && GodotObject.IsInstanceValid(instance)
+        return instance != null && GodotObject.IsInstanceValid(instance)
             && !Owner.PerSurfaceOrdering && _perSurfaceInstances.Count == 0;
+    }
+
+    MeshInstance3D? IDrawnInstance.DrawnInstance
+        => TryGetDrawn(out var instance) ? instance : null;
+
+    // WHERE THE INSTANCES ARE DRAWN: the slot's world transform (SlotHook.TryGetDrawnTransform), written when the
+    // slot or anything above it moves. Slot.WorldTransformChanged gathers every move of a frame into one pass before
+    // the hooks flush, so a moved renderer costs one write of its own instance, and the nodes above it are left
+    // alone unless something else reads them. -xlinka
+    private Transform3D _placed;
+    private bool _hasPlaced;
+    private Lumora.Core.Slot? _watchedSlot;
+    private System.Action<Lumora.Core.Slot>? _onSlotMoved;
+    private System.Action<Lumora.Core.Slot>? _onSlotActive;
+
+    // Moved while switched off, so nothing was written: placed when it comes back on. An avatar's spare outfits
+    // ride along with every step it takes.
+    private bool _placeStale;
+
+    private void WatchSlot(bool on)
+    {
+        var slot = on ? Owner?.Slot : null;
+        if (ReferenceEquals(slot, _watchedSlot))
+            return;
+        if (_watchedSlot != null && _onSlotMoved != null)
+        {
+            _watchedSlot.WorldTransformChanged -= _onSlotMoved;
+            _watchedSlot.ActiveChanged -= _onSlotActive;
+        }
+        _watchedSlot = slot;
+        if (slot != null)
+        {
+            _onSlotMoved ??= _ => Place(false);
+            // Can come from the sync thread: only asks for an apply.
+            _onSlotActive ??= _ =>
+            {
+                if (_placeStale)
+                    Owner?.MarkChangeDirty();
+            };
+            slot.WorldTransformChanged += _onSlotMoved;
+            slot.ActiveChanged += _onSlotActive;
+        }
+    }
+
+    void IPlacedRenderer.Place(bool force) => Place(force);
+
+    private void Place(bool force)
+    {
+        if (meshInstance == null || Owner?.Slot is not { IsDestroyed: false } slot)
+            return;
+        if (!force && !slot.IsActive)
+        {
+            _placeStale = true;
+            return;
+        }
+        // Somebody else's avatar places its accessories on its own pose frames (AvatarPlacement).
+        if (!force && AvatarPlacement.Defers(this, slot))
+            return;
+        if (!SlotHook.TryGetDrawnTransform(slot, out var transform))
+            return;
+        _placeStale = false;
+        if (!force && _hasPlaced && transform == _placed)
+            return;
+        _placed = transform;
+        _hasPlaced = true;
+        // Always through the node, never the render server alone: the engine hands a node's own pose to the server
+        // again whenever the node is shown or comes back into the tree, so a node left behind put a canvas chunk
+        // back where it was the last time the node was written (world browser cards at their old place or gone).
+        // -xlinka
+        meshInstance.Transform = transform;
+        foreach (var surface in _perSurfaceInstances)
+            surface.Transform = transform;
+        // A distance worked out from the size goes with the size.
+        if (_autoRangeScale > 0f && LargestScale(transform.Basis) != _autoRangeScale)
+            ApplyLodRange();
     }
 
     // Set by GetSurfaceMaterial whenever it hands back the placeholder, read once per apply.
     private bool _surfaceStillLoading;
+
+    // The view band last put on the instances, so a change is applied once.
+    private int _viewLayersApplied;
 
     private System.Collections.Generic.Dictionary<Material, Material> _overlayClones = new();
     private System.Collections.Generic.Dictionary<Material, Material> _overlayClonesUsed = new();
@@ -463,6 +619,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         int count = GetSurfaceCount();
 
         _surfaceStillLoading = false;
+        _materialsApplied = true;
         bool overlay = Owner.HasOverlayOrder;
         // One overlay clone per source material, kept while the source stays the same. An apply used to
         // clone every surface every time it ran, and a text renderer or a scrolling list applies every
@@ -472,6 +629,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
             _overlayClones.Clear();
             _overlayClonesDepthTest = Owner.OverlayDepthTest;
         }
+        _appliedMaterials.Clear();
         for (int i = 0; i < count; i++)
         {
             var material = GetSurfaceMaterial(i);
@@ -488,6 +646,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
             // everything wearing it re-rendering every frame. -xlinka
             if (!ReferenceEquals(meshInstance.GetSurfaceOverrideMaterial(i), material))
                 meshInstance.SetSurfaceOverrideMaterial(i, material);
+            _appliedMaterials.Add(material);
         }
         // Only the sources this apply touched survive, so a renderer that swaps materials cannot grow
         // the cache without bound.
@@ -507,6 +666,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         if (meshInstance.MaterialOverride != null)
             meshInstance.MaterialOverride = null;
         _lastSurfaceOverrideCount = count;
+        ApplyOcclusionCulling(count);
 
         if (_uiDiagLogged < 3 && Owner.Slot?.Parent?.SlotName?.Value == "HelioTestPanel")
         {
@@ -524,6 +684,28 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
     }
 
     private int _uiDiagLogged;
+
+    // Left undrawn behind a wall (StaticOccluders) only while every surface wears a material known to be tested
+    // against depth: an overlay, a volume or a shader of the world's own may draw through the wall it stands
+    // behind. Nothing on a person, in the private interface or in an order or band of its own. -xlinka
+    private bool _occludable = true;
+
+    private void ApplyOcclusionCulling(int count)
+    {
+        bool occludable = count > 0 && !Owner.HasOverlayOrder && Owner.ViewLayers == 0
+            && Owner.Slot?.ActiveUserRoot == null && Owner.World is { IsUserspace: false };
+        for (int i = 0; occludable && i < count; i++)
+        {
+            int index = _surfaceSource?.SubmeshForSurface(i) ?? i;
+            occludable = GetMaterialAsset(index)?.Hook is MaterialAssetHook material && material.DepthTested;
+        }
+        if (occludable == _occludable || meshInstance == null)
+            return;
+        _occludable = occludable;
+        meshInstance.IgnoreOcclusionCulling = !occludable;
+        foreach (var surface in _perSurfaceInstances)
+            surface.IgnoreOcclusionCulling = !occludable;
+    }
 
     // The overlay band is decided per instance, so the ASSET material is never touched: a duplicate takes
     // the pass and priority changes and is dropped again when the band clears. A native material moves to
@@ -778,6 +960,44 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
     }
 
     // At least one slot in the list actually has a material in it.
+    // A renderer that has never yet been drawn dressed stays out of sight while its materials still wait for their
+    // pictures, for up to DressWaitSeconds, so an object arrives with its mesh, material and pictures together
+    // instead of as the loading skin first and its pictures a moment later. A local load is done well inside the
+    // wait; a slower one (a picture coming from another machine) shows the loading skin when the wait runs out.
+    // Only the first time: a material swapped later never hides what is already on screen. -xlinka
+    // A cold world import wires its pictures last and has them on the GPU up to about 3.5 s after its meshes.
+    private const double DressWaitSeconds = 4.0;
+    private long _dressWaitFrom;
+    private bool _dressed;
+    private bool _materialsApplied;
+
+    private void ApplyVisible()
+    {
+        bool enabled = Owner.Enabled && HasAnyMaterial() && !Owner.IsLocallyHidden;
+        // Not for a panel: its chunks show at once, and one waiting on a picture from the web keeps its loading skin.
+        if (enabled && !_dressed && meshInstance != null && Owner.Mesh.Target is Helio.UI.LocalMeshSource)
+            _dressed = true;
+        if (enabled && !_dressed && meshInstance != null)
+        {
+            // The wait counts from when there is geometry to show, and nothing is shown before the first material
+            // pass has said whether anything is still arriving.
+            if (meshInstance.Mesh is not { } shown || shown.GetSurfaceCount() == 0)
+                enabled = false;
+            else
+            {
+                long now = System.Diagnostics.Stopwatch.GetTimestamp();
+                if (_dressWaitFrom == 0)
+                    _dressWaitFrom = now;
+                if ((_materialsApplied && !_surfaceStillLoading) || now - _dressWaitFrom > DressWaitSeconds * System.Diagnostics.Stopwatch.Frequency)
+                    _dressed = true;
+                else
+                    enabled = false;
+            }
+        }
+        if (meshInstance != null && meshInstance.Visible != enabled)
+            meshInstance.Visible = enabled;
+    }
+
     private bool HasAnyMaterial()
     {
         for (int i = 0; i < Owner.Materials.Count; i++)
@@ -839,15 +1059,29 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
 
     private void CleanupRenderer(bool destroyingWorld)
     {
-        // Per-surface instances are children of the MeshRenderer node, so freeing it frees them too - just drop
-        // our stale references so a fresh renderer rebuilds them. -xlinka
+        WatchSlot(false);
+        // Per-surface instances sit beside the instance under the slot's node, so they go one by one. -xlinka
+        if (!destroyingWorld)
+        {
+            foreach (var surface in _perSurfaceInstances)
+            {
+                if (GodotObject.IsInstanceValid(surface))
+                    surface.QueueFree();
+            }
+        }
         _perSurfaceInstances.Clear();
+        _appliedMaterials.Clear();
         _rangeApplied = false;
+        _hasPlaced = false;
+        _occludable = true;
         DirectPoses.InstancesFreed++;
         if (!destroyingWorld && MeshRenderer != null && GodotObject.IsInstanceValid(MeshRenderer))
         {
             ((Node)MeshRenderer).QueueFree();
         }
+        // A renderer that comes back (its mesh set again) builds a fresh instance rather than reaching for the freed one.
+        meshInstance = null!;
+        MeshRenderer = default!;
         OnCleanupRenderer();
     }
 
@@ -862,10 +1096,16 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         if (ReferenceEquals(_meshSource, source))
             return;
         if (_meshSource != null)
+        {
             _meshSource.MeshReplaced -= OnMeshSourceReplaced;
+            _meshSource.SurfacesRebuilt -= OnMeshSourceRebuilt;
+        }
         _meshSource = source;
         if (source != null)
+        {
             source.MeshReplaced += OnMeshSourceReplaced;
+            source.SurfacesRebuilt += OnMeshSourceRebuilt;
+        }
     }
 
     private void OnMeshSourceReplaced()
@@ -873,6 +1113,37 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         _meshSourceReplaced = true;
         if (Owner is { IsDestroyed: false })
             Owner.MarkChangeDirty();
+    }
+
+    // What ApplyMaterials last put on each surface of the instance, overlay copies included.
+    private readonly System.Collections.Generic.List<Material?> _appliedMaterials = new();
+
+    // The mesh this renderer draws was just emptied and filled again in place, which took the material off every
+    // surface after the first (MeshHook.SurfacesRebuilt). They go straight back on, so the frame about to be drawn
+    // never has a surface in the engine's plain default; the queued apply the rebuild also asked for still runs for
+    // anything else it changed. -xlinka
+    private void OnMeshSourceRebuilt()
+    {
+        var instance = meshInstance;
+        if (instance == null || !GodotObject.IsInstanceValid(instance) || instance.Mesh is not { } shown
+            || !ReferenceEquals(shown, _meshSource?.GodotMesh))
+            return;
+        int count = System.Math.Min(shown.GetSurfaceCount(), _appliedMaterials.Count);
+        bool restored = false;
+        for (int i = 0; i < count; i++)
+        {
+            var material = _appliedMaterials[i];
+            if (material == null || ReferenceEquals(instance.GetSurfaceOverrideMaterial(i), material))
+                continue;
+            instance.SetSurfaceOverrideMaterial(i, material);
+            restored = true;
+        }
+        // an instance value is filed against the material it wears
+        if (restored)
+        {
+            _instanceParamsStale = true;
+            ApplyInstanceParams();
+        }
     }
 
     public override void Destroy(bool destroyingWorld)
@@ -911,6 +1182,7 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
             aabb = new Aabb(new Vector3(min.x, min.y, min.z), new Vector3(size.x, size.y, size.z));
         }
 
+        _customBounds = aabb;
         if (meshInstance.CustomAabb != aabb)
             meshInstance.CustomAabb = aabb;
     }
@@ -1018,19 +1290,6 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
         meshInstance.SortingOffset = effectiveQueue;
     }
 
-    // Only answers for the native material path, which is what the primitives and the cloth actually
-    // use. A shader material carries its culling in the shader variant it was built from, so it is not
-    // readable here - those set their cast mode explicitly instead.
-    private bool IsDoubleSidedSurface()
-    {
-        if (meshInstance == null)
-            return false;
-
-        var material = meshInstance.MaterialOverride as StandardMaterial3D
-                       ?? meshInstance.GetActiveMaterial(0) as StandardMaterial3D;
-        return material != null && material.CullMode == BaseMaterial3D.CullModeEnum.Disabled;
-    }
-
     protected virtual void ApplyShadowCastMode(ShadowCastMode shadowCastMode)
     {
         if (meshInstance != null)
@@ -1041,16 +1300,11 @@ public abstract class MeshRendererHookBase<T, U> : ComponentHook<T>, ILodRangeTa
                     meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.Off;
                     break;
                 case ShadowCastMode.On:
-                    // A DOUBLE-SIDED SURFACE HAS TO CAST A DOUBLE-SIDED SHADOW.
-                    //
-                    // The renderer culls back faces during the shadow pass under On, so a surface whose
-                    // material draws both sides still casts from one of them. On thin geometry - cloth,
-                    // a quad, a disc - that means the shadow disappears or lands on the wrong side the
-                    // moment the light is behind it, which reads as the shadow being broken rather than
-                    // as a mode being wrong. Promote it rather than making every caller remember. -xlinka
-                    meshInstance.CastShadow = IsDoubleSidedSurface()
-                        ? GeometryInstance3D.ShadowCastingSetting.DoubleSided
-                        : GeometryInstance3D.ShadowCastingSetting.On;
+                    // On casts with the material's own culling, so a material with Culling None already casts
+                    // from both faces and a quad keeps its shadow with the light behind it, on both renderers.
+                    // DoubleSided is only for a back-culled surface that should cast from its back as well.
+                    // -xlinka
+                    meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.On;
                     break;
                 case ShadowCastMode.ShadowOnly:
                     meshInstance.CastShadow = GeometryInstance3D.ShadowCastingSetting.ShadowsOnly;

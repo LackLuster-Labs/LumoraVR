@@ -47,9 +47,14 @@ internal sealed class BodyPump
     public MoverBatches Batches => _batches ??= new MoverBatches(_world);
 
     private MoverBatches? _batches;
+    private GpuRigidWorld? _gpu;
+    private readonly HashSet<RigidBodyHook> _gpuRequested = new();
+    private bool _gpuChanged;
 
     public void Dispose()
     {
+        _gpu?.Dispose();
+        _gpu = null;
         _batches?.Dispose();
         _batches = null;
     }
@@ -74,11 +79,24 @@ internal sealed class BodyPump
     // bodies every step was fifteen megabytes a second to each guest.
     private const int PoseWritesPerStep = 2048;
 
-    public void Register(RigidBodyHook body) => _all.Add(body);
+    public void Register(RigidBodyHook body)
+    {
+        _all.Add(body);
+        GpuPreferenceChanged(body);
+    }
+
+    public void GpuPreferenceChanged(RigidBodyHook body)
+    {
+        var component = body.Component;
+        bool requested = component.IsSimulationOwner && component.Enabled
+            && component.SimulationDevice.Value == Lumora.Simulation.SimulationDevice.Gpu;
+        _gpuChanged |= requested ? _gpuRequested.Add(body) : _gpuRequested.Remove(body);
+    }
 
     public void Unregister(RigidBodyHook body)
     {
         _all.Remove(body);
+        _gpuChanged |= _gpuRequested.Remove(body);
         _wakeLater.Remove(body);
         Remove(Kind.Awake, body);
         Remove(Kind.Starting, body);
@@ -132,6 +150,11 @@ internal sealed class BodyPump
         ulong frame = global::Godot.Engine.GetPhysicsFrames();
         int ticks = _physicsFrame == ulong.MaxValue ? 1 : (int)System.Math.Min(frame - _physicsFrame, 8UL);
         _physicsFrame = frame;
+        if (_gpuRequested.Count > 0 || _gpuChanged)
+        {
+            _gpuChanged = false;
+            (_gpu ??= new GpuRigidWorld(_world)).Step(_all, ticks);
+        }
         float fraction = (float)global::Godot.Engine.GetPhysicsInterpolationFraction();
         int stride = (_awake.Count + PoseWritesPerStep - 1) / PoseWritesPerStep;
 

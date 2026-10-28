@@ -82,6 +82,19 @@ public sealed class GpuTextureVariants : ITextureVariantAccelerator, IDisposable
     {
         try
         {
+            // Made straight away, while the game is still starting. Making a local device holds the main
+            // thread too, 100 to 120 ms measured, and made on the first job it landed in the middle of
+            // play, on the first picture pasted or the first new texture a world brought. Its shader
+            // compile and every job after it do not. -xlinka
+            try
+            {
+                EnsureDevice();
+            }
+            catch (Exception ex)
+            {
+                _failed = true;
+                Logger.Warn($"GPU texture variants unavailable; using CPU: {ex.Message}");
+            }
             while (!_jobs.IsCompleted)
             {
                 if (!_jobs.TryTake(out var job, 2000))
@@ -118,21 +131,26 @@ public sealed class GpuTextureVariants : ITextureVariantAccelerator, IDisposable
         }
     }
 
+    private void EnsureDevice()
+    {
+        if (_device != null || _failed)
+            return;
+        _device = RenderingServer.CreateLocalRenderingDevice();
+        if (_device == null) { _failed = true; return; }
+        using var source = new RDShaderSource { SourceCompute = ComputeSource };
+        using var spirv = _device.ShaderCompileSpirVFromSource(source);
+        string error = spirv.GetStageCompileError(RenderingDevice.ShaderStage.Compute);
+        if (!string.IsNullOrEmpty(error)) throw new InvalidOperationException(error);
+        _shader = _device.ShaderCreateFromSpirV(spirv);
+        _pipeline = _device.ComputePipelineCreate(_shader);
+        if (!_pipeline.IsValid) throw new InvalidOperationException("compute pipeline could not be created");
+        Logger.Log("GPU texture variants: resizing and mip generation enabled");
+    }
+
     private byte[][]? Execute(Job job)
     {
-        if (_device == null)
-        {
-            _device = RenderingServer.CreateLocalRenderingDevice();
-            if (_device == null) { _failed = true; return null; }
-            using var source = new RDShaderSource { SourceCompute = ComputeSource };
-            using var spirv = _device.ShaderCompileSpirVFromSource(source);
-            string error = spirv.GetStageCompileError(RenderingDevice.ShaderStage.Compute);
-            if (!string.IsNullOrEmpty(error)) throw new InvalidOperationException(error);
-            _shader = _device.ShaderCreateFromSpirV(spirv);
-            _pipeline = _device.ComputePipelineCreate(_shader);
-            if (!_pipeline.IsValid) throw new InvalidOperationException("compute pipeline could not be created");
-            Logger.Log("GPU texture variants: resizing and mip generation enabled");
-        }
+        EnsureDevice();
+        if (_device == null) return null;
         var rd = _device;
         if (!_source.IsValid || _sourceBytes?.TryGetTarget(out var previous) != true || !ReferenceEquals(previous, job.Pixels))
         {

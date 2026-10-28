@@ -27,11 +27,16 @@ public partial class CharacterControllerHook : ComponentHook<CharacterController
     // braking existing momentum. -xlinka
     private const float AirControlAcceleration = 12f;
 
+    // A jump pressed in the air waited for the floor, so a press mid-fall jumped again on landing. It now counts
+    // only this long before touching down, enough for a press a moment early. -xlinka
+    private const float JumpBufferSeconds = 0.12f;
+
     private CharacterBody3D _characterBody = null!;
     private Dictionary<Collider, CollisionShape3D> _collisionShapes = new Dictionary<Collider, CollisionShape3D>();
     private Vector3 _velocity;
     private Vector3 _moveDirection;
     private bool _jumpRequested;
+    private float _jumpRequestAge;
     private bool _simulationEnabled = true;
     private bool _isCrouching;
     private float _currentHeight;
@@ -383,6 +388,11 @@ public partial class CharacterControllerHook : ComponentHook<CharacterController
     private void StepMovement(float delta)
     {
         float scale = UserScale();
+        if (Owner.Flying)
+        {
+            StepFlying(delta, scale);
+            return;
+        }
         // Apply gravity
         if (_characterBody.IsOnFloor())
         {
@@ -457,6 +467,8 @@ public partial class CharacterControllerHook : ComponentHook<CharacterController
             _velocity.Y = ApplySurfaceParameter(CharacterControllerParameter.TractionJumpSpeed, Owner.JumpSpeed * scale);
             _jumpRequested = false;
         }
+        else if (_jumpRequested && (_jumpRequestAge += delta) > JumpBufferSeconds)
+            _jumpRequested = false;
 
         _steppedHorizontalSpeed = new Vector2(_velocity.X, _velocity.Z).Length();
         _characterBody.Velocity = _velocity;
@@ -491,6 +503,24 @@ public partial class CharacterControllerHook : ComponentHook<CharacterController
             }
         }
         SetFloorSurface(floorSlot);
+    }
+
+    // Flying: no gravity, no floor, no jump. The body eases toward the asked direction at the air pace in all three
+    // axes and eases to a stop with no input, and it still slides along whatever it runs into. -xlinka
+    private const float FlyAcceleration = 50f;
+
+    private void StepFlying(float delta, float scale)
+    {
+        _jumpRequested = false;
+        float speed = Owner.AirSpeed * scale;
+        if (Owner.IsSprinting)
+            speed *= Owner.SprintMultiplier;
+        var target = _moveDirection.LengthSquared() > 1e-6f ? _moveDirection * speed : Vector3.Zero;
+        _velocity = _velocity.MoveToward(target, FlyAcceleration * scale * delta);
+        _steppedHorizontalSpeed = new Vector2(_velocity.X, _velocity.Z).Length();
+        _characterBody.Velocity = _velocity;
+        _characterBody.MoveAndSlide();
+        _velocity = _characterBody.Velocity;
     }
 
     private void SetFloorSurface(Lumora.Core.Slot? slot)
@@ -549,6 +579,7 @@ public partial class CharacterControllerHook : ComponentHook<CharacterController
     public void RequestJump()
     {
         _jumpRequested = true;
+        _jumpRequestAge = 0f;
     }
 
     public void Teleport(float3 position)
@@ -577,6 +608,15 @@ public partial class CharacterControllerHook : ComponentHook<CharacterController
     public bool IsOnFloor()
     {
         return _characterBody != null && _characterBody.IsOnFloor();
+    }
+
+    public float3 Velocity => new(_velocity.X, _velocity.Y, _velocity.Z);
+
+    // A push from outside, a script or a launcher. The step starts from it: upward leaves the floor, and on the
+    // ground the usual traction brakes what goes along it.
+    public void SetVelocity(float3 velocity)
+    {
+        _velocity = new Vector3(velocity.x, velocity.y, velocity.z);
     }
 
     public void SetCrouching(bool crouching)

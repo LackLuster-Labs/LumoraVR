@@ -12,7 +12,7 @@ namespace Lumora.Godot.Hooks;
 
 // Creates and manages the world root node, and answers the world's physics collision queries
 // against the Godot/Jolt physics space.
-public class WorldHook : IWorldHook, IPhysicsQueryHook, IPhysicsStepHook
+public partial class WorldHook : IWorldHook, IPhysicsQueryHook, IPhysicsStepHook
 {
     public World Owner { get; private set; } = null!;
 

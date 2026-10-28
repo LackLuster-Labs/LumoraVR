@@ -27,7 +27,7 @@ namespace Lumora.Godot.Hooks;
 // directly now and read from its state when the pump wants it. A plain node, tagged with the slot, stands in
 // for it wherever a cast or a touch has to name the thing it met. -xlinka
 [ImplementableHook(typeof(LumoraRigidBody))]
-public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
+public partial class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
 {
     private Rid _body;
     private Node _anchor = null!;
@@ -59,13 +59,12 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
         _body = PhysicsServer3D.BodyCreate();
 
         // This world's collision bit: rigid bodies only interact with their own world's geometry. The rest is
-        // what a rigid body node would have set: pickable, unit friction, no bounce, continuous collision.
+        // what a rigid body node would have set: pickable, continuous collision. Friction and bounce come from
+        // the colliders it carries (PushSurface).
         uint worldBit = WorldHook.GetCollisionBitFor(Owner?.World);
         PhysicsServer3D.BodySetCollisionLayer(_body, worldBit);
         PhysicsServer3D.BodySetCollisionMask(_body, worldBit);
         PhysicsServer3D.BodySetRayPickable(_body, true);
-        PhysicsServer3D.BodySetParam(_body, PhysicsServer3D.BodyParameter.Friction, 1f);
-        PhysicsServer3D.BodySetParam(_body, PhysicsServer3D.BodyParameter.Bounce, 0f);
         PhysicsServer3D.BodySetEnableContinuousCollisionDetection(_body, true);
 
         _anchor = new Node { Name = "RigidBody_" + Owner!.Slot.SlotName.Value };
@@ -176,6 +175,7 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
         // A shape that appears where there was none, or goes away, moves the place of every shape after it in
         // the body's list, so the list is laid out again; anything else is written in place.
         bool relay = false;
+        float friction = float.PositiveInfinity, bounce = 0f;
         for (int i = 0; i < colliders.Count; i++)
         {
             var collider = colliders[i];
@@ -191,6 +191,11 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
             var shape = part!.Bake.Build(collider, scale, simulated: true, out bool changed);
             var pose = PoseOf(collider, scale, bodySlot, bodyPosition, bodyInverse);
             bool disabled = shape == null || !collider.Enabled || !collider.Slot.IsActive;
+            if (!disabled)
+            {
+                friction = System.MathF.Min(friction, collider.SurfaceFriction);
+                bounce = System.MathF.Max(bounce, collider.SurfaceBounce);
+            }
             if (!ReferenceEquals(part.Shape, shape))
             {
                 if (shape == null || part.Shape == null)
@@ -233,6 +238,31 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
             LayOutShapes();
         _hasCollisionShape = _parts.Count > 0;
         _shapeScale = Owner.Slot.GlobalScale;
+        PushSurface(float.IsPositiveInfinity(friction) ? 1f : friction, bounce);
+    }
+
+    // SURFACE. The engine keeps one friction and one bounce per body, so a body of several colliders takes the
+    // most slippery and the bounciest of them, the way two touching bodies meet (the lower friction holds, the
+    // bounces add). Written straight onto the server body, which has no material to share. A change after the
+    // first wakes the body (ApplyChanges), so one at rest on a slope feels it. -xlinka
+    private float _friction = float.NaN;
+    private float _bounce = float.NaN;
+    private bool _surfaceChanged;
+
+    private void PushSurface(float friction, float bounce)
+    {
+        if (friction != _friction)
+        {
+            PhysicsServer3D.BodySetParam(_body, PhysicsServer3D.BodyParameter.Friction, friction);
+            _surfaceChanged |= !float.IsNaN(_friction);
+            _friction = friction;
+        }
+        if (bounce != _bounce)
+        {
+            PhysicsServer3D.BodySetParam(_body, PhysicsServer3D.BodyParameter.Bounce, bounce);
+            _surfaceChanged |= !float.IsNaN(_bounce);
+            _bounce = bounce;
+        }
     }
 
     private void LayOutShapes()
@@ -284,6 +314,9 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
 
         if (!EnsureSpace())
             return;
+
+        _pump?.GpuPreferenceChanged(this);
+        if (_gpuActive && !GpuEligible) StopGpu();
 
         // Something about the object changed; whether it can still be drawn straight on the render server is
         // asked again the next time it is drawn.
@@ -358,10 +391,23 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
             return;
         }
 
+        if (_gpuActive)
+        {
+            ReadGpuRequests();
+            EnterAwake();
+            return;
+        }
+
         bool woken = false;
         if (_frozen)
         {
             SetFrozen(false);
+            woken = true;
+        }
+        // A new friction or bounce: awake, it feels it at once, and wakes what it touches.
+        if (_surfaceChanged)
+        {
+            _surfaceChanged = false;
             woken = true;
         }
 
@@ -530,6 +576,7 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
     // pose written exactly), or something changed what it is and the hook update queued here sorts that out.
     internal bool PumpAwake(int ticks, float fraction, int stride)
     {
+        if (_gpuActive) return PumpGpu(ticks, fraction, stride);
         if (!_body.IsValid || Owner == null || Owner.IsDestroyed)
             return false;
         if (ticks > 0)
@@ -646,6 +693,7 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
 
     internal void ReadStep(int ticks, int frame)
     {
+        if (_gpuActive) return;
         var state = _state;
         if (state == null || _frozen || !GodotObject.IsInstanceValid(state))
             return;
@@ -689,6 +737,12 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
     // asked of the engine.
     private void WriteVelocities(bool atRest)
     {
+        if (_gpuActive)
+        {
+            Owner.ReportMotion(Owner.IsSleeping ? float3.Zero : ToCore(_gpu.Linear),
+                Owner.IsSleeping ? float3.Zero : ToCore(_gpu.Angular));
+            return;
+        }
         if (atRest)
         {
             Owner.ReportMotion(float3.Zero, float3.Zero);
@@ -835,6 +889,8 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
         if (!_pump!.RootIsIdentity)
             global = _pump.RootTransform * global;
         bool record = DirectPoses.Wanted;
+        // The renderers stop placing themselves from the slot while the body places them.
+        node.DrawRenderersDirect(true);
         if (_direct.Count == 1 && Batch(global, record))
         {
             _directDrawn = true;
@@ -982,13 +1038,14 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
         {
             if (component is not LumoraMeshRenderer renderer)
                 continue;
-            if (renderer.Hook is not MeshRendererHook hook || !hook.TryGetDrawn(out var holder, out var instance)
-                || holder.GetParent() != godotNode || holder.GetChildCount() != 1 || instance.GetChildCount() != 0)
+            // A renderer's instance is top-level under the slot's node and sits at the slot's own pose.
+            if (renderer.Hook is not MeshRendererHook hook || !hook.TryGetDrawn(out var instance)
+                || instance.GetParent() != godotNode || instance.GetChildCount() != 0)
             {
                 _direct.Clear();
                 return false;
             }
-            _direct.Add(new DirectTarget(hook, instance, holder.Transform * instance.Transform));
+            _direct.Add(new DirectTarget(hook, instance, Transform3D.Identity));
         }
         if (_direct.Count == 0 || godotNode.GetChildCount() != _direct.Count)
         {
@@ -1014,7 +1071,9 @@ public class RigidBodyHook : ComponentHook<LumoraRigidBody>, IRigidBodyHook
         // The node's own pose is older than what was drawn: forget what the node path drew last, so it moves
         // the node however little the body moves from here.
         _drawnPos = new float3(float.NaN, float.NaN, float.NaN);
-        (Owner?.Slot?.Hook as SlotHook)?.ForgetDrivenPose();
+        var drawn = Owner?.Slot?.Hook as SlotHook;
+        drawn?.ForgetDrivenPose();
+        drawn?.DrawRenderersDirect(false);
     }
 
     private float3 _drawnPos = new(float.NaN, float.NaN, float.NaN);

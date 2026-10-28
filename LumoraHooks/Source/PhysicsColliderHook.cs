@@ -23,7 +23,6 @@ namespace Lumora.Godot.Hooks
         private CollisionShape3D _collisionShape = null!;
         private Shape3D _shape = null!;
         private BodyKind _kind;
-        private PhysicsMaterial _material = null!;
         private MeshInstance3D _debugMesh = null!;
         private static bool _showDebugColliders = false;
 
@@ -41,6 +40,9 @@ namespace Lumora.Godot.Hooks
         private Vector3 _lastBodyPosition = new Vector3(float.NaN, float.NaN, float.NaN);
         private Quaternion _lastBodyRotation = new Quaternion(float.NaN, float.NaN, float.NaN, float.NaN);
         private int _lastQueryRules = -1;
+
+        // The body hangs under the world root and is placed from the slot itself.
+        protected override bool ReadsNodePose => false;
 
         public override void Initialize()
         {
@@ -93,8 +95,44 @@ namespace Lumora.Godot.Hooks
             owner.OnColliderShapeChanged(Owner);
         }
 
+        // A collider whose last apply finished, and the requests it had seen by then. When everything asked of it
+        // since was a move of its slot, the body is only put where the slot is now: a crowd's avatars carry a
+        // hundred colliders each on bones that move every frame, and the whole apply for each of them was over a
+        // thousand calls a frame for twelve people. A change of scale reshapes the collider, so it takes the whole
+        // apply. -xlinka
+        private bool _settled;
+        private int _seenApplies;
+        private int _seenMoves;
+        private Vector3 _shapeScale = new(float.NaN, float.NaN, float.NaN);
+
+        private bool FollowOnly()
+        {
+            int applies = Owner.ApplyRequests, moves = Owner.MoveRequests;
+            bool moveOnly = _settled && applies - _seenApplies == moves - _seenMoves;
+            _seenApplies = applies;
+            _seenMoves = moves;
+            if (!moveOnly || _bodyNode == null || !GodotObject.IsInstanceValid(_bodyNode))
+                return false;
+            if (!SameScale(Lumora.Godot.Helpers.ColliderShapeScaling.ScaleOf(Owner), _shapeScale))
+                return false;
+            UpdateTransform();
+            return true;
+        }
+
+        private static bool SameScale(Vector3 a, Vector3 b)
+        {
+            const float tolerance = 1e-4f;
+            return Mathf.Abs(a.X - b.X) <= tolerance * Mathf.Max(1f, Mathf.Abs(b.X))
+                && Mathf.Abs(a.Y - b.Y) <= tolerance * Mathf.Max(1f, Mathf.Abs(b.Y))
+                && Mathf.Abs(a.Z - b.Z) <= tolerance * Mathf.Max(1f, Mathf.Abs(b.Z));
+        }
+
         public override void ApplyChanges()
         {
+            if (FollowOnly())
+                return;
+            _settled = false;
+
             // A solid collider with a rigid body at or above it is part of that body. The body on its own slot
             // is asked directly as well, for the first apply that can come before the body has gathered.
             bool carried = Owner.Body != null
@@ -109,9 +147,18 @@ namespace Lumora.Godot.Hooks
                     LumoraLogger.Debug($"PhysicsColliderHook: Destroying body - carried={carried}, Type={Owner.Type.Value}");
                     DestroyBody(true);
                 }
+                // A part of a rigid body lives in that body's shapes, and only the body's own apply reads it: an
+                // edit made here (a size, an offset, a friction, its slot switched off) stayed out of the body
+                // until something else happened to apply it. Passed on now. The first apply after the body took
+                // this collider is the body's own doing, so that one is not passed back. -xlinka
+                var carrier = Owner.Body;
+                if (carrier != null && ReferenceEquals(carrier, _carrier))
+                    carrier.MarkPartMoved();
+                _carrier = carrier;
                 NoteSolidPending(false);
                 return;
             }
+            _carrier = null;
 
             var kind = DesiredKind();
 
@@ -136,6 +183,8 @@ namespace Lumora.Godot.Hooks
             BuildShape();
 
             UpdateTransform();
+
+            PushSurface();
 
             // Enable/disable collision, scoped to this world's collision bit so bodies in different
             // worlds can never touch or answer each other's queries.
@@ -188,6 +237,7 @@ namespace Lumora.Godot.Hooks
             NoteSolidPending(enabled && _kind != BodyKind.Query
                 && (layer & WorldHook.GetCharacterCollisionBitFor(Owner?.World)) != 0
                 && _collisionShape?.Shape == null);
+            _settled = _shapeBuilt;
         }
 
         // NoCollision is met by every cast though nothing collides with it; a Trigger only by casts that ask
@@ -239,23 +289,19 @@ namespace Lumora.Godot.Hooks
                     break;
                 case BodyKind.Moving:
                     // Kinematic: nothing carries a simulated pose back to the object, so it follows the object
-                    // and pushes what it moves into. -xlinka
-                    _material = new PhysicsMaterial { Friction = 1f, Bounce = 0f };
+                    // and pushes what it moves into. Its friction and bounce come from PushSurface. -xlinka
                     _bodyNode = new RigidBody3D
                     {
                         Name = "MovingCollider",
-                        PhysicsMaterialOverride = _material,
                         Mass = System.MathF.Max(Owner.Mass.Value, 0.001f),
                         FreezeMode = RigidBody3D.FreezeModeEnum.Kinematic,
                         Freeze = true,
                     };
                     break;
                 default:
-                    _material = new PhysicsMaterial { Friction = 1f, Bounce = 0f };
                     _bodyNode = new StaticBody3D
                     {
                         Name = "StaticCollider",
-                        PhysicsMaterialOverride = _material
                     };
                     break;
             }
@@ -289,18 +335,136 @@ namespace Lumora.Godot.Hooks
         private Rid _registeredRid;
         private Lumora.Core.Slot? _registeredSlot;
 
+        // The rigid body this collider was last seen as a part of, by the apply that found it carried.
+        private Lumora.Core.Components.RigidBody? _carrier;
+
+        // SURFACE. The friction and bounce on the body as last given, NaN before the first. The body wears the
+        // shared material for the pair (none for the plain surface), and a change swaps it on the live body: the
+        // engine takes the new values on the spot, nothing is rebuilt. -xlinka
+        private float _friction = float.NaN;
+        private float _bounce = float.NaN;
+
+        private void PushSurface()
+        {
+            if (_bodyNode is not (StaticBody3D or RigidBody3D) || !GodotObject.IsInstanceValid(_bodyNode))
+                return;
+            float friction = Owner.SurfaceFriction;
+            float bounce = Owner.SurfaceBounce;
+            if (friction == _friction && bounce == _bounce)
+                return;
+            bool first = float.IsNaN(_friction);
+            var material = Lumora.Godot.Helpers.SharedPhysicsMaterials.Take(friction, bounce);
+            // A body just made is the plain surface already.
+            if (!first || material != null)
+            {
+                if (_bodyNode is StaticBody3D still)
+                    still.PhysicsMaterialOverride = material;
+                else if (_bodyNode is RigidBody3D moving)
+                    moving.PhysicsMaterialOverride = material;
+            }
+            if (!first)
+                Lumora.Godot.Helpers.SharedPhysicsMaterials.Give(_friction, _bounce);
+            _friction = friction;
+            _bounce = bounce;
+            if (!first)
+                WakeResting();
+        }
+
+        private void ReleaseSurface()
+        {
+            if (!float.IsNaN(_friction))
+                Lumora.Godot.Helpers.SharedPhysicsMaterials.Give(_friction, _bounce);
+            _friction = float.NaN;
+            _bounce = float.NaN;
+        }
+
+        // A body asleep on this surface would not feel the new one until something else woke it: a cube resting
+        // on a ramp just made icy stayed where it was. A surface never wakes anything itself, so every body in its
+        // box, a few centimetres round, is woken to look again, and settles back to sleep if nothing changed for
+        // it. A huge floor wakes at most this many. -xlinka
+        private const int MaxWoken = 256;
+        private const float WakeReach = 0.05f;
+        private static BoxShape3D? _wakeBox;
+
+        private void WakeResting()
+        {
+            if (_bodyNode is not CollisionObject3D body || !body.IsInsideTree() || Owner?.Slot == null)
+                return;
+            var space = body.GetWorld3D()?.DirectSpaceState;
+            if (space == null)
+                return;
+            var bounds = Owner.GetLocalBounds().Transformed(Owner.Slot.LocalToWorld);
+            var size = bounds.Max - bounds.Min;
+            if (!float.IsFinite(size.x) || !float.IsFinite(size.y) || !float.IsFinite(size.z) || size.x < 0f || size.y < 0f || size.z < 0f)
+                return;
+            var centre = bounds.Center;
+            _wakeBox ??= new BoxShape3D();
+            _wakeBox.Size = new Vector3(size.x + 2f * WakeReach, size.y + 2f * WakeReach, size.z + 2f * WakeReach);
+            var query = new PhysicsShapeQueryParameters3D
+            {
+                ShapeRid = _wakeBox.GetRid(),
+                Transform = new Transform3D(Basis.Identity, new Vector3(centre.x, centre.y, centre.z)),
+                CollisionMask = WorldHook.GetCollisionBitFor(Owner.World),
+                CollideWithAreas = false,
+                CollideWithBodies = true,
+            };
+            foreach (var hit in space.IntersectShape(query, MaxWoken))
+            {
+                var rid = hit["rid"].AsRid();
+                if (rid.IsValid && PhysicsServer3D.BodyGetMode(rid) == PhysicsServer3D.BodyMode.Rigid)
+                    PhysicsServer3D.BodySetState(rid, PhysicsServer3D.BodyState.Sleeping, false);
+            }
+        }
+
+        // Cooking a mesh into a collision shape is the slow part of a world arriving: an imported building
+        // brings dozens of them at once, and one frame spent a quarter of a second on them. They take turns:
+        // once a frame's cooking has run past this, the rest come back on the next frame. The first one in a
+        // frame always cooks, so one huge mesh is still built. -xlinka
+        private const double CookBudgetMs = 4.0;
+        private static readonly long CookBudgetTicks = (long)(CookBudgetMs * System.Diagnostics.Stopwatch.Frequency / 1000.0);
+        private static ulong _cookFrame = ulong.MaxValue;
+        private static long _cookTicks;
+
+        private static bool TakeCookTurn()
+        {
+            ulong frame = global::Godot.Engine.GetProcessFrames();
+            if (frame != _cookFrame)
+            {
+                _cookFrame = frame;
+                _cookTicks = 0;
+            }
+            return _cookTicks < CookBudgetTicks;
+        }
+
+        // Whether the last BuildShape left the shape this collider asks for in place, at _shapeScale.
+        private bool _shapeBuilt;
+
         private void BuildShape()
         {
+            _shapeBuilt = false;
             if (_collisionShape == null || !GodotObject.IsInstanceValid(_collisionShape))
                 return;
 
             var scale = Lumora.Godot.Helpers.ColliderShapeScaling.ScaleOf(Owner);
+            bool cook = _bake.WouldCook(Owner, scale, simulated: false);
+            if (cook && !TakeCookTurn())
+            {
+                Owner.MarkChangeDirty();
+                return;
+            }
+            long cookStart = cook ? System.Diagnostics.Stopwatch.GetTimestamp() : 0;
             var shape = _bake.Build(Owner, scale, simulated: false, out _);
             if (!ReferenceEquals(_shape, shape))
             {
                 _shape = shape!;
                 _collisionShape.Shape = shape;
             }
+            if (cook)
+                _cookTicks += System.Diagnostics.Stopwatch.GetTimestamp() - cookStart;
+            // Settled with no shape too (a mesh still on its way, or one with nothing but triangles without area): a
+            // move only places the body, and anything that could change the answer asks for a full apply. -xlinka
+            _shapeBuilt = true;
+            _shapeScale = scale;
             if (shape == null)
                 return;
 
@@ -492,7 +656,6 @@ namespace Lumora.Godot.Hooks
             // for a slot made this frame is after us, and a body placed from it sat at the node's old pose
             // until the slot happened to move again. Reading the slot also keeps its world transform computed,
             // which is what lets the next move of anything above it reach this collider. -xlinka
-            bool inTree = slotNode.IsInsideTree();
             var globalPos = Owner.Slot.GlobalPosition;
             var globalRot = Owner.Slot.GlobalRotation;
             var position = new Vector3(globalPos.x, globalPos.y, globalPos.z);
@@ -504,16 +667,11 @@ namespace Lumora.Godot.Hooks
             _lastBodyPosition = position;
             _lastBodyRotation = rotation;
 
-            if (inTree)
-            {
-                _bodyNode.GlobalPosition = position;
-                _bodyNode.GlobalBasis = new Basis(rotation);
-            }
+            // One write for both: each one tells the physics server and every node under the body on its own.
+            if (slotNode.IsInsideTree())
+                _bodyNode.GlobalTransform = new Transform3D(new Basis(rotation), position);
             else
-            {
-                _bodyNode.Position = position;
-                _bodyNode.Quaternion = rotation;
-            }
+                _bodyNode.Transform = new Transform3D(new Basis(rotation), position);
         }
 
         public override void Destroy(bool destroyingWorld)
@@ -542,6 +700,7 @@ namespace Lumora.Godot.Hooks
             _lastQueryRules = -1;
             _kind = BodyKind.None;
             _bake.Clear();
+            ReleaseSurface();
 
             if (_debugMesh != null && GodotObject.IsInstanceValid(_debugMesh) && queueFree)
             {

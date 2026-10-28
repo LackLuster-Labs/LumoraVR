@@ -42,7 +42,7 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
         // before reporting the asset loaded (else a material binds a null albedo in the gap = white body). -xlinka
         var tcs = NewUploadTcs();
         System.Threading.Interlocked.Increment(ref _uploadsQueued);
-        MainThreadWork.Post($"texture build {width}x{height}", () =>
+        MainThreadWork.PostPicture($"texture build {width}x{height}", () =>
         {
             try { BuildTexture(pixels, width, height, hasMipmaps); }
             finally
@@ -84,58 +84,172 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
         }
 
         var tcs = NewUploadTcs();
+        int serial = System.Threading.Interlocked.Increment(ref _uploadSerial);
         System.Threading.Interlocked.Increment(ref _uploadsQueued);
+        var traced = asset;
         System.Threading.Tasks.Task.Run(() =>
         {
             Image image = null!;
             try
             {
-                image = PrepareImage(request);
+                image = PrepareImage(request, traced);
             }
             catch (Exception ex)
             {
                 LumoraLogger.Error($"TextureAssetHook: failed to prepare {request.Width}x{request.Height} texture: {ex.Message}");
             }
-
-            long uploadBytes = image?.GetDataSize() ?? 0;
-            string uploadLabel = image == null ? $"texture upload {request.Width}x{request.Height}"
-                : $"texture upload {image.GetWidth()}x{image.GetHeight()} {image.GetFormat()} {uploadBytes >> 10} KB";
-            MainThreadWork.Post(uploadLabel, () =>
-            {
-                try
-                {
-                    if (image != null)
-                    {
-                        Adopt(image);
-                        ReportUpload(request, image);
-                        // The GPU texture has its own copy now. Waiting for the finalizer kept every
-                        // decoded picture's native buffer alive until the next collection, tens of
-                        // megabytes each for a 4k map.
-                        image.Dispose();
-
-                        // THE GPU TEXTURE EXISTS ONLY AS OF THIS LINE. Every material that asked for it
-                        // before now was handed a null and wrote that null into its Godot material, and
-                        // the load-complete notification it was waiting on had already fired, back when
-                        // the DATA finished decoding. Nothing else is coming, so a prop kept a white
-                        // albedo for the session while the log insisted the texture was loaded. It was.
-                        // It just was not HERE yet. Tell the references now that it is. -xlinka
-                        asset?.NotifyBackingReady();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    LumoraLogger.Error($"TextureAssetHook: failed to build texture: {ex.Message}");
-                }
-                finally
-                {
-                    int built = System.Threading.Interlocked.Increment(ref _uploadsBuilt);
-                    int queued = System.Threading.Volatile.Read(ref _uploadsQueued);
-                    if (built <= 3 || built % 25 == 0 || queued - built > 20)
-                        LumoraLogger.Debug($"TextureAssetHook: GPU uploads queued={queued} built={built} valid={IsValid}");
-                    tcs.TrySetResult(true);
-                }
-            }, uploadBytes);
+            request.Prepared?.Invoke();
+            Deliver(request, image, tcs, serial, traced);
         });
+    }
+
+    // The renderer's compressed copy of exactly this request, read on a worker and queued like any upload.
+    public System.Threading.Tasks.Task<bool> UploadCachedAsync(TextureUploadRequest request)
+    {
+        string cachePath = ForceCpuEncoder ? null! : GetCachePath(request);
+        if (cachePath == null)
+            return System.Threading.Tasks.Task.FromResult(false);
+        var traced = asset;
+        return System.Threading.Tasks.Task.Run(() =>
+        {
+            if (!TryReadCache(request, cachePath, out var image))
+                return false;
+            TextureLoadTrace.Mark(traced, "cache-hit", "direct");
+            var tcs = NewUploadTcs();
+            int serial = System.Threading.Interlocked.Increment(ref _uploadSerial);
+            System.Threading.Interlocked.Increment(ref _uploadsQueued);
+            Deliver(request, image, tcs, serial, traced);
+            return true;
+        });
+    }
+
+    // Uploads are applied in the order they were asked for. A cold load sends a small preview and then the
+    // full picture; the preview is far quicker to prepare and lands first, but an older upload that does
+    // arrive late is dropped rather than put over a newer one.
+    private int _uploadSerial;
+    private int _appliedSerial;
+
+    private void Deliver(TextureUploadRequest request, Image? image, System.Threading.Tasks.TaskCompletionSource<bool> tcs, int serial, object? traced)
+    {
+        long uploadBytes = image?.GetDataSize() ?? 0;
+        Rid built = image != null && uploadBytes >= OffMainBytes ? BuildOffMain(image) : default;
+        string uploadLabel = image == null ? $"texture upload {request.Width}x{request.Height}"
+            : $"texture upload {image.GetWidth()}x{image.GetHeight()} {image.GetFormat()} {uploadBytes >> 10} KB{(built.IsValid ? " (built off the main thread)" : "")}";
+        TextureLoadTrace.Mark(traced, "posted", uploadLabel);
+        MainThreadWork.PostPicture(uploadLabel, () =>
+        {
+            try
+            {
+                if (image != null && serial < _appliedSerial)
+                {
+                    if (built.IsValid)
+                        RenderingServer.FreeRid(built);
+                    image.Dispose();
+                }
+                else if (image != null && built.IsValid)
+                {
+                    _appliedSerial = serial;
+                    AdoptBuilt(built, image);
+                    ReportUpload(request, image);
+                    image.Dispose();
+                    asset?.NotifyBackingReady();
+                    TextureLoadTrace.Mark(traced, "built");
+                }
+                else if (image != null && TryUpdateInPlace(image))
+                {
+                    // Same picture shape as the one already on the GPU: its contents change under the same
+                    // texture, which every material already holds, so nothing has to be told about it.
+                    _appliedSerial = serial;
+                    request.Report?.Invoke(MapFormat(image.GetFormat()), image.HasMipmaps() ? image.GetMipmapCount() + 1 : 1, image.GetDataSize());
+                    image.Dispose();
+                    TextureLoadTrace.Mark(traced, "updated");
+                }
+                else if (image != null)
+                {
+                    _appliedSerial = serial;
+                    Adopt(image);
+                    ReportUpload(request, image);
+                    // The GPU texture has its own copy now. Waiting for the finalizer kept every
+                    // decoded picture's native buffer alive until the next collection, tens of
+                    // megabytes each for a 4k map.
+                    image.Dispose();
+
+                    // THE GPU TEXTURE EXISTS ONLY AS OF THIS LINE. Every material that asked for it
+                    // before now was handed a null and wrote that null into its Godot material, and
+                    // the load-complete notification it was waiting on had already fired, back when
+                    // the DATA finished decoding. Nothing else is coming, so a prop kept a white
+                    // albedo for the session while the log insisted the texture was loaded. It was.
+                    // It just was not HERE yet. Tell the references now that it is. -xlinka
+                    asset?.NotifyBackingReady();
+                    TextureLoadTrace.Mark(traced, "built");
+                }
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Error($"TextureAssetHook: failed to build texture: {ex.Message}");
+            }
+            finally
+            {
+                int done = System.Threading.Interlocked.Increment(ref _uploadsBuilt);
+                int queued = System.Threading.Volatile.Read(ref _uploadsQueued);
+                if (done <= 3 || done % 25 == 0 || queued - done > 20)
+                    LumoraLogger.Debug($"TextureAssetHook: GPU uploads queued={queued} built={done} valid={IsValid}");
+                tcs.TrySetResult(true);
+            }
+        }, built.IsValid ? 0 : uploadBytes);
+    }
+
+    // A BIG PICTURE BECOMES A GPU TEXTURE OFF THE MAIN THREAD.
+    //
+    // Handing the renderer a picture copies it to the GPU in small tiles on the thread that asked, and a 4k map
+    // with its mips (21 MB as BC3) held the frame for 226 ms as a guest's avatar arrived. The renderer makes a
+    // texture on whatever thread asks for one (its own threaded loads do exactly this), so a big picture is made
+    // into one here, on the worker that prepared it, and the main thread only swaps it in behind the handle the
+    // materials hold, which is a move, not a copy. One at a time, so an avatar's maps never all copy at once.
+    // A renderer without a rendering device makes its resources on its own thread only, and keeps the old way.
+    // -xlinka
+    private const long OffMainBytes = 4L << 20;
+    private static readonly object _offMainTurn = new();
+    private static int _offMain;
+
+    private static void LearnOffMain()
+    {
+        if (System.Threading.Volatile.Read(ref _offMain) == 0)
+            System.Threading.Volatile.Write(ref _offMain, RenderingServer.GetRenderingDevice() != null ? 1 : -1);
+    }
+
+    private static Rid BuildOffMain(Image image)
+    {
+        if (System.Threading.Volatile.Read(ref _offMain) != 1)
+            return default;
+        lock (_offMainTurn)
+        {
+            try
+            {
+                return RenderingServer.Texture2DCreate(image);
+            }
+            catch (Exception ex)
+            {
+                System.Threading.Volatile.Write(ref _offMain, -1);
+                LumoraLogger.Warn($"TextureAssetHook: making a texture off the main thread failed ({ex.Message}); every texture is made on the main thread from now on");
+                return default;
+            }
+        }
+    }
+
+    private void AdoptBuilt(Rid built, Image image)
+    {
+        if (_godotTexture == null)
+        {
+            using var stub = Image.CreateEmpty(1, 1, false, Image.Format.Rgba8);
+            _godotTexture = ImageTexture.CreateFromImage(stub);
+        }
+        RenderingServer.TextureReplace(_godotTexture.GetRid(), built);
+        _godotTexture.SetSizeOverride(new Vector2I(image.GetWidth(), image.GetHeight()));
+        _godotTexture.EmitChanged();
+        // The handle's own record of its format and mips is the stub's or the last picture's now, so the next
+        // change goes through SetImage, never an in-place update.
+        _shape = default;
     }
 
     // completes once the deferred BuildTexture has run (the GPU texture exists) -xlinka
@@ -172,7 +286,7 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
 
     // OFF-THREAD IMAGE PREPARATION
 
-    private static Image PrepareImage(TextureUploadRequest request)
+    private static Image PrepareImage(TextureUploadRequest request, object? traced = null)
     {
         var levels = request.MipLevels;
         int width = request.Width;
@@ -182,8 +296,12 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
         // same compression intent, so there is nothing to recompute. A run forced onto the CPU encoder
         // neither reads nor writes the cache, so it measures the encoder and leaves no blobs behind.
         string cachePath = ForceCpuEncoder ? null! : GetCachePath(request);
-        if (cachePath != null && TryReadCache(cachePath, out var cached))
+        if (cachePath != null && TryReadCache(request, cachePath, out var cached))
+        {
+            TextureLoadTrace.Mark(traced, "cache-hit");
             return cached;
+        }
+        TextureLoadTrace.Mark(traced, "cache-miss", request.AllowBlockCompression ? "compress" : "plain");
 
         Image image = BuildSourceImage(levels, width, height, request.GenerateMipmaps,
             request.IsHdr ? Image.Format.Rgbah : Image.Format.Rgba8);
@@ -201,6 +319,7 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
                     compressed = true;
                 }
             }
+            TextureLoadTrace.Mark(traced, "encoded", image.GetFormat().ToString());
             if (compressed && cachePath != null)
                 TryWriteCache(cachePath, image);
         }
@@ -451,7 +570,7 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
         }
         catch (Exception ex)
         {
-            // No renderer to ask (headless, or a harness without a rendering server). Every flag
+            // No renderer to ask (headless, or a test without a rendering server). Every flag
             // stays false, which means every texture stays uncompressed, which is the only answer
             // that cannot be wrong.
             LumoraLogger.Warn($"TextureAssetHook: could not query texture format support ({ex.Message}); uploading uncompressed");
@@ -612,21 +731,26 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
             || string.IsNullOrEmpty(request.CacheKey)
             || string.IsNullOrEmpty(request.CacheDirectory))
             return null!;
-        // Extension shared with the engine side: it probes this same path to find out whether a rung
-        // is already compressed, and a private copy of the string here would silently make every
-        // probe miss. -xlinka
-        return Path.Combine(request.CacheDirectory!, request.CacheKey + TextureGpuCache.Extension);
+        // Name shared with the engine side: it probes this same path to find out whether a rung is already
+        // compressed, and a private copy of the naming here would silently make every probe miss. -xlinka
+        return TextureGpuCache.FileFor(request.CacheDirectory!, request.CacheKey!);
     }
 
-    private static bool TryReadCache(string path, out Image image)
+    // The sealed blob, or one from before sealing under its plain name (the background pass seals those).
+    private static bool TryReadCache(TextureUploadRequest request, string path, out Image image)
     {
         image = null!;
         try
         {
             if (!File.Exists(path))
-                return false;
+            {
+                var legacy = TextureGpuCache.LegacyFileFor(request.CacheDirectory!, request.CacheKey!);
+                if (!File.Exists(legacy))
+                    return false;
+                path = legacy;
+            }
 
-            using var stream = File.OpenRead(path);
+            using var stream = Lumora.Nexus.Storage.SealedFile.OpenAny(path);
             using var reader = new BinaryReader(stream);
             if (reader.ReadInt32() != GpuCacheVersion)
                 return false;
@@ -652,31 +776,82 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
 
     private static void TryWriteCache(string path, Image image)
     {
+        var data = image.GetData();
+        if (data == null || data.Length == 0)
+            return;
+        TryWriteCache(path, image.GetWidth(), image.GetHeight(), image.GetFormat(), image.HasMipmaps(), data);
+    }
+
+    // A block chain that arrived already compressed, filed exactly where an upload of the same request would
+    // file its own, so the load that asks for it takes it straight from the cache. Refused unless this device
+    // takes the format and the chain is the layout the platform holds behind one buffer. -xlinka
+    public static bool WriteBlockCache(string path, int width, int height, TextureFormatKind format, bool mipmaps, byte[] blocks)
+    {
+        if (ForceCpuEncoder || !CpuBcFamily || blocks == null || width < 4 || height < 4 || (width & 3) != 0 || (height & 3) != 0)
+            return false;
+        Image.Format target;
+        int blockBytes;
+        switch (format)
+        {
+            case TextureFormatKind.BC1_RGB:
+                target = Image.Format.Dxt1;
+                blockBytes = 8;
+                break;
+            case TextureFormatKind.BC3_RGBA:
+                target = Image.Format.Dxt5;
+                blockBytes = 16;
+                break;
+            default:
+                return false;
+        }
+        var layout = BlockLayout(width, height, mipmaps, target, blockBytes);
+        if (layout == null || layout[layout.Length - 1] != blocks.LongLength)
+            return false;
+        return TryWriteCache(path, width, height, target, mipmaps, blocks);
+    }
+
+    private static bool TryWriteCache(string path, int width, int height, Image.Format format, bool mipmaps, byte[] data)
+    {
+        string? temp = null;
         try
         {
-            var data = image.GetData();
-            if (data == null || data.Length == 0)
-                return;
-
             // Write beside the target then move into place, so a crash mid-write can never leave a
-            // truncated blob that a later run would happily load as a texture.
-            var temp = path + ".tmp";
-            using (var stream = File.Create(temp))
+            // truncated blob that a later run would happily load as a texture. The beside file is this
+            // write's own: two loads of one texture (a picture and its spawned copy, one map under two
+            // descriptors) finish their encodes together, and one shared name made the second fail with
+            // the file in use. Same key, same bytes, so whichever lands last is as good. -xlinka
+            temp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            using (var stream = Lumora.Nexus.Storage.SealedFile.Create(temp))
             using (var writer = new BinaryWriter(stream))
             {
                 writer.Write(GpuCacheVersion);
-                writer.Write(image.GetWidth());
-                writer.Write(image.GetHeight());
-                writer.Write((int)image.GetFormat());
-                writer.Write(image.HasMipmaps());
+                writer.Write(width);
+                writer.Write(height);
+                writer.Write((int)format);
+                writer.Write(mipmaps);
                 writer.Write(data.Length);
                 writer.Write(data);
             }
             File.Move(temp, path, true);
+            temp = null;
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException && File.Exists(path))
+        {
+            // The other write of this key landed first and a load has it open: it is these same bytes.
+            return true;
         }
         catch (Exception ex)
         {
             LumoraLogger.Warn($"TextureAssetHook: could not cache compressed texture '{path}': {ex.Message}");
+            return false;
+        }
+        finally
+        {
+            if (temp != null)
+            {
+                try { File.Delete(temp); } catch { }
+            }
         }
     }
 
@@ -693,10 +868,35 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
     // "optimize" this back into dispose-and-recreate. -xlinka
     private void Adopt(Image image)
     {
+        LearnOffMain();
         if (_godotTexture == null)
             _godotTexture = ImageTexture.CreateFromImage(image);
         else
             _godotTexture.SetImage(image);
+        _shape = (image.GetWidth(), image.GetHeight(), image.GetFormat(), image.HasMipmaps());
+    }
+
+    // What the texture on the GPU was last built from; the platform texture does not say whether it has mips.
+    private (int Width, int Height, Image.Format Format, bool Mips) _shape;
+
+    // A PROCEDURAL PICTURE THAT CHANGES IS NOT A NEW TEXTURE.
+    //
+    // A generated texture with something driving it (a noise whose offset scrolls, a gradient that fades) is
+    // made again on every change, and each one went up as a whole new texture swapped in behind the handle,
+    // then announced to every material as if it had just arrived: a world's scrolling noise card did that 1.6
+    // times a second for a whole evening, eighteen thousand textures. When the new picture has the shape of
+    // the one already there (size, format, mip chain, uncompressed), its pixels are written into the existing
+    // texture instead. -xlinka
+    private static int _updatedInPlace;
+
+    private bool TryUpdateInPlace(Image image)
+    {
+        var texture = _godotTexture;
+        if (texture == null || image.IsCompressed() || _shape != (image.GetWidth(), image.GetHeight(), image.GetFormat(), image.HasMipmaps()))
+            return false;
+        texture.Update(image);
+        System.Threading.Interlocked.Increment(ref _updatedInPlace);
+        return true;
     }
 
     // What has gone to the GPU, by format, since start. A picture of a megabyte or more that went up
@@ -722,7 +922,7 @@ public class TextureAssetHook : AssetHook, ITextureAssetHook, IGodotTexture
                             + $"compression allowed {request.AllowBlockCompression}, hdr {request.IsHdr}, alpha {request.HasAlpha}, "
                             + $"normal map {request.IsNormalMap}, CPU encoder fits {CpuEncoderFits(request)}, forced CPU {ForceCpuEncoder}");
         if (totals.Length > 0)
-            LumoraLogger.Log($"TextureAssetHook: {tallied} uploads so far: {totals}");
+            LumoraLogger.Log($"TextureAssetHook: {tallied} uploads so far: {totals}; {System.Threading.Volatile.Read(ref _updatedInPlace)} generated pictures refreshed in place");
     }
 
     private void ReportUpload(TextureUploadRequest request, Image image)

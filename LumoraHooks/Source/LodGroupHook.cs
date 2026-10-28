@@ -29,6 +29,8 @@ public sealed class LodGroupHook : ComponentHook<LodGroup>
 
     public static IHook<LodGroup> Constructor() => new LodGroupHook();
 
+    protected override bool ReadsNodePose => false;
+
     public override void Initialize()
     {
         base.Initialize();

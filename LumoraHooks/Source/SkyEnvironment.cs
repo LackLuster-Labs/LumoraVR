@@ -21,26 +21,21 @@ namespace Lumora.Godot.Hooks;
 // the bootstrap environment comes back when nothing claims at all. -xlinka
 public static class SkyEnvironment
 {
-    // The user's post stack, one record so every environment gets the same write. Tonemap indexes
-    // EngineSettings.TonemapOptions (which is the renderer's own enum order). AmbientOcclusion is the
-    // 0..1 strength the settings expose; 0 is off. Contrast and Saturation are 1 for untouched.
+    // The user's post stack, one record so every environment gets the same write. AmbientOcclusion is the
+    // 0..1 strength the settings expose; 0 is off.
     public struct PostSettings
     {
-        public int Tonemap;
-        public float WhitePoint;
         public float Bloom;
         public float AmbientOcclusion;
         public bool ScreenSpaceReflections;
         public bool ScreenSpaceIndirectLighting;
-        public float Contrast;
-        public float Saturation;
     }
 
     // What ApplyPostSettings last wrote, for an environment built later (a sky claim, a camera) so it
     // starts from the same stack instead of the scene file's.
     public static PostSettings CurrentPost { get; private set; } = new()
     {
-        Tonemap = 4, WhitePoint = 6f, Bloom = 0.5f, AmbientOcclusion = 1f, Contrast = 1f, Saturation = 1f,
+        Bloom = 0.5f, AmbientOcclusion = 1f,
     };
 
     // loses to anything that carries a cubemap
@@ -60,6 +55,27 @@ public static class SkyEnvironment
 
     private static readonly List<Claim> _claims = new();
     private static readonly object _lock = new();
+
+    // A world's own ambient light, laid over whichever environment wins for it. The environment's own
+    // ambient is kept aside while the light is on it and put back when it goes. -xlinka
+    private sealed class AmbientClaim
+    {
+        public object Owner = null!;
+        public World World = null!;
+        public Color Light;
+    }
+
+    private sealed class KeptAmbient
+    {
+        public global::Godot.Environment.AmbientSource Source;
+        public Color Color;
+        public float Energy;
+        public float SkyContribution;
+    }
+
+    private static readonly List<AmbientClaim> _ambientClaims = new();
+    private static global::Godot.Environment? _ambientOn;
+    private static KeptAmbient? _keptAmbient;
 
     private static WorldEnvironment _node = null!;
     private static bool _ownsNode;
@@ -127,22 +143,13 @@ public static class SkyEnvironment
 
     private static void WritePost(global::Godot.Environment environment, in PostSettings settings)
     {
-        environment.TonemapMode = settings.Tonemap switch
-        {
-            0 => global::Godot.Environment.ToneMapper.Linear,
-            1 => global::Godot.Environment.ToneMapper.Reinhardt,
-            2 => global::Godot.Environment.ToneMapper.Filmic,
-            3 => global::Godot.Environment.ToneMapper.Aces,
-            _ => global::Godot.Environment.ToneMapper.Agx,
-        };
-        environment.TonemapWhite = settings.WhitePoint;
-        // AgX does not read TonemapWhite at all. It has its own white, and the engine default for it is
-        // 16.29, the very top of the range and the flattest the curve gets. Every build since the
-        // tonemap work shipped has been running the default tonemapper at that white while the White
-        // Point slider wrote a property it never looked at, which is most of why the view read as
-        // washed out. Both are written so the slider means the same thing whichever curve is up. -xlinka
-        bool agx = environment.TonemapMode == global::Godot.Environment.ToneMapper.Agx;
-        environment.TonemapAgxWhite = System.MathF.Max(settings.WhitePoint, 2f);
+        // Linear out, no curve and no adjustment pass: both cost every pixel of both eyes, and a world's
+        // grade is the world's to set. A world environment that brought its own curve is put back to
+        // linear here too. -xlinka
+        environment.TonemapMode = global::Godot.Environment.ToneMapper.Linear;
+        environment.TonemapExposure = 1f;
+        environment.TonemapWhite = 1f;
+        environment.AdjustmentEnabled = false;
 
         // Zero turns the pass OFF rather than running it at no strength: a glow pass costs its blur
         // chain whether or not anything is bright enough to feed it.
@@ -192,32 +199,6 @@ public static class SkyEnvironment
 
         // Screen-space reflections at the renderer's own defaults; the setting is a switch.
         environment.SsrEnabled = !standalone && settings.ScreenSpaceReflections;
-
-        // Contrast. AgX carries a contrast term inside its own curve (engine default 1.25, range 1..2)
-        // which the engine docs prefer over the post-tonemap adjustment: it shapes the curve instead of
-        // stretching finished pixels, so it does not clip. The setting is a multiplier on the default
-        // look, so 1.0 leaves the curve exactly as shipped; whatever the native range cannot take (a
-        // setting under 0.8, or over 1.6) goes through the adjustment pass as the residual. Other
-        // tonemappers have no such term and take the whole setting in the adjustment pass. -xlinka
-        float adjustmentContrast = settings.Contrast;
-        if (agx)
-        {
-            float native = 1.25f * settings.Contrast;
-            environment.TonemapAgxContrast = System.Math.Clamp(native, 1f, 2f);
-            adjustmentContrast = native < 1f ? native : native > 2f ? native / 2f : 1f;
-        }
-        else
-        {
-            environment.TonemapAgxContrast = 1.25f;
-        }
-
-        // The adjustment pass runs inside the tonemap pass, so it is free when on and skipped when it
-        // has nothing to do.
-        bool adjust = System.MathF.Abs(adjustmentContrast - 1f) > 0.001f || System.MathF.Abs(settings.Saturation - 1f) > 0.001f;
-        environment.AdjustmentEnabled = adjust;
-        environment.AdjustmentBrightness = 1f;
-        environment.AdjustmentContrast = adjustmentContrast;
-        environment.AdjustmentSaturation = settings.Saturation;
     }
 
     // What the main view is actually rendering through, against what was just written. The scene's
@@ -234,10 +215,9 @@ public static class SkyEnvironment
         string match = installed == null ? "no WorldEnvironment node"
             : ReferenceEquals(rendering, installed) ? "matches WorldEnvironment"
             : "DIFFERS from WorldEnvironment";
-        return $"rendering env={rendering.GetRid().Id} ({match}) tonemap={rendering.TonemapMode} agxWhite={rendering.TonemapAgxWhite:0.##} "
-             + $"agxContrast={rendering.TonemapAgxContrast:0.##} ssao={rendering.SsaoEnabled} (intensity {rendering.SsaoIntensity:0.##}, light {rendering.SsaoLightAffect:0.##}) "
+        return $"rendering env={rendering.GetRid().Id} ({match}) tonemap={rendering.TonemapMode} "
+             + $"ssao={rendering.SsaoEnabled} (intensity {rendering.SsaoIntensity:0.##}, light {rendering.SsaoLightAffect:0.##}) "
              + $"ssil={rendering.SsilEnabled} ssr={rendering.SsrEnabled} glow={rendering.GlowEnabled} adjust={rendering.AdjustmentEnabled} "
-             + $"(contrast {rendering.AdjustmentContrast:0.##}, saturation {rendering.AdjustmentSaturation:0.##}) "
              + $"method={RenderingServer.GetCurrentRenderingMethod()}";
     }
 
@@ -253,6 +233,13 @@ public static class SkyEnvironment
 
         lock (_lock)
         {
+            // The claimer has just written its environment's ambient itself, so that is what to keep aside.
+            if (environment != null && ReferenceEquals(environment, _ambientOn))
+            {
+                _ambientOn = null;
+                _keptAmbient = null;
+            }
+
             var existing = Find(owner);
             if (existing != null)
             {
@@ -317,6 +304,84 @@ public static class SkyEnvironment
         var target = winner?.Environment ?? _bootstrap;
         if (_node.Environment != target)
             _node.Environment = target;
+        ApplyAmbient(target, focused);
+    }
+
+    // re-claiming with the same owner replaces its light; linear RGB
+    public static void AmbientClaimed(object owner, World world, in Color linearLight, Node anyNodeInTree)
+    {
+        EnsureNode(anyNodeInTree);
+        lock (_lock)
+        {
+            AmbientClaim? existing = null;
+            foreach (var claim in _ambientClaims)
+            {
+                if (ReferenceEquals(claim.Owner, owner))
+                    existing = claim;
+            }
+            if (existing == null)
+                _ambientClaims.Add(existing = new AmbientClaim { Owner = owner });
+            existing.World = world;
+            existing.Light = linearLight;
+        }
+        Resolve();
+    }
+
+    public static void AmbientReleased(object owner)
+    {
+        lock (_lock)
+        {
+            if (_ambientClaims.RemoveAll(claim => ReferenceEquals(claim.Owner, owner)) == 0)
+                return;
+        }
+        Resolve();
+    }
+
+    private static void ApplyAmbient(global::Godot.Environment? target, World? focused)
+    {
+        AmbientClaim? light = null;
+        lock (_lock)
+        {
+            foreach (var claim in _ambientClaims)
+            {
+                if (focused == null || claim.World == focused)
+                    light = claim;
+            }
+        }
+
+        // What was laid on another environment goes back first.
+        if (_ambientOn != null && (!ReferenceEquals(_ambientOn, target) || light == null))
+        {
+            if (GodotObject.IsInstanceValid(_ambientOn) && _keptAmbient != null)
+            {
+                _ambientOn.AmbientLightSource = _keptAmbient.Source;
+                _ambientOn.AmbientLightColor = _keptAmbient.Color;
+                _ambientOn.AmbientLightEnergy = _keptAmbient.Energy;
+                _ambientOn.AmbientLightSkyContribution = _keptAmbient.SkyContribution;
+            }
+            _ambientOn = null;
+            _keptAmbient = null;
+        }
+
+        if (light == null || target == null || !GodotObject.IsInstanceValid(target))
+            return;
+        if (_ambientOn == null)
+        {
+            _keptAmbient = new KeptAmbient
+            {
+                Source = target.AmbientLightSource,
+                Color = target.AmbientLightColor,
+                Energy = target.AmbientLightEnergy,
+                SkyContribution = target.AmbientLightSkyContribution,
+            };
+            _ambientOn = target;
+        }
+        // The colour property is read as sRGB; the light arrives linear, brighter than 1 kept by energy.
+        var linear = light.Light;
+        float peak = System.Math.Max(1f, System.Math.Max(linear.R, System.Math.Max(linear.G, linear.B)));
+        target.AmbientLightSource = global::Godot.Environment.AmbientSource.Color;
+        target.AmbientLightColor = new Color(linear.R / peak, linear.G / peak, linear.B / peak).LinearToSrgb();
+        target.AmbientLightEnergy = peak;
     }
 
     private static bool Outranks(Claim candidate, Claim current)

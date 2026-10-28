@@ -126,6 +126,7 @@ public class MeshHook : ComponentHook<ProceduralMesh>
             ReleaseEntry();
         }
         MeshReplaced = null;
+        SurfacesRebuilt = null;
 
         _surfaceArrays?.Dispose();
         _surfaceArrays = null;
@@ -214,6 +215,8 @@ public class MeshHook : ComponentHook<ProceduralMesh>
             _loggedSurfaceOverflow = false;
         }
 
+        SurfacesRebuilt?.Invoke();
+
         if (hashed)
         {
             _entry = new SharedMesh { Mesh = godotMesh, Key = key, Users = 1 };
@@ -257,6 +260,13 @@ public class MeshHook : ComponentHook<ProceduralMesh>
 
     // Raised when the Godot mesh this hook hands out becomes a different object.
     public event Action? MeshReplaced;
+
+    // Raised straight after this hook's own mesh was emptied and filled again in place. A mesh instance keeps a
+    // material per surface and cuts that list down to the surfaces the mesh has each time one is added, so a
+    // rebuild leaves every surface after the first with no material. Whatever draws the mesh puts its materials
+    // back from here, before the frame is drawn: the queued apply NotifyRenderer asks for can land after it on a
+    // busy frame, and a neon stroke's halo was drawn once in the engine's plain grey as it was let go. -xlinka
+    public event Action? SurfacesRebuilt;
 
     // Lets go of the shared entry. True when nobody else draws the mesh this hook held.
     private bool ReleaseEntry()

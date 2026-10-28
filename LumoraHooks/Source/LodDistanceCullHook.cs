@@ -21,6 +21,8 @@ public sealed class LodDistanceCullHook : ComponentHook<LodDistanceCull>
 
     public static IHook<LodDistanceCull> Constructor() => new LodDistanceCullHook();
 
+    protected override bool ReadsNodePose => false;
+
     public override void Initialize()
     {
         base.Initialize();

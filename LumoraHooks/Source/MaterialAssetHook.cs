@@ -40,6 +40,36 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
     // Pending properties to apply
     private readonly Dictionary<string, object> _pendingProperties = new();
 
+    // Puts a value in for the next ApplyChanges. An update stages every property of its material however few
+    // changed, and boxing each one again was most of what a scrolling or pulsing material allocated a frame. A
+    // value equal to the one already applied goes in as that same box, which ApplyChanges skips as before. -xlinka
+    private void Stage<T>(string property, T value) where T : struct, IEquatable<T>
+    {
+        if (_applied.TryGetValue(property, out var was) && was is T old && old.Equals(value))
+            _pendingProperties[property] = was;
+        else
+            _pendingProperties[property] = value;
+    }
+
+    // The names a texture's right eye and stored profile ride under, made once per property.
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, (string Right, string Profile)> TextureSideNames = new(StringComparer.Ordinal);
+
+    private static (string Right, string Profile) SideNames(string property)
+        => TextureSideNames.GetOrAdd(property, static name => (name + "Right", name + "Profile"));
+
+    // What each bound picture asks of its slot's sampler, by property, and the shader copy each pass wears for
+    // it (SamplerVariants). Only pictures asking something are listed.
+    private readonly Dictionary<string, (TextureFilter Filter, (TextureWrapMode U, TextureWrapMode V)? Wrap)> _samplerAsks = new(StringComparer.Ordinal);
+    private readonly SamplerState _mainSampler = new(), _nextSampler = new();
+
+    private sealed class SamplerState
+    {
+        public Shader? Base;
+        public Shader? Worn;
+        public string? Key;
+        public string? Source;
+    }
+
     // What was last pushed to the Godot material, and which material and shaders it went to. A material
     // update stages every property again, and pushing them all again made one animated value (a scrolled
     // offset, a fading tint) cost a write per property per frame, plus a shader lookup by path for the
@@ -163,8 +193,8 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
                 _usesShaderMaterial = true;
                 _shaderMaterial = new ShaderMaterial();
                 const string metaballShaderPath = "res://Shaders/Metaball.gdshader";
-                if (ResourceLoader.Exists(metaballShaderPath))
-                    _shaderMaterial.Shader = GD.Load<Shader>(metaballShaderPath);
+                if (ShaderFiles.Load(metaballShaderPath) is { } metaballShader)
+                    _shaderMaterial.Shader = metaballShader;
                 else
                     LumoraLogger.Warn($"MaterialAssetHook: Metaball shader not found at {metaballShaderPath}");
                 break;
@@ -173,8 +203,8 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
                 _usesShaderMaterial = true;
                 _shaderMaterial = new ShaderMaterial();
                 const string gridGroundShaderPath = "res://Shaders/GridSpaceGround.gdshader";
-                if (ResourceLoader.Exists(gridGroundShaderPath))
-                    _shaderMaterial.Shader = GD.Load<Shader>(gridGroundShaderPath);
+                if (ShaderFiles.Load(gridGroundShaderPath) is { } gridGroundShader)
+                    _shaderMaterial.Shader = gridGroundShader;
                 else
                     LumoraLogger.Warn($"MaterialAssetHook: Grid ground shader not found at {gridGroundShaderPath}");
                 break;
@@ -183,8 +213,8 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
                 _usesShaderMaterial = true;
                 _shaderMaterial = new ShaderMaterial();
                 const string localHomeRisingShaderPath = "res://Shaders/LocalHomeRising.gdshader";
-                if (ResourceLoader.Exists(localHomeRisingShaderPath))
-                    _shaderMaterial.Shader = GD.Load<Shader>(localHomeRisingShaderPath);
+                if (ShaderFiles.Load(localHomeRisingShaderPath) is { } localHomeRisingShader)
+                    _shaderMaterial.Shader = localHomeRisingShader;
                 else
                     LumoraLogger.Warn($"MaterialAssetHook: LocalHomeRising shader not found at {localHomeRisingShaderPath}");
                 break;
@@ -212,8 +242,8 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             case MaterialType.FlatToon:
                 _usesShaderMaterial = true;
                 _shaderMaterial = CreateShaderMaterial("res://Shaders/Mat_FlatToon.gdshader", MaterialType.FlatToon);
-                // The outline hull is a separate material chained after the lit pass. It discards
-                // itself at width 0, so it costs a degenerate draw and nothing else when unused.
+                // The outline hull is a separate material chained after the lit pass. At width 0 it
+                // collapses to a point in its vertex stage, so it costs a vertex pass and no pixels.
                 _nextPassMaterial = CreateShaderMaterial("res://Shaders/Mat_FlatToonOutline.gdshader", MaterialType.FlatToon);
                 _shaderMaterial.NextPass = _nextPassMaterial;
                 break;
@@ -226,6 +256,11 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             case MaterialType.PBS_DualSided:
                 _usesShaderMaterial = true;
                 _shaderMaterial = CreateShaderMaterial("res://Shaders/Mat_PBS_DualSided.gdshader", MaterialType.PBS_DualSided);
+                break;
+
+            case MaterialType.PBS_DualSidedSpecular:
+                _usesShaderMaterial = true;
+                _shaderMaterial = CreateShaderMaterial("res://Shaders/Mat_PBS_DualSidedSpecular.gdshader", MaterialType.PBS_DualSidedSpecular);
                 break;
 
             case MaterialType.PBS_VertexColor:
@@ -299,7 +334,7 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
 
             case MaterialType.PBS_Specular:
                 _usesShaderMaterial = true;
-                _shaderMaterial = CreateShaderMaterial(SpecularShaderPath(Culling.Back), MaterialType.PBS_Specular);
+                _shaderMaterial = CreateShaderMaterial(SpecularShaderPath(Culling.Back, BlendMode.Opaque), MaterialType.PBS_Specular);
                 break;
 
             case MaterialType.Poiyomi:
@@ -316,6 +351,7 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             case MaterialType.PBS_Displace:
             case MaterialType.PBS_DistanceLerp:
             case MaterialType.PBS_Stencil:
+            case MaterialType.NamedShader:
                 _usesShaderMaterial = true;
                 _shaderMaterial = new ShaderMaterial();
                 break;
@@ -356,9 +392,9 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
     private static ShaderMaterial CreateShaderMaterial(string shaderPath, MaterialType materialType)
     {
         var material = new ShaderMaterial();
-        if (ResourceLoader.Exists(shaderPath))
+        if (ShaderFiles.Load(shaderPath) is { } shader)
         {
-            material.Shader = GD.Load<Shader>(shaderPath);
+            material.Shader = shader;
         }
         else
         {
@@ -379,9 +415,9 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
 
         if (_shaderMaterial != null && !string.IsNullOrEmpty(_customShaderPath))
         {
-            if (ResourceLoader.Exists(_customShaderPath))
+            if (ShaderFiles.Load(_customShaderPath) is { } shader)
             {
-                _shaderMaterial.Shader = GD.Load<Shader>(_customShaderPath);
+                _shaderMaterial.Shader = shader;
                 _customSource = null;
             }
             else
@@ -427,7 +463,11 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
         var shader = CustomShaderCache.Get(shaderSource, ready =>
         {
             if (_customSource == shaderSource && ReferenceEquals(_shaderMaterial, material) && GodotObject.IsInstanceValid(material))
+            {
                 material.Shader = ready;
+                if (_samplerAsks.Count > 0)
+                    WearSamplerVariants();
+            }
         }, BuildsLate);
         if (shader != null)
             _shaderMaterial.Shader = shader;
@@ -447,7 +487,13 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             return;
         }
 
-        _nextPassMaterial ??= new ShaderMaterial();
+        // A pass made now has none of the values the main pass already holds, and only what changes is pushed,
+        // so everything goes again.
+        if (_nextPassMaterial == null)
+        {
+            _nextPassMaterial = new ShaderMaterial();
+            _applied.Clear();
+        }
         if (_nextPassSource == shaderSource && _nextPassMaterial.Shader != null)
         {
             if (!ReferenceEquals(_shaderMaterial.NextPass, _nextPassMaterial))
@@ -464,6 +510,8 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
                 return;
             pass.Shader = ready;
             owner.NextPass = pass;
+            if (_samplerAsks.Count > 0)
+                WearSamplerVariants();
         }, BuildsLate);
         if (shader != null)
         {
@@ -542,7 +590,7 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
                 string shaderPath = mode == BlendMode.Additive
                     ? "res://Shaders/Unlit_Additive.gdshader"
                     : "res://Shaders/Unlit.gdshader";
-                var shader = ResourceLoader.Load<Shader>(shaderPath);
+                var shader = ShaderFiles.Load(shaderPath);
                 if (shader != null && _shaderMaterial.Shader != shader)
                     _shaderMaterial.Shader = shader; // uniform values persist across the swap
             }
@@ -553,6 +601,13 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             if (_materialType == MaterialType.PBS_Metallic)
             {
                 SwapShader(MetallicShaderPath(_culling, mode));
+            }
+
+            // Opaque and cutout are files; the blended modes come as generated source from the material, which
+            // a file swap here would only overwrite.
+            if (_materialType == MaterialType.PBS_Specular && _customSource == null)
+            {
+                SwapShader(SpecularShaderPath(_culling, mode));
             }
 
             if (_materialType == MaterialType.Fresnel)
@@ -635,7 +690,8 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
 
             if (_materialType == MaterialType.PBS_Specular)
             {
-                SwapShader(SpecularShaderPath(culling));
+                if (_customSource == null)
+                    SwapShader(SpecularShaderPath(culling, _blendMode));
                 return;
             }
 
@@ -722,15 +778,13 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
         _ => string.Empty
     };
 
+    // Cutout has files of its own here: the discard stays out of the opaque ones. Transparent too: it is
+    // premultiplied, where Alpha is a plain fade. -xlinka
     private static string MetallicShaderPath(Culling culling, BlendMode blend)
-        => $"res://Shaders/Mat_PBS_Metallic{BlendVariant(blend)}{CullVariant(culling)}.gdshader";
+        => $"res://Shaders/Mat_PBS_Metallic{blend switch { BlendMode.Cutout => "Cutout", BlendMode.Transparent => "Transparent", _ => BlendVariant(blend) }}{CullVariant(culling)}.gdshader";
 
-    private static string SpecularShaderPath(Culling culling) => culling switch
-    {
-        Culling.Front => "res://Shaders/Mat_PBS_SpecularFrontCull.gdshader",
-        Culling.None => "res://Shaders/Mat_PBS_SpecularDoubleSided.gdshader",
-        _ => "res://Shaders/Mat_PBS_Specular.gdshader"
-    };
+    private static string SpecularShaderPath(Culling culling, BlendMode blend)
+        => $"res://Shaders/Mat_PBS_Specular{(blend == BlendMode.Cutout ? "Cutout" : string.Empty)}{CullVariant(culling)}.gdshader";
 
     private static string XiexeShaderPath(Culling culling) => culling switch
     {
@@ -753,7 +807,7 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             _renderQueue = (int)value;
         }
 
-        _pendingProperties[property] = value;
+        Stage(property, value);
     }
 
     public void SetInt(string property, int value)
@@ -800,7 +854,7 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
                 _shaderMaterial.Shader = shader;
         }
 
-        _pendingProperties[property] = value;
+        Stage(property, value);
     }
 
     public void SetBool(string property, bool value)
@@ -834,27 +888,18 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             }
         }
 
-        _pendingProperties[property] = value;
+        Stage(property, value);
     }
 
     // The UI shader files stay loaded for the whole run. Godot frees a shader nothing wears any more, and
     // the next canvas to want it loads and compiles it again: the hand menu's overlay pair, worn by nothing
     // else, went every time the menu closed, and the startup warm-up (OverlayShaderWarmUp) went with them.
-    private static readonly Dictionary<string, Shader?> UiShaders = new(StringComparer.Ordinal);
-
-    private static Shader? UiShader(string path)
-    {
-        if (!UiShaders.TryGetValue(path, out var shader) || shader == null || !GodotObject.IsInstanceValid(shader))
-        {
-            shader = ResourceLoader.Load<Shader>(path);
-            UiShaders[path] = shader;
-        }
-        return shader;
-    }
+    // Every shader file a material loads is kept now (ShaderFiles). -xlinka
+    private static Shader? UiShader(string path) => ShaderFiles.Load(path);
 
     private void SwapShader(string shaderPath)
     {
-        var shader = ResourceLoader.Load<Shader>(shaderPath);
+        var shader = ShaderFiles.Load(shaderPath);
         if (shader != null && _shaderMaterial.Shader != shader)
         {
             _shaderMaterial.Shader = shader;
@@ -863,12 +908,12 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
 
     public void SetColor(string property, colorHDR value)
     {
-        _pendingProperties[property] = new Color(value.r, value.g, value.b, value.a);
+        Stage(property, new Color(value.r, value.g, value.b, value.a));
     }
 
     public void SetFloat2(string property, float2 value)
     {
-        _pendingProperties[property] = new Vector2(value.x, value.y);
+        Stage(property, new Vector2(value.x, value.y));
     }
 
     // Record the property (so a later full ApplyChanges stays consistent) AND push just this one to the live
@@ -890,14 +935,35 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             _applied[property] = v;
     }
 
+    // The one property set since the last ApplyChanges, pushed now; the shader, the textures and every other value
+    // stay as they are. A value equal to the one the material already holds is not written again. -xlinka
+    public void ApplyStagedNow(string property)
+    {
+        if (!_pendingProperties.TryGetValue(property, out var value))
+            return;
+        // Written past the update, so only the component's own material sees it.
+        if (_shared != null)
+        {
+            _noShare = true;
+            LeaveShared();
+            _updated?.Invoke();
+        }
+        bool same = SameTargetAsApplied();
+        if (same && _applied.TryGetValue(property, out var was) && Equals(was, value))
+            return;
+        ApplyProperty(property, value);
+        if (same)
+            _applied[property] = value;
+    }
+
     public void SetFloat3(string property, float3 value)
     {
-        _pendingProperties[property] = new Vector3(value.x, value.y, value.z);
+        Stage(property, new Vector3(value.x, value.y, value.z));
     }
 
     public void SetFloat4(string property, float4 value)
     {
-        _pendingProperties[property] = new Vector4(value.x, value.y, value.z, value.w);
+        Stage(property, new Vector4(value.x, value.y, value.z, value.w));
     }
 
     // A TEXTURE THAT IS ASSIGNED BUT NOT YET ON THE GPU IS NOT THE SAME AS NO TEXTURE.
@@ -937,14 +1003,25 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
         // <Property>Right, which the name mapping turns into <property>_right. Everything else in the
         // engine only ever reads the left one and is none the wiser. -xlinka
         var rightEye = texture?.Hook is IStereoGodotTexture stereo ? stereo.RightEyeTexture2D : null;
-        _pendingProperties[property + "Right"] = rightEye!;
+        var (rightName, profileName) = SideNames(property);
+        _pendingProperties[rightName] = rightEye!;
 
-        // A canvas material bound to a frame strip plays it; bound to anything else it shows a still.
-        if (_materialType == MaterialType.UI_Unlit && property == "Texture")
+        // How the picture was stored rides beside it as <property>_profile, for the slots that read it.
+        Stage(profileName, (int)(texture?.Profile ?? TextureProfile.Slot));
+
+        if (texture != null && (texture.Filter != TextureFilter.Slot || texture.SlotWrap != null))
+            _samplerAsks[property] = (texture.Filter, texture.SlotWrap);
+        else
+            _samplerAsks.Remove(property);
+
+        // A canvas material bound to a frame sheet plays it, the stencil-tested one under a round mask too; bound
+        // to anything else it shows a still.
+        if ((_materialType is MaterialType.UI_Unlit or MaterialType.UI_StencilTest) && property == "Texture")
         {
             int frames = texture != null && texture.AnimationFrames > 1 ? texture.AnimationFrames : 1;
-            _pendingProperties["FrameCount"] = frames;
-            _pendingProperties["FrameRate"] = texture != null && frames > 1 && texture.AnimationFps > 0f ? texture.AnimationFps : 10f;
+            Stage("FrameCount", frames);
+            Stage("FrameColumns", frames > 1 ? texture!.AnimationColumns : 1);
+            Stage("FrameRate", texture != null && frames > 1 && texture.AnimationFps > 0f ? texture.AnimationFps : 10f);
         }
     }
 
@@ -959,6 +1036,7 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
     public void ApplyChanges(Action callback)
     {
         LumoraLogger.Debug($"MaterialAssetHook.ApplyChanges: Applying {_pendingProperties.Count} properties, usesShader={_usesShaderMaterial}");
+        WearSamplerVariants();
         bool moved = _keyStale;
         if (!SameTargetAsApplied())
         {
@@ -985,6 +1063,90 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
         callback?.Invoke();
     }
 
+    // SAMPLERS
+
+    // Each pass wears its shader, or a copy of it with the slots its pictures ask about rebuilt. Whatever put the
+    // shader on (a culling or blend swap, a generated source) did it before this runs; that shader is the one
+    // varied, and one put on again unchanged gets its copy back without a rebuild. -xlinka
+    private void WearSamplerVariants()
+    {
+        if (!_usesShaderMaterial || _materialType == MaterialType.Fur)
+            return;
+        // Nothing asked and no copy worn: the shaders stay as they are, untouched.
+        if (_samplerAsks.Count == 0 && _mainSampler.Key == null && _nextSampler.Key == null)
+            return;
+        if (_shaderMaterial != null)
+            WearSamplerVariant(_shaderMaterial, _mainSampler);
+        if (_nextPassMaterial != null)
+            WearSamplerVariant(_nextPassMaterial, _nextSampler);
+    }
+
+    private void WearSamplerVariant(ShaderMaterial material, SamplerState state)
+    {
+        var current = material.Shader;
+        if (current == null)
+            return;
+        if (!ReferenceEquals(current, state.Worn))
+        {
+            if (!ReferenceEquals(current, state.Base))
+            {
+                state.Base = current;
+                state.Key = null;
+                state.Source = null;
+            }
+            state.Worn = current;
+        }
+        var shader = state.Base!;
+
+        Dictionary<string, SamplerVariants.Wanted>? wanted = null;
+        foreach (var (property, ask) in _samplerAsks)
+        {
+            string uniform = MaterialPropertyApplicator.UniformName(_materialType, property);
+            if (!SamplerVariants.TryDeclared(shader, uniform, out var declared))
+                continue;
+            var want = SamplerVariants.Ask(ask.Filter, ask.Wrap, declared.Filter);
+            if ((want.Filter == null || want.Filter == declared.Filter) && (want.Repeat == null || want.Repeat == declared.Repeat))
+                continue;
+            (wanted ??= new Dictionary<string, SamplerVariants.Wanted>(StringComparer.Ordinal))[uniform] = want;
+        }
+
+        if (wanted == null)
+        {
+            state.Key = null;
+            state.Source = null;
+            if (!ReferenceEquals(material.Shader, shader))
+                material.Shader = shader;
+            state.Worn = shader;
+            return;
+        }
+
+        var parts = new List<string>(wanted.Count);
+        foreach (var (uniform, want) in wanted)
+            parts.Add(uniform + ":" + want.Filter + ":" + want.Repeat);
+        parts.Sort(StringComparer.Ordinal);
+        string key = string.Join(";", parts);
+        if (key != state.Key || state.Source == null)
+        {
+            state.Key = key;
+            state.Source = SamplerVariants.Build(shader, wanted);
+        }
+        string source = state.Source;
+        var variant = CustomShaderCache.Get(source, ready =>
+        {
+            if (state.Source != source || !GodotObject.IsInstanceValid(material) || !ReferenceEquals(material.Shader, state.Worn))
+                return;
+            material.Shader = ready;
+            state.Worn = ready;
+            Reshare();
+            _updated?.Invoke();
+        }, BuildsLate);
+        // Until the copy compiles the pass wears its own shader.
+        var wear = variant ?? shader;
+        if (!ReferenceEquals(material.Shader, wear))
+            material.Shader = wear;
+        state.Worn = wear;
+    }
+
     // SHARING
 
     private static readonly object SharedLock = new();
@@ -1000,9 +1162,18 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
     internal bool Batchable => !_noShare && _usesShaderMaterial && _customSource == null && _nextPassMaterial == null
         && SharesSurfaces(_materialType) && _blendMode is BlendMode.Opaque or BlendMode.Cutout;
 
+    // Solid everywhere it is drawn: a surface material of ours, opaque, no cut-outs, nothing chained after it.
+    // What it covers can be left undrawn (StaticOccludersHook).
+    internal bool DrawsSolid => _usesShaderMaterial && _customSource == null && _nextPassMaterial == null
+        && SharesSurfaces(_materialType) && _materialType != MaterialType.Wireframe && _blendMode == BlendMode.Opaque;
+
+    // Tested against what is in front of it, so it can be left undrawn behind a wall. Overlays, volumes and shaders
+    // of the world's own are not known to be, and draw wherever they are.
+    internal bool DepthTested => _usesShaderMaterial && _customSource == null && SharesSurfaces(_materialType);
+
     // Surface materials only: nothing outside an update writes to them, and none chains a second pass.
     private static bool SharesSurfaces(MaterialType type) => type is MaterialType.PBS_Metallic
-        or MaterialType.PBS_Specular or MaterialType.PBS_DualSided or MaterialType.PBS_Triplanar
+        or MaterialType.PBS_Specular or MaterialType.PBS_DualSided or MaterialType.PBS_DualSidedSpecular or MaterialType.PBS_Triplanar
         or MaterialType.PBS_VertexColor or MaterialType.PBS_ColorMask or MaterialType.Unlit
         or MaterialType.Fresnel or MaterialType.FresnelLerp or MaterialType.Reflection
         or MaterialType.Matcap or MaterialType.Wireframe;
@@ -1175,6 +1346,17 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
             return;
         }
 
+        // A blended two-sided surface draws its front faces on the next pass, off the same inputs. Written to
+        // the pass whether it is chained yet or not: it chains once its shader compiles, and the values have
+        // to be on it by then.
+        if (_materialType == MaterialType.NamedShader)
+        {
+            MaterialPropertyApplicator.Apply(_shaderMaterial, _materialType, property, value);
+            if (_nextPassMaterial != null)
+                MaterialPropertyApplicator.Apply(_nextPassMaterial, _materialType, property, value);
+            return;
+        }
+
         // Every fur shell reads every property the skin does.
         if (_materialType == MaterialType.Fur)
         {
@@ -1186,7 +1368,8 @@ public class MaterialAssetHook : AssetHook, IMaterialAssetHook
         // Outline controls belong to the chained hull material, not the lit surface - the base shader
         // has no such uniforms and would swallow the write.
         if (_nextPassMaterial != null
-            && property is "OutlineWidth" or "OutlineColor" or "OutlineMask" or "UseOutlineMask")
+            && property is "OutlineWidth" or "OutlineColor" or "OutlineMask" or "UseOutlineMask"
+                or "OutlineTexture" or "UseOutlineTexture" or "OutlineTextureScale" or "OutlineTextureOffset")
         {
             MaterialPropertyApplicator.Apply(_nextPassMaterial, _materialType, property, value);
             return;

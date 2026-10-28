@@ -58,6 +58,9 @@ public class LocalViewOverrideHook : ComponentHook<LocalViewOverride>
 
     public static IHook<LocalViewOverride> Constructor() => new LocalViewOverrideHook();
 
+    // The override reaches the node through SlotHook.SetLocalTransformOverride; nothing is hung here.
+    protected override bool ReadsNodePose => false;
+
     public override void Initialize()
     {
         base.Initialize();
@@ -67,11 +70,12 @@ public class LocalViewOverrideHook : ComponentHook<LocalViewOverride>
     public override void ApplyChanges()
     {
         // UserView hiding only applies while the first-person view renders:
-        // third-person/free-cam must show the full avatar.
+        // third-person/free-cam must show the full avatar, unless their lens is
+        // sitting right at the head.
         bool shouldApply = Owner.Enabled
             && Owner.Context.Value == ViewContext.UserView
             && IsLocalUser()
-            && !UserInputState.FocusedExternalCameraActive;
+            && !LocalViewOverride.ExternalViewShowsHead;
 
         if (!shouldApply)
         {

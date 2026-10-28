@@ -1,10 +1,12 @@
-<Project Sdk="Godot.NET.Sdk/4.8.0-dev.7">
+<Project Sdk="Godot.NET.Sdk/4.8.0-beta.1">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
     <OutputType>Library</OutputType>
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <LangVersion>preview</LangVersion>
     <Nullable>enable</Nullable>
+    <!-- Video frames live in engine memory that libVLC writes through a raw pointer (VideoFrameBuffer). -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>Lumora.Godot.Hooks</RootNamespace>
     <AssemblyName>LumoraHooks</AssemblyName>
     <Description>LumoraHooks - Godot-side hook layer that bridges LumoraCore components to Godot scene nodes.</Description>
@@ -19,5 +21,8 @@
        that uses it are both compiled out there (LibVlcBackend.cs is behind GODOT_PC). -xlinka -->
   <ItemGroup Condition="'$(GodotTargetPlatform)' != 'android' And '$(GodotTargetPlatform)' != 'ios'">
     <PackageReference Include="LibVLCSharp" Version="3.10.1" />
+  </ItemGroup>
+  <ItemGroup>
+    <EmbeddedResource Include="Source/PhysicsCompute/*.glsl" LogicalName="PhysicsCompute.%(Filename).glsl" />
   </ItemGroup>
 </Project>

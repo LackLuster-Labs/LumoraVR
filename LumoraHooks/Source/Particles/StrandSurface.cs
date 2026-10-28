@@ -43,6 +43,10 @@ internal sealed class StrandSurface : IDisposable
     private Color[] _colors = System.Array.Empty<Color>();
     private Vector2[] _uvs = System.Array.Empty<Vector2>();
     private int[] _indices = System.Array.Empty<int>();
+    private Vector3[] _normals = System.Array.Empty<Vector3>();
+    private float[] _tangents = System.Array.Empty<float>();
+    private Vector3[] _alongU = System.Array.Empty<Vector3>();
+    private Vector3[] _alongV = System.Array.Empty<Vector3>();
 
     private StrandRebuildGate _gate;
     private bool _hadGeometry;
@@ -51,6 +55,9 @@ internal sealed class StrandSurface : IDisposable
     private int _appliedQueue = int.MinValue;
     private Texture2D? _appliedTexture;
     private bool _materialApplied;
+
+    private Material? _authored;
+    private bool _lighting;
 
     public StrandSurface(Node3D parent, string name)
     {
@@ -112,6 +119,25 @@ internal sealed class StrandSurface : IDisposable
         _material.SetShaderParameter("strand_texture", godotTexture!);
         _material.SetShaderParameter("use_texture", godotTexture != null);
     }
+
+    // The module's own material, when it names one, and whether the mesh carries what a lit one shades
+    // with. A lighting change rebuilds; a material change only swaps the surface's material.
+    public void ApplyAuthored(Material? authored, bool lighting)
+    {
+        if (lighting != _lighting)
+        {
+            _lighting = lighting;
+            _gate.Reset();
+        }
+
+        if (ReferenceEquals(authored, _authored))
+            return;
+        _authored = authored;
+        if (_hadGeometry && _mesh != null && GodotObject.IsInstanceValid(_mesh) && _mesh.GetSurfaceCount() > 0)
+            _mesh.SurfaceSetMaterial(0, SurfaceMaterial);
+    }
+
+    private Material SurfaceMaterial => _authored != null && GodotObject.IsInstanceValid(_authored) ? _authored : _material;
 
     public void ApplyLodRange(in LodVisibilityRange range) => range.ApplyTo(_instance);
 
@@ -179,9 +205,83 @@ internal sealed class StrandSurface : IDisposable
         _arrays[(int)Mesh.ArrayType.Color] = _colors;
         _arrays[(int)Mesh.ArrayType.TexUV] = _uvs;
         _arrays[(int)Mesh.ArrayType.Index] = _indices;
+        if (_lighting)
+        {
+            BuildLightingData();
+            _arrays[(int)Mesh.ArrayType.Normal] = _normals;
+            _arrays[(int)Mesh.ArrayType.Tangent] = _tangents;
+        }
+        else
+        {
+            _arrays[(int)Mesh.ArrayType.Normal] = default;
+            _arrays[(int)Mesh.ArrayType.Tangent] = default;
+        }
         _mesh.AddSurfaceFromArrays(Mesh.PrimitiveType.Triangles, _arrays);
-        _mesh.SurfaceSetMaterial(0, _material);
+        _mesh.SurfaceSetMaterial(0, SurfaceMaterial);
         _hadGeometry = true;
+    }
+
+    // Area-weighted face normals summed onto their corners, with the face winding Godot's own normal
+    // generation uses, and a tangent along U from each face's UV gradient. The padding triangles are
+    // degenerate and add nothing.
+    private void BuildLightingData()
+    {
+        int vertices = _positions.Length;
+        if (_normals.Length != vertices)
+        {
+            _normals = new Vector3[vertices];
+            _alongU = new Vector3[vertices];
+            _alongV = new Vector3[vertices];
+            _tangents = new float[vertices * 4];
+        }
+        System.Array.Clear(_normals);
+        System.Array.Clear(_alongU);
+        System.Array.Clear(_alongV);
+
+        for (int i = 0; i + 2 < _indices.Length; i += 3)
+        {
+            int a = _indices[i], b = _indices[i + 1], c = _indices[i + 2];
+            if (a == b || b == c || a == c)
+                continue;
+            var pa = _positions[a];
+            var pb = _positions[b];
+            var pc = _positions[c];
+            var face = (pa - pc).Cross(pa - pb);
+            _normals[a] += face;
+            _normals[b] += face;
+            _normals[c] += face;
+
+            var e1 = pb - pa;
+            var e2 = pc - pa;
+            var d1 = _uvs[b] - _uvs[a];
+            var d2 = _uvs[c] - _uvs[a];
+            float det = d1.X * d2.Y - d2.X * d1.Y;
+            if (System.Math.Abs(det) < 1e-12f)
+                continue;
+            float r = 1f / det;
+            var s = (e1 * d2.Y - e2 * d1.Y) * r;
+            var t = (e2 * d1.X - e1 * d2.X) * r;
+            _alongU[a] += s; _alongU[b] += s; _alongU[c] += s;
+            _alongV[a] += t; _alongV[b] += t; _alongV[c] += t;
+        }
+
+        for (int v = 0; v < vertices; v++)
+        {
+            var n = _normals[v];
+            n = n.LengthSquared() > 1e-20f ? n.Normalized() : Vector3.Up;
+            _normals[v] = n;
+
+            var s = _alongU[v] - n * n.Dot(_alongU[v]);
+            if (s.LengthSquared() < 1e-20f)
+                s = n.Cross(System.Math.Abs(n.Y) < 0.99f ? Vector3.Up : Vector3.Right);
+            s = s.Normalized();
+            float w = n.Cross(s).Dot(_alongV[v]) < 0f ? -1f : 1f;
+            int o = v * 4;
+            _tangents[o] = s.X;
+            _tangents[o + 1] = s.Y;
+            _tangents[o + 2] = s.Z;
+            _tangents[o + 3] = w;
+        }
     }
 
     // The tail of the block. Vertices repeat the last real one so the surface AABB stays honest -

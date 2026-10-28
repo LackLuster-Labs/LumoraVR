@@ -30,6 +30,19 @@ public sealed partial class VideoTextureHook : AssetHook, IVideoTextureAssetHook
 
     private ImageTexture? _imageTexture;
     private Image? _image;
+
+    // A FRAME NOBODY CAN SEE STAYS ON THE DECODER.
+    //
+    // Every decoded frame went up to the video card, a 1080p frame at a time. A world with a screen in one room
+    // paid for it everywhere else in the building. A frame goes up only while a renderer showing the video is in
+    // front of the viewer, and a screen that is a small part of the view gets fewer of them: every decoded frame
+    // from FullRateShare up, then fewer in proportion to its size down to MinFramesPerSecond. The sound plays on
+    // regardless, and the next frame goes up the moment the screen is seen. The first frame always goes, so the
+    // texture is valid from the start. -xlinka
+    private readonly TextureViewers _viewers = new();
+    private const float FullRateShare = 0.5f;
+    private const double FullRateFramesPerSecond = 60.0;
+    private const double MinFramesPerSecond = 15.0;
     private Texture2D? _presented;
 
     private IVideoDecoderBackend? _backend;
@@ -148,6 +161,19 @@ public sealed partial class VideoTextureHook : AssetHook, IVideoTextureAssetHook
         var backend = _backend;
         var node = _processNode;
         var texture = _imageTexture;
+        var converter = _converter;
+        var planesView = _planesView;
+        var planesTexture = _planesTexture;
+        var planesImageTexture = _planesImageTexture;
+        _converter = null;
+        _converterRect = null;
+        _converterMaterial = null;
+        _boundPlanes = null;
+        _planesView = null;
+        _planesTexture = default;
+        _planesUpdatable = false;
+        _planesImage = null;
+        _planesImageTexture = null;
         _backend = null;
         _processNode = null;
         _imageTexture = null;
@@ -161,6 +187,7 @@ public sealed partial class VideoTextureHook : AssetHook, IVideoTextureAssetHook
             if (node != null && GodotObject.IsInstanceValid(node))
                 node.QueueFree();
             texture?.Dispose();
+            FreePlanes(converter, planesView, planesTexture, planesImageTexture);
         }).CallDeferred();
     }
 
@@ -200,7 +227,7 @@ public sealed partial class VideoTextureHook : AssetHook, IVideoTextureAssetHook
             return;
         }
 
-        var backend = CreateBackend(request, host);
+        var backend = CreateBackend(request, host, out var source);
         if (backend == null)
             return;
 
@@ -211,7 +238,7 @@ public sealed partial class VideoTextureHook : AssetHook, IVideoTextureAssetHook
         backend.SetAudioSink(_sink);
         backend.SetVolume(_volume);
         backend.UpdateState(_wantPlay, _wantLoop, _wantPosition, _wantSpeed);
-        backend.Open(request.Source, request.AudioSource, _audioTrack, request.IsStream, request.IsLive, request.MaxWidth, request.MaxHeight);
+        backend.Open(source, request.AudioSource, _audioTrack, request.IsStream, request.IsLive, request.MaxWidth, request.MaxHeight);
     }
 
     // Engine choice, in one place so the rule is readable:
@@ -220,10 +247,17 @@ public sealed partial class VideoTextureHook : AssetHook, IVideoTextureAssetHook
     //   libVLC missing -> Theora for an ogg, a named failure for everything else
     // A forced "libVLC" beats the extension, because someone forcing it wants the reason when it is
     // not there rather than a silent downgrade. -xlinka
-    private IVideoDecoderBackend? CreateBackend(LoadRequest request, Node host)
+    //
+    // A video from the asset database (a local:// source) is sealed on disk and only ever opened through a
+    // decrypting stream. libVLC reads that stream; the built-in Theora decoder can only open a path, so a
+    // sealed one goes to libVLC whatever its container. Where there is no libVLC the store keeps Theora plain
+    // (LocalDB.KeepsTheoraPlain) and Theora is given its file.
+    private IVideoDecoderBackend? CreateBackend(LoadRequest request, Node host, out string source)
     {
-        bool isOgg = HasOggExtension(request.Source);
-        bool wantsLibVlc = request.ForceEngine == MediaServices.EngineLibVlc || !isOgg;
+        source = request.Source;
+        bool stored = request.Source.StartsWith("local://", StringComparison.Ordinal);
+        bool isOgg = HasOggExtension(request.Source) || string.Equals(request.Mime, "video/ogg", StringComparison.OrdinalIgnoreCase);
+        bool wantsLibVlc = request.ForceEngine == MediaServices.EngineLibVlc || !isOgg || stored;
 
         if (!wantsLibVlc)
             return new TheoraBackend(host);
@@ -235,8 +269,19 @@ public sealed partial class VideoTextureHook : AssetHook, IVideoTextureAssetHook
 #else
         const string reason = "this platform has no libVLC build";
 #endif
-        if (isOgg)
+        if (isOgg && !stored)
             return new TheoraBackend(host);
+        if (isOgg && stored)
+        {
+            var path = Lumora.Core.Engine.Current?.LocalDB?.GetFilePath(request.Source);
+            if (!string.IsNullOrEmpty(path) && System.IO.File.Exists(path) && !Lumora.Nexus.Storage.SealedFile.IsSealed(path))
+            {
+                source = path!;
+                return new TheoraBackend(host);
+            }
+            OnBackendFailed($"a stored video plays through a decrypting stream, and the built-in decoder here only opens files ({reason})");
+            return null;
+        }
 
         OnBackendFailed($"libVLC unavailable: {reason}");
         return null;
@@ -293,41 +338,245 @@ public sealed partial class VideoTextureHook : AssetHook, IVideoTextureAssetHook
         OnBackendFailed($"no video after {FirstFrameTimeoutSeconds:0} s");
     }
 
-    void IVideoFrameTarget.SubmitFrame(byte[] rgba, int width, int height)
+    double IVideoFrameTarget.FrameInterval
     {
-        if (width <= 0 || height <= 0) return;
-        int expected = width * height * 4;
-        if (rgba.Length < expected) return;
-
-        // Godot refuses anything but the exact byte count, and a decoder buffer is allowed to run on
-        // past the picture (coded height below the visible rows), so only the picture is handed over.
-        var pixels = new ReadOnlySpan<byte>(rgba, 0, expected);
-        try
+        get
         {
-            if (_image == null || _image.GetWidth() != width || _image.GetHeight() != height)
-            {
-                _image = Image.CreateFromData(width, height, false, Image.Format.Rgba8, pixels);
-                Adopt(_image);
-            }
-            else
-            {
-                // Same resource, new contents. Every material that bound this texture holds the
-                // resource object, so pushing pixels through it is what keeps a playing video from
-                // needing a rebind on every frame (same rule as a progressive texture load). -xlinka
-                _image.SetData(width, height, false, Image.Format.Rgba8, pixels);
-                _imageTexture!.Update(_image);
-            }
+            if (!_sawFirstFrame)
+                return 0.0;
+            if (!_viewers.InView(asset))
+                return -1.0;
+            float share = _viewers.LargestShare;
+            if (share >= FullRateShare)
+                return 0.0;
+            return 1.0 / System.Math.Max(MinFramesPerSecond, FullRateFramesPerSecond * share / FullRateShare);
         }
-        catch (Exception ex)
+    }
+
+    // COLOUR IS PUT BACK TOGETHER ON THE CARD.
+    //
+    // A decoder that hands over planes (LibVlcBackend) sends a byte and a half a pixel instead of four, as one
+    // one-byte texture: brightness rows, then colour rows with U on the left half and V on the right. A small
+    // viewport draws it into the colour picture every material samples, once for each new frame. Colour samples
+    // are clamped inside their own half so filtering never mixes U into V or brightness into colour. The matrix
+    // is BT.709 for pictures 720 rows and up and BT.601 below, the usual rule for video that does not say which;
+    // both studio range. The picture the viewport draws is read through an sRGB view like any colour texture, so
+    // materials see the same values as from an image. -xlinka
+    private const string PlaneShaderCode = @"shader_type canvas_item;
+uniform sampler2D planes : filter_linear;
+uniform vec2 picture = vec2(1.0);
+uniform float luma_lines = 1.0;
+uniform bool bt709 = true;
+void fragment() {
+	vec2 size = vec2(textureSize(planes, 0));
+	vec2 p = UV * picture;
+	vec2 luma = vec2(p.x, min(p.y, picture.y - 0.5));
+	vec2 c = clamp(p * 0.5, vec2(0.5), ceil(picture * 0.5) - 0.5);
+	vec2 cu = vec2(c.x, luma_lines + c.y);
+	float y = (texture(planes, luma / size).r - 16.0 / 255.0) * (255.0 / 219.0);
+	float u = (texture(planes, cu / size).r - 0.5) * (255.0 / 224.0);
+	float v = (texture(planes, (cu + vec2(size.x * 0.5, 0.0)) / size).r - 0.5) * (255.0 / 224.0);
+	vec3 rgb = bt709
+		? vec3(y + 1.5748 * v, y - 0.1873 * u - 0.4681 * v, y + 1.8556 * u)
+		: vec3(y + 1.402 * v, y - 0.344136 * u - 0.714136 * v, y + 1.772 * u);
+	COLOR = vec4(clamp(rgb, 0.0, 1.0), 1.0);
+}
+";
+    private static readonly StringName PlanesParam = "planes";
+    private static readonly StringName PictureParam = "picture";
+    private static readonly StringName LumaLinesParam = "luma_lines";
+    private static readonly StringName Bt709Param = "bt709";
+    // Passed instead of null: GodotSharp would make a temporary array for the call that nothing keeps alive.
+    private static readonly global::Godot.Collections.Array<byte[]> NoLayers = new();
+    private static Shader? s_planeShader;
+
+    private SubViewport? _converter;
+    private ColorRect? _converterRect;
+    private ShaderMaterial? _converterMaterial;
+    private Texture2D? _boundPlanes;
+    private Texture2Drd? _planesView;
+    // The planes being shown. A backend's texture is ours to free once a newer one replaces it; one made here
+    // for main-thread uploads is updated in place.
+    private Rid _planesTexture;
+    private bool _planesUpdatable;
+    private int _planesWidth;
+    private int _planesHeight;
+    private Image? _planesImage;
+    private ImageTexture? _planesImageTexture;
+    private int _layoutWidth;
+    private int _layoutHeight;
+    private int _layoutPitch;
+    private int _layoutLumaLines;
+
+    void IVideoFrameTarget.PresentPlanes(Rid texture, int width, int height, int pitch, int lumaLines, int chromaLines)
+    {
+        var device = RenderingServer.GetRenderingDevice();
+        if (device == null || !texture.IsValid)
+            return;
+        if (width <= 0 || height <= 0 || pitch <= 0 || lumaLines <= 0 || chromaLines <= 0
+            || !EnsureConverter(width, height, pitch, lumaLines))
         {
-            LumoraLogger.Error($"VideoTextureHook: frame upload failed: {ex.Message}");
+            device.FreeRid(texture);
             return;
         }
 
+        var previous = _planesTexture;
+        _planesTexture = texture;
+        _planesUpdatable = false;
+        _planesView ??= new Texture2Drd();
+        _planesView.TextureRdRid = texture;
+        BindPlanes(_planesView);
+        if (previous.IsValid && previous != texture)
+            device.FreeRid(previous);
+        ShowPlanes(width, height);
+    }
+
+    void IVideoFrameTarget.SubmitPlanes(ReadOnlySpan<byte> planes, int width, int height, int pitch, int lumaLines, int chromaLines)
+    {
+        if (width <= 0 || height <= 0 || pitch <= 0 || lumaLines <= 0 || chromaLines <= 0)
+            return;
+        int rows = lumaLines + chromaLines;
+        if (planes.Length < pitch * rows)
+            return;
+        // A backend pacing itself already asked; this is for one that hands every frame over.
+        if (_sawFirstFrame && ((IVideoFrameTarget)this).FrameInterval < 0.0)
+            return;
+
+        try
+        {
+            if (!EnsureConverter(width, height, pitch, lumaLines))
+                return;
+            UploadPlanes(planes.Slice(0, pitch * rows), pitch, rows);
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Error($"VideoTextureHook: plane upload failed: {ex.Message}");
+            return;
+        }
+        ShowPlanes(width, height);
+    }
+
+    private void ShowPlanes(int width, int height)
+    {
+        _converter!.RenderTargetUpdateMode = SubViewport.UpdateMode.Once;
         VideoWidth = width;
         VideoHeight = height;
         _sawFirstFrame = true;
-        Present(_imageTexture);
+        Present(_converter.GetTexture());
+    }
+
+    private void BindPlanes(Texture2D texture)
+    {
+        if (ReferenceEquals(_boundPlanes, texture))
+            return;
+        _boundPlanes = texture;
+        _converterMaterial!.SetShaderParameter(PlanesParam, texture);
+    }
+
+    // The uniforms only change with the picture's size, not every frame.
+    private bool EnsureConverter(int width, int height, int pitch, int lumaLines)
+    {
+        if (_converter == null || !GodotObject.IsInstanceValid(_converter))
+        {
+            var host = EnsureProcessNode();
+            if (host == null)
+                return false;
+            s_planeShader ??= new Shader { Code = PlaneShaderCode };
+            _converterMaterial = new ShaderMaterial { Shader = s_planeShader };
+            _converterRect = new ColorRect { Material = _converterMaterial };
+            _converter = new SubViewport
+            {
+                Name = "VideoPlanes",
+                Disable3D = true,
+                TransparentBg = false,
+                RenderTargetUpdateMode = SubViewport.UpdateMode.Disabled,
+            };
+            _converter.AddChild(_converterRect);
+            host.AddChild(_converter);
+            _boundPlanes = null;
+            _layoutWidth = 0;
+        }
+        if (_layoutWidth == width && _layoutHeight == height && _layoutPitch == pitch && _layoutLumaLines == lumaLines)
+            return true;
+
+        _layoutWidth = width;
+        _layoutHeight = height;
+        _layoutPitch = pitch;
+        _layoutLumaLines = lumaLines;
+        var size = new Vector2I(width, height);
+        if (_converter.Size != size)
+            _converter.Size = size;
+        _converterRect!.Size = new Vector2(width, height);
+        _converterMaterial!.SetShaderParameter(PictureParam, new Vector2(width, height));
+        _converterMaterial.SetShaderParameter(LumaLinesParam, (float)lumaLines);
+        _converterMaterial.SetShaderParameter(Bt709Param, height >= 720);
+        return true;
+    }
+
+    // Main thread: the planes go into a texture of our own, in place.
+    private void UploadPlanes(ReadOnlySpan<byte> planes, int pitch, int rows)
+    {
+        var device = RenderingServer.GetRenderingDevice();
+        if (device != null)
+        {
+            if (_planesUpdatable && _planesTexture.IsValid && _planesWidth == pitch && _planesHeight == rows)
+            {
+                device.TextureUpdate(_planesTexture, 0, planes);
+                return;
+            }
+            var format = new RDTextureFormat
+            {
+                Format = RenderingDevice.DataFormat.R8Unorm,
+                Width = (uint)pitch,
+                Height = (uint)rows,
+                UsageBits = RenderingDevice.TextureUsageBits.SamplingBit | RenderingDevice.TextureUsageBits.CanUpdateBit,
+            };
+            var view = new RDTextureView();
+            var created = device.TextureCreate(format, view, NoLayers);
+            GC.KeepAlive(format);
+            GC.KeepAlive(view);
+            GC.KeepAlive(NoLayers);
+            if (!created.IsValid)
+                throw new InvalidOperationException("no device texture for the planes");
+            device.TextureUpdate(created, 0, planes);
+            var previous = _planesTexture;
+            _planesTexture = created;
+            _planesUpdatable = true;
+            _planesWidth = pitch;
+            _planesHeight = rows;
+            _planesView ??= new Texture2Drd();
+            _planesView.TextureRdRid = created;
+            BindPlanes(_planesView);
+            if (previous.IsValid)
+                device.FreeRid(previous);
+            return;
+        }
+
+        if (_planesImage != null && _planesImageTexture != null && _planesWidth == pitch && _planesHeight == rows)
+        {
+            _planesImage.SetData(pitch, rows, false, Image.Format.L8, planes);
+            _planesImageTexture.Update(_planesImage);
+            return;
+        }
+        _planesImage = Image.CreateFromData(pitch, rows, false, Image.Format.L8, planes);
+        _planesImageTexture = ImageTexture.CreateFromImage(_planesImage);
+        _planesWidth = pitch;
+        _planesHeight = rows;
+        BindPlanes(_planesImageTexture);
+    }
+
+    private static void FreePlanes(SubViewport? converter, Texture2Drd? view, Rid texture, ImageTexture? imageTexture)
+    {
+        if (converter != null && GodotObject.IsInstanceValid(converter))
+            converter.QueueFree();
+        if (view != null && GodotObject.IsInstanceValid(view))
+        {
+            view.TextureRdRid = new Rid();
+            view.Dispose();
+        }
+        if (texture.IsValid)
+            RenderingServer.GetRenderingDevice()?.FreeRid(texture);
+        imageTexture?.Dispose();
     }
 
     void IVideoFrameTarget.PresentTexture(Texture2D? texture, int width, int height)
