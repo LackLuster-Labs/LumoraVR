@@ -8,7 +8,10 @@ namespace Lumora.Script;
 // scope, so a write is judged by the gate exactly like the author's own would be.
 //
 // A call that could not do what it was asked says why with Fail, and a refusal says so on its own. With
-// failed wired, such a call leaves by failed instead of next; with nothing there it carries on by next.
+// failed wired, such a call leaves by failed instead of next; with nothing there it carries on by next. An
+// input bound to something since destroyed fails by its port's name before the body runs. A body that throws
+// ArgumentException for an input it cannot use, or InvalidOperationException for a thing it could not do,
+// leaves by failed with that message when failed is wired, and stops the call as a fault when it is not.
 public abstract class ActionNode : ScriptNode
 {
     public const string NextExit = "next";

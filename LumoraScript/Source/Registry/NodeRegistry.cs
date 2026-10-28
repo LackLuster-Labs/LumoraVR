@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 
@@ -21,14 +22,20 @@ public sealed class NodeRegistry
 
     public IReadOnlyList<string> Problems => _problems;
 
-    public static NodeRegistry Scan(IEnumerable<Assembly> assemblies)
+    private Func<MethodInfo, bool>? _keepOverload;
+
+    public static NodeRegistry Scan(IEnumerable<Assembly> assemblies) => Scan(assemblies, null, null);
+
+    // Only the node classes keepType takes, each with only the Run overloads keepOverload takes; a class left
+    // with none is left out. The shader registry takes Loom's value nodes this way, by their [Gpu] overloads.
+    public static NodeRegistry Scan(IEnumerable<Assembly> assemblies, Func<Type, bool>? keepType, Func<MethodInfo, bool>? keepOverload)
     {
-        var registry = new NodeRegistry();
+        var registry = new NodeRegistry { _keepOverload = keepOverload };
         foreach (var assembly in assemblies.Distinct())
         {
             foreach (var type in LoadableTypes(assembly).OrderBy(t => t.FullName, StringComparer.Ordinal))
             {
-                if (!typeof(ScriptNode).IsAssignableFrom(type) || type.IsAbstract)
+                if (!typeof(ScriptNode).IsAssignableFrom(type) || type.IsAbstract || (keepType != null && !keepType(type)))
                     continue;
                 var attribute = type.GetCustomAttribute<NodeAttribute>();
                 if (attribute == null)
@@ -76,6 +83,8 @@ public sealed class NodeRegistry
             overload = candidates[0];
             return true;
         }
+        if (definition.GrowsExits)
+            return TryGrow(definition, signature, out overload, out error);
 
         if (!TryCanonicalSignature(signature, out var canonical))
         {
@@ -188,6 +197,51 @@ public sealed class NodeRegistry
             function: signature);
     }
 
+    // A flow node's run of exits at the length its "sig" gives, "6" for six. The declared length is the node's
+    // own overload, so a graph saved with no "sig" opens as it always did.
+    private static bool TryGrow(NodeDefinition definition, string signature, out NodeOverload overload, out string error)
+    {
+        overload = null!;
+        error = string.Empty;
+        if (!int.TryParse(signature.Trim(), NumberStyles.None, CultureInfo.InvariantCulture, out int count))
+        {
+            error = $"{definition.Name} takes its number of exits in \"sig\", not \"{signature}\"";
+            return false;
+        }
+        if (count < FlowBuilder.MinExits || count > FlowBuilder.MaxExits)
+        {
+            error = $"{definition.Name} has {FlowBuilder.MinExits} to {FlowBuilder.MaxExits} exits, not {count}";
+            return false;
+        }
+        if (count == definition.ExitRun)
+        {
+            overload = definition.Overloads[0];
+            return true;
+        }
+        var key = count.ToString(CultureInfo.InvariantCulture);
+        lock (definition.Lock)
+        {
+            if (definition.Shaped.TryGetValue(key, out overload!))
+                return true;
+        }
+        NodeOverload made;
+        try
+        {
+            made = BuildFlow(definition, definition.ClrType, Array.Empty<ScriptType>(), count);
+        }
+        catch (Exception ex) when (ex is InvalidOperationException or ArgumentException)
+        {
+            error = $"{definition.Name}: {ex.Message}";
+            return false;
+        }
+        lock (definition.Lock)
+        {
+            if (!definition.Shaped.TryGetValue(key, out overload!))
+                definition.Shaped[key] = overload = made;
+        }
+        return true;
+    }
+
     // Three or more inputs of one type on a variadic node: its two-input overload for that type, folded.
     private static bool TryFold(NodeDefinition definition, string canonical, out NodeOverload overload, out string error)
     {
@@ -236,7 +290,8 @@ public sealed class NodeRegistry
 
         var kind = KindOf(type);
         var formerNames = type.GetCustomAttributes<FormerNameAttribute>().Select(a => a.Name).ToArray();
-        var definition = new NodeDefinition(name, attribute.Path, kind, attribute.Capability, attribute.Version, type, formerNames);
+        var definition = new NodeDefinition(name, attribute.Path, kind, attribute.Capability, attribute.Version, type, formerNames, attribute.Description,
+            attribute.Keywords);
 
         // An await closes per type like any generic node; its payload is not generic, so its outputs never move.
         if (type.IsGenericTypeDefinition && kind is NodeKind.Event)
@@ -280,6 +335,13 @@ public sealed class NodeRegistry
                     break;
                 default:
                     definition.Overloads.AddRange(BuildMethods(definition, type, Array.Empty<ScriptType>()));
+                    if (_keepOverload != null)
+                    {
+                        definition.Overloads.RemoveAll(o => o.Method != null && !_keepOverload(o.Method));
+                        if (definition.Overloads.Count == 0)
+                            return;
+                    }
+                    definition.Preferred = PreferredOf(definition.Overloads);
                     break;
             }
             if (definition.Overloads.Count == 0)
@@ -545,8 +607,8 @@ public sealed class NodeRegistry
             }
             if (parameter.ParameterType.IsByRef)
                 throw new InvalidOperationException($"parameter '{parameter.Name}' is ref; only out is allowed");
-            inputs.Add(Port(portName, parameter.ParameterType, parameter.HasDefaultValue ? parameter.DefaultValue : null,
-                parameter.HasDefaultValue, names, parameter.IsDefined(typeof(SettingAttribute), false)));
+            var (fallback, hasDefault) = DefaultOf(parameter, portName);
+            inputs.Add(Port(portName, parameter.ParameterType, fallback, hasDefault, names, parameter.IsDefined(typeof(SettingAttribute), false)));
         }
 
         byte? inline = null;
@@ -583,6 +645,58 @@ public sealed class NodeRegistry
         if (writer == null || writer.ReturnType != typeof(void))
             throw new InvalidOperationException($"[WasmBody] names {body.Writer}, which is not a static void {body.Writer}(WasmBodyWriter)");
         return (Action<WasmBodyWriter>)writer.CreateDelegate(typeof(Action<WasmBodyWriter>));
+    }
+
+    // An input's default: what [Default] spells, else its C# one. A [Default] goes through the literal rules a
+    // saved value does, so the card shows, and the compiler uses, exactly what a graph could have written.
+    // Past those, a vector's float or double lane may be an infinity, which no saved value spells but an
+    // empty box's corners are: the lanes are checked with zero there, then the infinity is put in. -xlinka
+    private static (object? Value, bool Has) DefaultOf(ParameterInfo parameter, string port)
+    {
+        if (parameter.GetCustomAttribute<DefaultAttribute>() is not { } stated)
+            return (parameter.HasDefaultValue ? parameter.DefaultValue : null, parameter.HasDefaultValue);
+        if (!ScriptTypes.TryGet(parameter.ParameterType, out var type))
+            return (null, false);
+        if (type.Kind == ScriptTypeKind.Handle)
+            throw new InvalidOperationException($"[Default] on '{port}' is for numbers, vectors, colours and rotations, not {type.Name}");
+        var lanes = stated.Lanes;
+        bool vector = type.Kind == ScriptTypeKind.Vector;
+        if (lanes.Length == 1 && vector && type.LaneCount > 1)
+            lanes = Enumerable.Repeat(lanes[0], type.LaneCount).ToArray();
+        if (lanes.Length == 0 || (!vector && lanes.Length != 1) || lanes.Any(double.IsNaN) || (!vector && double.IsInfinity(lanes[0])))
+            throw new InvalidOperationException($"[Default] on '{port}' does not spell a {type.Name}");
+        var finite = lanes.Select(lane => double.IsInfinity(lane) ? 0d : lane).ToArray();
+        var value = vector ? GraphValue.Of(finite) : GraphValue.Of(finite[0]);
+        if (!ConstantValue.TryConvert(value, type, out var constant, out var error))
+            throw new InvalidOperationException($"[Default] on '{port}': {error}");
+        for (int i = 0; i < lanes.Length; i++)
+        {
+            if (!double.IsInfinity(lanes[i]))
+                continue;
+            var leaf = type.Leaves[i];
+            if (leaf.ClrType == typeof(float))
+                leaf.Set(constant.Value!, (float)lanes[i]);
+            else if (leaf.ClrType == typeof(double))
+                leaf.Set(constant.Value!, lanes[i]);
+            else
+                throw new InvalidOperationException($"[Default] on '{port}' puts an infinity in a {type.Name} lane that is not a float or a double");
+        }
+        return (constant.Value, true);
+    }
+
+    // The one overload [Preferred] marks, if any.
+    private static NodeOverload? PreferredOf(List<NodeOverload> overloads)
+    {
+        NodeOverload? preferred = null;
+        foreach (var overload in overloads)
+        {
+            if (overload.Method?.IsDefined(typeof(PreferredAttribute), false) != true)
+                continue;
+            if (preferred != null)
+                throw new InvalidOperationException("two overloads are [Preferred]");
+            preferred = overload;
+        }
+        return preferred;
     }
 
     private static NodePort Port(string name, Type clrType, object? defaultValue, bool hasDefault, HashSet<string> names, bool isSetting = false)
@@ -668,8 +782,8 @@ public sealed class NodeRegistry
             if (parameter.IsOut || parameter.ParameterType.IsByRef)
                 throw new InvalidOperationException($"parameter '{parameter.Name}' is ref or out; what comes back comes with the answer");
             var portName = parameter.GetCustomAttribute<PortAttribute>()?.Name ?? parameter.Name ?? $"arg{i}";
-            inputs.Add(Port(portName, parameter.ParameterType, parameter.HasDefaultValue ? parameter.DefaultValue : null,
-                parameter.HasDefaultValue, names, parameter.IsDefined(typeof(SettingAttribute), false)));
+            var (fallback, hasDefault) = DefaultOf(parameter, portName);
+            inputs.Add(Port(portName, parameter.ParameterType, fallback, hasDefault, names, parameter.IsDefined(typeof(SettingAttribute), false)));
         }
         var outputs = new List<NodePort>();
         foreach (var property in PayloadProperties(payload))
@@ -716,16 +830,24 @@ public sealed class NodeRegistry
         return properties.OrderBy(p => p.MetadataToken).ToArray();
     }
 
-    private static NodeOverload BuildFlow(NodeDefinition definition, Type type, IReadOnlyList<ScriptType> typeArguments)
+    // With exitCount, the node's run of exits that long, the overload a graph's "sig" asks for; without, the node's own,
+    // which says how long its run is when it has one.
+    private static NodeOverload BuildFlow(NodeDefinition definition, Type type, IReadOnlyList<ScriptType> typeArguments, int? exitCount = null)
     {
         if (type.GetConstructor(Type.EmptyTypes) == null)
             throw new InvalidOperationException("a flow node needs a public parameterless constructor");
 
         var node = (FlowNode)Activator.CreateInstance(type)!;
-        var builder = new FlowBuilder();
+        var builder = new FlowBuilder { AskedExits = exitCount };
         node.Build(builder);
         if (builder.Shape == null)
             throw new InvalidOperationException("Build declared no shape");
+        if (builder.DeclaredExits > 0 && definition.IsGeneric)
+            throw new InvalidOperationException("a generic flow node cannot grow its exits; its \"sig\" is its types");
+        if (exitCount != null && builder.DeclaredExits == 0)
+            throw new InvalidOperationException("Build declared no run of exits to grow");
+        if (exitCount == null && !definition.IsGeneric)
+            definition.ExitRun = builder.DeclaredExits;
         if (builder.Shape.Kind is FlowShapeKind.Follow or FlowShapeKind.FrameDelta or FlowShapeKind.Drive)
             throw new InvalidOperationException($"{builder.Shape.Kind} belongs to a memory or drive node, not a flow node");
 
@@ -743,7 +865,8 @@ public sealed class NodeRegistry
         }
 
         return new NodeOverload(definition, typeArguments, builder.Inputs.ToArray(), builder.Outputs.ToArray(),
-            new[] { "in" }, builder.Exits.ToArray(), null, false, null, builder.Shape, null);
+            new[] { "in" }, builder.Exits.ToArray(), null, false, null, builder.Shape, null,
+            signature: exitCount is { } asked && asked != builder.DeclaredExits ? asked.ToString(CultureInfo.InvariantCulture) : null);
     }
 
     // A memory or a drive node: ports and shape from Build, the way a flow node's come, with no flow in or out.

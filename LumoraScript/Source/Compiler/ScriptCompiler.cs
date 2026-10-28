@@ -17,6 +17,7 @@ namespace Lumora.Script;
 // MODULE LAYOUT
 //   import lumora:rt.str_utf8 (ptr, len) -> handle   makes the constant strings at start
 //   import lumora:rt.url_utf8 (ptr, len) -> handle   makes the constant addresses at start, when there are any
+//   import lumora:rt.bigint_utf8 (ptr, len) -> handle   makes the constant big integers at start, when there are any
 //   import lumora.<overload>                         one per node overload that calls into C#
 //   import lumora:rt.delay (timer, seconds)          asks for a timer, when the graph has a Delay
 //   an await node's Start is a node import that takes the await's number ahead of its inputs
@@ -70,6 +71,7 @@ public sealed class ScriptCompiler
     public const string RuntimeModule = "lumora:rt";
     public const string StringImport = "str_utf8";
     public const string UrlImport = "url_utf8";
+    public const string BigIntImport = "bigint_utf8";
     public const string TimerImport = "delay";
     public const string NowImport = "now";
     public const string LiveImport = "live";
@@ -173,6 +175,8 @@ public sealed class ScriptCompiler
         CheckDataCycles();
         if (HasErrors)
             return CompileResult.Failed(hash, _diagnostics);
+
+        FoldConstants();
 
         CheckFunctions();
         if (HasErrors)
@@ -655,6 +659,106 @@ public sealed class ScriptCompiler
         }
     }
 
+    // A pure node whose every input is a constant is worked out here, by its own C# body, and whatever reads it
+    // reads the answer as a constant, so the module never works it out. Only over plain numbers and vectors,
+    // never a NaN (a sign flip keeps a NaN's payload in the module where the body would make it canonical), and
+    // only when the body answers: whatever would trap at run time is left to trap there. Folded answers feed the
+    // next round, so a chain of them folds whole. -xlinka
+    private void FoldConstants()
+    {
+        var folded = new HashSet<ResolvedNode>();
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var node in _nodes)
+            {
+                if (folded.Contains(node) || !Foldable(node) || !TryFold(node, out var answers))
+                    continue;
+                folded.Add(node);
+                foreach (var reader in _nodes)
+                {
+                    for (int i = 0; i < reader.Inputs.Length; i++)
+                    {
+                        if (reader.Inputs[i] is { Node: { } from, Output: int output } && ReferenceEquals(from, node))
+                        {
+                            reader.Inputs[i] = DataSource.Of(answers[output]);
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private static bool Foldable(ResolvedNode node)
+    {
+        if (node.Kind != NodeKind.Value || node.Overload.Method == null || node.Overload.TakesContext || node.Overload.Folds != null)
+            return false;
+        foreach (var port in node.Overload.Inputs.Concat(node.Overload.Outputs))
+        {
+            if (port.Type.Kind is not (ScriptTypeKind.Bool or ScriptTypeKind.Int or ScriptTypeKind.Long or ScriptTypeKind.Float
+                or ScriptTypeKind.Double or ScriptTypeKind.Vector))
+                return false;
+        }
+        foreach (var input in node.Inputs)
+        {
+            if (input?.Constant is not { Binding: < 0, Value: { } value } || HasNaN(value))
+                return false;
+        }
+        return true;
+    }
+
+    private static bool TryFold(ResolvedNode node, out ConstantValue[] answers)
+    {
+        answers = Array.Empty<ConstantValue>();
+        var method = node.Overload.Method!;
+        var parameters = method.GetParameters();
+        var arguments = new object?[parameters.Length];
+        int input = 0;
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            if (!parameters[i].IsOut)
+                arguments[i] = node.Inputs[input++]!.Constant!.Value;
+        }
+        object? returned;
+        try
+        {
+            returned = method.Invoke(null, arguments);
+        }
+        catch (System.Reflection.TargetInvocationException)
+        {
+            return false;
+        }
+        var values = new List<object?>();
+        if (method.ReturnType != typeof(void))
+            values.Add(returned);
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            if (parameters[i].IsOut)
+                values.Add(arguments[i]);
+        }
+        var outputs = node.Overload.Outputs;
+        if (values.Count != outputs.Count)
+            return false;
+        answers = new ConstantValue[outputs.Count];
+        for (int i = 0; i < outputs.Count; i++)
+        {
+            if (values[i] is not { } value || HasNaN(value))
+                return false;
+            answers[i] = ConstantValue.OfBoxed(outputs[i].Type, value);
+        }
+        return true;
+    }
+
+    private static bool HasNaN(object value) => value switch
+    {
+        float single => float.IsNaN(single),
+        double precise => double.IsNaN(precise),
+        _ => ScriptTypes.Get(value.GetType()) is { Kind: ScriptTypeKind.Vector } type
+            && type.Leaves.Any(leaf => leaf.Get(value) is float f && float.IsNaN(f) || leaf.Get(value) is double v && double.IsNaN(v)),
+    };
+
     // A relay is a point on a wire and nothing more. Every input it feeds reads what feeds it, every exit that
     // runs it runs what it runs, and it leaves before cycles are checked or anything is lowered, so the module
     // is the one the same graph makes without it. The exits that ran into one are kept, so its own exit can
@@ -976,6 +1080,130 @@ public sealed class ScriptCompiler
         return slash >= 0 ? path[(slash + 1)..] : path;
     }
 
+    // What a chain that runs out goes on to, the way the body is lowered: the next step of a Sequence, the leave
+    // of a scope and what follows it, or back to a loop, whose own exit is followed on its own. Null is the end of
+    // the body.
+    private enum ResumeKind : byte { Step, Then, Loop }
+
+    private sealed record Resume(ResumeKind Kind, ResolvedNode Node, int Index, Resume? Next)
+    {
+        public string Key => Next == null ? $"{(int)Kind}{Node.Tag}:{Index}" : $"{(int)Kind}{Node.Tag}:{Index}|{Next.Key}";
+    }
+
+    private const int EndsAtReturnBudget = 20000;
+
+    // Every way through a Function's body that ends without a Return, refused where it ends: an unwired exit, a
+    // Once past its first run, or the Function's own next left unwired. Each branch side runs to its end, a
+    // Sequence's steps one after another, a loop's body back to the loop and a scope's body to its leave. A shape
+    // it does not know, or more work than the bound, and it says nothing rather than refuse a graph it could not
+    // read. -xlinka
+    private void CheckEndsAtReturn(ResolvedNode function)
+    {
+        var ends = new List<(ResolvedNode Node, int Exit)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var pending = new Stack<(ResolvedNode? Node, Resume? Resume, ResolvedNode From, int Exit)>();
+        pending.Push((function.Exits.Length > 0 ? function.Exits[0] : null, null, function, 0));
+        int work = 0;
+        while (pending.Count > 0)
+        {
+            if (++work > EndsAtReturnBudget)
+                return;
+            var (node, resume, from, exit) = pending.Pop();
+            if (!seen.Add($"{node?.Tag ?? -1}/{from.Tag}:{exit}/{resume?.Key}"))
+                continue;
+
+            if (node == null)
+            {
+                if (resume == null)
+                {
+                    ends.Add((from, exit));
+                    continue;
+                }
+                var back = resume.Node;
+                var steps = back.Overload.Shape!.Exits;
+                switch (resume.Kind)
+                {
+                    case ResumeKind.Step:
+                        int at = steps[resume.Index];
+                        pending.Push((back.Exits[at], resume.Index + 1 < steps.Length ? resume with { Index = resume.Index + 1 } : resume.Next, back, at));
+                        break;
+                    case ResumeKind.Then:
+                        pending.Push((back.Exits[resume.Index], resume.Next, back, resume.Index));
+                        break;
+                }
+                continue;
+            }
+
+            switch (node.Kind)
+            {
+                case NodeKind.Return:
+                    continue;
+                case NodeKind.Action when node.FailedExit >= 0:
+                    pending.Push((node.Exits[0], resume, node, 0));
+                    pending.Push((node.Exits[node.FailedExit], resume, node, node.FailedExit));
+                    continue;
+                case NodeKind.Action:
+                case NodeKind.WriteVariable:
+                case NodeKind.Pulse:
+                case NodeKind.CallFunction when !node.IsAsyncCall:
+                    pending.Push((node.Exits.Length > 0 ? node.Exits[0] : null, resume, node, 0));
+                    continue;
+            }
+
+            var shape = node.Overload.Shape;
+            if (shape == null || node.IsDelay || node.IsAwait || node.IsAsyncCall)
+                return;
+            var exits = shape.Exits;
+            switch (shape.Kind)
+            {
+                case FlowShapeKind.Branch:
+                case FlowShapeKind.Toggle:
+                case FlowShapeKind.Watch:
+                case FlowShapeKind.Cooldown:
+                    pending.Push((node.Exits[exits[0]], resume, node, exits[0]));
+                    pending.Push((node.Exits[exits[1]], resume, node, exits[1]));
+                    break;
+                case FlowShapeKind.Once:
+                    pending.Push((node.Exits[exits[0]], resume, node, exits[0]));
+                    pending.Push((null, resume, node, -1));
+                    break;
+                case FlowShapeKind.Change:
+                    pending.Push((node.Exits[exits[0]], resume, node, exits[0]));
+                    break;
+                case FlowShapeKind.Scope:
+                    pending.Push((node.Exits[exits[0]], new Resume(ResumeKind.Then, node, exits[1], resume), node, exits[0]));
+                    break;
+                case FlowShapeKind.Sequence:
+                    if (exits.Length == 0)
+                        pending.Push((null, resume, node, -1));
+                    else
+                        pending.Push((node.Exits[exits[0]], exits.Length > 1 ? new Resume(ResumeKind.Step, node, 1, resume) : resume, node, exits[0]));
+                    break;
+                case FlowShapeKind.Repeat:
+                case FlowShapeKind.While:
+                case FlowShapeKind.Each:
+                case FlowShapeKind.Range:
+                case FlowShapeKind.ListEach:
+                    pending.Push((node.Exits[exits[0]], new Resume(ResumeKind.Loop, node, 0, null), node, exits[0]));
+                    pending.Push((node.Exits[exits[1]], resume, node, exits[1]));
+                    break;
+                default:
+                    return;
+            }
+        }
+
+        string name = function.FunctionName ?? function.Id;
+        foreach (var (node, exit) in ends)
+        {
+            if (node == function)
+                Error(node.Id, "gives values back but its body never reaches a Return; run next to a Return, or have it give nothing back");
+            else if (exit < 0)
+                Error(node.Id, $"ends {name} without a Return after its first run, while {name} gives values back; wire it to a Return, or have {name} give nothing back");
+            else
+                Error(node.Id, $"'{node.Overload.FlowOutputs[exit]}' ends {name} without a Return, while {name} gives values back; wire it to a Return, or have {name} give nothing back");
+        }
+    }
+
     // Functions as a whole: one name each; a Return only ever reached from its own Function's body, whatever waits
     // come between; and an Evaluate only of a Function whose body is one Return of values that need no flow, which
     // never comes back round to evaluating itself, since a value is worked out at once and has no If to stop it.
@@ -1028,6 +1256,16 @@ public sealed class ScriptCompiler
                 Error(node.Id, $"is never reached; run it from the body of {owner.FunctionName}");
             if (node.IsDelay || node.IsAwait || node.IsAsyncCall)
                 node.CarriesWord = node.Owners?.Any(o => o.Kind == NodeKind.Function) == true;
+        }
+
+        // A Function that gives nothing back, no ports after its bar, is a void one: its body may end wherever its
+        // flow does, and a Return in it only leaves early. One that gives values hands them over at a Return, so a
+        // way through its body that ends anywhere else is refused where it ends, rather than the call quietly
+        // coming back with every output's default. -xlinka
+        foreach (var function in functions)
+        {
+            if (!function.IsAsync && function.Overload.FunctionSignature is { Outputs.Count: > 0 })
+                CheckEndsAtReturn(function);
         }
 
         // Pure: next goes straight to a Return of this Function, fed by its arguments and what needs no flow.
@@ -1121,6 +1359,9 @@ public sealed class ScriptCompiler
             new WasmFuncType(new[] { WasmValueType.I32, WasmValueType.I32 }, new[] { WasmValueType.I32 }));
         int urlImport = AllConstants().Any(c => c.Value is Uri)
             ? module.ImportFunction(RuntimeModule, UrlImport, new WasmFuncType(new[] { WasmValueType.I32, WasmValueType.I32 }, new[] { WasmValueType.I32 }))
+            : -1;
+        int bigImport = AllConstants().Any(c => c.Value is ScriptBigInt)
+            ? module.ImportFunction(RuntimeModule, BigIntImport, new WasmFuncType(new[] { WasmValueType.I32, WasmValueType.I32 }, new[] { WasmValueType.I32 }))
             : -1;
 
         var imports = new List<NodeOverload>();
@@ -1252,6 +1493,22 @@ public sealed class ScriptCompiler
             }
             constant.Global = made.Global;
         }
+        // And every constant big integer, by its digits.
+        var bigs = new Dictionary<string, (int Offset, int Length, int Global)>(StringComparer.Ordinal);
+        foreach (var constant in AllConstants())
+        {
+            if (constant.Value is not ScriptBigInt big)
+                continue;
+            string digits = big.ToString();
+            if (!bigs.TryGetValue(digits, out var made))
+            {
+                var utf8 = Encoding.UTF8.GetBytes(digits);
+                made = (StackBytes + data.Count, utf8.Length, module.AddGlobal(new WasmGlobalType(WasmValueType.I32, true), WasmConstInit.I32(0)));
+                bigs.Add(digits, made);
+                data.AddRange(utf8);
+            }
+            constant.Global = made.Global;
+        }
 
         uint pages = (uint)((StackBytes + data.Count + 65535) / 65536);
         module.AddMemory(pages, pages);
@@ -1261,6 +1518,7 @@ public sealed class ScriptCompiler
         var variables = new List<ScriptVariableEntry>();
         var stringVariables = new List<(int Global, string Text)>();
         var urlVariables = new List<(int Global, int From)>();
+        var bigVariables = new List<(int Global, int From)>();
         foreach (var node in _nodes.Where(n => n.Kind == NodeKind.StoredVariable))
         {
             var type = node.Overload.Outputs[0].Type;
@@ -1283,6 +1541,8 @@ public sealed class ScriptCompiler
                 stringVariables.Add((node.Globals[0], text));
             else if (initial.Value is Uri)
                 urlVariables.Add((node.Globals[0], initial.Global));
+            else if (initial.Value is ScriptBigInt)
+                bigVariables.Add((node.Globals[0], initial.Global));
             variables.Add(new ScriptVariableEntry(node.Id, node.VariableName ?? node.Id, type, exports));
         }
 
@@ -1454,14 +1714,17 @@ public sealed class ScriptCompiler
         }
 
         List<string>? driveSources = driven.Count > 0 ? new List<string>() : null;
+        bool drivesRead = false;
         foreach (var node in driven)
         {
             var shape = node.Overload.Shape!;
             var stored = new List<ResolvedNode>();
             var seen = new HashSet<ResolvedNode>();
-            if (!SettlesOn(node.Inputs[shape.Input], seen, stored) || (shape.Switch >= 0 && !SettlesOn(node.Inputs[shape.Switch], seen, stored)))
+            if (!SettlesOn(node.Inputs[shape.Input], seen, stored, ref drivesRead)
+                || (shape.Switch >= 0 && !SettlesOn(node.Inputs[shape.Switch], seen, stored, ref drivesRead)))
             {
                 driveSources = null;
+                drivesRead = false;
                 break;
             }
             foreach (var variable in stored)
@@ -1471,7 +1734,7 @@ public sealed class ScriptCompiler
             }
         }
 
-        if (strings.Count > 0 || urls.Count > 0)
+        if (strings.Count > 0 || urls.Count > 0 || bigs.Count > 0)
         {
             var start = module.AddFunction(WasmFuncType.Empty);
             foreach (var (_, (offset, length, global)) in strings)
@@ -1480,7 +1743,11 @@ public sealed class ScriptCompiler
                 start.I32Const(offset).I32Const(length).Call(urlImport).GlobalSet(global);
             foreach (var (global, text) in stringVariables)
                 start.GlobalGet(strings[text].Global).GlobalSet(global);
+            foreach (var (_, (offset, length, global)) in bigs)
+                start.I32Const(offset).I32Const(length).Call(bigImport).GlobalSet(global);
             foreach (var (global, from) in urlVariables)
+                start.GlobalGet(from).GlobalSet(global);
+            foreach (var (global, from) in bigVariables)
                 start.GlobalGet(from).GlobalSet(global);
             module.SetStart(start.Index);
         }
@@ -1590,10 +1857,25 @@ public sealed class ScriptCompiler
             Error(null, $"internal: the compiler produced a module the engine rejects ({ex.Message})");
             return CompileResult.Failed(hash, _diagnostics);
         }
+        decoded.DirectImports = DirectImports(imports);
 
         var tags = _graph.Nodes.Select(n => n.Id).ToArray();
         return new CompileResult(hash, bytes, manifest, _diagnostics, imports, events, timers, variables, _bindings, tags,
-            displays) { Decoded = decoded, Traces = traces, FlowMemory = memory, Awaits = answered, Drives = drives, HandleRoots = _handleRoots.ToArray(), DriveSources = driveSources, Functions = functions, ScriptCalls = scriptCalls };
+            displays) { Decoded = decoded, Traces = traces, FlowMemory = memory, Awaits = answered, Drives = drives, HandleRoots = _handleRoots.ToArray(), DriveSources = driveSources, DrivesRead = drivesRead, Functions = functions, ScriptCalls = scriptCalls };
+    }
+
+    // What native code may call straight: a node import linked to a pure overload over plain numbers, which the
+    // linker binds to that same overload's adapter and nothing else, so the straight call is the same work
+    // without the host call around it.
+    private static Func<WasmImport, WasmFuncType, WasmDirectImport?> DirectImports(IReadOnlyList<NodeOverload> imports)
+    {
+        var byName = new Dictionary<string, NodeOverload>(StringComparer.Ordinal);
+        foreach (var overload in imports)
+            byName[overload.ImportName] = overload;
+        return (import, _) => import.Module == NodeModule && byName.TryGetValue(import.Name, out var overload)
+            && (overload.Folds ?? overload).DirectLanes is { } call
+                ? new WasmDirectImport(call, NodeOverload.HostFuel)
+                : null;
     }
 
     // Whether a value can be worked out at any time: from constants, stored values, and pure and read
@@ -1633,7 +1915,7 @@ public sealed class ScriptCompiler
     // the stored values it reads. A pure node with a handle in or out is not counted: what a handle names can
     // go away while the lanes stay the same. An evaluated Function counts as what its Return's values come
     // from, its arguments standing for the evaluation's own inputs.
-    private static bool SettlesOn(DataSource? source, HashSet<ResolvedNode> seen, List<ResolvedNode> stored)
+    private static bool SettlesOn(DataSource? source, HashSet<ResolvedNode> seen, List<ResolvedNode> stored, ref bool reads)
     {
         if (source?.Node is not { } from || !seen.Add(from))
             return true;
@@ -1651,32 +1933,46 @@ public sealed class ScriptCompiler
                     return false;
                 foreach (var input in body.Inputs)
                 {
-                    if (!SettlesOn(input, seen, stored))
+                    if (!SettlesOn(input, seen, stored, ref reads))
                         return false;
                 }
                 goto case NodeKind.Value;
             case NodeKind.Value:
-                foreach (var port in from.Overload.Inputs)
+                foreach (var port in from.Overload.Inputs.Concat(from.Overload.Outputs))
                 {
-                    if (port.Type.IsHandle)
+                    if (!port.Type.IsHandle)
+                        continue;
+                    if (!HoldsStill(port.Type))
                         return false;
+                    // Whether it is gone, or what it is called, moves with the tree.
+                    if (port.Type.Name is not ("string" or "uri" or "bigint" or "jsontoken" or "jsonobject" or "jsonarray"))
+                        reads = true;
                 }
-                foreach (var port in from.Overload.Outputs)
-                {
-                    if (port.Type.IsHandle)
-                        return false;
-                }
+                break;
+            // A read whose answer moves only with the tree or with the field it reads: the drives then note at
+            // run time what they read, and are left as they are while none of it moves.
+            case NodeKind.Read when from.Overload.Definition.Evaluation is Evaluation.Fixed or Evaluation.Tree or Evaluation.Field:
+                reads = true;
                 break;
             default:
                 return false;
         }
         foreach (var input in from.Inputs)
         {
-            if (!SettlesOn(input, seen, stored))
+            if (!SettlesOn(input, seen, stored, ref reads))
                 return false;
         }
         return true;
     }
+
+    // A handle a pure node can take or give without its answer moving under it: text, addresses and big integers
+    // never change, a JSON value never changes, and what a pure node can tell of a world object (which one it is,
+    // whether it is gone, what it is called) moves only with the tree, which the drives check. Lists and
+    // dictionaries change in place, so a pure node over one answers differently with the same handle.
+    private static bool HoldsStill(ScriptType type)
+        => type.Name is "string" or "uri" or "bigint" or "slot" or "user" or "component" or "anyfield" or "reference"
+            or "jsontoken" or "jsonobject" or "jsonarray"
+            || type.Name.StartsWith("field<", StringComparison.Ordinal);
 
     // Whether a Display reads an event's payload, a Function's argument or an action's or call's output
     // directly, through any Constants.

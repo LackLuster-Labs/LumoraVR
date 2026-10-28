@@ -157,6 +157,20 @@ internal sealed class ConstantValue
                 }
                 error = $"'{value.String}' is not a whole address";
                 return false;
+            case ScriptTypeKind.Handle when type.ClrType == typeof(ScriptBigInt) && value.Kind is GraphValueKind.String or GraphValueKind.Number:
+            {
+                // A big integer is written as its digits, or as a whole number a document states exactly.
+                string? digits = value.Kind == GraphValueKind.String ? value.String
+                    : value.Number == Math.Floor(value.Number) && Math.Abs(value.Number) <= 9007199254740992d
+                        ? ((long)value.Number).ToString(CultureInfo.InvariantCulture) : null;
+                if (digits != null && ScriptBigInt.TryParse(digits, out var number))
+                {
+                    constant = new(type, number, -1);
+                    return true;
+                }
+                error = $"{value} is not a whole number a big integer holds";
+                return false;
+            }
             case ScriptTypeKind.Handle when value.Kind == GraphValueKind.Binding:
                 constant = new(type, null, value.Binding);
                 return true;

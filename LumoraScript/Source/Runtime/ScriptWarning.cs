@@ -33,4 +33,5 @@ public enum ScriptWarning : byte
     Attaches,
     Bakes,
     Variables,
+    People,
 }

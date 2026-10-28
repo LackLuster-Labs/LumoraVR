@@ -37,7 +37,8 @@ public sealed class NodeOverload
     public NodeOverload? Folds { get; }
 
     // What a graph writes in "sig" to pick this overload: the type arguments for a generic node, a function
-    // node's ports spelled out, the input types otherwise.
+    // node's ports spelled out, a flow node's number of exits when its run is not the length it declares, the
+    // input types otherwise.
     public string Signature { get; }
 
     // A function node's ports, as its "sig" declares them; null for any other node.
@@ -47,6 +48,11 @@ public sealed class NodeOverload
     public WasmFuncType? ImportType { get; }
 
     private NodeInvoker? _invoker;
+    private Delegate? _direct;
+    private int _directMade;
+
+    // What a node import's host function charges a call: the linker's default.
+    public const int HostFuel = 10;
 
     private NodeOverload(NodeOverload binary, IReadOnlyList<NodePort> inputs)
     {
@@ -82,7 +88,7 @@ public sealed class NodeOverload
     internal NodeOverload(NodeDefinition definition, IReadOnlyList<ScriptType> typeArguments, IReadOnlyList<NodePort> inputs,
         IReadOnlyList<NodePort> outputs, IReadOnlyList<string> flowInputs, IReadOnlyList<string> flowOutputs,
         MethodInfo? method, bool takesContext, byte? inlineOpcode, FlowShape? shape, Type? payloadType,
-        Action<WasmBodyWriter>? inlineBody = null, FunctionSignature? function = null)
+        Action<WasmBodyWriter>? inlineBody = null, FunctionSignature? function = null, string? signature = null)
     {
         InlineBody = inlineBody;
         FunctionSignature = function;
@@ -106,7 +112,7 @@ public sealed class NodeOverload
         for (int i = 0; i < typeArguments.Count; i++)
             typeArgs[i] = typeArguments[i].Name;
 
-        Signature = function?.Canonical ?? (definition.IsGeneric ? string.Join(",", typeArgs) : string.Join(",", inputTypes));
+        Signature = signature ?? function?.Canonical ?? (definition.IsGeneric ? string.Join(",", typeArgs) : string.Join(",", inputTypes));
         ImportName = definition.IsGeneric
             ? $"{definition.Name}<{string.Join(",", typeArgs)}>({string.Join(",", inputTypes)})"
             : $"{definition.Name}({string.Join(",", inputTypes)})";
@@ -123,6 +129,22 @@ public sealed class NodeOverload
 
     // Built once, by whichever thread asks first: a compile on a worker makes the ones its graph links.
     public NodeInvoker Invoker => Folds?.Invoker ?? LazyInitializer.EnsureInitialized(ref _invoker, () => new NodeInvoker(this));
+
+    // This overload as a call native code makes straight from lanes, when it is a pure one over plain numbers;
+    // null otherwise. Built once.
+    internal Delegate? DirectLanes
+    {
+        get
+        {
+            if (Volatile.Read(ref _directMade) == 0)
+            {
+                var made = NodeInvoker.DirectLanes(this);
+                Interlocked.CompareExchange(ref _direct, made, null);
+                Volatile.Write(ref _directMade, 1);
+            }
+            return _direct;
+        }
+    }
 
     public int InputIndex(string name)
     {

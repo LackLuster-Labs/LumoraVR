@@ -36,6 +36,16 @@ public sealed class NodeInvoker
     private readonly Action<ulong[], ulong[], ScriptContextBase>? _compiled;
     private readonly int _argumentLanes;
     private readonly int _resultLanes;
+    private readonly Evaluation _evaluation;
+    // The lane of the first handle input: the field a Field read reads.
+    private readonly int _watchLane = -1;
+    private readonly bool _isAction;
+    // An action's handle inputs that name a thing of their own, by lane and port: one bound to something
+    // since gone fails the call by name instead of reaching the node as nothing, where an empty optional
+    // input means the script's own object, the world root or world space. A port of the node's own type
+    // argument carries data, a list item or a reference's target, and is left as it is.
+    private readonly int[]? _thingLanes;
+    private readonly string[]? _thingPorts;
 
     public bool IsCompiled => _compiled != null;
 
@@ -45,6 +55,21 @@ public sealed class NodeInvoker
         _method = overload.Method ?? throw new ArgumentException($"{overload} has no method to call");
         _argumentLanes = overload.ImportType!.Parameters.Length;
         _resultLanes = overload.ImportType!.Results.Length;
+        _evaluation = overload.Definition.Evaluation;
+        int lane = Awaits ? 1 : 0;
+        foreach (var input in overload.Inputs)
+        {
+            if (input.Type.IsHandle)
+            {
+                _watchLane = lane;
+                break;
+            }
+            lane += input.Type.LaneCount;
+        }
+
+        _isAction = overload.Definition.Kind == NodeKind.Action;
+        if (_isAction)
+            FindThings(out _thingLanes, out _thingPorts);
 
         try
         {
@@ -69,6 +94,15 @@ public sealed class NodeInvoker
         for (int i = 0; i < arguments.Length; i++)
             arguments[i] = call.GetRaw(i);
         Array.Clear(results);
+        bool watched = context.TakeFailWatch();
+
+        if (_thingLanes != null && GoneInput(context, arguments) is { } gone)
+        {
+            context.Fail(gone);
+            for (int i = 0; i < results.Length; i++)
+                call.SetRaw(i, 0);
+            return;
+        }
 
         try
         {
@@ -85,6 +119,12 @@ public sealed class NodeInvoker
                 Array.Clear(results);
                 context.Fail(reason);
                 context.OnRefused(_overload, new UnauthorizedAccessException(reason));
+                if (context.Recording)
+                    context.NoteUnsettled();
+            }
+            else if (context.Recording)
+            {
+                context.Note(_evaluation, _watchLane >= 0 ? context.GetLive(LaneCodec.ToInt(arguments[_watchLane])) : null);
             }
         }
         catch (UnauthorizedAccessException refusal)
@@ -92,10 +132,63 @@ public sealed class NodeInvoker
             Array.Clear(results);
             context.Fail(refusal.Message);
             context.OnRefused(_overload, refusal);
+            if (context.Recording)
+                context.NoteUnsettled();
+        }
+        // An input the action cannot use, or a thing it could not do, with failed wired: it leaves by failed
+        // saying why. Without failed wired it stops the call as a fault, as it always has. -xlinka
+        catch (Exception bad) when (watched && _isAction && bad is ArgumentException or InvalidOperationException)
+        {
+            Array.Clear(results);
+            context.Fail(bad.Message);
         }
 
         for (int i = 0; i < results.Length; i++)
             call.SetRaw(i, results[i]);
+    }
+
+    private string? GoneInput(ScriptContextBase context, ulong[] arguments)
+    {
+        for (int i = 0; i < _thingLanes!.Length; i++)
+        {
+            int handle = LaneCodec.ToInt(arguments[_thingLanes[i]]);
+            if (handle != 0 && context.GetHandle(handle) is { } thing && context.IsGone(thing))
+                return context.GoneWords(_thingPorts![i], thing);
+        }
+        return null;
+    }
+
+    private void FindThings(out int[]? lanes, out string[]? ports)
+    {
+        lanes = null;
+        ports = null;
+        var open = _overload.Definition.ClrType.IsGenericTypeDefinition
+            ? Array.Find(_overload.Definition.ClrType.GetMethods(BindingFlags.Public | BindingFlags.Static), m => m.MetadataToken == _method.MetadataToken)
+            : _method;
+        if (open == null)
+            return;
+        var parameters = open.GetParameters();
+        var foundLanes = new List<int>();
+        var foundPorts = new List<string>();
+        int input = 0;
+        int lane = Awaits ? 1 : 0;
+        for (int i = 0; i < parameters.Length; i++)
+        {
+            if ((i == 0 && _overload.TakesContext) || (Awaits && i == TicketParameter) || parameters[i].IsOut)
+                continue;
+            var port = _overload.Inputs[input++];
+            if (port.Type.IsHandle && port.Type != ScriptTypes.String && !parameters[i].ParameterType.IsGenericParameter)
+            {
+                foundLanes.Add(lane);
+                foundPorts.Add(port.Name);
+            }
+            lane += port.Type.LaneCount;
+        }
+        if (foundLanes.Count > 0)
+        {
+            lanes = foundLanes.ToArray();
+            ports = foundPorts.ToArray();
+        }
     }
 
     private static T? ResolveHandle<T>(ScriptContextBase context, int handle) where T : class
@@ -179,16 +272,18 @@ public sealed class NodeInvoker
     }
 
     private static Expression Decode(ScriptType type, ParameterExpression arguments, int lane, ParameterExpression context)
-    {
-        Expression Lane(int index) => Expression.ArrayIndex(arguments, Expression.Constant(index));
+        => Decode(type, index => Expression.ArrayIndex(arguments, Expression.Constant(index)), arguments, lane, context);
 
+    private static Expression Decode(ScriptType type, Func<int, Expression> laneAt, ParameterExpression? arguments, int lane,
+        ParameterExpression? context)
+    {
         switch (type.Kind)
         {
-            case ScriptTypeKind.Bool: return Expression.Call(ToBoolMethod, Lane(lane));
-            case ScriptTypeKind.Int: return Expression.Call(ToIntMethod, Lane(lane));
-            case ScriptTypeKind.Long: return Expression.Call(ToLongMethod, Lane(lane));
-            case ScriptTypeKind.Float: return Expression.Call(ToFloatMethod, Lane(lane));
-            case ScriptTypeKind.Double: return Expression.Call(ToDoubleMethod, Lane(lane));
+            case ScriptTypeKind.Bool: return Expression.Call(ToBoolMethod, laneAt(lane));
+            case ScriptTypeKind.Int: return Expression.Call(ToIntMethod, laneAt(lane));
+            case ScriptTypeKind.Long: return Expression.Call(ToLongMethod, laneAt(lane));
+            case ScriptTypeKind.Float: return Expression.Call(ToFloatMethod, laneAt(lane));
+            case ScriptTypeKind.Double: return Expression.Call(ToDoubleMethod, laneAt(lane));
             case ScriptTypeKind.Vector:
             {
                 // A local filled leaf by leaf; a nested struct's numbers are written through its field.
@@ -197,19 +292,89 @@ public sealed class NodeInvoker
                 for (int i = 0; i < type.Leaves.Length; i++)
                 {
                     var leaf = type.Leaves[i];
-                    steps.Add(Expression.Assign(leaf.Read(value), Expression.Call(leaf.FromRawMethod, Lane(lane + i))));
+                    steps.Add(Expression.Assign(leaf.Read(value), Expression.Call(leaf.FromRawMethod, laneAt(lane + i))));
                 }
                 steps.Add(value);
                 return Expression.Block(type.ClrType, new[] { value }, steps);
             }
             case ScriptTypeKind.Coded:
-                return type.Codec!.Decode(arguments, lane);
+                return type.Codec!.Decode(arguments ?? throw new InvalidOperationException("a coded value needs its lanes"), lane);
             default:
-                return Expression.Call(ResolveMethod.MakeGenericMethod(type.ClrType), context, Expression.Call(ToIntMethod, Lane(lane)));
+                return Expression.Call(ResolveMethod.MakeGenericMethod(type.ClrType),
+                    context ?? throw new InvalidOperationException("a handle needs its context"), Expression.Call(ToIntMethod, laneAt(lane)));
         }
     }
 
-    private static void Encode(ScriptType type, Expression value, ParameterExpression results, int lane,
+    // A pure overload over plain numbers, as a call native code can make straight from its lanes: one ulong per
+    // input lane in, the one output lane back. No context, no handle table, no host call around it, and the same
+    // conversions the adapter makes, so the same bits come out. Null for any overload that is not that.
+    internal static Delegate? DirectLanes(NodeOverload overload)
+    {
+        if (overload.Definition.Kind != NodeKind.Value || overload.TakesContext || overload.Method is not { } method
+            || overload.Outputs.Count != 1 || method.ReturnType == typeof(void))
+            return null;
+        foreach (var parameter in method.GetParameters())
+        {
+            if (parameter.IsOut || parameter.ParameterType.IsByRef)
+                return null;
+        }
+        var output = overload.Outputs[0].Type;
+        if (output.Kind is not (ScriptTypeKind.Bool or ScriptTypeKind.Int or ScriptTypeKind.Long or ScriptTypeKind.Float or ScriptTypeKind.Double))
+            return null;
+        int lanes = 0;
+        foreach (var input in overload.Inputs)
+        {
+            if (input.Type.Kind is not (ScriptTypeKind.Bool or ScriptTypeKind.Int or ScriptTypeKind.Long or ScriptTypeKind.Float
+                or ScriptTypeKind.Double or ScriptTypeKind.Vector))
+                return null;
+            lanes += input.Type.LaneCount;
+        }
+        if (lanes > 16)
+            return null;
+        try
+        {
+            var parameters = new ParameterExpression[lanes];
+            for (int i = 0; i < lanes; i++)
+                parameters[i] = Expression.Parameter(typeof(ulong), "a" + i);
+            var arguments = new Expression[overload.Inputs.Count];
+            int at = 0;
+            for (int i = 0; i < arguments.Length; i++)
+            {
+                var type = overload.Inputs[i].Type;
+                arguments[i] = Decode(type, index => parameters[index], null, at, null);
+                at += type.LaneCount;
+            }
+            var call = Expression.Call(method, arguments);
+            var encode = output.Kind switch
+            {
+                ScriptTypeKind.Bool => FromBoolMethod,
+                ScriptTypeKind.Int => FromIntMethod,
+                ScriptTypeKind.Long => FromLongMethod,
+                ScriptTypeKind.Float => FromFloatMethod,
+                _ => FromDoubleMethod,
+            };
+            // A throw becomes the trap a host function's throw becomes, so native code needs no handler of its own.
+            var trap = Expression.Parameter(typeof(WasmException), "trap");
+            var thrown = Expression.Parameter(typeof(Exception), "thrown");
+            var named = Expression.Call(typeof(string).GetMethod(nameof(string.Concat), new[] { typeof(string), typeof(string), typeof(string) })!,
+                Expression.Property(Expression.Call(thrown, typeof(object).GetMethod(nameof(GetType))!), nameof(Type.Name)),
+                Expression.Constant(": "), Expression.Property(thrown, nameof(Exception.Message)));
+            var hostTrap = Expression.New(typeof(WasmTrapException).GetConstructor(new[] { typeof(WasmTrapCode), typeof(string) })!,
+                Expression.Constant(WasmTrapCode.HostTrap), named);
+            var body = Expression.TryCatch(Expression.Call(encode, call),
+                Expression.Catch(trap, Expression.Rethrow(typeof(ulong))),
+                Expression.Catch(thrown, Expression.Throw(hostTrap, typeof(ulong))));
+            var types = new Type[lanes + 1];
+            Array.Fill(types, typeof(ulong));
+            return Expression.Lambda(Expression.GetFuncType(types), body, parameters).Compile();
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    internal static void Encode(ScriptType type, Expression value, ParameterExpression results, int lane,
         ParameterExpression context, List<Expression> body)
     {
         Expression Slot(int index) => Expression.ArrayAccess(results, Expression.Constant(index));

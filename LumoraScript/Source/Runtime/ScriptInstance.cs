@@ -195,6 +195,9 @@ public sealed class ScriptInstance
         linker.DefineFunction(ScriptCompiler.RuntimeModule, ScriptCompiler.UrlImport,
             new WasmFuncType(new[] { WasmValueType.I32, WasmValueType.I32 }, new[] { WasmValueType.I32 }),
             call => MakeUrl(call, context));
+        linker.DefineFunction(ScriptCompiler.RuntimeModule, ScriptCompiler.BigIntImport,
+            new WasmFuncType(new[] { WasmValueType.I32, WasmValueType.I32 }, new[] { WasmValueType.I32 }),
+            call => MakeBigInt(call, context));
 
         // The queue exists before the instance does, because the timer import is bound at link time.
         var timers = new PriorityQueue<(int Timer, int Word), (double Due, long Order)>();
@@ -236,7 +239,8 @@ public sealed class ScriptInstance
         {
             if (!context.AllowsCapability(overload.Definition.Capability))
                 throw new ScriptLinkException($"{overload.ImportName} needs {overload.Definition.Capability}, which this script may not use");
-            linker.DefineFunction(ScriptCompiler.NodeModule, overload.ImportName, overload.ImportType!, overload.Invoker.Bind(context));
+            linker.DefineFunction(ScriptCompiler.NodeModule, overload.ImportName, overload.ImportType!, overload.Invoker.Bind(context),
+                NodeOverload.HostFuel);
         }
 
         foreach (var entry in compiled.ScriptCalls)
@@ -334,22 +338,16 @@ public sealed class ScriptInstance
     }
 
     // Every event node of this payload type in graph order, stopping at the first that does not run clean, the
-    // way raising them one by one does. Nodes with the same outputs take the payload turned into lanes once.
+    // way raising them one by one does. Each node takes the payload turned into lanes afresh: a call lets go of
+    // the handles it did not keep, so a user or slot in the payload has to be handed in again for the next.
     // The result is the last node's, with the fuel all of them used.
     public ScriptCallResult RaiseEach<T>(in T payload, ScriptCallResult none) where T : struct
     {
         var last = none;
         long fuel = 0;
-        NodeOverload? encodedFor = null;
-        ulong[] lanes = Array.Empty<ulong>();
         foreach (var (entry, function) in EventsOf(typeof(T)))
         {
-            if (!ReferenceEquals(entry.Overload, encodedFor))
-            {
-                lanes = Encode(entry, payload);
-                encodedFor = entry.Overload;
-            }
-            last = LastResult = Invoke(function, lanes);
+            last = LastResult = Invoke(function, Encode(entry, payload));
             fuel += last.FuelUsed;
             if (!last.Ok)
                 break;
@@ -534,13 +532,26 @@ public sealed class ScriptInstance
             for (int i = 0; i < _driveSources.Length; i++)
                 _driveSeen![i] = _driveSources[i].RawValue;
         }
-        var result = LastResult = Invoke(_drivesFunction, ReadOnlySpan<ulong>.Empty);
-        _drivesRan = result.Ok;
+        bool record = _driveSources != null && Compiled.DrivesRead;
+        if (record)
+            Context.BeginRecording();
+        ScriptCallResult result;
+        bool settled;
+        try
+        {
+            result = LastResult = Invoke(_drivesFunction, ReadOnlySpan<ulong>.Empty);
+        }
+        finally
+        {
+            settled = !record || Context.EndRecording();
+        }
+        _drivesRan = result.Ok && settled;
         return result;
     }
 
     // Whether running the drives again would only work out what they hold already: they read nothing but
-    // stored values, ran clean last time, and every one of those values holds the lanes it held then.
+    // stored values, pure nodes and reads that said what they hang on, ran clean last time, every one of those
+    // values holds the lanes it held then, and nothing those reads noted has moved since.
     public bool DrivesCurrent
     {
         get
@@ -552,7 +563,7 @@ public sealed class ScriptInstance
                 if (_driveSources[i].RawValue != _driveSeen![i])
                     return false;
             }
-            return true;
+            return !Compiled.DrivesRead || Context.ReadsCurrent();
         }
     }
 
@@ -834,14 +845,27 @@ public sealed class ScriptInstance
 
     private void CollectHandles()
     {
+        if (!Context.HasLiveHandles)
+            return;
         Span<int> roots = _handleRoots.Count <= 64 ? stackalloc int[_handleRoots.Count] : new int[_handleRoots.Count];
         for (int i = 0; i < _handleRoots.Count; i++)
             roots[i] = LaneCodec.ToInt(_handleRoots[i].RawValue);
         Context.Collect(roots);
     }
 
-    private ulong[] Encode<T>(ScriptEventEntry entry, in T payload) where T : struct
-        => Encode(entry.Overload, typeof(T), payload);
+    // A payload's lanes in a buffer the instance keeps: the executor copies them in before anything runs.
+    private ulong[] _payload = new ulong[8];
+
+    private ReadOnlySpan<ulong> Encode<T>(ScriptEventEntry entry, in T payload) where T : struct
+    {
+        if (PayloadLanes<T>.Write is not { } write)
+            return Encode(entry.Overload, typeof(T), payload);
+        int count = PayloadLanes<T>.Count;
+        if (_payload.Length < count)
+            _payload = new ulong[count];
+        write(payload, _payload, Context);
+        return _payload.AsSpan(0, count);
+    }
 
     private ulong[] Encode(NodeOverload overload, Type payloadType, object boxed, int extra = 0)
     {
@@ -885,6 +909,9 @@ public sealed class ScriptInstance
     // The compiler only writes whole addresses; read back by the same rule, anything else is nothing.
     private static void MakeUrl(WasmHostCall call, ScriptContextBase context)
         => call.SetI32(0, TextToUrl.Run(ReadText(call), out _) is { } url ? context.AddHandle(url) : 0);
+
+    private static void MakeBigInt(WasmHostCall call, ScriptContextBase context)
+        => call.SetI32(0, ScriptBigInt.TryParse(ReadText(call), out var number) ? context.AddHandle(number) : 0);
 
     private static string ReadText(WasmHostCall call)
     {

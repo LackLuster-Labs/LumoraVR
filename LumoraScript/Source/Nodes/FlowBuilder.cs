@@ -50,6 +50,32 @@ public sealed class FlowBuilder
         return new FlowExit(Exits.Count - 1);
     }
 
+    // How long a run of exits may be, either way of the count a node declares.
+    public const int MinExits = 2;
+    public const int MaxExits = 32;
+
+    // The run's length the graph asked for, set by the registry; null builds the declared count.
+    internal int? AskedExits { get; init; }
+
+    // The count Outs was given, 0 until it is called.
+    internal int DeclaredExits { get; private set; }
+
+    // A run of exits named name0, name1 and on, count of them unless the graph asks for more or fewer: the
+    // card's options grow and shrink it, and a graph whose run is not count long says how long in "sig".
+    // One run a node.
+    public FlowExit[] Outs(string name, int count)
+    {
+        if (DeclaredExits != 0)
+            throw new InvalidOperationException("a flow node has one run of exits");
+        if (count < MinExits || count > MaxExits)
+            throw new ArgumentOutOfRangeException(nameof(count), $"a run of exits is {MinExits} to {MaxExits} long");
+        DeclaredExits = count;
+        var exits = new FlowExit[AskedExits ?? count];
+        for (int i = 0; i < exits.Length; i++)
+            exits[i] = Out(name + i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        return exits;
+    }
+
     // Runs one exit or the other on a condition read when the node runs.
     public void Branch(FlowInput<bool> condition, FlowExit whenTrue, FlowExit whenFalse)
         => SetShape(new FlowShape(FlowShapeKind.Branch, condition.Index, new[] { whenTrue.Index, whenFalse.Index }, -1));

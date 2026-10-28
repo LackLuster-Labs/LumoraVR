@@ -100,7 +100,22 @@ public abstract class ScriptContextBase
 
     public void Fail(string reason) => _failure ??= string.IsNullOrEmpty(reason) ? "it failed" : reason;
 
-    internal void ClearFailure() => _failure = null;
+    // Set by the clear the module makes right before an action whose failed exit is wired, and taken by that
+    // action's call: a bad input it throws on leaves by failed there instead of stopping the call.
+    private bool _failWatched;
+
+    internal void ClearFailure()
+    {
+        _failure = null;
+        _failWatched = true;
+    }
+
+    internal bool TakeFailWatch()
+    {
+        bool watched = _failWatched;
+        _failWatched = false;
+        return watched;
+    }
 
     internal bool TakeFailure()
     {
@@ -111,7 +126,11 @@ public abstract class ScriptContextBase
         return true;
     }
 
-    internal void ResetFailures() => _failure = null;
+    internal void ResetFailures()
+    {
+        _failure = null;
+        _failWatched = false;
+    }
 
     // Seconds on the clock timers are due by. The world runtime answers world time, so a paused or
     // throttled world's timers follow it.
@@ -262,7 +281,13 @@ public abstract class ScriptContextBase
     // Whether an object has left the world it lived in. The base knows no world, so nothing is ever gone.
     protected internal virtual bool IsGone(object value) => false;
 
+    // How a failure says an action's input has gone.
+    protected internal virtual string GoneWords(string port, object value) => $"the {port} is gone";
+
     internal void EndPinning() => _pinning = false;
+
+    // Whether a call made handles a collect could let go of.
+    internal bool HasLiveHandles => _live.Count > 0;
 
     // Releases every handle that is neither pinned nor named by one of the roots.
     internal void Collect(ReadOnlySpan<int> roots)
@@ -317,6 +342,76 @@ public abstract class ScriptContextBase
     protected internal virtual void CallScriptFunction(CallTicket ticket, object? target, string function, FunctionSignature signature,
         object?[] arguments)
         => ticket.Fail("this script cannot call other scripts here");
+
+    // WHAT THE DRIVES READ. While a drives call records, each read node it calls notes what its answer hangs on,
+    // as its Evaluation says: nothing for a Fixed read, the tree for a Tree read, its field for a Field read, and
+    // for a Changing read that it cannot be told. If nothing noted has moved by the next frame, the drives would
+    // work out what they hold already. -xlinka
+    internal bool Recording { get; private set; }
+    private bool _unsettled;
+    private bool _readsTree;
+    private long _treeStamp;
+    private readonly List<(object Field, ulong Stamp)> _fieldsRead = new();
+
+    // The tree is always watched: what the drives read hangs on it whether or not a Tree read noted it, since a
+    // pure node can tell whether an object it is handed is gone.
+    internal void BeginRecording()
+    {
+        Recording = true;
+        _unsettled = false;
+        _readsTree = true;
+        _fieldsRead.Clear();
+        _treeStamp = TreeStamp;
+    }
+
+    // Whether everything read can be told apart from a change: no Changing read, no refusal.
+    internal bool EndRecording()
+    {
+        Recording = false;
+        return !_unsettled;
+    }
+
+    internal void Note(Evaluation evaluation, object? watched)
+    {
+        switch (evaluation)
+        {
+            case Evaluation.Pure:
+            case Evaluation.Fixed:
+                return;
+            case Evaluation.Tree:
+                _readsTree = true;
+                return;
+            case Evaluation.Field when watched != null && FieldStamp(watched) is { } stamp:
+                _fieldsRead.Add((watched, stamp));
+                _readsTree = true;
+                return;
+            default:
+                _unsettled = true;
+                return;
+        }
+    }
+
+    internal void NoteUnsettled() => _unsettled = true;
+
+    // Whether everything the last recorded call read still answers the same.
+    internal bool ReadsCurrent()
+    {
+        if (_readsTree && TreeStamp != _treeStamp)
+            return false;
+        foreach (var (field, stamp) in _fieldsRead)
+        {
+            if (FieldStamp(field) != stamp)
+                return false;
+        }
+        return true;
+    }
+
+    // A number that moves whenever anything a Tree read could see changes. The base knows no world, so it never
+    // moves.
+    protected internal virtual long TreeStamp => 0;
+
+    // A number that moves whenever this field changes, or null when that cannot be told. The base knows no fields.
+    protected internal virtual ulong? FieldStamp(object field) => null;
 
     // A node turning its own call down without throwing, for a refusal that can come every frame: the
     // invoker answers it as it answers a thrown one.

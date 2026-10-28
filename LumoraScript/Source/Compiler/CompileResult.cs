@@ -49,12 +49,36 @@ public sealed class CompileResult
     // when any drive reads the world, the time, a handle or a remembered value.
     public IReadOnlyList<string>? DriveSources { get; init; }
 
+    // Whether those drives also read the world through Fixed, Tree or Field reads, whose answers the instance
+    // notes as the drives run and checks before running them again.
+    public bool DrivesRead { get; init; }
+
     // Globals that keep a handle from one call to the next, so the thing it names is not let go between them.
     public IReadOnlyList<string> HandleRoots { get; init; } = Array.Empty<string>();
 
     // The module as the engine's validator decoded it when the compiler checked its own output. Nothing
     // writes a module once it is decoded, so every instance of this graph runs this one, from any thread.
     internal WasmModule? Decoded { get; init; }
+
+    // Makes that module's native code on this thread, for a compile on a worker, so the script's first call
+    // does not wait for it. False where modules run in the interpreter.
+    public bool PrepareNative()
+    {
+        foreach (var entry in Events)
+            WarmPayload(entry.PayloadType);
+        return Decoded?.CompileNative() ?? false;
+    }
+
+    // The payload's lane writer, made here rather than as its first event is raised.
+    private static void WarmPayload(Type payload)
+    {
+        if (payload.IsValueType)
+            System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(PayloadLanes<>).MakeGenericType(payload).TypeHandle);
+    }
+
+    // Whether the module runs as native code now, and why not when its code could not be made.
+    public bool IsNative => Decoded?.IsNative ?? false;
+    public string? NativeRefusal => Decoded?.NativeRefusal;
 
     internal CompileResult(string graphHash, byte[]? module, byte[] manifest, IReadOnlyList<CompileDiagnostic> diagnostics,
         IReadOnlyList<NodeOverload> imports, IReadOnlyList<ScriptEventEntry> events, IReadOnlyList<ScriptTimerEntry> timers,

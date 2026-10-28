@@ -47,7 +47,8 @@ namespace Lumora.Script;
 // last parameter is where its continuation stack starts: a call passes the top of its own, so a body in a
 // dispatch loop stacks above its caller's and its pop state ends the call once it is back down to that start.
 // A Return works out what it hands back, takes the Displays as a call's end would, and returns; a body that
-// runs out without reaching one gives every output's default. A Call Function is a step like an action's, its
+// runs out without reaching one is a Function that gives nothing (the check refuses it for one that gives
+// values), and gives every output's default should one ever get here. A Call Function is a step like an action's, its
 // outputs kept for the whole call; an Evaluate Function is worked out like a pure node.
 //
 // A Function that WAITS (a Delay, an await, or a call of one that waits, anywhere in its body) gives nothing
@@ -1791,7 +1792,7 @@ internal sealed class EventFunctionEmitter
                     _f.I32Const(constant.Binding + 1);
                 else if (constant.Value is string text)
                     _f.GlobalGet(_stringGlobal(text));
-                else if (constant.Value is Uri)
+                else if (constant.Value is Uri or ScriptBigInt)
                     _f.GlobalGet(constant.Global);
                 else
                     _f.I32Const(0);
