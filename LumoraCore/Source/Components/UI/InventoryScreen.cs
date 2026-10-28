@@ -7,23 +7,40 @@ using System.Threading.Tasks;
 using Helio.UI;
 using Helio.UI.Layout;
 using Lumora.Core.Assets;
+using Lumora.Core.Components.Import;
 using Lumora.Core.Components.UI.Worlds;
+using Lumora.Core.Localization;
 using Lumora.Core.Math;
 
 namespace Lumora.Core.Components.UI;
 
-// What you have saved, as one folder tree you can shape: on the cloud, and on this machine until a new
+// What the in-world readout says for a spawn from the inventory.
+internal static class SpawnLocale
+{
+    public static readonly LocaleText Spawning = "Inventory.Readout.Spawning".AsLocale("Spawning");
+    public static readonly LocaleText Spawned = "Inventory.Readout.Spawned".AsLocale("Spawned");
+    public static readonly LocaleText InFront = "Inventory.Readout.InFront".AsLocale("In front of you");
+    public static readonly LocaleText PuttingOn = "Inventory.Readout.PuttingOn".AsLocale("Putting on");
+    public static readonly LocaleText PutOn = "Inventory.Readout.PutOn".AsLocale("Wearing it");
+    public static readonly LocaleText Wearing = "Inventory.Readout.Wearing".AsLocale("It shows as soon as it has loaded");
+    public static readonly LocaleText WouldNotEquip = "Inventory.Readout.WouldNotEquip".AsLocale("In front of you, but it would not go on");
+}
+
+// What you have saved, as folder trees you can shape: on the cloud, and on this machine until a new
 // save has gone up, which the status line follows.
 //
-// One root, and anything under it. The rail on the left shows the way down from the root to the
-// folder being looked at and takes you back up with a press; its bottom holds the kind filters and
-// the new folder button. One bar above the cards holds the way up, the two ways in from the world
-// (what you hold, what you wear), search, sort and Move, and the actions for whatever is selected.
-// A card is selected with one press and opened with a second press on the same card. Move lifts a
-// thing as a transparent copy that follows the pointer; the next press on a folder card, on a step in
-// the rail, or on Up puts it there. Nothing here touches the disk beyond the download cache. -xlinka
+// Your own inventory, and one more root for every group you are in. The rail on the left lists the roots
+// and, under the open one, the way down to the folder being looked at, any step a press away; its bottom
+// holds the kind filters and the new folder and link buttons. The game's own library leads your own
+// inventory as one gold folder, and things shared with you sit at the top of it in the share colour. One
+// bar above the cards holds the way up, the two ways in from the world (what you hold, what you wear),
+// search, sort and Move, and the actions for whatever is
+// selected. A card is selected with one press and opened with a second press on the same card. Move lifts
+// a thing as a transparent copy that follows the pointer; the next press on a folder card, on a step in
+// the rail, or on Up puts it there. The folder open here is where every save lands, wherever it is made
+// from. Nothing here touches the disk beyond the download cache. -xlinka
 [ComponentCategory("Hidden")]
-public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedScreen
+public sealed partial class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedScreen
 {
     private const float BarHeight = 40f;
     private const float BarGap = DashTheme.Gap;
@@ -47,12 +64,13 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     private enum Sort { AToZ, ZToA, Newest, Oldest, ByType }
     private enum Show { All = 0, Worlds = 1, Items = 2, Avatars = 3 }
     private enum Field { None, Search, Dialog }
-    private enum DialogKind { None, NewFolder, Rename }
+    private enum DialogKind { None, NewFolder, Rename, AddLink }
 
     private IInventorySource _source = new CloudInventorySource();
 
     private BrowserParts _parts = null!;
     private ThumbnailCache _thumbnails = null!;
+    private InventoryFavourites? _favourites;
     private InventorySidebar _sidebar = null!;
     private Slot? _bar;
     private RectTransform? _barNav;
@@ -77,17 +95,12 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     private Text? _dialogText;
     private Text? _dialogError;
     private readonly List<InventoryCard> _pool = new();
-    private readonly List<(RectTransform rect, string id, string name)> _dropRects = new();
+    private readonly List<(RectTransform rect, InventoryPlace place)> _dropRects = new();
     private int _boundFirstRow = -1;
     private float _lastCardW = -1f;
     private int _columns = MaxColumns;
 
     private int Columns => _columns;
-
-    // The way down from the root: (folder id, name). The last one is the folder being looked at.
-    private readonly List<(string id, string name)> _chain = new() { (Inventory.Root, "Inventory") };
-    private string FolderId => _chain[_chain.Count - 1].id;
-    private string FolderName => _chain[_chain.Count - 1].name;
 
     private int _page;
     private Sort _sort = Sort.AToZ;
@@ -108,6 +121,8 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     private InventoryEntry? _carried;
     private string? _dropTarget;
     private float _confirmDeleteLeft;
+    // A folder move refused because a folder of its name is there already: the bar offers to merge the two.
+    private (InventoryEntry Folder, InventoryPlace Target)? _mergeOffer;
 
     private DialogKind _dialog = DialogKind.None;
     private string _dialogBuffer = string.Empty;
@@ -116,11 +131,15 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     private string? _notice;
     private color _noticeColor = DashTheme.TextDim;
     private bool _artDirty;
+    // A picture handed to a card is still decoding for a few frames after its provider exists, so the cards
+    // look again until it shows, for this long at most.
+    private const float ArtPatience = 10f;
+    private float _artWaitLeft;
     private readonly HashSet<string> _thumbnailsAsked = new(StringComparer.Ordinal);
 
-    // HARNESS
+    // NAMED STATES
 
-    // Comma separated so the harness can stack them: "demo,select" looks at the demo tree with a card
+    // Comma separated so a capture can stack them: "demo,select" looks at the demo tree with a card
     // selected, "demo,carry" mid-move.
     public bool ShowTab(string name)
     {
@@ -138,7 +157,30 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             case "demo":
                 _source = new DemoInventorySource();
                 _thumbnailsAsked.Clear();
+                RefreshGroups();
                 NavigateToRoot();
+                return true;
+            case "group":
+                World?.RunInUpdates(60, () =>
+                {
+                    if (!IsDestroyed && _roots.Count > 1)
+                        OpenRoot(1);
+                });
+                return true;
+            case "share":
+                World?.RunInUpdates(120, () =>
+                {
+                    if (IsDestroyed) return;
+                    foreach (var entry in _visible)
+                    {
+                        if (entry.IsFolder && !entry.IsLink)
+                        {
+                            _selectedId = entry.Id;
+                            OpenShare(entry);
+                            return;
+                        }
+                    }
+                });
                 return true;
             case "select":
                 World?.RunInUpdates(120, () =>
@@ -193,12 +235,17 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     protected override void OnShow()
     {
         base.OnShow();
+        RefreshGroups();
         Reload();
+        RecheckEmail();
     }
 
     public override void OnDestroy()
     {
         InventorySync.Changed -= OnSyncChanged;
+        AccountEmail.Changed -= OnEmailChanged;
+        Inventory.OpenRequested -= OnOpenRequested;
+        _favourites?.Dispose();
         _thumbnails?.Clear();
         base.OnDestroy();
     }
@@ -232,6 +279,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         BrowserParts.Height(_bar, BarHeight);
 
         Rule(root, DashTheme.Divider);
+        BuildVerifyRow(root);
 
         var body = root.AddSlot("Body");
         body.AttachComponent<RectTransform>();
@@ -244,15 +292,17 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         bodyLayout.ForceExpandWidth.Value = false;
         bodyLayout.ForceExpandHeight.Value = true;
 
-        _sidebar = new InventorySidebar(_parts, body, "+ New Folder", () => OpenDialog(DialogKind.NewFolder));
-        _sidebar.PathPicked += NavigateBackTo;
+        _sidebar = new InventorySidebar(_parts, body, () => OpenDialog(DialogKind.NewFolder), () => OpenDialog(DialogKind.AddLink));
+        _sidebar.StepPicked += NavigateBackTo;
+        _sidebar.RootPicked += OpenRoot;
+        _sidebar.RequestsPicked += OpenRequests;
         _sidebar.FilterPicked += id => { _show = (Show)id; _sidebar.SelectFilter(id); _page = 0; ApplyView(); };
         _sidebar.AddFilter((int)Show.All, "All");
         _sidebar.AddFilter((int)Show.Worlds, "Worlds");
         _sidebar.AddFilter((int)Show.Items, "Items");
         _sidebar.AddFilter((int)Show.Avatars, "Avatars");
         _sidebar.SelectFilter((int)_show);
-        _sidebar.SetPath(_chain);
+        RebuildRoots();
 
         // The rail and the grid had nothing between them, so the screen read as one wide field of
         // stuff with a few pills floating at the left. A one-unit column between them is enough to
@@ -295,8 +345,13 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         _ghost = new InventoryGhost(_parts, ghostHost, ghostRect);
 
         BuildDialog(root);
+        BuildShareDialog(root);
+        BuildRequestsPanel(root);
         InventorySync.Changed += OnSyncChanged;
+        Inventory.OpenRequested += OnOpenRequested;
+        _favourites = new InventoryFavourites(_parts, OnUi, () => { RepaintCards(); RebuildBar(); });
         RebuildBar();
+        RefreshGroups();
         Reload();
     }
 
@@ -346,7 +401,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         });
     }
 
-    private void Await<T>(Task<T> task, Action<T> then)
+    private void Await<T>(Task<T> task, Action<T> then, Action<string>? failed = null)
     {
         _ = task.ContinueWith(t =>
         {
@@ -357,7 +412,9 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
                 {
                     _busy = false;
                     _loading = false;
-                    SetStatus(t.Exception?.GetBaseException().Message ?? "That did not work.", DashTheme.Warning);
+                    string why = t.Exception?.GetBaseException().Message ?? "That did not work.";
+                    SetStatus(why, DashTheme.Warning);
+                    failed?.Invoke(why);
                 });
         });
     }
@@ -389,17 +446,19 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         bool signedIn = _source.SignedIn;
         bool carrying = _carried.HasValue;
         bool canUp = _chain.Count > 1;
+        bool canChange = CanEditHere;
         var up = AddBarButton(nav, "Up", canUp ? TabFill : ControlFill, 56f, GoUp);
         if (canUp)
-            _dropRects.Add((up.GetComponent<RectTransform>()!, _chain[_chain.Count - 2].id, _chain[_chain.Count - 2].name));
+            _dropRects.Add((up.GetComponent<RectTransform>()!, _chain[_chain.Count - 2]));
 
         var here = nav.AddSlot("Here");
         here.AttachComponent<RectTransform>();
         var hereElement = here.AttachComponent<LayoutElement>();
         hereElement.MinWidth.Value = HereMinWidth;
         hereElement.FlexibleWidth.Value = 1f;
-        var hereText = _parts.Label(here, BrowserParts.Truncate(FolderName, 40), DashTheme.FontBody, DashTheme.TextDim, BrowserParts.Weight.Semibold);
+        var hereText = _parts.Label(here, BrowserParts.Truncate(FolderName, 40), DashTheme.FontBody, HereInk(), BrowserParts.Weight.Semibold);
         hereText.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
+        AddPlaceChip(nav);
 
         if (!signedIn)
             return;
@@ -419,40 +478,132 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             return;
         }
 
+        if (_mergeOffer is { } offer)
+        {
+            AddMergeOffer(tools, offer.Folder, offer.Target);
+            return;
+        }
+
         // The right hand group changes with the selection: with nothing selected it is the two ways
         // in from the world, with something selected it is what can be done to that thing.
         var selected = SelectedEntry();
         if (selected.HasValue)
         {
             var entry = selected.Value;
-            AddBarButton(tools, "Rename", TabFill, 80f, () => OpenDialog(DialogKind.Rename));
-            AddBarButton(tools, _confirmDeleteLeft > 0f ? "Confirm" : "Delete",
-                _confirmDeleteLeft > 0f ? DashTheme.Negative : TabFill, 76f, DeleteSelected);
-            switch (entry.Kind)
-            {
-                case InventoryEntryKind.Folder:
-                    AddBarButton(tools, "Open", AccentColor, 76f, () => NavigateInto(entry));
-                    break;
-                case InventoryEntryKind.Item:
-                    if (entry.IsAvatar)
-                        AddBarButton(tools, "Equip", TabFill, 70f, () => EquipItem(entry));
-                    AddBarButton(tools, "Spawn", AccentColor, 76f, () => SpawnItem(entry));
-                    break;
-                case InventoryEntryKind.World:
-                    AddBarButton(tools, "Orb", TabFill, 60f, () => SpawnWorldOrb(entry));
-                    AddBarButton(tools, "Open", AccentColor, 76f, () => OpenWorld(entry));
-                    break;
-            }
+            AddEntryActions(tools, entry, canChange);
+            _favourites?.AddButtons(tools, entry, AddBarButton, (text, tint) => SetStatus(text, tint));
         }
         else if (_search.Length == 0)
         {
-            AddBarButton(tools, "Save held", TabFill, 96f, SaveHeld);
-            AddBarButton(tools, "Save avatar", TabFill, 108f, SaveAvatar);
+            // Saves made from here land here; where they cannot, they land at the top of your own inventory,
+            // and the buttons say so rather than vanish. -xlinka
+            AddBarButton(tools, canChange ? "Save held" : "Save held to mine", TabFill, canChange ? 96f : 150f, SaveHeld);
+            AddBarButton(tools, canChange ? "Save avatar" : "Save avatar to mine", TabFill, canChange ? 108f : 162f, SaveAvatar);
+            // the library is no root of the side tree, so its delete requests are reached from in here
+            if (Here.IsLibrary && RankIn(Inventory.LibraryId) <= 2 && _requestCounts.TryGetValue(Inventory.LibraryId, out int asked) && asked > 0)
+                AddBarButton(tools, InventoryLibraryLocale.Requests(asked).Resolve(), ControlFill, 160f, () => OpenRequests(Inventory.LibraryId, LibraryName));
         }
 
         BuildSearchWell(tools);
         AddBarButton(tools, SortLabel(_sort), TabFill, 80f, CycleSort);
-        AddBarButton(tools, _pickForMove ? "Pick" : "Move", _pickForMove ? AccentColor : TabFill, 66f, StartMove);
+        if (canChange)
+            AddBarButton(tools, _pickForMove ? "Pick" : "Move", _pickForMove ? AccentColor : TabFill, 66f, StartMove);
+    }
+
+    // What can be done to the selected thing: change it where this account may, share it where it may share,
+    // take a shared thing back out of its inventory, and open, spawn, wear or orb it wherever it is.
+    private void AddEntryActions(Slot tools, in InventoryEntry selected, bool canChange)
+    {
+        var entry = selected;
+        bool reachable = entry.LinkAccess != InventoryAccess.None;
+        if (entry.IsLibrary)
+        {
+            AddBarButton(tools, "Open", AccentColor, 76f, () => NavigateInto(entry));
+            return;
+        }
+        if (entry.IsLink)
+        {
+            if (entry.Link!.Via != Inventory.ShareGroup)
+                AddBarButton(tools, _confirmDeleteLeft > 0f ? "Confirm" : "Remove",
+                    _confirmDeleteLeft > 0f ? DashTheme.Negative : TabFill, 84f, DeleteSelected);
+            if (entry.IsKeptLink)
+                AddBarButton(tools, "Rename", TabFill, 80f, () => OpenDialog(DialogKind.Rename));
+            if (reachable)
+                AddBarButton(tools, "Copy link", TabFill, 96f, () => CopyLink(entry));
+        }
+        else
+        {
+            if (canChange)
+                AddBarButton(tools, "Rename", TabFill, 80f, () => OpenDialog(DialogKind.Rename));
+            AddDeleteAction(tools, entry);
+            if (_canShare)
+            {
+                AddBarButton(tools, entry.IsShared ? "Sharing" : "Share", entry.IsShared ? ShareFill : TabFill, 84f, () => OpenShare(entry));
+                if (entry.IsShared)
+                    AddBarButton(tools, "Spawn link", TabFill, 104f, () => SpawnLinkCard(entry));
+            }
+        }
+        if (!reachable)
+            return;
+        switch (entry.Kind)
+        {
+            case InventoryEntryKind.Folder:
+                AddBarButton(tools, "Open", AccentColor, 76f, () => NavigateInto(entry));
+                break;
+            case InventoryEntryKind.Item:
+                if (entry.IsAvatar)
+                    AddBarButton(tools, "Equip", TabFill, 70f, () => EquipItem(entry));
+                AddBarButton(tools, "Spawn", AccentColor, 76f, () => SpawnItem(entry));
+                break;
+            case InventoryEntryKind.World:
+                AddBarButton(tools, "Orb", TabFill, 60f, () => SpawnWorldOrb(entry));
+                AddBarButton(tools, "Open", AccentColor, 76f, () => OpenWorld(entry));
+                break;
+        }
+    }
+
+    // Deleting follows the inventory: anything of yours, anything a write share lets you change, and in a group
+    // whatever a moderator or above presses. A group's builder asks instead, and while the request waits can take
+    // it back; a locked group still lets moderators clear things out. -xlinka
+    private void AddDeleteAction(Slot tools, InventoryEntry entry)
+    {
+        bool confirming = _confirmDeleteLeft > 0f;
+        bool inGroup = entry.OwnerId != null && entry.OwnerId == Here.OwnerId && Here.IsGroup;
+        if (inGroup && RankIn(entry.OwnerId) == 3)
+        {
+            if (entry.DeleteRequest is { } asked)
+            {
+                bool mine = asked.ByName == _myName;
+                AddBarButton(tools, mine ? "Take back request" : "Delete asked", mine ? TabFill : ControlFill, mine ? 150f : 116f,
+                    mine ? () => WithdrawRequest(entry, asked) : (Action)(() => SetStatus($"{asked.ByName} asked for this to be deleted.", DashTheme.TextDim)));
+                return;
+            }
+            AddBarButton(tools, confirming ? "Confirm" : "Ask to delete", confirming ? DashTheme.Warning : TabFill, confirming ? 84f : 120f,
+                DeleteSelected);
+            return;
+        }
+        if (!_access.CanChange())
+            return;
+        AddBarButton(tools, confirming ? "Confirm" : "Delete", confirming ? DashTheme.Negative : TabFill, 76f, DeleteSelected);
+    }
+
+    private void WithdrawRequest(InventoryEntry entry, Lumora.Nexus.Cloud.Cdn.InventoryDeleteMark asked)
+        => RunAction(System.Threading.Tasks.Task.Run(() => Inventory.DropDeleteRequestAsync(entry.OwnerId!, asked.Id, entry.Name, mine: true)));
+
+    // A link card for this shared folder or item, in front of you in the world you are in.
+    private void SpawnLinkCard(InventoryEntry entry)
+    {
+        var world = FocusedWorld;
+        if (world == null)
+        {
+            SetStatus("The world manager isn't up yet.", DashTheme.Warning);
+            return;
+        }
+        string owner = entry.OwnerId == null ? _myName ?? "you" : Here.OwnerName.Length > 0 ? Here.OwnerName : entry.OwnerId;
+        if (ShareCard.Spawn(world, entry, owner, out var refusal))
+            SetStatus($"A link card for \"{entry.Name}\" is in front of you. Whoever it is shared with can open it or keep it.", DashTheme.TextDim);
+        else
+            SetStatus($"Couldn't place a link card: {refusal}.", DashTheme.Warning);
     }
 
     private Slot AddBarButton(Slot row, string label, color fill, float width, Action onClick)
@@ -582,8 +733,11 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         row.DestroyChildren();
 
         var selected = SelectedEntry();
-        string text = _notice ?? (_loading ? "Loading…" : selected.HasValue ? DescribeEntry(selected.Value) : DescribeListing());
-        var tint = _notice != null ? _noticeColor : DashTheme.TextDim;
+        string? offer = _mergeOffer is { } pending ? InventoryFolderLocale.MergeOffer(pending.Folder.Name, pending.Target.Name).Resolve() : null;
+        string? broken = _notice == null && offer == null && !_loading && selected is { IsBroken: true } lost ? DescribeBroken(lost) : null;
+        string text = _notice ?? offer ?? broken ?? (_loading ? "Loading…" : selected.HasValue ? DescribeEntry(selected.Value) : DescribeListing());
+        var tint = _notice != null ? _noticeColor
+            : offer != null || broken != null || (PlaceWarns() && !selected.HasValue) ? DashTheme.Warning : DashTheme.TextDim;
         _notice = null;
 
         var textSlot = row.AddSlot("Text");
@@ -628,9 +782,13 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     private void OnSyncChanged() => OnUi(() =>
     {
         if (InventorySync.Revision != _listedRevision && Slot.ActiveSelf.Value)
+        {
             Reload();
-        else
-            ShowSyncState();
+            return;
+        }
+        ShowSyncState();
+        if (Slot.ActiveSelf.Value && InventorySync.TakeNotice() is { } note)
+            SetStatus(note, DashTheme.Warning);
     });
 
     private void SetStatus(string text, in color tint)
@@ -644,12 +802,34 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         }
     }
 
+    // A save whose parts the server lost says what to do about it: whoever can save over it is told how, anyone
+    // else who can.
+    private string DescribeBroken(in InventoryEntry entry)
+    {
+        int count = entry.MissingParts!.Count;
+        bool canFix = !entry.IsLink && (entry.OwnerId == null || _access.CanChange());
+        return (canFix ? InventoryPartsLocale.FixOwn(count) : InventoryPartsLocale.FixOther(count)).Resolve();
+    }
+
     private static string DescribeEntry(in InventoryEntry entry)
     {
+        if (entry.IsLibrary)
+            return InventoryLibraryLocale.Describe(entry.Name, entry.ChildCount).Resolve();
+        string from = entry.IsLink
+            ? entry.LinkAccess == InventoryAccess.None
+                ? $" · {Inventory.OwnerLabel(entry)} no longer shares it"
+                : $" · shared by {Inventory.OwnerLabel(entry)}{(entry.Link!.Via == Inventory.ShareGroup ? $" with {entry.Link.ViaName}" : string.Empty)}"
+            : entry.IsPublic ? " · anyone with the link can see it"
+            : entry.ShareCount > 0 ? $" · shared with {(entry.ShareCount == 1 ? "1" : entry.ShareCount.ToString())}"
+            : string.Empty;
         if (entry.IsFolder)
-            return $"{entry.Name} · folder · {(entry.ChildCount == 1 ? "1 thing inside" : $"{entry.ChildCount} things inside")}";
-        string kind = entry.Kind == InventoryEntryKind.World ? "world" : entry.IsAvatar ? "avatar" : "item";
-        return $"{entry.Name} · {kind} · {entry.ModifiedUtc.ToLocalTime():yyyy-MM-dd HH:mm} · {Inventory.FormatBytes(entry.SizeBytes)}";
+            return $"{entry.Name} · folder · {(entry.ChildCount == 1 ? "1 thing inside" : $"{entry.ChildCount} things inside")}{from}"
+                + (entry.DeleteRequest is { } folderAsked ? $" · {folderAsked.ByName} asked to delete it" : string.Empty);
+        string kind = entry.Kind == InventoryEntryKind.World ? "world" : entry.IsAvatar ? "avatar" : entry.IsImage ? "image" : "item";
+        string by = string.IsNullOrEmpty(entry.SavedByName) ? string.Empty : $" · saved by {entry.SavedByName}";
+        if (entry.DeleteRequest is { } asked)
+            by += $" · {asked.ByName} asked to delete it";
+        return $"{entry.Name} · {kind} · {entry.ModifiedUtc.ToLocalTime():yyyy-MM-dd HH:mm} · {Inventory.FormatBytes(entry.SizeBytes)}{by}{from}";
     }
 
     private string DescribeListing()
@@ -665,15 +845,16 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         }
         if (_search.Length > 0)
             return $"{_entries.Count} match \"{_search}\"";
+        string where = PlaceLine();
         if (folders == 0 && worlds == 0 && items == 0)
-            return _chain.Count == 1
+            return _chain.Count == 1 && Here.IsOwn
                 ? "Nothing saved yet. Save what you hold or wear, or a world from the Session tab."
-                : "This folder is empty.";
+                : "This folder is empty." + where;
         var parts = new List<string>(3);
         if (folders > 0) parts.Add(folders == 1 ? "1 folder" : $"{folders} folders");
         if (items > 0) parts.Add(items == 1 ? "1 item" : $"{items} items");
         if (worlds > 0) parts.Add(worlds == 1 ? "1 world" : $"{worlds} worlds");
-        return string.Join(" · ", parts);
+        return string.Join(" · ", parts) + where;
     }
 
     private static string SortLabel(Sort sort) => sort switch
@@ -707,72 +888,13 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         _ => true,
     };
 
-    // NAVIGATION
-
-    private void NavigateToRoot()
-    {
-        _chain.Clear();
-        _chain.Add((Inventory.Root, "Inventory"));
-        AfterNavigate();
-    }
-
-    private void NavigateInto(InventoryEntry folder)
-    {
-        if (!folder.IsFolder)
-            return;
-        if (_carried.HasValue)
-            CancelCarry();
-        // A search result can sit anywhere in the tree; opening it lands there without the steps
-        // between, which the rail shows as root then the folder.
-        if (_search.Length > 0)
-        {
-            _chain.Clear();
-            _chain.Add((Inventory.Root, "Inventory"));
-        }
-        _chain.Add((folder.Id, folder.Name));
-        AfterNavigate();
-    }
-
-    private void NavigateBackTo(string folderId)
-    {
-        if (_carried.HasValue)
-            CancelCarry();
-        for (int i = 0; i < _chain.Count; i++)
-        {
-            if (_chain[i].id != folderId)
-                continue;
-            _chain.RemoveRange(i + 1, _chain.Count - i - 1);
-            break;
-        }
-        AfterNavigate();
-    }
-
-    private void GoUp()
-    {
-        if (_chain.Count <= 1)
-            return;
-        if (_carried.HasValue)
-            CancelCarry();
-        _chain.RemoveAt(_chain.Count - 1);
-        AfterNavigate();
-    }
-
-    private void AfterNavigate()
-    {
-        _selectedId = null;
-        _pickForMove = false;
-        _search = string.Empty;
-        _focus = Field.None;
-        _page = 0;
-        _sidebar?.SetPath(_chain);
-        Reload();
-    }
-
     // LOADING
 
     private void Reload()
     {
         if (_contentSlot == null)
+            return;
+        if (_source is CloudInventorySource && AccountMoved())
             return;
         int serial = ++_loadSerial;
         _listedRevision = InventorySync.Revision;
@@ -785,7 +907,9 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         }
         _loading = true;
         RebuildStatusRow();
-        var task = _search.Length > 0 ? _source.Search(_search) : _source.List(FolderId);
+        // Search runs over the open root's inventory: your own, or the group's.
+        var task = _search.Length > 0 ? _source.Search(_search, _chain[0].OwnerId) : _source.List(Here);
+        bool searching = _search.Length > 0;
         Await(task, listing =>
         {
             if (serial != _loadSerial)
@@ -793,9 +917,16 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             _loading = false;
             _entries.Clear();
             _entries.AddRange(listing.Entries);
+            if (!searching)
+                Listed(listing);
             if (listing.Problem != null)
             {
                 _notice = listing.Problem;
+                _noticeColor = DashTheme.Warning;
+            }
+            else if (_source is CloudInventorySource && InventorySync.TakeNotice() is { } note)
+            {
+                _notice = note;
                 _noticeColor = DashTheme.Warning;
             }
             ApplyView();
@@ -854,6 +985,8 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
 
     private int CompareEntries(InventoryEntry a, InventoryEntry b)
     {
+        if (a.IsLibrary != b.IsLibrary)
+            return a.IsLibrary ? -1 : 1;
         if (a.IsFolder != b.IsFolder)
             return a.IsFolder ? -1 : 1;
         switch (_sort)
@@ -929,6 +1062,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         base.OnUpdate(delta);
         FitBar();
         _sidebar?.FitTree();
+        _sidebar?.Tick();
         RelayoutVirtual(force: false);
         if (_confirmDeleteLeft > 0f)
         {
@@ -942,15 +1076,19 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         if (_artDirty)
         {
             _artDirty = false;
+            bool waiting = false;
             for (int i = 0; i < _pool.Count; i++)
             {
                 var card = _pool[i];
-                if (!card.Active || card.Kind != InventoryEntryKind.World)
+                if (!card.Active || card.Kind == InventoryEntryKind.Folder)
                     continue;
                 var entry = EntryById(card.Id);
-                if (entry.HasValue)
-                    card.ApplyArt(ThumbnailFor(entry.Value));
+                if (entry.HasValue && !card.ApplyArt(ThumbnailFor(entry.Value)))
+                    waiting = true;
             }
+            _artWaitLeft -= delta;
+            if (waiting && _artWaitLeft > 0f)
+                _artDirty = true;
         }
     }
 
@@ -1009,7 +1147,8 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             int colIndex = e % Columns;
             card.Place(ContentPad + colIndex * (cardW + CardSpacing), ContentPad + row * rowStride, cardW);
             card.Bind(in entry, e);
-            card.ApplyArt(entry.Kind == InventoryEntryKind.World ? ThumbnailFor(entry) : null);
+            if (!card.ApplyArt(entry.IsFolder ? null : ThumbnailFor(entry)))
+                LookAgainForArt();
             PaintCard(card);
         }
         for (int i = 0; i < _pool.Count; i++)
@@ -1038,6 +1177,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         bool target = _dropTarget != null && card.Id == _dropTarget;
         bool carried = _carried.HasValue && card.Id == _carried.Value.Id;
         card.SetState(selected, target, carried);
+        _favourites?.Badge(card.Root, EntryById(card.Id));
     }
 
     private void RepaintCards()
@@ -1049,7 +1189,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         }
     }
 
-    // A world's picture comes down once per hash and lives in the thumbnail cache from then on.
+    // A saved thing's picture comes down once per hash and lives in the thumbnail cache from then on.
     private IAssetProvider<TextureAsset>? ThumbnailFor(in InventoryEntry entry)
     {
         if (string.IsNullOrEmpty(entry.ThumbnailHash))
@@ -1065,10 +1205,16 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             {
                 if (bytes == null || bytes.Length == 0)
                     return;
-                _thumbnails.OfferBase64(key, Convert.ToBase64String(bytes), () => _artDirty = true);
+                _thumbnails.OfferBase64(key, Convert.ToBase64String(bytes), LookAgainForArt);
             });
         }
         return null;
+    }
+
+    private void LookAgainForArt()
+    {
+        _artDirty = true;
+        _artWaitLeft = ArtPatience;
     }
 
     private InventoryEntry? SelectedEntry() => _selectedId == null ? null : EntryById(_selectedId);
@@ -1093,6 +1239,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         if (!entry.HasValue)
             return;
         _focus = Field.None;
+        _mergeOffer = null;
         if (_pickForMove)
         {
             _pickForMove = false;
@@ -1132,12 +1279,18 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             CancelCarry();
             return;
         }
+        if (!CanEditHere)
+        {
+            SetStatus(EditRefusal("nothing here can be moved"), DashTheme.Warning);
+            return;
+        }
         var selected = SelectedEntry();
         if (selected.HasValue)
         {
             BeginCarry(selected.Value, null);
             return;
         }
+        _mergeOffer = null;
         _pickForMove = !_pickForMove;
         SetStatus(_pickForMove ? "Press the folder, item or world you want to move." : DescribeListing(), DashTheme.TextDim);
         RebuildBar();
@@ -1146,6 +1299,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     private void BeginCarry(InventoryEntry entry, UIInteractionContext? context)
     {
         _carried = entry;
+        _mergeOffer = null;
         _dropTarget = null;
         _selectedId = null;
         _confirmDeleteLeft = 0f;
@@ -1158,7 +1312,8 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         });
         if (context.HasValue)
             _ghost.MoveTo(context.Value.PointIn(_catcher.Slot));
-        SetStatus("Escape puts it back.", DashTheme.TextDim);
+        var back = Engine.Current?.InputInterface?.Actions?.Menu.Back;
+        SetStatus(Input.InputHints.PadNames && back != null ? $"{Input.InputHints.Name(back)} puts it back." : "Escape puts it back.", DashTheme.TextDim);
         RepaintCards();
         RebuildBar();
     }
@@ -1195,35 +1350,31 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         if (!_carried.HasValue)
             return;
         var carried = _carried.Value;
-        string? targetId = null;
-        string targetName = "there";
+        InventoryPlace? target = null;
         var card = FolderCardAt(context.LocalPoint);
-        if (card != null)
+        if (card != null && EntryById(card.Id) is { } folder)
         {
-            var folder = EntryById(card.Id);
-            targetId = card.Id;
-            targetName = folder?.Name ?? "that folder";
+            // A shared folder at the top of yours is someone else's: dropping into it is refused as any move
+            // across inventories is.
+            target = new InventoryPlace(folder.TargetOwnerId, folder.TargetId, folder.Name);
         }
         else
         {
-            foreach (var (rect, id, name) in _dropRects)
+            foreach (var (rect, place) in _dropRects)
             {
                 if (rect != null && !rect.IsDestroyed && rect.LocalComputeRect.Contains(context.PointIn(rect.Slot)))
                 {
-                    targetId = id;
-                    targetName = name;
+                    target = place;
                     break;
                 }
             }
-            if (targetId == null && _sidebar != null)
+            if (target == null && _sidebar != null)
             {
-                foreach (var (rect, id) in _sidebar.TreeRects)
+                foreach (var (rect, place) in _sidebar.TreeRects)
                 {
                     if (rect != null && !rect.IsDestroyed && rect.Slot.IsActive && rect.LocalComputeRect.Contains(context.PointIn(rect.Slot)))
                     {
-                        targetId = id;
-                        for (int i = 0; i < _chain.Count; i++)
-                            if (_chain[i].id == id) targetName = _chain[i].name;
+                        target = place;
                         break;
                     }
                 }
@@ -1234,14 +1385,73 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         _dropTarget = null;
         _catcher!.Slot.ActiveSelf.Value = false;
         _ghost!.Hide();
-        if (targetId == null)
+        if (target == null)
         {
             SetStatus(DescribeListing(), DashTheme.TextDim);
             RepaintCards();
             RebuildBar();
             return;
         }
-        RunAction(_source.Move(carried, targetId, targetName));
+        RunMove(carried, target.Value);
+    }
+
+    // A move whose folder meets a folder of its name where it lands comes back as an offer to merge the two, which
+    // the bar shows until it is taken, cancelled or left behind; anything else goes the way every change does.
+    private void RunMove(InventoryEntry carried, InventoryPlace target)
+    {
+        if (_busy)
+            return;
+        _busy = true;
+        SetStatus("Working…", DashTheme.TextDim);
+        Await(_source.Move(carried, target), result =>
+        {
+            _busy = false;
+            if (!result.Ok && result.Code == Inventory.NameTakenCode && carried.IsFolder && !carried.IsLink)
+            {
+                _mergeOffer = (carried, target);
+                _notice = null;
+                RebuildBar();
+                return;
+            }
+            Finished(result);
+        });
+    }
+
+    private void AddMergeOffer(Slot tools, in InventoryEntry folder, in InventoryPlace target)
+    {
+        var hint = tools.AddSlot("Hint");
+        hint.AttachComponent<RectTransform>();
+        var hintElement = BrowserParts.Size(hint, 400f, BarHeight);
+        hintElement.MinWidth.Value = 120f;
+        hintElement.FlexibleWidth.Value = 1f;
+        var hintText = _parts.Label(hint, InventoryFolderLocale.MergeQuestion(BrowserParts.Truncate(folder.Name, 22), BrowserParts.Truncate(target.Name, 22)).Resolve(),
+            DashTheme.FontSmall, DashTheme.TextDim, BrowserParts.Weight.Regular);
+        hintText.HorizontalAlignment.Value = TextHorizontalAlignment.Right;
+        string cancel = InventoryFolderLocale.Cancel.Resolve();
+        string merge = InventoryFolderLocale.MergeButton.Resolve();
+        AddBarButton(tools, cancel, TabFill, LabelWidth(cancel), CancelMerge);
+        AddBarButton(tools, merge, AccentColor, LabelWidth(merge), ConfirmMerge);
+    }
+
+    // Wide enough for a word in any language the bar is shown in.
+    private static float LabelWidth(string label) => MathF.Max(84f, 2f * ControlTextInset + 10f * label.Length);
+
+    // One press: everything in both folders ends up in the one already there, and the folder reads again.
+    private void ConfirmMerge()
+    {
+        if (_mergeOffer is not { } offer || _busy)
+            return;
+        _mergeOffer = null;
+        RunAction(_source.Merge(offer.Folder, offer.Target));
+    }
+
+    private void CancelMerge()
+    {
+        if (_mergeOffer == null)
+            return;
+        _mergeOffer = null;
+        SetStatus(DescribeListing(), DashTheme.TextDim);
+        RebuildBar();
     }
 
     private InventoryCard? FolderCardAt(in float2 point)
@@ -1274,18 +1484,23 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         Await(task, result =>
         {
             _busy = false;
-            _notice = result.Message;
-            _noticeColor = result.Ok ? DashTheme.TextDim : DashTheme.Warning;
-            if (result.Ok)
-            {
-                _selectedId = null;
-                Reload();
-            }
-            else
-            {
-                RebuildBar();
-            }
+            Finished(result);
         });
+    }
+
+    private void Finished(in InventoryResult result)
+    {
+        _notice = result.Message;
+        _noticeColor = result.Ok ? DashTheme.TextDim : DashTheme.Warning;
+        if (result.Ok)
+        {
+            _selectedId = null;
+            Reload();
+        }
+        else
+        {
+            RebuildBar();
+        }
     }
 
     private void DeleteSelected()
@@ -1296,7 +1511,12 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         if (_confirmDeleteLeft <= 0f)
         {
             _confirmDeleteLeft = ConfirmSeconds;
-            SetStatus(selected.Value.IsFolder
+            bool asks = !selected.Value.IsLink && Here.IsGroup && selected.Value.OwnerId == Here.OwnerId && RankIn(Here.OwnerId) == 3;
+            SetStatus(asks
+                ? $"Press Confirm to ask the group's moderators to delete \"{selected.Value.Name}\"."
+                : selected.Value.IsLink
+                ? $"Press Confirm to take \"{selected.Value.Name}\" out of your inventory. {Inventory.OwnerLabel(selected.Value)} keeps it."
+                : selected.Value.IsFolder
                 ? $"Press Confirm to delete \"{selected.Value.Name}\" and everything in it."
                 : $"Press Confirm to delete \"{selected.Value.Name}\".", DashTheme.Warning);
             RebuildBar();
@@ -1330,49 +1550,101 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             : new float3(0f, 1f, 0f);
     }
 
-    // Fetch first, on a task; load on the world thread once the file is here.
-    private void SpawnItem(InventoryEntry entry) => FetchThen(entry, (world, path) =>
+    // Fetch first, on a task; load on the world thread once the file is here. The readout comes up in the
+    // world the moment Spawn is pressed and stands in front of the item once it is there, counting its
+    // meshes in, so a spawn is seen happen rather than read off a line on the dash. -xlinka
+    private void SpawnItem(InventoryEntry entry) => FetchWithReadout(entry, SpawnLocale.Spawning, (world, path, readout) =>
     {
         if (!CanSpawnHere(world, out var refusal))
         {
-            SetStatus(refusal!, DashTheme.Warning);
+            Refuse(refusal!, readout);
             return;
         }
-        var spawned = Inventory.LoadItem(world, path, entry.Name);
-        if (spawned == null)
+        LoadFetched(world, path, entry.Name, readout, spawned => spawned.GlobalPosition = SpawnPosition(world), spawned =>
         {
-            SetStatus($"Couldn't load \"{entry.Name}\".", DashTheme.Warning);
-            return;
-        }
-        spawned.GlobalPosition = SpawnPosition(world);
-        InspectorUndo.Record(world, SlotExistenceUndoBatch.Created(world, new[] { spawned }, UndoLocale.SpawnItem));
-        SetStatus($"\"{entry.Name}\" is in front of you.", DashTheme.TextDim);
+            InspectorUndo.Record(world, SlotExistenceUndoBatch.Created(world, new[] { spawned }, UndoLocale.SpawnItem));
+            ModelImportIndicator.Follow(readout, spawned, SpawnLocale.InFront, SpawnLocale.Spawned);
+            SetStatus($"\"{entry.Name}\" is in front of you.", DashTheme.TextDim);
+        });
     });
 
-    private void EquipItem(InventoryEntry entry) => FetchThen(entry, (world, path) =>
+    // The item is read, decrypted and parsed on a task, and only the load itself runs on the world thread: the
+    // reading was 60 ms of a 2700-slot avatar's spawn frame. A big one then goes in over several frames
+    // (Inventory.LoadItemStaged); placed says where it stands as soon as it has a place, done hears it whole.
+    // -xlinka
+    private void LoadFetched(World world, string path, string name, object? readout, Action<Slot>? placed, Action<Slot> done)
+    {
+        Await(Task.Run(() => Inventory.ReadItem(path)), tree =>
+        {
+            var spawned = tree != null && !world.IsDestroyed
+                ? Inventory.LoadItemStaged(world, tree, name, placed, loaded =>
+                {
+                    if (loaded == null)
+                        Refuse($"Couldn't load \"{name}\".", readout);
+                    else
+                        done(loaded);
+                })
+                : null;
+            if (spawned == null)
+                Refuse($"Couldn't load \"{name}\".", readout);
+        }, why => ModelImportIndicator.Fail(LocaleText.Plain(why), readout));
+    }
+
+    // Once it is on, the avatar's own arrival takes over in the world, so the readout only covers the fetch.
+    private void EquipItem(InventoryEntry entry) => FetchWithReadout(entry, SpawnLocale.PuttingOn, (world, path, readout) =>
     {
         var manager = world.LocalUser?.Root?.GetRegisteredComponent<Lumora.Core.Components.Avatar.AvatarEquipManager>();
         if (manager == null)
         {
-            SetStatus("There is nothing to wear it on here.", DashTheme.Warning);
+            Refuse("There is nothing to wear it on here.", readout);
             return;
         }
-        if (!CanSpawnHere(world, out var refusal))
+        // Wearing is not spawning: where props may not come in, the avatar still does, loaded straight onto the user.
+        if (!CanSpawnHere(world, out _))
         {
-            SetStatus(refusal!, DashTheme.Warning);
+            Await(Task.Run(() => Inventory.ReadItem(path)), tree =>
+            {
+                var loading = tree != null && !world.IsDestroyed && !manager.IsDestroyed
+                    ? manager.LoadToWear(tree, entry.Name, loaded =>
+                    {
+                        if (loaded != null && !manager.IsDestroyed && manager.EquipAvatar(loaded, replaceCurrent: true))
+                        {
+                            ModelImportIndicator.Hide(readout, SpawnLocale.Wearing, SpawnLocale.PutOn);
+                            SetStatus($"Wearing \"{entry.Name}\".", DashTheme.TextDim);
+                            return;
+                        }
+                        if (loaded != null && !loaded.IsDestroyed)
+                            loaded.Destroy();
+                        Refuse($"\"{entry.Name}\" would not go on.", readout);
+                    })
+                    : null;
+                if (loading == null)
+                    Refuse($"Couldn't load \"{entry.Name}\".", readout);
+            }, why => ModelImportIndicator.Fail(LocaleText.Plain(why), readout));
             return;
         }
-        var spawned = Inventory.LoadItem(world, path, entry.Name);
-        if (spawned == null)
+        LoadFetched(world, path, entry.Name, readout, spawned => spawned.GlobalPosition = SpawnPosition(world), spawned =>
         {
-            SetStatus($"Couldn't load \"{entry.Name}\".", DashTheme.Warning);
-            return;
-        }
-        spawned.GlobalPosition = SpawnPosition(world);
-        InspectorUndo.Record(world, SlotExistenceUndoBatch.Created(world, new[] { spawned }, UndoLocale.SpawnItem));
-        SetStatus(manager.EquipAvatar(spawned, replaceCurrent: true) ? $"Wearing \"{entry.Name}\"." : $"\"{entry.Name}\" is in front of you, but it would not equip.",
-            DashTheme.TextDim);
+            spawned.GlobalPosition = SpawnPosition(world);
+            if (!manager.IsDestroyed && manager.EquipAvatar(spawned, replaceCurrent: true))
+            {
+                ModelImportIndicator.Hide(readout, SpawnLocale.Wearing, SpawnLocale.PutOn);
+                SetStatus($"Wearing \"{entry.Name}\".", DashTheme.TextDim);
+            }
+            else
+            {
+                InspectorUndo.Record(world, SlotExistenceUndoBatch.Created(world, new[] { spawned }, UndoLocale.SpawnItem));
+                ModelImportIndicator.Follow(readout, spawned, SpawnLocale.WouldNotEquip, SpawnLocale.Spawned);
+                SetStatus($"\"{entry.Name}\" is in front of you, but it would not equip.", DashTheme.TextDim);
+            }
+        });
     });
+
+    private void Refuse(string why, object? readout)
+    {
+        SetStatus(why, DashTheme.Warning);
+        ModelImportIndicator.Fail(LocaleText.Plain(why), readout);
+    }
 
     private void OpenWorld(InventoryEntry entry) => FetchThen(entry, (_, path) =>
     {
@@ -1382,7 +1654,18 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             SetStatus("The world manager isn't up yet.", DashTheme.Warning);
             return;
         }
-        var world = manager.OpenSavedWorld(path, entry.Name);
+        var world = manager.OpenSavedWorld(path, entry.Name, fromCloudRecord: true);
+        // Save changes in it writes over this item rather than making another, wherever the item lives, when
+        // this account may change things there. Someone else's world opened from a share or a link is theirs:
+        // Save changes makes a new one in the open folder instead. -xlinka
+        if (world != null && !entry.IsLink && _access.CanChange())
+        {
+            world.SavedItemId = entry.Id;
+            world.SavedItemAccount = Lumora.Core.InventorySync.Account;
+            world.SavedItemName = entry.Name;
+            world.SavedItemFolder = entry.FolderId;
+            world.SavedItemOwner = entry.OwnerId;
+        }
         SetStatus(world != null ? $"Opened \"{entry.Name}\"." : $"Couldn't open \"{entry.Name}\".", world != null ? DashTheme.TextDim : DashTheme.Warning);
     });
 
@@ -1395,6 +1678,14 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     });
 
     private void FetchThen(InventoryEntry entry, Action<World, string> then)
+        => Fetch(entry, default, (world, path, _) => then(world, path));
+
+    private void FetchWithReadout(InventoryEntry entry, LocaleText readout, Action<World, string, object?> then)
+        => Fetch(entry, readout, then);
+
+    // With a readout title the in-world readout comes up as the fetch starts and goes red with the reason
+    // when it does not land, rather than hanging at "Fetching".
+    private void Fetch(InventoryEntry entry, LocaleText readoutTitle, Action<World, string, object?> then)
     {
         if (_busy)
             return;
@@ -1406,28 +1697,41 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         }
         _busy = true;
         SetStatus($"Fetching \"{entry.Name}\"…", DashTheme.TextDim);
+        object? readout = null;
+        if (!readoutTitle.IsEmpty)
+        {
+            readout = ModelImportIndicator.Show(world, null, readoutTitle, entry.Name);
+            ModelImportIndicator.Report(new ImportProgress(ImportStage.Fetching, 0.1f), readout);
+        }
         Await(_source.FetchToCache(entry), fetched =>
         {
             _busy = false;
             if (fetched.path == null)
             {
-                SetStatus(fetched.problem ?? "The download did not go through.", DashTheme.Warning);
+                Refuse(fetched.problem ?? "The download did not go through.", readout);
                 return;
             }
             var target = FocusedWorld ?? world;
             if (target.IsDestroyed)
             {
-                SetStatus("That world is gone.", DashTheme.Warning);
+                Refuse("That world is gone.", readout);
                 return;
             }
-            then(target, fetched.path);
-        });
+            // Somewhere else by the time it landed: the readout follows the item there.
+            if (readout != null && !ReferenceEquals(target, world))
+            {
+                ModelImportIndicator.Dismiss(readout);
+                readout = ModelImportIndicator.Show(target, null, readoutTitle, entry.Name);
+            }
+            then(target, fetched.path, readout);
+        }, why => ModelImportIndicator.Fail(LocaleText.Plain(why), readout));
     }
 
-    // Everything in either hand that may be copied out, saved into the folder being looked at.
+    // Everything in either hand that may be copied out, saved into the folder being looked at, or the top of
+    // your own inventory when this folder is not yours to save into.
     private void SaveHeld()
     {
-        if (_busy)
+        if (_busy || RefusedForEmail())
             return;
         var world = FocusedWorld;
         var root = world?.LocalUser?.Root;
@@ -1454,6 +1758,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         var uploads = new List<Task<InventoryResult>>();
         int refused = 0;
         string? lastRefusal = null;
+        var place = SaveHere(out var notice);
         foreach (var slot in slots)
         {
             if (Lumora.Core.Components.Interaction.GrabSaveBlock.BlocksInventorySave(slot))
@@ -1468,7 +1773,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
                 lastRefusal = reason ?? "not allowed";
                 continue;
             }
-            uploads.Add(_source.SaveItem(slot, slot.Name, FolderId));
+            uploads.Add(_source.SaveItem(slot, slot.Name, place));
         }
         if (uploads.Count == 0)
         {
@@ -1489,12 +1794,14 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
                 if (r.Ok) saved++; else failure = r.Message;
             }
             string line = saved == 1 ? "Saved 1 item here." : $"Saved {saved} items here.";
+            if (notice != null)
+                line = saved == 1 ? notice : saved > 1 ? $"{notice.TrimEnd('.')}: {saved} items." : $"Saved {saved} items to your inventory.";
             if (failure != null)
                 line += $" One failed: {failure}";
             if (refusedCount > 0)
                 line += refusedCount == 1 ? $" One was refused: {refusalText}." : $" {refusedCount} were refused: {refusalText}.";
             _notice = line;
-            _noticeColor = saved == 0 ? DashTheme.Warning : DashTheme.TextDim;
+            _noticeColor = saved == 0 || notice != null ? DashTheme.Warning : DashTheme.TextDim;
             Reload();
         });
     }
@@ -1503,7 +1810,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     // tree, so the upload carries no link to it and the copy comes back unworn.
     private void SaveAvatar()
     {
-        if (_busy)
+        if (_busy || RefusedForEmail())
             return;
         var world = FocusedWorld;
         var manager = world?.LocalUser?.Root?.GetRegisteredComponent<Lumora.Core.Components.Avatar.AvatarEquipManager>();
@@ -1520,11 +1827,12 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         }
         _busy = true;
         SetStatus("Saving your avatar…", DashTheme.TextDim);
-        Await(_source.SaveItem(avatar, avatar.Name, FolderId), result =>
+        var place = SaveHere(out var notice);
+        Await(_source.SaveItem(avatar, avatar.Name, place), result =>
         {
             _busy = false;
-            _notice = result.Message;
-            _noticeColor = result.Ok ? DashTheme.TextDim : DashTheme.Warning;
+            _notice = notice != null && result.Ok ? Inventory.WentToOwn(notice, result.Message) : result.Message;
+            _noticeColor = result.Ok && notice == null ? DashTheme.TextDim : DashTheme.Warning;
             Reload();
         });
     }
@@ -1540,8 +1848,13 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
 
         var backdrop = _dialogRoot.AddSlot("Backdrop");
         BrowserParts.Fill(backdrop.AttachComponent<RectTransform>());
-        backdrop.AttachComponent<Image>().Tint.Value = new color(0f, 0f, 0f, 0.55f);
+        // The cards are chunks of their own and drew straight through the dialog; overlay bands put the
+        // scrim and the panel above every one of them. -xlinka
+        backdrop.AttachComponent<GraphicChunkRoot>().OverlayLevel = 1;
+        // Button before Image: a button attached after an image takes over its tint as a hover ramp, and the
+        // whole window lit up grey under the cursor. -xlinka
         backdrop.AttachComponent<Button>().Clicked += (_, _) => CloseDialog();
+        backdrop.AttachComponent<Image>().Tint.Value = DashTheme.ModalScrim;
 
         var panel = _dialogRoot.AddSlot("Panel");
         var panelRect = panel.AttachComponent<RectTransform>();
@@ -1549,7 +1862,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         panelRect.AnchorMax.Value = new float2(0.5f, 0.5f);
         panelRect.OffsetMin.Value = new float2(-220f, -92f);
         panelRect.OffsetMax.Value = new float2(220f, 92f);
-        panel.AttachComponent<GraphicChunkRoot>();
+        panel.AttachComponent<GraphicChunkRoot>().OverlayLevel = 2;
         BrowserParts.Panel(panel, DashTheme.Panel, DashTheme.RadiusCard, DashTheme.Outline, 1.5f);
         panel.AttachComponent<Button>();
 
@@ -1597,13 +1910,28 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         var selected = SelectedEntry();
         if (kind == DialogKind.Rename && !selected.HasValue)
             return;
+        if (kind == DialogKind.NewFolder && !CanEditHere)
+        {
+            SetStatus(EditRefusal("no folder can go in it"), DashTheme.Warning);
+            return;
+        }
+        if (kind == DialogKind.Rename && !selected!.Value.IsKeptLink && !CanEditHere)
+        {
+            SetStatus(EditRefusal("nothing here can be renamed"), DashTheme.Warning);
+            return;
+        }
+        CloseShare();
+        _mergeOffer = null;
         _dialog = kind;
         _dialogBuffer = kind == DialogKind.Rename ? selected!.Value.Name : string.Empty;
         _dialogProblem = null;
         _focus = Field.Dialog;
-        BrowserParts.SetText(_dialogTitle, kind == DialogKind.Rename
-            ? $"Rename \"{BrowserParts.Truncate(selected!.Value.Name, 24)}\""
-            : $"New folder in {BrowserParts.Truncate(FolderName, 22)}");
+        BrowserParts.SetText(_dialogTitle, kind switch
+        {
+            DialogKind.Rename => $"Rename \"{BrowserParts.Truncate(selected!.Value.Name, 24)}\"",
+            DialogKind.AddLink => $"Paste a shared link into {BrowserParts.Truncate(LinkHome.Name, 18)}",
+            _ => $"New folder in {BrowserParts.Truncate(FolderName, 22)}",
+        });
         UpdateDialog();
         _dialogRoot.ActiveSelf.Value = true;
         MarkDirty();
@@ -1622,7 +1950,8 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     private void UpdateDialog()
     {
         bool empty = _dialogBuffer.Length == 0;
-        BrowserParts.SetText(_dialogText, empty ? "Name" : _dialogBuffer);
+        string shown = _dialog == DialogKind.AddLink && _dialogBuffer.Length > 44 ? "…" + _dialogBuffer[^43..] : _dialogBuffer;
+        BrowserParts.SetText(_dialogText, empty ? (_dialog == DialogKind.AddLink ? Inventory.LinkPrefix + "…" : "Name") : shown);
         if (_dialogText != null)
             BrowserParts.SetColor(_dialogText.Color, empty ? DashTheme.TextDim : DashTheme.Text);
         BrowserParts.SetText(_dialogError, _dialogProblem ?? string.Empty);
@@ -1634,7 +1963,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         if (_dialog == DialogKind.None || _busy)
             return;
         string name = _dialogBuffer.Trim();
-        if (!Inventory.ValidName(name, out var error))
+        if (_dialog != DialogKind.AddLink && !Inventory.ValidName(name, out var error))
         {
             _dialogProblem = error;
             UpdateDialog();
@@ -1643,7 +1972,11 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         Task<InventoryResult> task;
         if (_dialog == DialogKind.NewFolder)
         {
-            task = _source.CreateFolder(FolderId, name);
+            task = _source.CreateFolder(Here, name);
+        }
+        else if (_dialog == DialogKind.AddLink)
+        {
+            task = _source.AddLink(name, LinkHome.FolderId);
         }
         else
         {
@@ -1683,7 +2016,7 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
     {
         if (_focus == Field.Dialog && _dialog != DialogKind.None)
         {
-            if (char.IsControl(c) || _dialogBuffer.Length >= 64)
+            if (char.IsControl(c) || _dialogBuffer.Length >= (_dialog == DialogKind.AddLink ? 200 : 64))
                 return true;
             _dialogBuffer += c;
             _dialogProblem = null;
@@ -1739,6 +2072,11 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
             RebuildBar();
             return true;
         }
+        if (_mergeOffer != null)
+        {
+            ConfirmMerge();
+            return true;
+        }
         return false;
     }
 
@@ -1747,6 +2085,21 @@ public sealed class InventoryScreen : WidgetScreen, IDashboardKeyInput, ITabbedS
         if (_dialog != DialogKind.None)
         {
             CloseDialog();
+            return true;
+        }
+        if (_shareOpen)
+        {
+            CloseShare();
+            return true;
+        }
+        if (_requestsOpen)
+        {
+            CloseRequests();
+            return true;
+        }
+        if (_mergeOffer != null)
+        {
+            CancelMerge();
             return true;
         }
         if (_carried.HasValue || _pickForMove)

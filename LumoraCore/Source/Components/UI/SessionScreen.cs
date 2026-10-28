@@ -32,6 +32,9 @@ public static class SessionLocale
     public static readonly LocaleText SectionSaving = "Session.Settings.Saving".AsLocale("Saving");
 
     public static readonly LocaleText Name = "Session.Settings.Name".AsLocale("Name");
+    public static readonly LocaleText NameHint =
+        "Session.Settings.Name.Hint".AsLocale("What the session is listed as and what everyone in it sees.");
+    public static readonly LocaleText NamePlaceholder = "Session.Settings.Name.Placeholder".AsLocale("Session name");
     public static readonly LocaleText Description = "Session.Settings.Description".AsLocale("Description");
     public static readonly LocaleText NoDescription = "Session.Settings.Description.None".AsLocale("None");
     public static readonly LocaleText MaxUsers = "Session.Settings.MaxUsers".AsLocale("Max users");
@@ -39,6 +42,8 @@ public static class SessionLocale
     public static readonly LocaleText AllowJoiningHint =
         "Session.Settings.AllowJoining.Hint".AsLocale("Off turns away anyone new, whatever the access level.");
     public static readonly LocaleText WhoCanJoin = "Session.Settings.WhoCanJoin".AsLocale("Who can join");
+    public static readonly LocaleText LocalStaysPrivate =
+        "Session.Settings.WhoCanJoin.Local".AsLocale("Local is yours alone. Nobody else can join it.");
     public static readonly LocaleText HideFromLists = "Session.Settings.HideFromLists".AsLocale("Hide from session lists");
     public static readonly LocaleText TickRate = "Session.Settings.TickRate".AsLocale("Tick rate");
     public static readonly LocaleText TickRateHint =
@@ -79,8 +84,10 @@ public static class SessionLocale
     public static readonly LocaleText Respawn = "Session.Users.Respawn".AsLocale("Respawn");
     public static readonly LocaleText Ban = "Session.Users.Ban".AsLocale("Ban");
     public static readonly LocaleText BanTitle = "Session.Users.Ban.Title".AsLocale("Ban this user?");
-    public static readonly LocaleText Block = "Session.Users.Block".AsLocale("Block");
-    public static readonly LocaleText Blocked = "Session.Users.Blocked".AsLocale("Blocked");
+    // Your ears only: the people Block (profile) is a different, bigger thing.
+    public static readonly LocaleText MuteForMe = "Session.Users.MuteForMe".AsLocale("Mute for me");
+    public static readonly LocaleText MutedForMe = "Session.Users.MutedForMe".AsLocale("Muted for me");
+    public static readonly LocaleText BlockedByYou = "Session.Users.BlockedByYou".AsLocale("Blocked, hidden from you");
     public static readonly LocaleText Hosting = "Session.Hosting".AsLocale("Hosting");
     public static readonly LocaleText Guest = "Session.Guest".AsLocale("Guest");
 
@@ -121,6 +128,7 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
     private const float ScrollbarGap = 6f;
     private const float RefreshInterval = 0.25f;
     private const float FeedbackSeconds = 1.8f;
+    private const float InviteWidth = 128f;
 
     // Pages and tabs line up with the rows inside them: the row lists sit this far in from the page
     // edges, with the scrollbar's track and gap on the right.
@@ -174,6 +182,11 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
     private DashScrollbar? _usersBar;
     private Slot? _permissionsPage;
     private SessionPermissionsPanel? _permissionsPanel;
+    private SessionInvitePicker? _invitePicker;
+    private SettingsChip? _inviteButton;
+    private int _currentTab;
+
+    internal SessionInvitePicker? InvitePicker => _invitePicker;
 
     public SessionPermissionsPanel? PermissionsPanel => _permissionsPanel;
 
@@ -229,6 +242,7 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         RefreshScrollbars();
         if (_permissionsPage != null && _permissionsPage.ActiveSelf.Value)
             _permissionsPanel?.Tick(delta);
+        _invitePicker?.Tick();
 
         _accum += delta;
         if (_accum < RefreshInterval)
@@ -280,6 +294,8 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         RebuildSettings();
         RebuildUsers();
         _permissionsPanel?.Bind(_world);
+        if (_invitePicker?.IsShown == true)
+            _invitePicker.Show(_world);
         MarkDirty();
     }
 
@@ -305,8 +321,7 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         });
     }
 
-    private static string WorldDisplayName(World world)
-        => string.IsNullOrEmpty(world.WorldName?.Value) ? world.Name : world.WorldName!.Value;
+    private static string WorldDisplayName(World world) => Management.WorldManager.DisplayName(world);
 
     protected override void BuildContent(UIBuilder builder)
     {
@@ -346,6 +361,9 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         AddTab(track, contentHost, "Settings", SessionLocale.TabSettings, BuildSettingsPage);
         AddTab(track, contentHost, "Users", SessionLocale.TabUsers, BuildUsersPage);
         AddTab(track, contentHost, "Permissions", SessionLocale.TabPermissions, BuildPermissionsPage);
+        _invitePicker = new SessionInvitePicker(_fonts, icon => _dashboard?.IconProvider(icon));
+        _invitePicker.Build(SettingsUI.Fill(contentHost, "InviteHost", ContentLeft, SettingsMetrics.PanelInset, SettingsMetrics.PanelInset, 0f), MarkDirty);
+        _invitePicker.Closed += () => SelectTab(_currentTab);
         BuildWorldTitle(headerInner);
         LayoutHeader(1);
 
@@ -518,8 +536,11 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         SetFixedHeight(_previewRow, 88f);
         var row = SettingsUI.Fill(_previewRow, "Inner", ContentLeft, 0f, ContentRight, 0f);
         var image = SettingsUI.Child(row, "Image", float2.Zero, new float2(0f, 1f), float2.Zero, new float2(156f, 0f));
-        _previewArt = new Worlds.ArtBlock(parts, image, DashTheme.RadiusControl, 28f, 156f / 88f, 0f);
-        var info = SettingsUI.Fill(row, "Info", 156f + DashTheme.GapLarge, 0f, 0f, 0f);
+        _previewArt = new Worlds.ArtBlock(parts, image, DashTheme.RadiusControl, 28f, 0f);
+        var invite = SettingsUI.Child(row, "Invite", new float2(1f, 1f), new float2(1f, 1f), new float2(-InviteWidth, -36f), new float2(0f, -4f));
+        _inviteButton = SettingsChip.Build(invite, _fonts.Medium, DashTheme.FontBody, DashTheme.RadiusControl);
+        _inviteButton.Button.Clicked += (_, _) => OpenInvites();
+        var info = SettingsUI.Fill(row, "Info", 156f + DashTheme.GapLarge, 0f, InviteWidth + DashTheme.GapLarge, 0f);
         var facts = info.AddSlot("Facts");
         Worlds.BrowserParts.PinTop(facts.AttachComponent<RectTransform>(), 4f, 32f);
         _previewFacts = parts.Label(facts, string.Empty, DashTheme.FontBody, DashTheme.Text, Worlds.BrowserParts.Weight.Semibold, wrap: true);
@@ -546,11 +567,20 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         string host = current.Session?.Metadata?.HostUsername ?? string.Empty;
         Worlds.BrowserParts.SetText(_previewDescription, !string.IsNullOrWhiteSpace(description) ? description
             : !string.IsNullOrWhiteSpace(host) ? "Hosted by " + host : string.Empty);
+        if (_inviteButton != null)
+        {
+            // pressable either way: the picker says why when this user may not invite here
+            var right = Networking.Session.SessionInvites.RightOf(current, current.LocalUser);
+            GroupBand.PaintAction(_inviteButton, InviteLocale.Invite.Resolve(), true, false, right.Allowed);
+            string tip = right.Allowed ? string.Empty : InviteLocale.Bar(right.Bar).Resolve();
+            if (_inviteButton.Button.Tip.Value != tip)
+                _inviteButton.Button.Tip.Value = tip;
+        }
     }
 
     // TABS
 
-    // Named entry for anything outside the screen that needs a tab up, the capture harness included.
+    // Named entry for anything outside the screen that needs a tab up, a screen capture included.
     public bool ShowTab(string name)
     {
         for (int i = 0; i < _tabs.Count; i++)
@@ -564,8 +594,24 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         return false;
     }
 
+    // The picker takes the page area while it is up; a tab pressed meanwhile puts it away.
+    public void OpenInvites()
+    {
+        if (_invitePicker == null)
+            return;
+        for (int i = 0; i < _tabs.Count; i++)
+        {
+            if (_tabs[i].Page != null && !_tabs[i].Page.IsDestroyed)
+                _tabs[i].Page.ActiveSelf.Value = false;
+        }
+        _invitePicker.Show(_world);
+        MarkDirty();
+    }
+
     private void SelectTab(int index)
     {
+        _currentTab = index;
+        _invitePicker?.Hide(notify: false);
         for (int i = 0; i < _tabs.Count; i++)
         {
             var tab = _tabs[i];
@@ -626,6 +672,7 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         templates.MapKind(KindChoice, new SessionChoiceTemplate(_fonts) { Fit = _settingsFit });
         templates.MapKind(KindNote, new PermNoteTemplate(_fonts) { Fit = _settingsFit });
         templates.MapKind(KindProse, new SettingsProseTemplate(_fonts) { Fit = _settingsFit });
+        templates.Map<ListingTextField>(new SettingsTextFieldTemplate(_fonts) { Fit = _settingsFit });
         _settingsView = AttachListing(page, "Settings", templates, _settingsItems, out var bar);
         _settingsBar = bar;
     }
@@ -671,7 +718,22 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         AddSettingsNote("intro", host ? SessionLocale.IntroHost : SessionLocale.IntroGuest);
 
         _settingsItems.AddRoot(new ListingHeader("h.world", SessionLocale.SectionWorld));
-        _settingsItems.AddRoot(new ListingLabel("world.name", SessionLocale.Name, () => WorldDisplayName(world)));
+        // The home is found by its name all over, so it keeps the one it has.
+        if (host && world.Name != "LocalHome")
+        {
+            _settingsItems.AddRoot(new ListingTextField("world.name", SessionLocale.Name)
+            {
+                DetailText = SessionLocale.NameHint,
+                Read = () => WorldDisplayName(world),
+                Write = value => RenameSession(world, config, value),
+                Placeholder = SessionLocale.NamePlaceholder.Resolve(),
+                MaxLength = DashTextField.WorldNameLength,
+            });
+        }
+        else
+        {
+            _settingsItems.AddRoot(new ListingLabel("world.name", SessionLocale.Name, () => WorldDisplayName(world)));
+        }
         _settingsItems.AddRoot(new ListingLabel("world.description", SessionLocale.Description,
             () => string.IsNullOrWhiteSpace(config.Description.Value)
                 ? SessionLocale.NoDescription.Resolve()
@@ -755,6 +817,14 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         var levels = new List<World.WorldAccessLevel>(AccessLabels.Offered(forGroup));
         if (!levels.Contains(config.AccessLevel.Value))
             levels.Add(config.AccessLevel.Value);
+
+        if (Management.WorldManager.IsLocalHome(world))
+        {
+            _settingsItems.AddRoot(new ListingLabel("access.level", SessionLocale.WhoCanJoin,
+                () => AccessLabels.Private.Resolve()));
+            AddSettingsNote("access.local", SessionLocale.LocalStaysPrivate);
+            return;
+        }
 
         if (!world.IsAuthority)
         {
@@ -845,6 +915,14 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         apply();
     }
 
+    // A blank name keeps the old one rather than leaving a session nobody can pick out of a list.
+    private static void RenameSession(World world, WorldSettings config, string typed)
+    {
+        string name = typed.Trim();
+        if (name.Length > 0)
+            EditConfig(world, () => config.SessionName.Value = name);
+    }
+
     // SAVING
 
     // Save changes: the local home writes back over its own file, the one save that stays on this machine
@@ -858,18 +936,21 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
                 world.SaveToFile(Lumora.Core.Engine.LocalHomeSavePath) ? SessionLocale.Saved : SessionLocale.SaveFailed);
             return;
         }
-        UploadWorld(world, WorldDisplayName(world), action, SessionLocale.SaveChangesButton);
+        UploadWorld(world, WorldDisplayName(world), action, SessionLocale.SaveChangesButton, over: true);
     }
 
     // Save a copy: a new, stamped item in the cloud inventory, the current world left untouched. The home
     // is allowed here too; a copy of it is a saved world like any other.
     private void SaveWorldCopy(World world, ListingAction action)
     {
-        var stem = world.Name == "LocalHome" ? "Home" : WorldDisplayName(world);
+        var stem = WorldDisplayName(world);
         UploadWorld(world, $"{stem} {DateTime.Now:yyyy-MM-dd HH.mm}", action, SessionLocale.SaveCopyButton);
     }
 
-    private void UploadWorld(World world, string name, ListingAction action, LocaleText idle)
+    // Save changes writes over the item the world came from or was last saved as, while the account that
+    // owns it is signed in; the first one, and every copy, goes into the folder the inventory has open, the
+    // way any save does. -xlinka
+    private void UploadWorld(World world, string name, ListingAction action, LocaleText idle, bool over = false)
     {
         if (!Lumora.Core.Inventory.IsSignedIn)
         {
@@ -877,15 +958,37 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
             return;
         }
         SetActionLabel(action, SessionLocale.Uploading);
-        var task = Lumora.Core.Inventory.SaveWorldAsync(world, name, null);
+        var account = Lumora.Core.InventorySync.Account;
+        string? itemId = null;
+        string? notice = null;
+        Lumora.Core.InventoryPlace place;
+        if (over && world.SavedItemId != null && world.SavedItemAccount == account)
+        {
+            itemId = world.SavedItemId;
+            name = world.SavedItemName ?? name;
+            place = new Lumora.Core.InventoryPlace(world.SavedItemOwner, world.SavedItemFolder ?? Lumora.Core.Inventory.Root, string.Empty);
+        }
+        else
+            place = Lumora.Core.Inventory.SavePlace(out notice);
+        var task = Lumora.Core.Inventory.SaveWorldAsync(world, name, place, itemId);
         _ = task.ContinueWith(t =>
         {
             bool ok = t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && t.Result.Ok;
             var message = t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion
                 ? t.Result.Message
                 : t.Exception?.GetBaseException().Message ?? "upload failed";
-            Logging.Logger.Log($"Save world '{name}': {message}");
-            World?.RunSynchronously(() => ShowActionResult(action, idle, ok ? SessionLocale.Saved : SessionLocale.SaveFailed));
+            Logging.Logger.Log($"Save world '{name}': {(notice != null ? notice + " " : string.Empty)}{message}");
+            if (ok && over && itemId == null && t.Result.ItemId != null)
+            {
+                world.SavedItemId = t.Result.ItemId;
+                world.SavedItemAccount = account;
+                world.SavedItemName = name;
+                world.SavedItemFolder = place.FolderId;
+                world.SavedItemOwner = place.OwnerId;
+            }
+            bool email = t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion && t.Result.Code == Lumora.Core.AccountEmail.NotVerifiedCode;
+            var shown = email ? Lumora.Core.AccountEmailLocale.VerifyFirst : !ok ? SessionLocale.SaveFailed : notice != null ? LocaleText.Plain("Saved to Inventory") : SessionLocale.Saved;
+            World?.RunSynchronously(() => ShowActionResult(action, idle, shown));
         });
     }
 
@@ -919,6 +1022,7 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
         templates.MapKind(KindUser, new SessionUserRowTemplate(_fonts, this) { Fit = _usersFit });
         templates.MapKind(KindNote, new PermNoteTemplate(_fonts) { Fit = _usersFit });
         templates.Fallback(new SettingsLabelTemplate(_fonts) { Fit = _usersFit });
+        templates.Map<ListingAction>(new SettingsActionTemplate(_fonts) { Fit = _usersFit });
         _usersView = AttachListing(page, "Users", templates, _userItems, out var bar);
         _usersBar = bar;
     }
@@ -953,6 +1057,21 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
                 Tag = user,
             });
         }
+        var remembered = Networking.Session.RememberedEditConsent.Entries(world.LocalUser);
+        if (remembered.Count > 0)
+            _userItems.AddRoot(new ListingHeader("h.remembered", EditConsentLocale.RememberedHeading));
+        foreach (var person in remembered)
+        {
+            _userItems.AddRoot(new ListingAction("remembered." + person.AccountId, LocaleText.Plain(person.Name))
+            {
+                ButtonLabel = EditConsentLocale.Forget,
+                Invoke = () =>
+                {
+                    world.RunSynchronously(() => Networking.Session.RememberedEditConsent.Forget(world.LocalUser, person.AccountId));
+                    MarkDirty();
+                },
+            });
+        }
         if (users.Count <= 1)
             _userItems.AddRoot(new ListingCustom("alone", KindNote,
                 world.IsAuthority ? SessionLocale.AloneHost : SessionLocale.AloneGuest));
@@ -972,6 +1091,8 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
                 continue;
             builder.Append(user.ReferenceID).Append(':');
         }
+        foreach (var person in Networking.Session.RememberedEditConsent.Entries(world.LocalUser))
+            builder.Append(person.AccountId).Append(':').Append(person.Name).Append(';');
         return builder.ToString();
     }
 
@@ -991,7 +1112,12 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
     internal string DescribeUser(User user, bool hostUser)
     {
         string role = hostUser ? RoleLabels.Host.Resolve() : RoleLabels.Of(_world?.DataModelPermissions?.GetRole(user));
-        return user.IsLocal ? $"{role} · {SessionLocale.You.Resolve()}" : role;
+        if (user.IsBot)
+            role = PeopleLocale.ChipBot.Resolve() + " · " + role;
+        if (user.IsLocal)
+            return $"{role} · {SessionLocale.You.Resolve()}";
+        // they are hidden from you, and this is the one place that says so
+        return user.IsBlockedByMe ? $"{role} · {SessionLocale.BlockedByYou.Resolve()}" : role;
     }
 
     // Mute and Silence are the host's decision about someone else's record and replicate. The social
@@ -1018,12 +1144,38 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
     }
 
     // Your ears, nobody else's: local state only, so it needs no authority.
-    internal void ToggleBlocked(User user)
+    internal void ToggleMutedForMe(User user)
     {
         if (user.IsLocal)
             return;
         user.SetAudioLocallyBlocked(!user.IsAudioLocallyBlocked);
         _usersView?.RefreshValues();
+    }
+
+    // Editing somebody: ask them from their row, or take back a yes given to them. Both write this machine's own
+    // record in the session world, on that world's update. -xlinka
+    internal void AskToEdit(User user)
+    {
+        var world = user.World;
+        if (user.IsLocal || world == null || world.IsDestroyed)
+            return;
+        world.RunSynchronously(() =>
+        {
+            if (!user.IsDestroyed)
+                Networking.Session.SessionEditConsent.Ask(world, user);
+        });
+    }
+
+    internal void TakeBackEdits(User user)
+    {
+        var world = user.World;
+        if (user.IsLocal || world == null || world.IsDestroyed)
+            return;
+        world.RunSynchronously(() =>
+        {
+            if (!user.IsDestroyed)
+                Networking.Session.SessionEditConsent.Revoke(world, user);
+        });
     }
 
     internal void RequestKick(User user)
@@ -1057,19 +1209,27 @@ public sealed class SessionScreen : WidgetScreen, ITabbedScreen
             });
     }
 
-    // Back to spawn through the user's character. Works where this machine has authority over that
-    // character's transform: your own, or anyone's on the host.
+    // A fresh body at a spawn point, built by the host, so it also mends a user whose body lost something
+    // it needs to move or interact. Your own peer asks for yours; the host builds anyone's; a moderating
+    // guest asks on the other user's behalf and the host's gate decides. -xlinka
     internal void Respawn(User user)
     {
         if (!user.IsLocal && !CanModerate(user))
             return;
-        var character = user.Root?.GetRegisteredComponent<Lumora.Core.Components.CharacterController>();
-        if (character == null)
-        {
-            Lumora.Core.Logging.Logger.Log($"[Session] Respawn: no reachable character for '{user.UserName?.Value}'.");
+        var world = user.World;
+        if (world == null || world.IsDestroyed)
             return;
-        }
-        character.Teleport(new float3(0f, 1f, 0f));
+        world.RunSynchronously(() =>
+        {
+            if (user.IsDestroyed)
+                return;
+            if (user.IsLocal)
+                world.RequestLocalRespawn();
+            else if (world.IsAuthority)
+                world.RespawnUser(user);
+            else
+                user.RespawnRequest.Value = true;
+        });
     }
 
     // PERMISSIONS PAGE - roles, what each role can do, and what happens when someone keeps getting

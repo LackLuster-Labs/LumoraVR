@@ -51,7 +51,7 @@ internal sealed class WorldDetailPeople
             if (user == null || user.IsDestroyed) continue;
             count++;
             signature.Append(user.ReferenceID).Append('|').Append(SessionPermissionsPanel.DisplayName(user))
-                .Append('|').Append(Status(world, user)).Append('\n');
+                .Append('|').Append(user.AccountId.Value).Append('|').Append(Status(world, user)).Append('\n');
         }
         BrowserParts.SetText(_heading, $"People here · {count}");
         string key = signature.ToString();
@@ -67,7 +67,8 @@ internal sealed class WorldDetailPeople
             BrowserParts.Panel(row, DashTheme.Surface, DashTheme.RadiusControl);
             var name = row.AddSlot("Name");
             BrowserParts.PinTop(name.AttachComponent<RectTransform>(), 8f, 23f, 12f);
-            _parts.Label(name, SessionPermissionsPanel.DisplayName(user), DashTheme.FontBody, DashTheme.Text, BrowserParts.Weight.Semibold);
+            ProfileLink.On(_parts.Label(name, SessionPermissionsPanel.DisplayName(user), DashTheme.FontBody, DashTheme.Text,
+                BrowserParts.Weight.Semibold)).Bind(user);
             var status = row.AddSlot("Status");
             BrowserParts.PinBottom(status.AttachComponent<RectTransform>(), 7f, 18f, 12f);
             _parts.Label(status, Status(world, user), DashTheme.FontSmall, DashTheme.TextDim, BrowserParts.Weight.Regular);
@@ -87,6 +88,15 @@ internal sealed class WorldDetailPeople
         bool host = permissions != null && ReferenceEquals(permissions.GetRole(user), permissions.HostRole);
         string role = ReferenceEquals(user, world.LocalUser) ? host ? "You · Host" : "You" : host ? "Host" : "Guest";
         string device = user.VRActive.Value ? "VR" : "Desktop";
-        return role + " · " + device + (user.PresentInWorld.Value ? string.Empty : " · Away");
+        return role + " · " + device + Capture(user) + (user.PresentInWorld.Value ? string.Empty : " · Away");
     }
+
+    // The same strongest-first reading as the mark over their name.
+    private static string Capture(User user) => user.Capture.Value switch
+    {
+        _ when user.IsLive.Value => " · Live",
+        Lumora.Core.Photos.CaptureState.Streaming => " · Live",
+        Lumora.Core.Photos.CaptureState.Recording => " · Recording",
+        _ => string.Empty,
+    };
 }

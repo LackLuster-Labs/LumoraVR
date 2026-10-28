@@ -6,6 +6,7 @@ using Helio.UI;
 using Helio.UI.Listing;
 using Lumora.Core.Localization;
 using Lumora.Core.Math;
+using Lumora.Core.Networking.Session;
 
 namespace Lumora.Core.Components.UI;
 
@@ -118,9 +119,11 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
     private const float RespawnWidth = 86f;
     private const float KickWidth = 64f;
     private const float BanWidth = 64f;
-    private const float BlockWidth = 92f;
+    private const float MuteForMeWidth = 116f;
     private const float VolumeWidth = 120f;
     private const float VolumeValueWidth = 44f;
+    private const float ConsentWidth = 112f;
+    private const float TakeBackWidth = 132f;
 
     private readonly SettingsFonts _fonts;
     private readonly SessionScreen _screen;
@@ -152,8 +155,12 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
         moderation = screen.CanModerate(user)
             ? BanWidth + KickWidth + RespawnWidth + SilenceWidth + MuteWidth + ControlGap * 4f
             : user.IsLocal ? RespawnWidth : 0f;
-        ears = user.IsLocal ? 0f : BlockWidth + VolumeValueWidth + VolumeWidth + ControlGap * 2f;
+        ears = user.IsLocal ? 0f : MuteForMeWidth + VolumeValueWidth + VolumeWidth + ConsentWidth + ControlGap * 3f
+            + (EditsMe(user) ? TakeBackWidth + ControlGap : 0f);
     }
+
+    // Whether this machine's user said yes to user editing them.
+    private static bool EditsMe(User user) => SessionEditConsent.Allows(user.World?.LocalUser, user);
 
     private static float Both(float moderation, float ears)
         => moderation + ears + (moderation > 0f && ears > 0f ? GroupGap : 0f);
@@ -192,6 +199,7 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
             Detail = detail,
             Screen = _screen,
             Fit = Fit,
+            NameLink = ProfileLink.On(name),
         };
 
         listingRow.Ban = Chip(row, "Ban", listingRow, user => _screen.RequestBan(user));
@@ -199,7 +207,9 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
         listingRow.Respawn = Chip(row, "Respawn", listingRow, user => _screen.Respawn(user));
         listingRow.Silence = Chip(row, "Silence", listingRow, user => _screen.ToggleSilenced(user));
         listingRow.Mute = Chip(row, "Mute", listingRow, user => _screen.ToggleMuted(user));
-        listingRow.Block = Chip(row, "Block", listingRow, user => _screen.ToggleBlocked(user));
+        listingRow.MuteForMe = Chip(row, "MuteForMe", listingRow, user => _screen.ToggleMutedForMe(user));
+        listingRow.Consent = Chip(row, "Consent", listingRow, user => _screen.AskToEdit(user));
+        listingRow.TakeBack = Chip(row, "TakeBack", listingRow, user => _screen.TakeBackEdits(user));
 
         listingRow.VolumeValue = SettingsUI.Label(row, "VolumeValue", _fonts.Body, DashTheme.FontSmall,
             DashTheme.TextDim, TextHorizontalAlignment.Right, float2.One, float2.One,
@@ -256,6 +266,7 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
         public required Text Name;
         public required Text Detail;
         public required SessionScreen Screen;
+        public required ProfileLink NameLink;
         public SettingsRowFit? Fit;
 
         public SettingsChip Ban = null!;
@@ -263,7 +274,9 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
         public SettingsChip Respawn = null!;
         public SettingsChip Silence = null!;
         public SettingsChip Mute = null!;
-        public SettingsChip Block = null!;
+        public SettingsChip MuteForMe = null!;
+        public SettingsChip Consent = null!;
+        public SettingsChip TakeBack = null!;
         public Text VolumeValue = null!;
         public Slider Volume = null!;
         public Slot VolumeHost = null!;
@@ -271,9 +284,11 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
         public override void Bind(ListingItem item)
         {
             SettingsUI.SetPaint(Background, DashTheme.Surface, DashTheme.Outline);
-            ListingStyle.SetText(Name, item.Label);
-
             var user = item.Tag as User;
+            // the live name: signing in or out mid-session renames a user without changing who is here
+            ListingStyle.SetText(Name, user != null && !user.IsDestroyed ? SessionPermissionsPanel.DisplayName(user) : item.Label);
+
+            NameLink.Bind(user);
             int shape = ShapeFor(Fit, Screen, user);
             float inset = SettingsMetrics.RowInset;
             float line = (Fit?.Width ?? 0f) - inset * 2f;
@@ -290,9 +305,11 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
                 Place(Respawn.Slot, false, 0f, ref none, 0f, 1f);
                 Place(Silence.Slot, false, 0f, ref none, 0f, 1f);
                 Place(Mute.Slot, false, 0f, ref none, 0f, 1f);
-                Place(Block.Slot, false, 0f, ref none, 0f, 1f);
+                Place(MuteForMe.Slot, false, 0f, ref none, 0f, 1f);
                 Place(VolumeValue.Slot, false, 0f, ref none, 0f, 1f);
                 Place(VolumeHost, false, 0f, ref none, 0f, 1f);
+                Place(Consent.Slot, false, 0f, ref none, 0f, 1f);
+                Place(TakeBack.Slot, false, 0f, ref none, 0f, 1f);
                 return;
             }
 
@@ -337,9 +354,13 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
             {
                 right += (GroupGap - ControlGap) * scale;
             }
-            Place(Block.Slot, ears, BlockWidth, ref right, top, scale);
+            Place(MuteForMe.Slot, ears, MuteForMeWidth, ref right, top, scale);
             Place(VolumeValue.Slot, ears, VolumeValueWidth, ref right, top, scale);
             Place(VolumeHost, ears, VolumeWidth, ref right, top, scale, SettingsMetrics.SliderBand);
+            // Editing them, and them editing you: the ask with where it stands, and a yes you gave them to take back.
+            bool editsMe = ears && EditsMe(user);
+            Place(Consent.Slot, ears, ConsentWidth, ref right, top, scale);
+            Place(TakeBack.Slot, editsMe, TakeBackWidth, ref right, top, scale);
 
             if (moderate)
             {
@@ -353,19 +374,45 @@ internal sealed class SessionUserRowTemplate : ListingRowTemplate
 
             if (ears)
             {
-                bool blocked = user.IsAudioLocallyBlocked;
-                ListingStyle.SetText(Block.Text, (blocked ? SessionLocale.Blocked : SessionLocale.Block).Resolve());
-                if (blocked)
-                    Block.SetPaint(PermPaint.DangerFill, PermPaint.DangerHover, DashTheme.Outline, DashTheme.Negative);
+                bool mutedForMe = user.IsAudioLocallyBlocked;
+                ListingStyle.SetText(MuteForMe.Text, (mutedForMe ? SessionLocale.MutedForMe : SessionLocale.MuteForMe).Resolve());
+                if (mutedForMe)
+                    MuteForMe.SetPaint(PermPaint.DangerFill, PermPaint.DangerHover, DashTheme.Outline, DashTheme.Negative);
                 else
-                    Block.SetPaint(DashTheme.Surface, DashTheme.SurfaceHover, DashTheme.Outline, DashTheme.TextDim);
-                Block.SetInteractable(true);
+                    MuteForMe.SetPaint(DashTheme.Surface, DashTheme.SurfaceHover, DashTheme.Outline, DashTheme.TextDim);
+                MuteForMe.SetInteractable(true);
 
                 ListingStyle.SetSlider(Volume, 0f, User.MaxLocalVolume, user.LocalVolume);
-                ListingStyle.SetInteractable(Volume, !blocked);
+                ListingStyle.SetInteractable(Volume, !mutedForMe);
                 ListingStyle.SetText(VolumeValue, SessionLocale.Percent(user.LocalVolume));
-                ListingStyle.SetTextColor(VolumeValue, blocked ? DashTheme.TextMuted : DashTheme.TextDim);
+                ListingStyle.SetTextColor(VolumeValue, mutedForMe ? DashTheme.TextMuted : DashTheme.TextDim);
+
+                PaintConsent(Consent, SessionEditConsent.StateOf(user.World?.LocalUser, user));
+                if (editsMe)
+                    PaintDanger(TakeBack, EditConsentLocale.UsersTakeBack);
             }
+        }
+
+        // Asking is live only while nothing stands between this user and asking; the rest is where the ask stands.
+        private static void PaintConsent(SettingsChip chip, EditAskState state)
+        {
+            ListingStyle.SetText(chip.Text, EditConsentLocale.AskLabel(state).Resolve());
+            switch (state)
+            {
+                case EditAskState.Granted:
+                    chip.SetPaint(DashTheme.AccentSoft, DashTheme.AccentSoft, DashTheme.Accent, DashTheme.Accent);
+                    break;
+                case EditAskState.Denied:
+                    chip.SetPaint(DashTheme.Surface, DashTheme.Surface, DashTheme.Outline, DashTheme.Warning);
+                    break;
+                case EditAskState.None:
+                    chip.SetPaint(DashTheme.Surface, DashTheme.SurfaceHover, DashTheme.Outline, DashTheme.TextDim);
+                    break;
+                default:
+                    chip.SetPaint(DashTheme.Surface, DashTheme.Surface, DashTheme.Outline, DashTheme.TextMuted);
+                    break;
+            }
+            chip.SetInteractable(state == EditAskState.None);
         }
 
         private static void PaintState(SettingsChip chip, bool on, LocaleText onLabel, LocaleText offLabel)

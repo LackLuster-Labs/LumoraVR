@@ -587,6 +587,7 @@ internal sealed class PermUserRowTemplate : ListingRowTemplate
             Background = background,
             NameColumn = nameColumn,
             Name = name,
+            NameLink = ProfileLink.On(name),
             You = you,
             HostTag = hostTag,
             Refusals = refusals,
@@ -644,6 +645,7 @@ internal sealed class PermUserRowTemplate : ListingRowTemplate
         public required RoundedPanel Background;
         public required Slot NameColumn;
         public required Text Name;
+        public required ProfileLink NameLink;
         public required Tag You;
         public required Tag HostTag;
         public required Slot Refusals;
@@ -721,6 +723,7 @@ internal sealed class PermUserRowTemplate : ListingRowTemplate
             ListingStyle.SetText(Name, item.Label);
 
             var user = item.Tag as User;
+            NameLink.Bind(user);
             bool stacked = Stacks(Fit, Panel, user);
             Arrange(stacked, user != null && !user.IsDestroyed && Panel.IsGroupActor(user));
             // Controls that came or went since the list measured this row (this machine took or lost the

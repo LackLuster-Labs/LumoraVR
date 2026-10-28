@@ -9,10 +9,10 @@ using Lumora.Core.Assets;
 using Lumora.Core.Components.Network;
 using Lumora.Core.Components.UI.Worlds;
 using Lumora.Core.Localization;
+using Lumora.Core.Management;
 using Lumora.Core.Math;
 using Lumora.Core.Networking.Session;
 using Lumora.Core.Templates;
-using Lumora.Nexus.Cloud;
 
 namespace Lumora.Core.Components.UI;
 
@@ -85,7 +85,7 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     // Which inline text field owns the keyboard. The dash routes keystrokes to the current screen
     // through IDashboardKeyInput; with two fields on one screen the focus has to be explicit or typing
     // would land in whichever one was written last. None = we consume nothing.
-    private enum FieldFocus { None, Query, NewWorldName }
+    private enum FieldFocus { None, Query }
 
     private BrowserParts _parts = null!;
     private ThumbnailCache _thumbnails = null!;
@@ -95,7 +95,6 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     private Page _page = Page.Grid;
     private FieldFocus _focus = FieldFocus.None;
     private string _query = string.Empty;
-    private string _newWorldName = string.Empty;
 
     // Chrome, built once.
     private Slot _backSlot = null!;
@@ -177,10 +176,12 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     private static readonly LocaleText GroupsEmpty =
         "Worlds.Groups.Empty".AsLocale("None of your groups is hosting a world right now.");
 
-    // Create form (all four are real HostNewWorld arguments).
+    // Create form (all four are real HostNewWorld arguments). Who can join starts at the account's default
+    // join level and follows it when the setting moves; a pick made on the form stands until then.
     private string _template = "LocalHome";
     private WorldMode _mode = WorldMode.Builder;
-    private SessionVisibility _visibility = SessionVisibility.Private;
+    private World.WorldAccessLevel _access = EngineSettings.DefaultJoinLevel;
+    private World.WorldAccessLevel _accessDefault = EngineSettings.DefaultJoinLevel;
     private int _maxUsers = 16;
 
     // HOST FOR
@@ -203,9 +204,8 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     private bool _myGroupsFetching;
     private readonly Dictionary<string, WorldCard> _templateCards = new(StringComparer.Ordinal);
     private readonly List<(WorldMode mode, PillButton pill)> _modePills = new();
-    private readonly List<(SessionVisibility visibility, PillButton pill)> _visibilityPills = new();
-    private Text _newWorldNameLabel = null!;
-    private RoundedPanel _newWorldNamePanel = null!;
+    private readonly List<(World.WorldAccessLevel level, PillButton pill)> _accessPills = new();
+    private TextInput _newWorldNameInput = null!;
     private Text _createStatus = null!;
 
     // Live data for the current pass. Reused rather than reallocated: this runs once a second.
@@ -495,18 +495,22 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         // Ring, not overlay: see WorldCard.FrameThickness for why a transparent-fill outline panel
         // floods instead of outlining.
         BrowserParts.Panel(heroFrame, DashTheme.Surface, DashTheme.RadiusCard, DashTheme.Outline, 2f);
-        _heroArt = new ArtBlock(_parts, heroFrame, DashTheme.RadiusCard - 2f, 74f,
-            HeroWidth / HeroHeight, 2f);
+        _heroArt = new ArtBlock(_parts, heroFrame, DashTheme.RadiusCard - 2f, 74f, 2f);
 
         var info = heroRow.AddSlot("Info");
         _detailInfo = info;
         info.AttachComponent<RectTransform>();
-        var infoSize = BrowserParts.Flex(info, 0f, 0f);
-        infoSize.MinWidth.Value = infoSize.PreferredWidth.Value = 440f;
         var infoLayout = info.AttachComponent<VerticalLayout>();
         infoLayout.Spacing.Value = DashTheme.Gap;
         infoLayout.ForceExpandWidth.Value = true;
         infoLayout.ForceExpandHeight.Value = false;
+        // The width is this element's, the height the column's: at the column's priority and attached after
+        // it, what the element sets stands and the height it leaves unset is the column's own. Above it, it
+        // took both axes and the column measured 0 tall, so once a narrow window wrapped it under the picture
+        // the people and sessions below were drawn over it. -xlinka
+        var infoSize = BrowserParts.Flex(info, 0f, 0f);
+        infoSize.MinWidth.Value = infoSize.PreferredWidth.Value = 440f;
+        infoSize.PriorityValue.Value = 0;
 
         var chips = info.AddSlot("Chips");
         chips.AttachComponent<RectTransform>();
@@ -691,8 +695,6 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     {
         _filter = filter;
         _sidebar.Select((int)filter);
-        if (_focus == FieldFocus.NewWorldName)
-            SetFieldFocus(FieldFocus.None);
         _detailKind = DetailKind.None;
         _detailKey = string.Empty;
         _strip.Clear();
@@ -706,6 +708,7 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     private void OpenCreate()
     {
         EnsureHostGroups();
+        FollowDefaultAccess();
         if (_focus == FieldFocus.Query)
             SetFieldFocus(FieldFocus.None);
         _detailKind = DetailKind.None;
@@ -724,8 +727,6 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         _detailKind = DetailKind.None;
         _detailKey = string.Empty;
         _strip.Clear();
-        if (_focus == FieldFocus.NewWorldName)
-            SetFieldFocus(FieldFocus.None);
         _page = Page.Grid;
         ApplyPageVisibility();
         _dataDirty = true;
@@ -1221,7 +1222,8 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
                 card.Activate = () => OpenDetail(captured);
             }
             _worldsByKey.TryGetValue(data.Key, out var openWorld);
-            card.SetCloseAction(openWorld != null && !openWorld.IsDestroyed && FindFallbackWorld(openWorld) != null
+            card.SetCloseAction(openWorld != null && !openWorld.IsDestroyed && !WorldManager.IsLocalHome(openWorld)
+                && FindFallbackWorld(openWorld) != null
                 ? () => CloseWorld(openWorld) : null);
             card.Apply(data.Name, data.Meta, data.Mode, data.Badge, data.Highlighted, data.GroupTag);
             card.ApplyArt(data.Art);
@@ -1411,6 +1413,8 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         // when the directory is simply unreachable.
         if (_sessions.Count > 0)
             return "No session matches the filter.";
+        if (Lumora.Core.Security.Integrity.GameIntegrity.IsReady && Lumora.Core.Security.Integrity.BuildIdentity.IsModified)
+            return Lumora.Core.Security.Integrity.IntegrityLocale.ListNote.Resolve();
         if (browser?.IsScanning.Value != true)
             return "No sessions found.";
         if (browser.BackendUnreachable)
@@ -1623,7 +1627,7 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
 
         // Closing the world you are standing in only works if there is somewhere to go, so the button
         // only exists when a fallback does (see CloseWorld). No dead buttons.
-        bool closable = FindFallbackWorld(world) != null;
+        bool closable = !WorldManager.IsLocalHome(world) && FindFallbackWorld(world) != null;
         _detailSecondary.SetActive(closable);
         _secondaryAction = closable ? () => CloseWorld(captured) : null;
         SyncLinkActionsForWorld(captured);
@@ -1763,7 +1767,7 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     // manager nulls it and does not re-home you), so the fallback is focused BEFORE the destroy. -xlinka
     public void CloseWorld(World world)
     {
-        if (world == null || world.IsDestroyed)
+        if (world == null || world.IsDestroyed || WorldManager.IsLocalHome(world))
             return;
 
         var fallback = FindFallbackWorld(world);
@@ -1783,7 +1787,7 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     private void CommitCloseWorld(World world)
     {
         var manager = Manager;
-        if (world == null || world.IsDestroyed)
+        if (world == null || world.IsDestroyed || WorldManager.IsLocalHome(world))
             return;
 
         // Re-read rather than trusting what the dialog was opened against: worlds can close on their
@@ -1935,11 +1939,11 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         nameRow.AttachComponent<RectTransform>();
         nameRow.AttachComponent<GraphicChunkRoot>();
         BrowserParts.Height(nameRow, DashTheme.ControlHeight);
-        _newWorldNamePanel = BrowserParts.Panel(nameRow, DashTheme.Field, DashTheme.RadiusControl,
-            DashTheme.Outline);
-        nameRow.AttachComponent<Button>().Clicked += (_, _) => SetFieldFocus(FieldFocus.NewWorldName);
-        _newWorldNameLabel = _parts.Label(nameRow, string.Empty, DashTheme.FontBody, DashTheme.TextMuted,
-            BrowserParts.Weight.Regular, TextHorizontalAlignment.Left, padLeft: 12f, padRight: 12f);
+        _newWorldNameInput = DashTextField.Attach(nameRow, _parts.Regular, DashTheme.FontBody, string.Empty,
+            DashTextField.WorldNameLength);
+        // The filter box is this screen's own typing; one keyboard owner at a time.
+        _newWorldNameInput.EditingStarted += _ => SetFieldFocus(FieldFocus.None);
+        _newWorldNameInput.EditingFinished += (_, _) => HostWorld();
 
         // HOST FOR sits above the access pills and only appears at all when the caller actually has a
         // group they may host for, so a signed-out form is the form it has always been. One cycle pill:
@@ -1992,15 +1996,15 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
             BrowserParts.Weight.Regular);
 
         var accessGroup = FormGroup(options, "WHO CAN JOIN", "WHO CAN JOIN",
-            GroupWidth(VisibilityLabels()), out _accessGroupSlot);
-        foreach (SessionVisibility visibility in Enum.GetValues<SessionVisibility>())
+            GroupWidth(AccessLevelLabels()), out _accessGroupSlot);
+        foreach (var level in AccessLabels.Offered(hostedForGroup: false))
         {
-            var captured = visibility;
-            string label = AccessLabels.Label(visibility).Resolve();
+            var captured = level;
+            string label = AccessLabels.Label(level).Resolve();
             var pill = _parts.AddButton(accessGroup, label, PillWidth(label), DashTheme.ControlHeight,
                 DashTheme.Surface, DashTheme.SurfaceHover, DashTheme.SurfacePressed, DashTheme.TextDim,
-                BrowserParts.Weight.Semibold, () => SelectVisibility(captured));
-            _visibilityPills.Add((visibility, pill));
+                BrowserParts.Weight.Semibold, () => SelectAccess(captured));
+            _accessPills.Add((level, pill));
         }
 
         // A group world is on one of two tiers and nothing else: members only, or anyone. Group+ would be
@@ -2071,14 +2075,14 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
 
         _createPage.ActiveSelf.Value = false;
         SelectTemplate(_template);
-        SelectVisibility(_visibility);
+        SelectAccess(_access);
         SelectGroupAccess(_groupMembersOnly);
         ApplyHostForRow();
         UpdateNewWorldNameLabel();
     }
 
     // An empty name well means the template's name, or the group's when one is picked: a world hosted for
-    // a group and left unnamed is that group's world, not "Home Space".
+    // a group and left unnamed is that group's world, not "Local".
     private string DefaultWorldName()
     {
         var picked = SelectedHostGroup;
@@ -2114,11 +2118,11 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         return labels;
     }
 
-    private static List<string> VisibilityLabels()
+    private static List<string> AccessLevelLabels()
     {
         var labels = new List<string>();
-        foreach (SessionVisibility visibility in Enum.GetValues<SessionVisibility>())
-            labels.Add(AccessLabels.Label(visibility).Resolve());
+        foreach (var level in AccessLabels.Offered(hostedForGroup: false))
+            labels.Add(AccessLabels.Label(level).Resolve());
         return labels;
     }
 
@@ -2215,12 +2219,22 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
             pill.SetPaint(DashTheme.Surface, DashTheme.SurfaceHover, DashTheme.SurfacePressed, DashTheme.TextDim);
     }
 
-    private void SelectVisibility(SessionVisibility visibility)
+    private void SelectAccess(World.WorldAccessLevel level)
     {
-        _visibility = visibility;
-        for (int i = 0; i < _visibilityPills.Count; i++)
-            PaintSelectable(_visibilityPills[i].pill, _visibilityPills[i].visibility == _visibility);
+        _access = level;
+        for (int i = 0; i < _accessPills.Count; i++)
+            PaintSelectable(_accessPills[i].pill, _accessPills[i].level == _access);
         MarkDirty();
+    }
+
+    // The default join level moved since the form last took it, so the form takes the new one.
+    private void FollowDefaultAccess()
+    {
+        var level = EngineSettings.DefaultJoinLevel;
+        if (level == _accessDefault)
+            return;
+        _accessDefault = level;
+        SelectAccess(level);
     }
 
     private void SelectGroupAccess(bool membersOnly)
@@ -2240,6 +2254,9 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         if (_hostGroups.Count == 0)
             return;
         _hostGroupIndex = (_hostGroupIndex + 1) % (_hostGroups.Count + 1);
+        // Each group starts on the tier it keeps for its worlds.
+        if (SelectedHostGroup is { } picked)
+            SelectGroupAccess(picked.MembersOnly);
         ApplyHostForRow();
         UpdateNewWorldNameLabel();
         MarkDirty();
@@ -2338,13 +2355,13 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         {
             // The caller is on that group's page with a rank that lets them host, so the group is real
             // whether or not our own fetch has landed yet.
-            _hostGroups.Add(new HostGroupOption(group.GroupId, group.GroupTag, groupName));
+            _hostGroups.Add(new HostGroupOption(group.GroupId, group.GroupTag, groupName, group.MembersOnly));
             index = _hostGroups.Count - 1;
         }
 
         _hostGroupIndex = index + 1;
         SelectGroupAccess(group.MembersOnly);
-        _newWorldName = worldName ?? string.Empty;
+        _newWorldNameInput.Text.Value = worldName ?? string.Empty;
 
         var allowed = WorldTemplates.AllowedModes(_template);
         for (int i = 0; i < allowed.Count; i++)
@@ -2380,7 +2397,8 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         }
 
         var picked = SelectedHostGroup;
-        var name = string.IsNullOrWhiteSpace(_newWorldName) ? DefaultWorldName() : _newWorldName.Trim();
+        string typed = _newWorldNameInput.Text.Value?.Trim() ?? string.Empty;
+        var name = typed.Length > 0 ? typed : DefaultWorldName();
         // Clamp to the modes this template allows.
         var mode = WorldTemplates.DefaultMode(_template);
         foreach (var allowed in WorldTemplates.AllowedModes(_template))
@@ -2393,7 +2411,7 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
             : null;
 
         SetCreateStatus($"Hosting '{name}'…", DashTheme.TextDim);
-        var world = manager.HostNewWorld(_template, name, _visibility, _maxUsers, mode, hosting);
+        var world = manager.HostNewWorld(_template, name, _access, _maxUsers, mode, hosting);
         if (world == null)
         {
             SetCreateStatus("Failed to host world.", DashTheme.Negative);
@@ -2404,7 +2422,7 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         // Hosting focuses the new world and we leave the create page, so repeat the result where the
         // user is about to be looking.
         SetStatus($"Now hosting '{name}' ({DashTheme.ModeLabel(mode)}).", DashTheme.TextDim);
-        _newWorldName = string.Empty;
+        _newWorldNameInput.Text.Value = string.Empty;
         SetFieldFocus(FieldFocus.None);
         UpdateNewWorldNameLabel();
         SelectFilter(hosting != null ? Filter.Group : Filter.Open);
@@ -2417,8 +2435,6 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         _focus = focus;
         BrowserParts.SetColor(_queryPanel?.OutlineColor,
             focus == FieldFocus.Query ? DashTheme.Accent : DashTheme.Outline);
-        BrowserParts.SetColor(_newWorldNamePanel?.OutlineColor,
-            focus == FieldFocus.NewWorldName ? DashTheme.Accent : DashTheme.Outline);
         UpdateQueryLabel();
         UpdateNewWorldNameLabel();
         MarkDirty();
@@ -2454,24 +2470,15 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
 
     private void UpdateNewWorldNameLabel()
     {
-        if (_newWorldNameLabel == null || _newWorldNameLabel.IsDestroyed)
+        if (_newWorldNameInput == null || _newWorldNameInput.IsDestroyed)
             return;
-        bool focused = _focus == FieldFocus.NewWorldName;
-        if (_newWorldName.Length == 0)
-        {
-            BrowserParts.SetText(_newWorldNameLabel,
-                focused ? "|" : $"World name (defaults to \"{DefaultWorldName()}\")");
-            BrowserParts.SetColor(_newWorldNameLabel.Color, DashTheme.TextMuted);
-        }
-        else
-        {
-            BrowserParts.SetText(_newWorldNameLabel, focused ? _newWorldName + "|" : _newWorldName);
-            BrowserParts.SetColor(_newWorldNameLabel.Color, DashTheme.Text);
-        }
+        string hint = $"World name (defaults to \"{DefaultWorldName()}\")";
+        if (!string.Equals(_newWorldNameInput.Placeholder.Value, hint, StringComparison.Ordinal))
+            _newWorldNameInput.Placeholder.Value = hint;
     }
 
     public bool HasFieldFocus => _focus != FieldFocus.None;
-    public string? CopyText => _focus == FieldFocus.Query ? _query : _focus == FieldFocus.NewWorldName ? _newWorldName : null;
+    public string? CopyText => _focus == FieldFocus.Query ? _query : null;
 
     public bool ConsumeChar(char c)
     {
@@ -2489,11 +2496,6 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
             _dataDirty = true;
             return true;
         }
-        if (_newWorldName.Length >= 48)
-            return true;
-        _newWorldName += c;
-        UpdateNewWorldNameLabel();
-        MarkDirty();
         return true;
     }
 
@@ -2510,10 +2512,6 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
             _dataDirty = true;
             return true;
         }
-        if (_newWorldName.Length > 0)
-            _newWorldName = Lumora.Core.Input.TextElements.RemoveLast(_newWorldName);
-        UpdateNewWorldNameLabel();
-        MarkDirty();
         return true;
     }
 
@@ -2521,12 +2519,6 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
     {
         if (_focus == FieldFocus.None)
             return false;
-        if (_focus == FieldFocus.NewWorldName)
-        {
-            SetFieldFocus(FieldFocus.None);
-            HostWorld();
-            return true;
-        }
         SetFieldFocus(FieldFocus.None);
         return true;
     }
@@ -2707,8 +2699,7 @@ public sealed class WorldsScreen : WidgetScreen, IDashboardKeyInput
         return browser;
     }
 
-    private static string WorldDisplayName(World world)
-        => string.IsNullOrEmpty(world.WorldName?.Value) ? world.Name : world.WorldName!.Value;
+    private static string WorldDisplayName(World world) => Lumora.Core.Management.WorldManager.DisplayName(world);
 
     private static string UserCount(int n) => n == 1 ? "1 user" : $"{n} users";
 

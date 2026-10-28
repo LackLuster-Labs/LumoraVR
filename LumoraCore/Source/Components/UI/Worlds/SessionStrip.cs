@@ -340,6 +340,7 @@ internal sealed class SessionCard
 
     private readonly RoundedPanel _frame;
     private readonly Text _host;
+    private readonly ProfileLink _hostLink;
     private readonly Text _users;
     private readonly Chip _sourceChip;
     private readonly Chip _visibilityChip;
@@ -367,6 +368,7 @@ internal sealed class SessionCard
         _host = parts.Label(hostSlot, string.Empty, DashTheme.FontBody, DashTheme.Text,
             BrowserParts.Weight.Semibold);
         hostSlot.GetComponent<RectTransform>()!.OffsetMax.Value = new float2(-114f, -14f);
+        _hostLink = ProfileLink.On(_host);
 
         var usersSlot = Root.AddSlot("Users");
         BrowserParts.PinTop(usersSlot.AttachComponent<RectTransform>(), 40f, 20f, 14f);
@@ -375,7 +377,7 @@ internal sealed class SessionCard
         usersSlot.GetComponent<RectTransform>()!.OffsetMax.Value = new float2(-114f, -40f);
         var picture = Root.AddSlot("Preview");
         BrowserParts.PinTopCorner(picture.AttachComponent<RectTransform>(), 12f, 92f, 58f, fromRight: true);
-        _art = new ArtBlock(parts, picture, DashTheme.RadiusControl, 26f, 92f / 58f, 0f);
+        _art = new ArtBlock(parts, picture, DashTheme.RadiusControl, 26f, 0f);
 
         _sourceChip = parts.AddChip(Root, string.Empty, DashTheme.Field, DashTheme.TextDim, 68f);
         BrowserParts.PinBottomCorner(_sourceChip.Root.GetComponent<RectTransform>()!, 14f, 68f,
@@ -404,6 +406,7 @@ internal sealed class SessionCard
         _art.SetPlaceholder(WorldGroup.TryReadMode(entry.Tags, out var mode) ? mode : null, entry.Name);
         string host = string.IsNullOrEmpty(entry.HostUsername) ? "(unnamed host)" : entry.HostUsername;
         BrowserParts.SetText(_host, BrowserParts.Truncate(host, 28));
+        _hostLink.Bind(entry.HostUserId, DashTheme.Text);
         BrowserParts.SetText(_users, $"{entry.ActiveUsers}/{entry.MaxUsers} users");
         _sourceChip.Set(entry.Source == SessionSource.Internet ? "Internet" : "Local",
             DashTheme.Field, DashTheme.TextDim);

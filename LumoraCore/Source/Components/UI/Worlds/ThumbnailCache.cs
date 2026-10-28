@@ -81,7 +81,7 @@ internal sealed class ThumbnailCache
         {
             try
             {
-                return await System.IO.File.ReadAllBytesAsync(path).ConfigureAwait(false);
+                return await AssetFiles.ReadAllBytesAsync(path).ConfigureAwait(false);
             }
             catch
             {

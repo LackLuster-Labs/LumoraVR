@@ -19,9 +19,7 @@ namespace Lumora.Core.Components.UI.Worlds;
 // somebody actually rendered. -xlinka
 internal sealed class ArtBlock
 {
-    // Every producer in the tree writes 256x144, so 16:9 is where the crop starts from; SetTexture
-    // re-derives it from the real texture the moment one reports its own size.
-    private const float AssumedSourceAspect = 16f / 9f;
+    private const float WholeInset = 6f;
 
     public readonly Slot Root;
 
@@ -30,14 +28,11 @@ internal sealed class ArtBlock
     private readonly Text _placeholderLetter;
     private readonly Slot _imageSlot;
     private readonly RawImage _image;
-    private readonly float _targetAspect;
 
     private IAssetProvider<TextureAsset>? _texture;
 
-    public ArtBlock(BrowserParts parts, Slot parent, float radius, float letterSize, float targetAspect,
-        float inset)
+    public ArtBlock(BrowserParts parts, Slot parent, float radius, float letterSize, float inset)
     {
-        _targetAspect = targetAspect;
         Root = parent.AddSlot("Art");
         // Inset by exactly the frame's outline thickness: the picture then lands on the frame's inner
         // fill and the outline stays a visible ring around it.
@@ -71,8 +66,10 @@ internal sealed class ArtBlock
 
     // Point the block at a texture, or at nothing. The UV window CROPS to cover the box instead of
     // letterboxing it: RawImage.PreserveAspect fits inside the rect, which leaves bars on a card that
-    // is not the picture's shape.
-    public void SetTexture(IAssetProvider<TextureAsset>? texture)
+    // is not the picture's shape. Whole is for a picture of one thing on a clear background, which a crop
+    // would cut the ends off: it fits inside, standing on the placeholder's wash with the letter put away.
+    // False while the texture given has not loaded yet, so the caller knows to look again.
+    public bool SetTexture(IAssetProvider<TextureAsset>? texture, bool whole = false)
     {
         if (!ReferenceEquals(texture, _texture))
         {
@@ -82,33 +79,24 @@ internal sealed class ArtBlock
         var asset = _image.Texture.Asset;
         bool hasArt = texture != null && asset != null && asset.Width > 0 && asset.Height > 0;
         BrowserParts.SetActive(_imageSlot, hasArt);
-        BrowserParts.SetActive(_placeholder, !hasArt);
+        BrowserParts.SetActive(_placeholder, !hasArt || whole);
+        BrowserParts.SetActive(_placeholderLetter.Slot, !hasArt);
         if (!hasArt)
-            return;
+            return texture == null;
 
-        float sourceAspect = asset != null && asset.Width > 0 && asset.Height > 0
-            ? asset.Width / (float)asset.Height
-            : AssumedSourceAspect;
-        var rect = Root.GetComponent<RectTransform>()!.LocalComputeRect;
-        float targetAspect = rect.width > 1f && rect.height > 1f ? rect.width / rect.height : _targetAspect;
-        var window = CoverWindow(targetAspect, sourceAspect);
-        if (_image.UVRect.Value != window)
-            _image.UVRect.Value = window;
-    }
-
-    // The slice of the source that fills a target box without distorting it: crop the long axis, keep
-    // the short one whole.
-    private static Rect CoverWindow(float targetAspect, float sourceAspect)
-    {
-        if (sourceAspect <= 0f || targetAspect <= 0f)
-            return Rect.UnitRect;
-        if (sourceAspect > targetAspect)
-        {
-            float width = targetAspect / sourceAspect;
-            return Rect.FromMinMax(new float2((1f - width) * 0.5f, 0f), new float2((1f + width) * 0.5f, 1f));
-        }
-        float height = sourceAspect / targetAspect;
-        return Rect.FromMinMax(new float2(0f, (1f - height) * 0.5f), new float2(1f, (1f + height) * 0.5f));
+        if (_image.PreserveAspect.Value != whole)
+            _image.PreserveAspect.Value = whole;
+        // a cropped picture is cropped by the image itself, for the box it has at every layout
+        if (_image.Cover.Value == whole)
+            _image.Cover.Value = !whole;
+        if (_image.UVRect.Value != Rect.UnitRect)
+            _image.UVRect.Value = Rect.UnitRect;
+        // A thing standing whole keeps off the edges a little; a cropped picture runs to them.
+        float inset = whole ? WholeInset : 0f;
+        var imageRect = _imageSlot.GetComponent<RectTransform>()!;
+        if (imageRect.OffsetMin.Value.y != inset)
+            BrowserParts.Inset(imageRect, inset);
+        return true;
     }
 
     private static string InitialOf(string name)

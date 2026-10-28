@@ -70,8 +70,7 @@ internal sealed class WorldCard
         var button = Root.AttachComponent<Button>();
         button.Clicked += (_, _) => Activate?.Invoke();
 
-        _art = new ArtBlock(parts, Root, DashTheme.RadiusCard - FrameThickness, height * 0.30f,
-            width / height, FrameThickness);
+        _art = new ArtBlock(parts, Root, DashTheme.RadiusCard - FrameThickness, height * 0.30f, FrameThickness);
 
         // Floor the scrim so it always reaches above the name, however short the card is.
         float scrimHeight = MathF.Max(66f, MathF.Min(height * 0.42f, 84f));
