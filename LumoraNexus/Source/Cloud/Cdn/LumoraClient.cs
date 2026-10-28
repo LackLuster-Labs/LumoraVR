@@ -19,7 +19,7 @@ using System.Threading.Tasks;
 
 namespace Lumora.Nexus.Cloud.Cdn;
 
-public sealed class LumoraClient : IDisposable
+public sealed class LumoraClient : IDisposable, IProtectionRoutes
 {
     private readonly HttpClient _api;
     private readonly HttpClient _content;
@@ -33,6 +33,8 @@ public sealed class LumoraClient : IDisposable
     private RSA? _accountKey;
     private string? _accountUserId;
     private string? _accountSessionId;
+    // The build identity the account key went out with, so a host's fetch can be refused for another build's session.
+    private string? _publishedBuild;
 
     public const int DefaultChunkSize = 4 * 1024 * 1024; // 4MB chunks
 
@@ -50,6 +52,9 @@ public sealed class LumoraClient : IDisposable
     // DER SubjectPublicKeyInfo, else null
     public byte[]? AccountPublicKey => _accountKey?.ExportSubjectPublicKeyInfo();
     public bool HasAccountIdentity => _accountKey != null && !string.IsNullOrEmpty(_accountUserId) && !string.IsNullOrEmpty(_accountSessionId);
+
+    // This game's build identity, reported with the account key; null until it is known. The engine sets it.
+    public Func<string?>? BuildProvider { get; set; }
 
     // signs a host's join challenge nonce
     public byte[]? SignWithAccountKey(byte[] nonce)
@@ -131,6 +136,7 @@ public sealed class LumoraClient : IDisposable
             ? "Invalid login credentials or two-factor code."
             : "Invalid login credentials.",
         HttpStatusCode.Forbidden => "Enter your two-factor code.",
+        HttpStatusCode.Locked => "This account is suspended.",
         HttpStatusCode.TooManyRequests => "Too many sign-in attempts. Please wait and try again.",
         HttpStatusCode.RequestTimeout or HttpStatusCode.GatewayTimeout => "Sign-in timed out. Please try again.",
         HttpStatusCode.ServiceUnavailable => "Unable to reach the sign-in service. Please try again.",
@@ -196,6 +202,7 @@ public sealed class LumoraClient : IDisposable
         _accountKey = null;
         _accountUserId = null;
         _accountSessionId = null;
+        _publishedBuild = null;
         _api.DefaultRequestHeaders.Authorization = null;
         // Signing out takes the group card off this machine's nametag immediately rather than leaving the
         // last account's group hanging over whoever plays next. -xlinka
@@ -236,9 +243,11 @@ public sealed class LumoraClient : IDisposable
             _accountSessionId = session.SessionId;
 
             var publicKey = Convert.ToBase64String(_accountKey.ExportSubjectPublicKeyInfo());
+            var build = BuildProvider?.Invoke();
             var publish = await PutAsync(
                 $"{ServiceConfig.Current.ApiBase}/api/user/{_accountUserId}/rsa/{_accountSessionId}",
-                new { PublicKey = publicKey });
+                new { PublicKey = publicKey, Build = build });
+            _publishedBuild = publish.Failed ? null : build;
 
             if (publish.Failed)
             {
@@ -262,14 +271,42 @@ public sealed class LumoraClient : IDisposable
         try { await RefreshRepresentedGroupAsync(); } catch { /* no card is a fine outcome */ }
     }
 
-    // DER SubjectPublicKeyInfo bytes; null if there's no key or the call fails
-    public async Task<byte[]?> GetSessionPublicKeyAsync(string userId, string sessionId)
+    // The build identity changed (it became known after the sign in, or something was loaded into the game): the same
+    // key goes out again with it. Nothing to do signed out or when the service already has this one.
+    public async Task RepublishBuildAsync()
     {
-        var result = await GetAsync<SessionKeyInfo>($"{ServiceConfig.Current.ApiBase}/api/user/{userId}/rsa/{sessionId}");
+        var key = _accountKey;
+        string? userId = _accountUserId, sessionId = _accountSessionId;
+        var build = BuildProvider?.Invoke();
+        if (key == null || string.IsNullOrEmpty(userId) || string.IsNullOrEmpty(sessionId) || string.IsNullOrEmpty(build)
+            || string.Equals(build, _publishedBuild, StringComparison.Ordinal))
+            return;
+        try
+        {
+            var publish = await PutAsync(
+                $"{ServiceConfig.Current.ApiBase}/api/user/{userId}/rsa/{sessionId}",
+                new { PublicKey = Convert.ToBase64String(key.ExportSubjectPublicKeyInfo()), Build = build });
+            if (!publish.Failed)
+                _publishedBuild = build;
+        }
+        catch
+        {
+            // the next change tries again; a host's own handshake check still stands meanwhile
+        }
+    }
+
+    // DER SubjectPublicKeyInfo bytes, or null with the service's code for why when it gave one ("email_not_verified":
+    // it holds that account back from other people's worlds; "build_mismatch": the account reported other game files
+    // than worldSessionId was listed with).
+    public async Task<(byte[]? Key, string? Refusal)> GetSessionPublicKeyAsync(string userId, string sessionId, string? worldSessionId = null)
+    {
+        var query = string.IsNullOrEmpty(worldSessionId) ? string.Empty : "?world=" + Uri.EscapeDataString(worldSessionId);
+        var result = await SendAsync<SessionKeyInfo>(_api, HttpMethod.Get,
+            $"{ServiceConfig.Current.ApiBase}/api/user/{userId}/rsa/{sessionId}{query}", null, auth: false, CancellationToken.None);
         if (result.Failed || result.Data == null || string.IsNullOrEmpty(result.Data.PublicKey))
-            return null;
-        try { return Convert.FromBase64String(result.Data.PublicKey); }
-        catch { return null; }
+            return (null, result.Error);
+        try { return (Convert.FromBase64String(result.Data.PublicKey), null); }
+        catch { return (null, null); }
     }
 
     // Fetch a user's public record, including PLATFORM moderation ban status, so a game host can gate a
@@ -344,6 +381,24 @@ public sealed class LumoraClient : IDisposable
         return await PostAsync($"{ServiceConfig.Current.ApiBase}/api/user/disable2fa", payload);
     }
 
+    // A new account. Nothing comes back to sign in with, so the caller signs in with what it sent. A refusal keeps the
+    // body, so a caller can tell which field it was about.
+    public Task<ApiResponse<UserProfile>> Register(string username, string email, string password)
+        => SendAsync<UserProfile>(_api, HttpMethod.Post, $"{ServiceConfig.Current.ApiBase}/api/user/register",
+            CreateJsonContent(new { Username = username, Email = email, Password = password }), auth: false, CancellationToken.None);
+
+    // The confirmation mail again, to the address the signed-in account has. A refusal names why in Error: too_soon (with
+    // retryAfter in the body), mail_unavailable or already_verified.
+    public async Task<ApiResponse> ResendVerificationEmail()
+    {
+        var id = await ResolveUserIdAsync();
+        if (id.Failed || id.Data == null)
+            return ApiResponse.Fail(id.Status, id.Message);
+        return await SendAsync<JsonElement>(_api, HttpMethod.Post,
+            $"{ServiceConfig.Current.ApiBase}/api/user/resend-verification?userId={Uri.EscapeDataString(id.Data)}", null, auth: true,
+            CancellationToken.None);
+    }
+
     #endregion
 
     #region Inventory
@@ -380,15 +435,15 @@ public sealed class LumoraClient : IDisposable
     }
     // Makes the folder under the id this client chose, or renames it when it is there already, so asking
     // twice never makes two.
-    public async Task<ApiResponse<FolderSummary>> UpsertFolder(string folderId, string name, string? parentId)
+    public async Task<ApiResponse<FolderSummary>> UpsertFolder(string folderId, string name, string? parentId, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse<FolderSummary>.Fail(id.Status, id.Message);
 
         var payload = new { Name = name, ParentId = string.IsNullOrEmpty(parentId) ? InventoryRoot : parentId };
         var answer = await SendAsync<JsonElement>(_api, HttpMethod.Put,
-            $"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/folders/{Uri.EscapeDataString(folderId)}",
+            $"{InventoryOf(id.Data)}/folders/{Uri.EscapeDataString(folderId)}",
             CreateJsonContent(payload), auth: true, CancellationToken.None);
         return answer.Success ? ApiResponse<FolderSummary>.Ok(Read<FolderSummary>(answer.Data)!) : Refused<FolderSummary>(answer);
     }
@@ -397,32 +452,54 @@ public sealed class LumoraClient : IDisposable
     // search across the whole tree. "root" names the top of the inventory.
     public const string InventoryRoot = "root";
 
-    public async Task<ApiResponse<FolderContents>> GetFolderContents(string? folderId)
+    // The game's own library, a group the services keep under this id. Every signed-in account finds its top as one
+    // folder at the top of its own inventory; staff save into it.
+    public const string InventoryLibrary = "G-00000000-0000-4000-8000-00000000f11b";
+
+    // Every inventory call names whose inventory it is: this account's own when ownerId is empty, else a group's
+    // or the account that shared something; the service decides what this account may do there.
+    private async Task<ApiResponse<string>> OwnerOrSelfAsync(string? ownerId)
     {
-        var id = await ResolveUserIdAsync();
+        if (string.IsNullOrEmpty(ownerId))
+            return await ResolveUserIdAsync();
+        return IsAuthenticated
+            ? ApiResponse<string>.Ok(ownerId!)
+            : ApiResponse<string>.Fail(HttpStatusCode.Unauthorized, "Not authenticated");
+    }
+
+    private static string InventoryOf(string ownerId)
+        => $"{ServiceConfig.Current.ContentBase}/api/inventory/users/{Uri.EscapeDataString(ownerId)}";
+
+    public async Task<ApiResponse<FolderContents>> GetFolderContents(string? folderId, string? ownerId = null)
+    {
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse<FolderContents>.Fail(id.Status, id.Message);
         var folder = string.IsNullOrEmpty(folderId) ? InventoryRoot : folderId;
-        return await GetAsync<FolderContents>($"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/folders/{folder}/contents");
+        return await GetAsync<FolderContents>($"{InventoryOf(id.Data)}/folders/{Uri.EscapeDataString(folder)}/contents");
     }
 
-    public async Task<ApiResponse<FolderContents>> SearchInventory(string query)
+    public async Task<ApiResponse<FolderContents>> SearchInventory(string query, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse<FolderContents>.Fail(id.Status, id.Message);
-        return await GetAsync<FolderContents>($"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/search?q={Uri.EscapeDataString(query)}");
+        return await GetAsync<FolderContents>($"{InventoryOf(id.Data)}/search?q={Uri.EscapeDataString(query)}");
     }
+
+    // A group's storage as this member sees it: the group's use and their own slice of it.
+    public Task<ApiResponse<GroupInventoryQuota>> GetGroupInventoryQuota(string groupId)
+        => GetAsync<GroupInventoryQuota>($"{InventoryOf(groupId)}/quota");
 
     // The item under the id this client chose, made or replaced whole, so sending it again after an answer
     // that never arrived changes nothing. A folder that is gone comes back as 404 with Error "folder", an id
     // another account holds as 409 with Error "id-taken", a save that does not fit as 413 with Error
-    // "quota". -xlinka
+    // "quota", a folder this account may only look at as 403 "read-only". -xlinka
     public async Task<ApiResponse<InventoryItemInfo>> UpsertInventoryItem(string itemId, string fileHash, string name, string kind,
         string? folderId, string? thumbnailHash, long fileBytes, string? worldMode, IReadOnlyList<AssetManifestEntry> manifest,
-        CancellationToken ct = default)
+        CancellationToken ct = default, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse<InventoryItemInfo>.Fail(id.Status, id.Message);
         var payload = new
@@ -437,61 +514,177 @@ public sealed class LumoraClient : IDisposable
             Manifest = manifest,
         };
         var answer = await SendAsync<JsonElement>(_api, HttpMethod.Put,
-            $"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/items/{Uri.EscapeDataString(itemId)}",
+            $"{InventoryOf(id.Data)}/items/{Uri.EscapeDataString(itemId)}",
             CreateJsonContent(payload), auth: true, ct);
         return answer.Success ? ApiResponse<InventoryItemInfo>.Ok(Read<InventoryItemInfo>(answer.Data)!) : Refused<InventoryItemInfo>(answer);
     }
 
-    public async Task<ApiResponse> RenameInventoryItem(string itemId, string name)
+    public async Task<ApiResponse> RenameInventoryItem(string itemId, string name, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse.Fail(id.Status, id.Message);
-        var result = await PatchAsync<InventoryItemInfo>($"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/items/{itemId}", new { Name = name });
+        var result = await PatchAsync<InventoryItemInfo>($"{InventoryOf(id.Data)}/items/{Uri.EscapeDataString(itemId)}", new { Name = name });
         return result.Success ? ApiResponse.Ok() : ApiResponse.Fail(result.Status, result.Message);
     }
 
-    public async Task<ApiResponse> DeleteInventoryItem(string itemId)
+    // A refusal keeps the service's code: "needs-approval" is a group builder, who asks instead.
+    public async Task<ApiResponse> DeleteInventoryItem(string itemId, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse.Fail(id.Status, id.Message);
-        return await DeleteAsync($"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/items/{itemId}");
+        return await SendAsync<JsonElement>(_api, HttpMethod.Delete, $"{InventoryOf(id.Data)}/items/{Uri.EscapeDataString(itemId)}",
+            null, auth: true, CancellationToken.None);
     }
 
-    public async Task<ApiResponse> RenameFolder(string folderId, string name)
+    // One item of ownerId's, when this account reaches it; 403 whether it is hidden or missing.
+    public Task<ApiResponse<InventoryItemInfo>> GetInventoryItem(string ownerId, string itemId)
+        => SendAsync<InventoryItemInfo>(_api, HttpMethod.Get, $"{InventoryOf(ownerId)}/items/{Uri.EscapeDataString(itemId)}",
+            null, auth: true, CancellationToken.None);
+
+    // A name another folder beside it holds is 409 with Error "name-taken", the body naming that folder (folderId,
+    // name); the same goes for MoveFolder and for a new folder through UpsertFolder.
+    public async Task<ApiResponse> RenameFolder(string folderId, string name, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse.Fail(id.Status, id.Message);
-        return await PostAsync($"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/folders/{folderId}/rename", new { Name = name });
+        return await SendAsync<JsonElement>(_api, HttpMethod.Post, $"{InventoryOf(id.Data)}/folders/{Uri.EscapeDataString(folderId)}/rename",
+            CreateJsonContent(new { Name = name }), auth: true, CancellationToken.None);
     }
 
-    public async Task<ApiResponse> MoveFolder(string folderId, string? targetFolderId)
+    public async Task<ApiResponse> MoveFolder(string folderId, string? targetFolderId, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse.Fail(id.Status, id.Message);
         var target = string.IsNullOrEmpty(targetFolderId) || targetFolderId == InventoryRoot ? null : targetFolderId;
-        return await PostAsync($"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/folders/{folderId}/move", new { TargetFolderId = target });
+        return await SendAsync<JsonElement>(_api, HttpMethod.Post, $"{InventoryOf(id.Data)}/folders/{Uri.EscapeDataString(folderId)}/move",
+            CreateJsonContent(new { TargetFolderId = target }), auth: true, CancellationToken.None);
     }
 
-    public async Task<ApiResponse> DeleteFolder(string folderId)
+    // A move that merges the folder into the one of the same name in the target, or a plain move when there is none.
+    // Answers the folder that holds everything now and each folder that went into another. A folder that would go
+    // with a grant on it is 409 "shared", one with a delete request waiting 409 "delete-requested", either naming
+    // that folder (folderId, name). -xlinka
+    public async Task<ApiResponse<FolderMergeResult>> MergeFolder(string folderId, string? targetFolderId, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
+        if (id.Failed || id.Data == null)
+            return ApiResponse<FolderMergeResult>.Fail(id.Status, id.Message);
+        var target = string.IsNullOrEmpty(targetFolderId) || targetFolderId == InventoryRoot ? null : targetFolderId;
+        var answer = await SendAsync<JsonElement>(_api, HttpMethod.Post, $"{InventoryOf(id.Data)}/folders/{Uri.EscapeDataString(folderId)}/merge",
+            CreateJsonContent(new { TargetFolderId = target }), auth: true, CancellationToken.None);
+        return answer.Success ? ApiResponse<FolderMergeResult>.Ok(Read<FolderMergeResult>(answer.Data) ?? new FolderMergeResult()) : Refused<FolderMergeResult>(answer);
+    }
+
+    public async Task<ApiResponse> DeleteFolder(string folderId, string? ownerId = null)
+    {
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse.Fail(id.Status, id.Message);
-        return await DeleteAsync($"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/folders/{folderId}");
+        return await SendAsync<JsonElement>(_api, HttpMethod.Delete, $"{InventoryOf(id.Data)}/folders/{Uri.EscapeDataString(folderId)}",
+            null, auth: true, CancellationToken.None);
     }
 
-    public async Task<ApiResponse> MoveItemToFolder(string itemId, string? targetFolderId)
+    // DELETE REQUESTS: a group's builders ask, its moderators and up decide.
+
+    // kind is "item" or "folder". Asking again for the same thing answers the request already waiting.
+    public Task<ApiResponse<InventoryDeleteRequest>> RequestInventoryDelete(string groupId, string kind, string targetId)
+        => SendAsync<InventoryDeleteRequest>(_api, HttpMethod.Post, $"{InventoryOf(groupId)}/delete-requests",
+            CreateJsonContent(new { Kind = kind, Id = targetId }), auth: true, CancellationToken.None);
+
+    // Every waiting request for a moderator and up; a builder's own for a builder.
+    public Task<ApiResponse<List<InventoryDeleteRequest>>> GetInventoryDeleteRequests(string groupId)
+        => SendAsync<List<InventoryDeleteRequest>>(_api, HttpMethod.Get, $"{InventoryOf(groupId)}/delete-requests",
+            null, auth: true, CancellationToken.None);
+
+    public Task<ApiResponse<JsonElement>> ApproveInventoryDelete(string groupId, string requestId)
+        => SendAsync<JsonElement>(_api, HttpMethod.Post, $"{InventoryOf(groupId)}/delete-requests/{Uri.EscapeDataString(requestId)}/approve",
+            CreateJsonContent(new { }), auth: true, CancellationToken.None);
+
+    // A moderator's deny, or the asker taking it back.
+    public Task<ApiResponse<JsonElement>> DropInventoryDeleteRequest(string groupId, string requestId)
+        => SendAsync<JsonElement>(_api, HttpMethod.Delete, $"{InventoryOf(groupId)}/delete-requests/{Uri.EscapeDataString(requestId)}",
+            null, auth: true, CancellationToken.None);
+
+    public async Task<ApiResponse> MoveItemToFolder(string itemId, string? targetFolderId, string? ownerId = null)
     {
-        var id = await ResolveUserIdAsync();
+        var id = await OwnerOrSelfAsync(ownerId);
         if (id.Failed || id.Data == null)
             return ApiResponse.Fail(id.Status, id.Message);
         var target = string.IsNullOrEmpty(targetFolderId) || targetFolderId == InventoryRoot ? null : targetFolderId;
-        return await PostAsync($"{ServiceConfig.Current.ContentBase}/api/inventory/users/{id.Data}/items/{Uri.EscapeDataString(itemId)}/move",
+        return await PostAsync($"{InventoryOf(id.Data)}/items/{Uri.EscapeDataString(itemId)}/move",
             new { TargetFolderId = target });
+    }
+
+    // SHARING
+
+    // Who can reach one folder or item of ownerId's, for an account allowed to share it.
+    public Task<ApiResponse<InventoryShareListing>> GetInventoryShares(string ownerId, string targetId)
+        => SendAsync<InventoryShareListing>(_api, HttpMethod.Get, $"{InventoryOf(ownerId)}/shares/{Uri.EscapeDataString(targetId)}",
+            null, auth: true, CancellationToken.None);
+
+    // kind "user" or "group" with that account's or group's id, or "public" for anyone holding the link; access
+    // "read" or "write" (the link is always read). Sharing again with the same one changes its access.
+    public Task<ApiResponse<InventoryShareListing>> SetInventoryShare(string ownerId, string targetId, string kind, string? granteeId, string access)
+        => SendAsync<InventoryShareListing>(_api, HttpMethod.Put, $"{InventoryOf(ownerId)}/shares/{Uri.EscapeDataString(targetId)}",
+            CreateJsonContent(new { Kind = kind, Id = granteeId ?? string.Empty, Access = access }), auth: true, CancellationToken.None);
+
+    // One grant taken back, or with no kind every grant on it.
+    public Task<ApiResponse<InventoryShareListing>> RemoveInventoryShare(string ownerId, string targetId, string? kind = null, string? granteeId = null)
+    {
+        var url = $"{InventoryOf(ownerId)}/shares/{Uri.EscapeDataString(targetId)}";
+        if (!string.IsNullOrEmpty(kind))
+            url += $"?kind={Uri.EscapeDataString(kind)}&id={Uri.EscapeDataString(granteeId ?? string.Empty)}";
+        return SendAsync<InventoryShareListing>(_api, HttpMethod.Delete, url, null, auth: true, CancellationToken.None);
+    }
+
+    // Something shared with this account by name, taken out of its inventory. Group shares stay.
+    public async Task<ApiResponse> DeclineInventoryShare(string shareId)
+    {
+        var id = await ResolveUserIdAsync();
+        if (id.Failed || id.Data == null)
+            return ApiResponse.Fail(id.Status, id.Message);
+        return await DeleteAsync($"{InventoryOf(id.Data)}/incoming/{Uri.EscapeDataString(shareId)}");
+    }
+
+    // A link to someone's shared folder or item, kept in this account's own folder. kind is "folder" or "item".
+    public async Task<ApiResponse> AddInventoryLink(string targetOwnerId, string kind, string targetId, string? folderId, string? name = null)
+    {
+        var id = await ResolveUserIdAsync();
+        if (id.Failed || id.Data == null)
+            return ApiResponse.Fail(id.Status, id.Message);
+        var answer = await SendAsync<JsonElement>(_api, HttpMethod.Post, $"{InventoryOf(id.Data)}/links",
+            CreateJsonContent(new
+            {
+                OwnerId = targetOwnerId,
+                Kind = kind,
+                Id = targetId,
+                FolderId = string.IsNullOrEmpty(folderId) ? InventoryRoot : folderId,
+                Name = name,
+            }), auth: true, CancellationToken.None);
+        return answer.Success ? ApiResponse.Ok() : Refused<object>(answer);
+    }
+
+    // A kept link renamed or moved; either may be null to leave it.
+    public async Task<ApiResponse> UpdateInventoryLink(string linkId, string? name, string? folderId)
+    {
+        var id = await ResolveUserIdAsync();
+        if (id.Failed || id.Data == null)
+            return ApiResponse.Fail(id.Status, id.Message);
+        var result = await PatchAsync<JsonElement>($"{InventoryOf(id.Data)}/links/{Uri.EscapeDataString(linkId)}",
+            new { Name = name, FolderId = folderId });
+        return result.Success ? ApiResponse.Ok() : ApiResponse.Fail(result.Status, result.Message);
+    }
+
+    public async Task<ApiResponse> DeleteInventoryLink(string linkId)
+    {
+        var id = await ResolveUserIdAsync();
+        if (id.Failed || id.Data == null)
+            return ApiResponse.Fail(id.Status, id.Message);
+        return await DeleteAsync($"{InventoryOf(id.Data)}/links/{Uri.EscapeDataString(linkId)}");
     }
 
     #endregion
@@ -549,6 +742,22 @@ public sealed class LumoraClient : IDisposable
         {
             return ApiResponse<string>.Fail(HttpStatusCode.ServiceUnavailable, ex.Message);
         }
+    }
+
+    #endregion
+
+    #region Protection
+
+    public Task<ApiResponse<ProtectionKeySet>> GetProtectionKeys(string userId, CancellationToken ct = default)
+        => SendAsync<ProtectionKeySet>(_api, HttpMethod.Get,
+            $"{ServiceConfig.Current.ApiBase}/api/users/{Uri.EscapeDataString(userId)}/protection-keys", null, auth: false, ct);
+
+    public Task<ApiResponse<SealGrant>> RequestSeal(string itemId, int rules, CancellationToken ct = default)
+    {
+        if (!IsAuthenticated)
+            return Task.FromResult(ApiResponse<SealGrant>.Fail(HttpStatusCode.Unauthorized, "Not authenticated"));
+        return SendAsync<SealGrant>(_api, HttpMethod.Post, $"{ServiceConfig.Current.ApiBase}/api/protection/seal",
+            CreateJsonContent(new { ItemId = itemId, Rules = rules }), auth: true, ct);
     }
 
     #endregion
@@ -642,6 +851,16 @@ public sealed class LumoraClient : IDisposable
     // Admin+; the sum of every slice has to stay inside the pool or this comes back 409
     public Task<ApiResponse> SetGroupMemberStorage(string groupId, string userId, long bytes)
         => PutAsync($"{ServiceConfig.Current.ApiBase}/api/groups/{groupId}/members/{userId}/storage", new { Bytes = bytes });
+
+    // The caller's own pool as an owner, with every owned group's share of it. No tier and no groups is a
+    // total of 0 and an empty list, not a failure.
+    public Task<ApiResponse<GroupStorageInfo>> GetGroupStorage()
+        => GetAsync<GroupStorageInfo>($"{ServiceConfig.Current.ApiBase}/api/groups/storage");
+
+    // Owner only; null puts the group back on an even share. 409 when the pins would pass the pool, the share
+    // would drop under what members hold, or the pool is locked and this raises it.
+    public Task<ApiResponse> SetGroupPool(string groupId, long? bytes)
+        => PutAsync($"{ServiceConfig.Current.ApiBase}/api/groups/{groupId}/pool", new { Bytes = bytes });
 
     // moderator+ only
     public Task<ApiResponse<List<GroupInviteInfo>>> GetGroupInvites(string groupId)
@@ -751,6 +970,160 @@ public sealed class LumoraClient : IDisposable
             return; // records compare by value, so an unchanged profile read raises nothing
         RepresentedGroup = group;
         RepresentedGroupChanged?.Invoke(group);
+    }
+
+    #endregion
+
+    #region Social
+
+    // Profiles, friends, requests, blocks, notes, presence and chat. Every route answers 400, 403, 404 or 409
+    // with { "message": "..." } for a refusal, which lands in Message. Lists are never null on success.
+
+    // Anonymous callers get the public view; signed in, it says where the caller stands with the account.
+    public Task<ApiResponse<ProfileInfo>> GetProfile(string userId)
+        => GetAsync<ProfileInfo>($"{ServiceConfig.Current.ApiBase}/api/user/{Uri.EscapeDataString(userId)}/profile");
+
+    // A null field is left alone. The answer is the caller's own view, with their real StatusMode.
+    public Task<ApiResponse<ProfileInfo>> UpdateMyProfile(ProfileUpdate update)
+        => SendAsync<ProfileInfo>(_api, HttpMethod.Put, $"{ServiceConfig.Current.ApiBase}/api/user/me/profile",
+            CreateJsonContent(update), auth: true, CancellationToken.None);
+
+    // A prefix of the username, two characters at least; take is 1 to 50.
+    public Task<ApiResponse<List<UserSearchResult>>> SearchUsers(string query, int skip = 0, int take = 20)
+        => GetAsync<List<UserSearchResult>>(
+            $"{ServiceConfig.Current.ApiBase}/api/users/search?q={Uri.EscapeDataString(query ?? "")}&skip={skip}&take={take}");
+
+    // The caller's own private note on an account; empty or null clears it.
+    public Task<ApiResponse> SetNote(string userId, string? text)
+    {
+        var url = $"{ServiceConfig.Current.ApiBase}/api/user/{Uri.EscapeDataString(userId)}/note";
+        return string.IsNullOrWhiteSpace(text) ? DeleteAsync(url) : PutAsync(url, new { Text = text });
+    }
+
+    // The badge catalogue, granted or not.
+    public Task<ApiResponse<List<BadgeInfo>>> GetBadges()
+        => GetAsync<List<BadgeInfo>>($"{ServiceConfig.Current.ApiBase}/api/badges");
+
+    // pinned first, then online, then by name
+    public Task<ApiResponse<List<FriendInfo>>> GetFriends()
+        => GetAsync<List<FriendInfo>>($"{ServiceConfig.Current.ApiBase}/api/friends");
+
+    // incoming and outgoing, newest first
+    public Task<ApiResponse<List<FriendRequestInfo>>> GetFriendRequests()
+        => GetAsync<List<FriendRequestInfo>>($"{ServiceConfig.Current.ApiBase}/api/friends/requests");
+
+    public Task<ApiResponse<FriendRequestResult>> SendFriendRequest(string userId)
+        => PostAsync<FriendRequestResult>($"{ServiceConfig.Current.ApiBase}/api/friends/requests", new { UserId = userId });
+
+    // the recipient only
+    public Task<ApiResponse<FriendInfo>> AcceptFriendRequest(string requestId)
+        => PostAsync<FriendInfo>($"{ServiceConfig.Current.ApiBase}/api/friends/requests/{Uri.EscapeDataString(requestId)}/accept", null);
+
+    // the recipient only
+    public Task<ApiResponse> DeclineFriendRequest(string requestId)
+        => PostAsync($"{ServiceConfig.Current.ApiBase}/api/friends/requests/{Uri.EscapeDataString(requestId)}/decline", null);
+
+    // the sender only
+    public Task<ApiResponse> CancelFriendRequest(string requestId)
+        => DeleteAsync($"{ServiceConfig.Current.ApiBase}/api/friends/requests/{Uri.EscapeDataString(requestId)}");
+
+    public Task<ApiResponse> RemoveFriend(string userId)
+        => DeleteAsync($"{ServiceConfig.Current.ApiBase}/api/friends/{Uri.EscapeDataString(userId)}");
+
+    // the caller's side only
+    public Task<ApiResponse> SetFriendPinned(string userId, bool pinned)
+    {
+        var url = $"{ServiceConfig.Current.ApiBase}/api/friends/{Uri.EscapeDataString(userId)}/pin";
+        return pinned ? PutAsync(url, null) : DeleteAsync(url);
+    }
+
+    public Task<ApiResponse<List<BlockInfo>>> GetBlocks()
+        => GetAsync<List<BlockInfo>>($"{ServiceConfig.Current.ApiBase}/api/blocks");
+
+    // Also ends the friendship both ways and any request between the two.
+    public Task<ApiResponse> BlockUser(string userId)
+        => PutAsync($"{ServiceConfig.Current.ApiBase}/api/blocks/{Uri.EscapeDataString(userId)}", null);
+
+    public Task<ApiResponse> UnblockUser(string userId)
+        => DeleteAsync($"{ServiceConfig.Current.ApiBase}/api/blocks/{Uri.EscapeDataString(userId)}");
+
+    // An account reported to the moderators, as one multipart form with the picture as a file part. Sent
+    // through the content client for its long timeout: a 5 MB picture on a slow line outlasts the api
+    // client's 30 s. The bearer rides on the request itself. Answers 201 { reportId }; 400, 404 (no such
+    // account), 409 (yourself) and 429 (too many this hour) are refusals. -xlinka
+    public async Task<ApiResponse<ReportReceipt>> SubmitReport(ReportSubmission report, IProgress<float>? progress = null,
+        CancellationToken ct = default)
+    {
+        if (!IsAuthenticated)
+            return ApiResponse<ReportReceipt>.Fail(HttpStatusCode.Unauthorized, "Not authenticated");
+
+        byte[] body;
+        MediaTypeHeaderValue? type;
+        using (var form = new MultipartFormDataContent())
+        {
+            form.Add(new StringContent(report.TargetUserId), "targetUserId");
+            form.Add(new StringContent(report.Category), "category");
+            form.Add(new StringContent(report.Reason), "reason");
+            if (!string.IsNullOrEmpty(report.WorldName))
+                form.Add(new StringContent(report.WorldName), "worldName");
+            if (!string.IsNullOrEmpty(report.SessionId))
+                form.Add(new StringContent(report.SessionId), "sessionId");
+            if (report.Image is { Length: > 0 } image)
+            {
+                var file = new ByteArrayContent(image);
+                file.Headers.ContentType = new MediaTypeHeaderValue(report.ImageType ?? "application/octet-stream");
+                form.Add(file, "image", string.IsNullOrEmpty(report.ImageName) ? "picture" : report.ImageName);
+            }
+            type = form.Headers.ContentType;
+            body = await form.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+        }
+        return await SendAsync<ReportReceipt>(_content, HttpMethod.Post, $"{ServiceConfig.Current.ApiBase}/api/reports",
+            new UploadProgressContent(body, type, progress), auth: true, ct).ConfigureAwait(false);
+    }
+
+    // Where the signed-in account is, for its friends. Lives about two and a half minutes on the service, so
+    // it is sent every minute as well as on a change.
+    public Task<ApiResponse> ReportMyPresence(PresenceReportBody report)
+        => PutAsync($"{ServiceConfig.Current.ApiBase}/api/presence/me", report);
+
+    // newest last message first
+    public Task<ApiResponse<List<ChatSummaryInfo>>> GetChats()
+        => GetAsync<List<ChatSummaryInfo>>($"{ServiceConfig.Current.ApiBase}/api/chats");
+
+    // Newest last; before is a message id to page back from, take is 1 to 100.
+    public Task<ApiResponse<List<ChatMessageInfo>>> GetChatMessages(string userId, string? before = null, int take = 50)
+    {
+        var url = $"{ServiceConfig.Current.ApiBase}/api/chats/{Uri.EscapeDataString(userId)}/messages?take={take}";
+        if (!string.IsNullOrEmpty(before))
+            url += $"&before={Uri.EscapeDataString(before)}";
+        return GetAsync<List<ChatMessageInfo>>(url);
+    }
+
+    // Friends only. Body for text, Item for an item, never both.
+    public Task<ApiResponse<ChatMessageInfo>> SendChatMessage(string userId, SendMessageBody message)
+        => PostAsync<ChatMessageInfo>($"{ServiceConfig.Current.ApiBase}/api/chats/{Uri.EscapeDataString(userId)}/messages", message);
+
+    public Task<ApiResponse> MarkChatRead(string userId)
+        => PostAsync($"{ServiceConfig.Current.ApiBase}/api/chats/{Uri.EscapeDataString(userId)}/read", null);
+
+    // Hides every message so far, for the caller only.
+    public Task<ApiResponse> ClearChat(string userId)
+        => DeleteAsync($"{ServiceConfig.Current.ApiBase}/api/chats/{Uri.EscapeDataString(userId)}");
+
+    // One message: hidden for the caller only, or with forBoth one of the caller's own taken back from both sides.
+    // One not in the chat or already gone answers as done.
+    public Task<ApiResponse> DeleteChatMessage(string userId, string messageId, bool forBoth)
+        => DeleteAsync($"{ServiceConfig.Current.ApiBase}/api/chats/{Uri.EscapeDataString(userId)}/messages"
+            + $"?id={Uri.EscapeDataString(messageId)}&for={(forBoth ? "both" : "me")}");
+
+    // Whether the sessions some invites in the chat name still run: one answer per id, up to 20 at a time.
+    public Task<ApiResponse<List<ChatInviteStateInfo>>> GetChatInviteStates(string userId, IReadOnlyList<string> messageIds)
+    {
+        var escaped = new string[messageIds.Count];
+        for (int i = 0; i < escaped.Length; i++)
+            escaped[i] = Uri.EscapeDataString(messageIds[i]);
+        var ids = string.Join(",", escaped);
+        return GetAsync<List<ChatInviteStateInfo>>($"{ServiceConfig.Current.ApiBase}/api/chats/{Uri.EscapeDataString(userId)}/invites?ids={ids}");
     }
 
     #endregion

@@ -22,6 +22,9 @@
     <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageReference Include="System.Net.Http.Json" Version="9.0.0" />
     <PackageReference Include="System.Text.Json" Version="9.0.0" />
+    <!-- The social hub's live feed. The 9.0 line, to match the net9.0 target and the service; 9.0.21 is the
+         first without CVE-2026-70159. -->
+    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" Version="9.0.21" />
   </ItemGroup>
 
   <ItemGroup>

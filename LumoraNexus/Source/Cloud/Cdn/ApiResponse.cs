@@ -139,6 +139,8 @@ public record GroupInfo
     [JsonPropertyName("ownerId")] public string OwnerId { get; init; } = "";
     [JsonPropertyName("visibility")] public string Visibility { get; init; } = "Public";
     [JsonPropertyName("iconHash")] public string? IconHash { get; init; }
+    // The wide picture: the group page's header and the plate over a representing member's nametag.
+    [JsonPropertyName("bannerHash")] public string? BannerHash { get; init; }
     // "#RRGGBB". Drives the card chip and the nametag card fill.
     [JsonPropertyName("color")] public string Color { get; init; } = "";
     [JsonPropertyName("storageQuotaBytes")] public long StorageQuotaBytes { get; init; }
@@ -152,6 +154,33 @@ public record GroupInfo
     // The caller's own slice of the pool, 0 when not a member.
     [JsonPropertyName("myAllocatedBytes")] public long MyAllocatedBytes { get; init; }
     [JsonPropertyName("myUsedBytes")] public long MyUsedBytes { get; init; }
+    // Who can join a world hosted for the group until the host changes it: "GroupMembers" or "GroupPublic".
+    // Empty from a service too old to keep one, which reads as members only.
+    [JsonPropertyName("defaultJoinLevel")] public string DefaultJoinLevel { get; init; } = "";
+}
+
+// The caller's group storage as an owner (GET /api/groups/storage): ONE allowance from their tier, split
+// across every group they own. "Active" | "Grace" | "Locked"; a locked pool totals 0. -xlinka
+public record GroupStorageInfo
+{
+    [JsonPropertyName("totalBytes")] public long TotalBytes { get; init; }
+    [JsonPropertyName("usedBytes")] public long UsedBytes { get; init; }
+    [JsonPropertyName("status")] public string Status { get; init; } = "";
+    [JsonPropertyName("lockAt")] public DateTime? LockAt { get; init; }
+    [JsonPropertyName("groups")] public List<GroupPoolShare> Groups { get; init; } = new();
+}
+
+// One owned group's cut of that pool. PinnedBytes is null while the group takes an even share of what the
+// owner's pins leave; SlicedBytes is what its members were already handed, the floor for any pin.
+public record GroupPoolShare
+{
+    [JsonPropertyName("groupId")] public string GroupId { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("tag")] public string Tag { get; init; } = "";
+    [JsonPropertyName("shareBytes")] public long ShareBytes { get; init; }
+    [JsonPropertyName("pinnedBytes")] public long? PinnedBytes { get; init; }
+    [JsonPropertyName("usedBytes")] public long UsedBytes { get; init; }
+    [JsonPropertyName("slicedBytes")] public long SlicedBytes { get; init; }
 }
 
 public record GroupMemberInfo
@@ -244,11 +273,15 @@ public record GroupPatch
     [JsonPropertyName("tag")] public string? Tag { get; init; }
     [JsonPropertyName("description")] public string? Description { get; init; }
     [JsonPropertyName("iconHash")] public string? IconHash { get; init; }
+    // empty clears the banner
+    [JsonPropertyName("bannerHash")] public string? BannerHash { get; init; }
     [JsonPropertyName("color")] public string? Color { get; init; }
     [JsonPropertyName("visibility")] public string? Visibility { get; init; }
+    [JsonPropertyName("defaultJoinLevel")] public string? DefaultJoinLevel { get; init; }
 
     public bool IsEmpty => Name == null && Tag == null && Description == null
-        && IconHash == null && Color == null && Visibility == null;
+        && IconHash == null && BannerHash == null && Color == null && Visibility == null
+        && DefaultJoinLevel == null;
 }
 
 // The group a user has chosen to wear, as it rides their public profile. This is what the nametag card
@@ -260,6 +293,7 @@ public record RepresentedGroupInfo
     [JsonPropertyName("name")] public string Name { get; init; } = "";
     [JsonPropertyName("color")] public string Color { get; init; } = "";
     [JsonPropertyName("iconHash")] public string? IconHash { get; init; }
+    [JsonPropertyName("bannerHash")] public string? BannerHash { get; init; }
     [JsonPropertyName("role")] public string Role { get; init; } = "";
 }
 
@@ -276,13 +310,20 @@ public record PublicUserInfo
     // "#RRGGBB" as the account stores them. Empty from a service too old to send them.
     [JsonPropertyName("nameColor")] public string NameColor { get; init; } = "";
     [JsonPropertyName("supporterColor")] public string? SupporterColor { get; init; }
+    // How the tier's name tag moves, as the tier file names it ("Animated"), or null for a still one.
+    [JsonPropertyName("supporterStyle")] public string? SupporterStyle { get; init; }
     [JsonPropertyName("isStaff")] public bool IsStaff { get; init; }
+    // AccountKinds: a person, or a bot or server login. A service too old to send it leaves it empty.
+    [JsonPropertyName("accountKind")] public string AccountKind { get; init; } = AccountKinds.User;
     [JsonPropertyName("isAccountBanned")] public bool IsAccountBanned { get; init; }
     [JsonPropertyName("isPublicBanned")] public bool IsPublicBanned { get; init; }
     [JsonPropertyName("isSpectatorBanned")] public bool IsSpectatorBanned { get; init; }
     [JsonPropertyName("isMuteBanned")] public bool IsMuteBanned { get; init; }
     // Null when the user is not wearing a group.
     [JsonPropertyName("representedGroup")] public RepresentedGroupInfo? RepresentedGroup { get; init; }
+    // The account's profile picture and banner may play when animated: it holds a supporter tier right now.
+    // False from a service too old to say, and every picture then shows its first frame.
+    [JsonPropertyName("animatedPictures")] public bool AnimatedPictures { get; init; }
 }
 
 // What POST /content/upload/begin answers: a session to send the chunks to, or that the blob is there already.
@@ -330,6 +371,10 @@ public record UserProfile
     public string Bio { get; init; } = "";
     [JsonPropertyName("status")]
     public string Status { get; init; } = "";
+    // Set while joining other people's worlds waits on something, "email_not_verified" so far. Null from a service too
+    // old to say.
+    [JsonPropertyName("joinBlock")]
+    public string? JoinBlock { get; init; }
 }
 
 public record PatreonInfo
@@ -373,6 +418,116 @@ public record InventoryItemInfo
     [JsonPropertyName("updatedAt")] public DateTime UpdatedAt { get; init; }
     // Search rows carry where they live; a folder listing leaves this null.
     [JsonPropertyName("path")] public string? Path { get; init; }
+    // Who saved it when that is not the inventory's owner: a group member, or a friend saving into a share.
+    [JsonPropertyName("savedBy")] public string? SavedBy { get; init; }
+    [JsonPropertyName("savedByName")] public string? SavedByName { get; init; }
+    // Only for whoever may share it: how many grants it carries, and whether one is the open link.
+    [JsonPropertyName("shareCount")] public int ShareCount { get; init; }
+    [JsonPropertyName("isPublic")] public bool IsPublic { get; init; }
+    [JsonPropertyName("link")] public InventoryLinkInfo? Link { get; init; }
+    // In a group: a builder asked for it to be deleted and a moderator has not decided yet.
+    [JsonPropertyName("deleteRequest")] public InventoryDeleteMark? DeleteRequest { get; init; }
+    // Files the item lists that the store no longer has, as lowercase hashes. Null or empty when none, and from a
+    // service too old to say.
+    [JsonPropertyName("missingParts")] public List<string>? MissingParts { get; init; }
+}
+
+// The mark on a group row someone asked to delete.
+public record InventoryDeleteMark
+{
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    [JsonPropertyName("byName")] public string ByName { get; init; } = "";
+    [JsonPropertyName("at")] public DateTime At { get; init; }
+}
+
+// A builder's request to delete something in a group, waiting for a moderator. FolderId is where it sits, null at
+// the top.
+public record InventoryDeleteRequest
+{
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    // "folder" or "item"
+    [JsonPropertyName("targetKind")] public string TargetKind { get; init; } = "";
+    [JsonPropertyName("targetId")] public string TargetId { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("folderId")] public string? FolderId { get; init; }
+    [JsonPropertyName("requestedBy")] public string RequestedBy { get; init; } = "";
+    [JsonPropertyName("requestedByName")] public string RequestedByName { get; init; } = "";
+    [JsonPropertyName("requestedAt")] public DateTime RequestedAt { get; init; }
+}
+
+// A row that leads into someone else's inventory: a link kept in this one ("link"), something shared with this
+// account ("user") or with a group it is in ("group"), or the game's library ("library"). Id is the link's or the
+// share's, never the target's; the library's row carries the library's own id.
+public record InventoryLinkInfo
+{
+    [JsonPropertyName("via")] public string Via { get; init; } = "";
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    [JsonPropertyName("ownerId")] public string OwnerId { get; init; } = "";
+    [JsonPropertyName("ownerName")] public string OwnerName { get; init; } = "";
+    // "folder" or "item"
+    [JsonPropertyName("targetKind")] public string TargetKind { get; init; } = "";
+    [JsonPropertyName("targetId")] public string TargetId { get; init; } = "";
+    // "read", "write", or "none" once it is unshared or gone
+    [JsonPropertyName("access")] public string Access { get; init; } = "";
+    // The group a group grant came through.
+    [JsonPropertyName("viaName")] public string? ViaName { get; init; }
+    // On the library's row, this account's role there when it is on staff ("Owner", "Admin", "Builder").
+    [JsonPropertyName("role")] public string? Role { get; init; }
+}
+
+// Who can reach one folder or item, for whoever may share it. Inherited grants sit on folders above it.
+public record InventoryShareListing
+{
+    [JsonPropertyName("targetId")] public string TargetId { get; init; } = "";
+    [JsonPropertyName("targetKind")] public string TargetKind { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("canShare")] public bool CanShare { get; init; }
+    [JsonPropertyName("grants")] public List<InventoryShareGrant> Grants { get; init; } = new();
+    [JsonPropertyName("inherited")] public List<InventoryInheritedGrant> Inherited { get; init; } = new();
+}
+
+// "user", "group" or "public" (Id empty), and "read" or "write".
+public record InventoryShareGrant
+{
+    [JsonPropertyName("kind")] public string Kind { get; init; } = "";
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("access")] public string Access { get; init; } = "";
+    [JsonPropertyName("createdAt")] public DateTime CreatedAt { get; init; }
+}
+
+public record InventoryInheritedGrant
+{
+    [JsonPropertyName("kind")] public string Kind { get; init; } = "";
+    [JsonPropertyName("id")] public string Id { get; init; } = "";
+    [JsonPropertyName("name")] public string Name { get; init; } = "";
+    [JsonPropertyName("access")] public string Access { get; init; } = "";
+    [JsonPropertyName("fromId")] public string FromId { get; init; } = "";
+    [JsonPropertyName("fromName")] public string FromName { get; init; } = "";
+}
+
+// A group's inventory storage as one of its members sees it: the whole group's use, and their own room. A member
+// with no slice of their own draws from the group's main pool (FromPool), and MyLimitBytes is then the pool's.
+// Status is the owner's billing: "Active", "Grace" (locks at LockAt) or "Locked" (nothing new goes in).
+public record GroupInventoryQuota
+{
+    [JsonPropertyName("groupId")] public string GroupId { get; init; } = "";
+    [JsonPropertyName("usedBytes")] public long UsedBytes { get; init; }
+    [JsonPropertyName("myUsedBytes")] public long MyUsedBytes { get; init; }
+    [JsonPropertyName("myLimitBytes")] public long MyLimitBytes { get; init; }
+    [JsonPropertyName("fromPool")] public bool FromPool { get; init; }
+    [JsonPropertyName("poolBytes")] public long PoolBytes { get; init; }
+    [JsonPropertyName("poolUsedBytes")] public long PoolUsedBytes { get; init; }
+    [JsonPropertyName("status")] public string Status { get; init; } = "Active";
+    [JsonPropertyName("lockAt")] public DateTime? LockAt { get; init; }
+
+    public bool IsLocked => Status == "Locked";
+    public bool InGrace => Status == "Grace";
+    // What this member has used of the room they save into, and that room.
+    public long RoomUsed => FromPool ? PoolUsedBytes : MyUsedBytes;
+    public bool HasRoom => MyLimitBytes > RoomUsed;
+    // No slice set for this member and no pool to draw from: only the owner and admins draw from the pool.
+    public bool NoStorage => !FromPool && MyLimitBytes <= 0;
 }
 
 // A variant some client made and registered for a blob: the stored blob it is, and its size.
@@ -406,13 +561,20 @@ public record FolderSummary
     [JsonPropertyName("updatedAt")] public DateTime UpdatedAt { get; init; }
     // Search rows carry where they live; a folder listing leaves this null.
     [JsonPropertyName("path")] public string? Path { get; init; }
+    [JsonPropertyName("shareCount")] public int ShareCount { get; init; }
+    [JsonPropertyName("isPublic")] public bool IsPublic { get; init; }
+    [JsonPropertyName("link")] public InventoryLinkInfo? Link { get; init; }
+    [JsonPropertyName("deleteRequest")] public InventoryDeleteMark? DeleteRequest { get; init; }
 }
 
-// One folder's direct children, or the rows a search found.
+// One folder's direct children, or the rows a search found. Access is the caller's in that folder: "owner",
+// "write" or "read"; a service from before shared folders sends none, which is the caller's own.
 public record FolderContents
 {
     [JsonPropertyName("folders")] public List<FolderSummary> Folders { get; init; } = new();
     [JsonPropertyName("items")] public List<InventoryItemInfo> Items { get; init; } = new();
+    [JsonPropertyName("access")] public string Access { get; init; } = "owner";
+    [JsonPropertyName("canShare")] public bool CanShare { get; init; }
 }
 
 // The account's storage in bytes. Used is what its items list plus what it uploaded that nothing lists yet,
@@ -423,6 +585,8 @@ public record UserQuotaResponse
     [JsonPropertyName("usedBytes")] public long UsedBytes { get; init; }
     [JsonPropertyName("pendingBytes")] public long PendingBytes { get; init; }
     [JsonPropertyName("limitBytes")] public long LimitBytes { get; init; }
+    // Set while nothing new may be saved, "email_not_verified" so far.
+    [JsonPropertyName("saveBlock")] public string? SaveBlock { get; init; }
 }
 
 // One setting that follows the account. Removed (with no value) when it was taken away on some computer,

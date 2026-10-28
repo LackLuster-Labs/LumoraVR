@@ -51,6 +51,64 @@ public static class SyncFrameCodec
         return output;
     }
 
+    // The same envelope written into a buffer the caller keeps, grown as frames need it, for a sender that
+    // hands each frame on before it writes the next. Returns what to send: the buffer, or the frame itself
+    // when compressing did not pay; length becomes its byte count. -xlinka
+    public static byte[] WrapCompressed(byte[] frame, ref int length, ref byte[]? buffer)
+    {
+        if (frame == null || length < 2)
+            return frame!;
+
+        int tailLen = length - 1;
+        int headerLen = 1 + Varint.Length((uint)tailLen);
+        int needed = headerLen + Codec.MaxCompressedLength(tailLen);
+        if (buffer == null || buffer.Length < needed)
+            buffer = new byte[System.Math.Max(needed, 4096)];
+        int written = Codec.Compress(new ReadOnlySpan<byte>(frame, 1, tailLen), new Span<byte>(buffer, headerLen, buffer.Length - headerLen));
+        if (written <= 0 || headerLen + written >= length)
+            return frame;
+
+        buffer[0] = (byte)(frame[0] | CompressedFlag);
+        Varint.Write(buffer, 1, (uint)tailLen);
+        length = headerLen + written;
+        return buffer;
+    }
+
+    // The same unwrapping into a buffer the caller keeps, grown as frames need it. A frame that is not compressed
+    // is left where it lies; either way the frame is data[offset .. offset + length) afterwards, data being what
+    // comes back. -xlinka
+    public static byte[] UnwrapInto(byte[] data, ref int offset, ref int length, ref byte[]? buffer)
+    {
+        if (data == null || length <= 0)
+            return data!;
+
+        byte b0 = data[offset];
+        if ((b0 & CompressedFlag) == 0)
+            return data;
+
+        int pos = offset + 1;
+        uint tailLenRaw = Varint.Read(data, ref pos);
+        if (tailLenRaw == 0 || tailLenRaw > (uint)NetworkLimits.MaxDecompressedFrameBytes)
+            throw new InvalidDataException($"Compressed sync frame declares tail length {tailLenRaw}, cap {NetworkLimits.MaxDecompressedFrameBytes}.");
+        int tailLen = (int)tailLenRaw;
+        int compressedLen = (offset + length) - pos;
+        if (compressedLen <= 0)
+            throw new InvalidDataException("Compressed sync frame has no payload.");
+
+        if (buffer == null || buffer.Length < 1 + tailLen)
+            buffer = new byte[System.Math.Max(1 + tailLen, 4096)];
+        buffer[0] = (byte)(b0 & ~CompressedFlag);
+        int produced = Codec.Decompress(
+            new ReadOnlySpan<byte>(data, pos, compressedLen),
+            new Span<byte>(buffer, 1, tailLen),
+            tailLen);
+        if (produced != tailLen)
+            throw new InvalidDataException($"Sync frame decompression size mismatch: got {produced}, expected {tailLen}.");
+        offset = 0;
+        length = 1 + tailLen;
+        return buffer;
+    }
+
     // If the frame is compressed (byte 0 high bit set), decompress it into a full plaintext frame
     // (type tag + tail) and return that; otherwise return the bytes as a frame that starts at index 0
     // (the original array when it's the whole slice, else a copy). The returned frame is always safe to

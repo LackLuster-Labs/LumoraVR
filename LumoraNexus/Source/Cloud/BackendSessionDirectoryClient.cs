@@ -49,6 +49,8 @@ public sealed class BackendSessionDirectoryClient : IDisposable
     private const int MaxUsersCap = 256;
     private const int MaxUserListEntries = 64;
     private const int MaxSessionUrls = 8;
+    private const int MaxUserIdLength = 64;
+    private const string UserIdPrefix = "U-";
 
     private readonly string _apiBaseUrl;
     private readonly Func<string?> _tokenProvider;
@@ -63,6 +65,7 @@ public sealed class BackendSessionDirectoryClient : IDisposable
     private Task? _heartbeatTask;
     private SessionMetadata? _metadata;
     private Func<string[]>? _getUserList;
+    private Func<string[]>? _getUserIds;
 
     private volatile bool _running;
     private volatile bool _registered;
@@ -102,7 +105,9 @@ public sealed class BackendSessionDirectoryClient : IDisposable
     // Returns false only when there is no session to publish. A backend that is down or refusing right now
     // still returns true, because the loop keeps trying and the session gets listed as soon as it comes back.
     // Signed in or not, it publishes: without a token the session is listed as a guest's.
-    public async Task<bool> StartAsync(SessionMetadata metadata, Func<string[]> getUserList)
+    // getUserIds gives the account ids of the signed-in users in the session, which is how the directory tells a
+    // friend which session someone is in; guests have none and are left out.
+    public async Task<bool> StartAsync(SessionMetadata metadata, Func<string[]> getUserList, Func<string[]>? getUserIds = null)
     {
         if (_running)
             return true;
@@ -115,6 +120,7 @@ public sealed class BackendSessionDirectoryClient : IDisposable
 
         _metadata = metadata;
         _getUserList = getUserList;
+        _getUserIds = getUserIds;
         _running = true;
         _cts = new CancellationTokenSource();
 
@@ -126,8 +132,8 @@ public sealed class BackendSessionDirectoryClient : IDisposable
     }
 
     // Pushes the user count out of band, on top of the timed heartbeat. Throttled, and a no-op before
-    // registration succeeds (the loop handles that case).
-    public void SendHeartbeat(int activeUsers, string[] userList)
+    // registration succeeds (the loop handles that case). Null userIds leaves the directory's list as it was.
+    public void SendHeartbeat(int activeUsers, string[] userList, string[]? userIds = null)
     {
         if (!_running || !_registered || _metadata == null)
             return;
@@ -138,7 +144,7 @@ public sealed class BackendSessionDirectoryClient : IDisposable
         _lastPushUtc = now;
 
         var token = _cts?.Token ?? CancellationToken.None;
-        _ = Task.Run(() => HeartbeatAsync(activeUsers, userList, token));
+        _ = Task.Run(() => HeartbeatAsync(activeUsers, userList, userIds, token));
     }
 
     // Safe to call more than once. Callers on the world thread should await this rather than relying on
@@ -200,7 +206,7 @@ public sealed class BackendSessionDirectoryClient : IDisposable
                 if (_registered)
                 {
                     var users = _getUserList?.Invoke() ?? Array.Empty<string>();
-                    await HeartbeatAsync(_metadata?.ActiveUsers ?? users.Length, users, cancellationToken)
+                    await HeartbeatAsync(_metadata?.ActiveUsers ?? users.Length, users, _getUserIds?.Invoke(), cancellationToken)
                         .ConfigureAwait(false);
                 }
                 else
@@ -271,7 +277,7 @@ public sealed class BackendSessionDirectoryClient : IDisposable
         }
     }
 
-    private async Task HeartbeatAsync(int activeUsers, string[] userList, CancellationToken cancellationToken)
+    private async Task HeartbeatAsync(int activeUsers, string[] userList, string[]? userIds, CancellationToken cancellationToken)
     {
         var metadata = _metadata;
         if (metadata == null || !_registered)
@@ -287,6 +293,7 @@ public sealed class BackendSessionDirectoryClient : IDisposable
             {
                 ActiveUsers = Math.Clamp(Math.Max(activeUsers, users.Length), 0, MaxUsersCap),
                 UserList = users,
+                UserIds = userIds == null ? null : NormalizeUserIds(userIds, metadata.MaxUsers),
                 SessionUrls = BuildSessionUrls(metadata),
                 Name = Clamp(metadata.Name, MaxNameLength),
                 Tags = NormalizeTags(metadata.Tags)
@@ -324,6 +331,59 @@ public sealed class BackendSessionDirectoryClient : IDisposable
         {
             _requestGate.Release();
         }
+    }
+
+    // The access level or the build changed while listed (Anyone to Friends and back, something loaded into the
+    // game): the entry is updated where it stands. Taking it down and putting it back would race its own removal,
+    // the same session id going both ways.
+    public void PushListing()
+    {
+        if (!_running || !_registered || _metadata == null)
+            return;
+        var token = _cts?.Token ?? CancellationToken.None;
+        _ = Task.Run(() => UpdateListingAsync(token));
+    }
+
+    private async Task UpdateListingAsync(CancellationToken cancellationToken)
+    {
+        var metadata = _metadata;
+        if (metadata == null)
+            return;
+
+        try
+        {
+            var url = $"{_apiBaseUrl}/sessions/{Uri.EscapeDataString(metadata.SessionId)}";
+            using var request = CreateRequest(HttpMethod.Patch, url, new ListingPayload
+            {
+                AccessLevel = metadata.Visibility.ToString(),
+                VersionHash = Clamp(metadata.VersionHash, MaxHashLength)
+            });
+            if (request == null)
+                return;
+
+            using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (response.StatusCode == HttpStatusCode.NotFound)
+            {
+                // gone from the directory: registering again carries the new level and build
+                _registered = false;
+                return;
+            }
+            if (!response.IsSuccessStatusCode)
+                LumoraLogger.Warn($"BackendSessionDirectoryClient: Listing update failed ({(int)response.StatusCode})");
+        }
+        catch (OperationCanceledException)
+        {
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Warn($"BackendSessionDirectoryClient: Listing update failed - {ex.Message}");
+        }
+    }
+
+    private sealed class ListingPayload
+    {
+        public string AccessLevel { get; set; } = "";
+        public string VersionHash { get; set; } = "";
     }
 
     private async Task UnregisterAsync()
@@ -395,11 +455,11 @@ public sealed class BackendSessionDirectoryClient : IDisposable
             MaxUsers = maxUsers,
             ActiveUsers = Math.Clamp(Math.Max(metadata.ActiveUsers, users.Length), 0, MaxUsersCap),
             UserList = users,
+            UserIds = _getUserIds == null ? null : NormalizeUserIds(_getUserIds.Invoke(), maxUsers),
             Tags = NormalizeTags(metadata.Tags),
             IsHeadless = metadata.IsHeadless,
             AppVersion = NexusRuntime.AppVersion,
-            // Nothing computes a compatibility hash yet, so this stays empty instead of shipping a
-            // placeholder that browsers would treat as a real compatibility claim.
+            // The host's build identity; browsers list only sessions on their own.
             CompatibilityHash = Clamp(metadata.VersionHash, MaxHashLength),
             ThumbnailUrl = string.IsNullOrWhiteSpace(metadata.ThumbnailUrl) || metadata.ThumbnailUrl.Length > MaxThumbnailUrlLength
                 ? null
@@ -412,13 +472,32 @@ public sealed class BackendSessionDirectoryClient : IDisposable
         if (metadata.SessionURLs == null || metadata.SessionURLs.Count == 0)
             return Array.Empty<string>();
 
-        return metadata.SessionURLs
+        var urls = metadata.SessionURLs
             .Where(uri => uri != null)
             .Select(uri => uri.ToString())
             .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Take(MaxSessionUrls)
-            .ToArray();
+            .ToList();
+        if (urls.Count <= MaxSessionUrls)
+            return urls.ToArray();
+
+        // Over the cap, private network addresses give way first: a host with many network cards would otherwise
+        // push out its NAT node, forwarded, IPv6 and Steam addresses, the ones a joiner elsewhere can use.
+        int direct = Math.Max(0, MaxSessionUrls - urls.Count(u => !IsPrivateDirect(u)));
+        var kept = new List<string>();
+        foreach (var url in urls)
+        {
+            if (!IsPrivateDirect(url) || direct-- > 0)
+                kept.Add(url);
+        }
+        return kept.Take(MaxSessionUrls).ToArray();
     }
+
+    private static bool IsPrivateDirect(string url)
+        => url.StartsWith("lnl://", StringComparison.OrdinalIgnoreCase)
+           && Uri.TryCreate(url, UriKind.Absolute, out var uri)
+           && IPAddress.TryParse(uri.DnsSafeHost, out var ip)
+           && ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork
+           && !Lumora.Nexus.Transport.PortMapping.RouterAddress.IsPublic(ip);
 
     private static string[] NormalizeTags(List<string>? tags)
     {
@@ -455,6 +534,22 @@ public sealed class BackendSessionDirectoryClient : IDisposable
             .ToArray();
     }
 
+    // The directory refuses a list with anything but account ids in it, and a refused heartbeat repeats every
+    // interval, so anything else is dropped here rather than costing the session its listing.
+    private static string[] NormalizeUserIds(string[]? ids, int maxUsers)
+    {
+        if (ids == null || ids.Length == 0)
+            return Array.Empty<string>();
+
+        return ids
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .Select(id => id.Trim())
+            .Where(id => id.StartsWith(UserIdPrefix, StringComparison.Ordinal) && id.Length <= MaxUserIdLength)
+            .Distinct(StringComparer.Ordinal)
+            .Take(Math.Clamp(maxUsers, 1, MaxUsersCap))
+            .ToArray();
+    }
+
     public void Dispose()
     {
         // Dispose is the fallback path (Session.Dispose runs on the world thread). StopAsync is the one to
@@ -485,6 +580,7 @@ public sealed class BackendSessionDirectoryClient : IDisposable
         public int MaxUsers { get; set; }
         public int ActiveUsers { get; set; }
         public string[] UserList { get; set; } = Array.Empty<string>();
+        public string[]? UserIds { get; set; }
         public string[] Tags { get; set; } = Array.Empty<string>();
         public bool IsHeadless { get; set; }
         public string AppVersion { get; set; } = "";
@@ -496,6 +592,7 @@ public sealed class BackendSessionDirectoryClient : IDisposable
     {
         public int ActiveUsers { get; set; }
         public string[] UserList { get; set; } = Array.Empty<string>();
+        public string[]? UserIds { get; set; }
         public string[] SessionUrls { get; set; } = Array.Empty<string>();
         public string Name { get; set; } = "";
         public string[] Tags { get; set; } = Array.Empty<string>();

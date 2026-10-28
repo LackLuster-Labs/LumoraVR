@@ -18,6 +18,8 @@ public static class SessionUrlBuilder
     public static Uri BuildLNLUrl(string host, int port, string sessionId = null!)
     {
         string path = !string.IsNullOrEmpty(sessionId) ? $"/{sessionId}" : "";
+        if (IPAddress.TryParse(host, out var literal) && literal.AddressFamily == AddressFamily.InterNetworkV6)
+            host = "[" + literal + "]";
         return new Uri($"{LNLScheme}://{host}:{port}{path}");
     }
 
@@ -65,6 +67,13 @@ public static class SessionUrlBuilder
         foreach (var ip in GetLocalIPAddresses())
         {
             urls.Add(BuildLNLUrl(ip.ToString(), port, sessionId));
+        }
+
+        // A public IPv6 address reaches the listener directly, with no NAT to get through.
+        if (Lumora.Nexus.Transport.NetworkOptions.AllowIpv6)
+        {
+            foreach (var ip in Lumora.Nexus.Transport.HostAddresses.GlobalIpv6)
+                urls.Add(BuildLNLUrl(ip.ToString(), port, sessionId));
         }
 
         return urls;

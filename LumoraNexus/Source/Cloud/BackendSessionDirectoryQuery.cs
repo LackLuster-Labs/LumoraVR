@@ -16,8 +16,8 @@ namespace Lumora.Nexus.Cloud;
 // BackendSessionDirectoryClient.
 //
 // Deliberately dumb. It does not map, merge, de-dup or cache; that is the browser's job, which already
-// owns one upsert path for every discovery source. It also stays anonymous, because the list endpoint is
-// public and there is no contacts system for a token to unlock yet. -xlinka
+// owns one upsert path for every discovery source. The list poll stays anonymous, because the list is
+// Public sessions only; a friend's session is looked up by id with the caller's token. -xlinka
 public sealed class BackendSessionDirectoryQuery : IDisposable
 {
     // How often we ask the directory for the list. Hosts heartbeat every 20s, so anything faster than
@@ -25,6 +25,7 @@ public sealed class BackendSessionDirectoryQuery : IDisposable
     public static readonly TimeSpan PollInterval = TimeSpan.FromSeconds(15);
 
     private readonly string _apiBaseUrl;
+    private readonly Func<string?>? _build;
     private readonly HttpClient _httpClient;
     private readonly JsonSerializerOptions _jsonOptions;
     private readonly SemaphoreSlim _refreshSignal = new(0);
@@ -48,9 +49,11 @@ public sealed class BackendSessionDirectoryQuery : IDisposable
 
     public bool IsRunning => _pollTask != null;
 
-    public BackendSessionDirectoryQuery(string apiBaseUrl)
+    // build gives this game's build identity once it is known; the directory then sends only sessions on it.
+    public BackendSessionDirectoryQuery(string apiBaseUrl, Func<string?>? build = null)
     {
         _apiBaseUrl = BackendSessionDirectoryClient.NormalizeBaseUrl(apiBaseUrl);
+        _build = build;
         _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
         _jsonOptions = new JsonSerializerOptions
         {
@@ -116,8 +119,9 @@ public sealed class BackendSessionDirectoryQuery : IDisposable
     {
         try
         {
+            var build = _build?.Invoke();
             using var response = await _httpClient
-                .GetAsync($"{_apiBaseUrl}/sessions", cancellationToken)
+                .GetAsync(string.IsNullOrEmpty(build) ? $"{_apiBaseUrl}/sessions" : $"{_apiBaseUrl}/sessions?build={Uri.EscapeDataString(build)}", cancellationToken)
                 .ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
@@ -145,6 +149,35 @@ public sealed class BackendSessionDirectoryQuery : IDisposable
         catch (Exception ex)
         {
             ReportFailure(ex.Message);
+        }
+    }
+
+    // One session by id, as the caller may see it. A Friends session never rides the public list and comes
+    // back here only to the host's friends, so this one carries the caller's token. Null for not listed,
+    // not for them, or no answer. -xlinka
+    public async Task<SessionListingDto?> GetSessionAsync(string sessionId, string? token, CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return null;
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"{_apiBaseUrl}/sessions/{Uri.EscapeDataString(sessionId)}");
+            if (!string.IsNullOrWhiteSpace(token))
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
+            using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            if (!response.IsSuccessStatusCode)
+                return null;
+            var json = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            return JsonSerializer.Deserialize<SessionListingDto>(json, _jsonOptions);
+        }
+        catch (OperationCanceledException)
+        {
+            return null;
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Log($"BackendSessionDirectoryQuery: Session lookup failed ({ex.Message})");
+            return null;
         }
     }
 

@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Lumora.Core.Math;
 
 namespace Lumora.Nexus.Protocol;
@@ -12,48 +13,52 @@ namespace Lumora.Nexus.Protocol;
 // bit-packed to N bits within a range (absolute for quantized frames, or the change from the previous
 // value for delta frames). Quaternions renormalize on compose. Type-keyed, so any supported value type
 // works without a per-stream override. -xlinka
+//
+// The components go through a span on the stack. A table of boxing delegates did this before, and every value
+// coded was a box and a float array for it and for each end of its range: a crowd's bones made thousands of
+// them a second on the sync threads. The wire is the same. -xlinka
 public static class StreamCoder
 {
-    private readonly struct Entry
+    private static readonly Dictionary<Type, int> Coded = new()
     {
-        public readonly Func<object, float[]> Extract;     // value -> components
-        public readonly Func<float[], object> Compose;     // components -> value
-        public readonly int Components;
-
-        public Entry(Func<object, float[]> extract, Func<float[], object> compose, int components)
-        {
-            Extract = extract;
-            Compose = compose;
-            Components = components;
-        }
-    }
-
-    private static readonly Dictionary<Type, Entry> Coders = Build();
+        [typeof(float)] = 1,
+        [typeof(double)] = 1,
+        [typeof(float2)] = 2,
+        [typeof(float3)] = 3,
+        [typeof(float4)] = 4,
+        [typeof(floatQ)] = 4,
+        [typeof(color)] = 4,
+    };
 
     // False means callers fall back to full precision.
-    public static bool SupportsQuantization(Type type) => Coders.ContainsKey(type);
+    public static bool SupportsQuantization(Type type) => Coded.ContainsKey(type);
 
-    public static int ComponentCount(Type type) => Coders.TryGetValue(type, out var e) ? e.Components : 0;
+    public static int ComponentCount(Type type) => Coded.TryGetValue(type, out var n) ? n : 0;
 
     // Byte size of a quantized T at the given bit depth. No length prefix on the wire.
     public static int QuantizedByteCount<T>(int bits) => (ComponentCount(typeof(T)) * bits + 7) / 8;
 
     public static void EncodeQuantized<T>(BitWriter bw, T value, T min, T max, int bits)
     {
-        var e = Coders[typeof(T)];
-        var v = e.Extract(value!); var lo = e.Extract(min!); var hi = e.Extract(max!);
-        for (int i = 0; i < e.Components; i++)
+        int n = Components<T>();
+        Span<float> v = stackalloc float[4];
+        Span<float> lo = stackalloc float[4];
+        Span<float> hi = stackalloc float[4];
+        Extract(value, v); Extract(min, lo); Extract(max, hi);
+        for (int i = 0; i < n; i++)
             bw.WriteBits(Quantization.Quantize(v[i], lo[i], hi[i], bits), bits);
     }
 
     public static T DecodeQuantized<T>(BitReader br, T min, T max, int bits)
     {
-        var e = Coders[typeof(T)];
-        var lo = e.Extract(min!); var hi = e.Extract(max!);
-        var v = new float[e.Components];
-        for (int i = 0; i < e.Components; i++)
+        int n = Components<T>();
+        Span<float> v = stackalloc float[4];
+        Span<float> lo = stackalloc float[4];
+        Span<float> hi = stackalloc float[4];
+        Extract(min, lo); Extract(max, hi);
+        for (int i = 0; i < n; i++)
             v[i] = Quantization.Dequantize(br.ReadBits(bits), lo[i], hi[i], bits);
-        return (T)e.Compose(v);
+        return Compose<T>(v);
     }
 
     // Delta: quantize (value - previous) componentwise within the (small) delta range, reconstructed as
@@ -61,35 +66,60 @@ public static class StreamCoder
     // stream sends periodic full keyframes so a lost frame's drift is bounded. -xlinka
     public static void EncodeDelta<T>(BitWriter bw, T value, T previous, T deltaMin, T deltaMax, int bits)
     {
-        var e = Coders[typeof(T)];
-        var v = e.Extract(value!); var p = e.Extract(previous!); var lo = e.Extract(deltaMin!); var hi = e.Extract(deltaMax!);
-        for (int i = 0; i < e.Components; i++)
+        int n = Components<T>();
+        Span<float> v = stackalloc float[4];
+        Span<float> p = stackalloc float[4];
+        Span<float> lo = stackalloc float[4];
+        Span<float> hi = stackalloc float[4];
+        Extract(value, v); Extract(previous, p); Extract(deltaMin, lo); Extract(deltaMax, hi);
+        for (int i = 0; i < n; i++)
             bw.WriteBits(Quantization.Quantize(v[i] - p[i], lo[i], hi[i], bits), bits);
     }
 
     public static T DecodeDelta<T>(BitReader br, T previous, T deltaMin, T deltaMax, int bits)
     {
-        var e = Coders[typeof(T)];
-        var p = e.Extract(previous!); var lo = e.Extract(deltaMin!); var hi = e.Extract(deltaMax!);
-        var v = new float[e.Components];
-        for (int i = 0; i < e.Components; i++)
+        int n = Components<T>();
+        Span<float> v = stackalloc float[4];
+        Span<float> p = stackalloc float[4];
+        Span<float> lo = stackalloc float[4];
+        Span<float> hi = stackalloc float[4];
+        Extract(previous, p); Extract(deltaMin, lo); Extract(deltaMax, hi);
+        for (int i = 0; i < n; i++)
             v[i] = p[i] + Quantization.Dequantize(br.ReadBits(bits), lo[i], hi[i], bits);
-        return (T)e.Compose(v);
+        return Compose<T>(v);
     }
 
-    private static Dictionary<Type, Entry> Build()
+    private static int Components<T>()
     {
-        var d = new Dictionary<Type, Entry>();
+        if (typeof(T) == typeof(float) || typeof(T) == typeof(double)) return 1;
+        if (typeof(T) == typeof(float2)) return 2;
+        if (typeof(T) == typeof(float3)) return 3;
+        if (typeof(T) == typeof(float4) || typeof(T) == typeof(floatQ) || typeof(T) == typeof(color)) return 4;
+        throw new KeyNotFoundException($"No quantized coder for {typeof(T)}.");
+    }
 
-        d[typeof(float)] = new Entry(v => new[] { (float)v }, c => c[0], 1);
-        d[typeof(double)] = new Entry(v => new[] { (float)(double)v }, c => (double)c[0], 1);
-        d[typeof(float2)] = new Entry(v => { var a = (float2)v; return new[] { a.x, a.y }; }, c => new float2(c[0], c[1]), 2);
-        d[typeof(float3)] = new Entry(v => { var a = (float3)v; return new[] { a.x, a.y, a.z }; }, c => new float3(c[0], c[1], c[2]), 3);
-        d[typeof(float4)] = new Entry(v => { var a = (float4)v; return new[] { a.x, a.y, a.z, a.w }; }, c => new float4(c[0], c[1], c[2], c[3]), 4);
+    private static void Extract<T>(T value, Span<float> c)
+    {
+        if (typeof(T) == typeof(float)) { c[0] = Unsafe.As<T, float>(ref value); return; }
+        if (typeof(T) == typeof(double)) { c[0] = (float)Unsafe.As<T, double>(ref value); return; }
+        if (typeof(T) == typeof(float2)) { var a = Unsafe.As<T, float2>(ref value); c[0] = a.x; c[1] = a.y; return; }
+        if (typeof(T) == typeof(float3)) { var a = Unsafe.As<T, float3>(ref value); c[0] = a.x; c[1] = a.y; c[2] = a.z; return; }
+        if (typeof(T) == typeof(float4)) { var a = Unsafe.As<T, float4>(ref value); c[0] = a.x; c[1] = a.y; c[2] = a.z; c[3] = a.w; return; }
+        if (typeof(T) == typeof(floatQ)) { var a = Unsafe.As<T, floatQ>(ref value); c[0] = a.x; c[1] = a.y; c[2] = a.z; c[3] = a.w; return; }
+        if (typeof(T) == typeof(color)) { var a = Unsafe.As<T, color>(ref value); c[0] = a.r; c[1] = a.g; c[2] = a.b; c[3] = a.a; return; }
+        throw new KeyNotFoundException($"No quantized coder for {typeof(T)}.");
+    }
+
+    private static T Compose<T>(ReadOnlySpan<float> c)
+    {
+        if (typeof(T) == typeof(float)) { float v = c[0]; return Unsafe.As<float, T>(ref v); }
+        if (typeof(T) == typeof(double)) { double v = c[0]; return Unsafe.As<double, T>(ref v); }
+        if (typeof(T) == typeof(float2)) { var v = new float2(c[0], c[1]); return Unsafe.As<float2, T>(ref v); }
+        if (typeof(T) == typeof(float3)) { var v = new float3(c[0], c[1], c[2]); return Unsafe.As<float3, T>(ref v); }
+        if (typeof(T) == typeof(float4)) { var v = new float4(c[0], c[1], c[2], c[3]); return Unsafe.As<float4, T>(ref v); }
         // Quaternion: renormalize on compose so quantization/delta error doesn't leave it non-unit.
-        d[typeof(floatQ)] = new Entry(v => { var a = (floatQ)v; return new[] { a.x, a.y, a.z, a.w }; }, c => new floatQ(c[0], c[1], c[2], c[3]).Normalized, 4);
-        d[typeof(color)] = new Entry(v => { var a = (color)v; return new[] { a.r, a.g, a.b, a.a }; }, c => new color(c[0], c[1], c[2], c[3]), 4);
-
-        return d;
+        if (typeof(T) == typeof(floatQ)) { var v = new floatQ(c[0], c[1], c[2], c[3]).Normalized; return Unsafe.As<floatQ, T>(ref v); }
+        if (typeof(T) == typeof(color)) { var v = new color(c[0], c[1], c[2], c[3]); return Unsafe.As<color, T>(ref v); }
+        throw new KeyNotFoundException($"No quantized coder for {typeof(T)}.");
     }
 }
