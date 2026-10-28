@@ -148,8 +148,13 @@ public class UserspaceDashboard : UIComponent
     {
         base.OnStart();
         LocalInstance = this;
-        if (Slot.GetComponent<CameraDirector>() == null)
-            Slot.AttachComponent<CameraDirector>();
+        // Shutting the dash switches its slot off, and the camera has to keep working with the dash shut (moving to
+        // the focused world, the window feed, the streaming program), so the director gets a slot of its own. -xlinka
+        var directorSlot = World?.RootSlot?.FindChildOrAdd("Camera Director") ?? Slot;
+        if (directorSlot.GetComponent<CameraDirector>() == null)
+            directorSlot.AttachComponent<CameraDirector>();
+        if (directorSlot.GetComponent<SocialNotifications>() == null)
+            directorSlot.AttachComponent<SocialNotifications>();
         EnsureBuilt();
         ApplyOpenState();
         ScheduleRigParkAfterWarmup();
@@ -307,7 +312,7 @@ public class UserspaceDashboard : UIComponent
         if (!TryGetFocusedViewPose(out _, out _))
             return;
 
-        // Locked: pin the panel in front of the view every frame.
+        // Follow: carry locomotion immediately, easing only tracked head motion. -xlinka
         // Freeform: leave it where it was placed; snap it back in front once
         // at the moment freeform is switched on so it stays within reach.
         bool freeform = Freeform.Value;
@@ -408,8 +413,8 @@ public class UserspaceDashboard : UIComponent
         PositionInFrontOfFocusedView();
     }
 
-    // Whether the view stepped to another frame since the last look: another world focused, a new root, a root
-    // override taken up or put down. Walking and turning move the frame without a step.
+    // Carry locomotion immediately; only movement within the tracking space uses lazy follow. Freeform
+    // keeps its world position until the view changes to another world or tracking origin. -xlinka
     private bool StepOrigin(out float3 shift, out floatQ turn)
     {
         shift = float3.Zero;
@@ -417,7 +422,9 @@ public class UserspaceDashboard : UIComponent
         if (!PanelPlacement.TryOriginFrame(out var world, out var root, out var frame, out var position, out var rotation))
             return false;
         bool stepped = _originSeen && (!ReferenceEquals(world, _originWorld) || !ReferenceEquals(root, _originRoot)
-            || !ReferenceEquals(frame, _originSlot));
+            || !ReferenceEquals(frame, _originSlot)
+            || (!Freeform.Value && FollowViewWhileOpen.Value
+                && (position != _originPosition || rotation != _originRotation)));
         if (stepped)
             PanelPlacement.FrameShift(_originPosition, _originRotation, position, rotation, out shift, out turn);
         _originWorld = world;
@@ -600,8 +607,7 @@ public class UserspaceDashboard : UIComponent
         if (_dashboard != null) _dashboard.Size.Value = new float2(w, h);
         if (_renderTexture != null)
         {
-            _renderTexture.Width.Value = w * SupersampleScale;
-            _renderTexture.Height.Value = h * SupersampleScale;
+            _renderTexture.Size.Value = new int2(w * SupersampleScale, h * SupersampleScale);
             _renderTexture.OrthographicSize.Value = h * CanvasScale;
         }
         if (_displayMesh != null)
@@ -796,6 +802,9 @@ public class UserspaceDashboard : UIComponent
     public bool WantsVrAxis(InteractionLaser laser, int pointerId)
         => _canvasSlot?.GetComponent<Canvas>()?.WantsAxis(VrSource(laser), pointerId) == true;
 
+    public ScrollRect? ScrollUnderVrPointer(InteractionLaser laser, int pointerId)
+        => _canvasSlot?.GetComponent<Canvas>()?.ScrollUnder(VrSource(laser), pointerId);
+
     private static UIInteractionSource VrSource(InteractionLaser laser)
     {
         return laser?.ControllerSide.Value == Chirality.Left
@@ -898,8 +907,7 @@ public class UserspaceDashboard : UIComponent
         _dashboard.FontMono.Target = FontMono.Target;
 
         _renderTexture = _renderRig.AttachComponent<RenderTextureProvider>();
-        _renderTexture.Width.Value = _captureWidth * SupersampleScale;
-        _renderTexture.Height.Value = _captureHeight * SupersampleScale;
+        _renderTexture.Size.Value = new int2(_captureWidth * SupersampleScale, _captureHeight * SupersampleScale);
         // A clear capture: the UI blends over nothing and comes out with its colour multiplied by its own
         // coverage, which is what the composite on the surface (and on the desktop window) expects. A
         // straight-alpha read of it is what made an earlier clear capture look ghostly.
@@ -983,10 +991,7 @@ public class UserspaceDashboard : UIComponent
         var home = dash.AddScreen<HomeScreen>("Home", new color(0.94f, 0.81f, 0f, 1f));
         dash.AddScreen<WorldsScreen>("Worlds", new color(0.20f, 0.80f, 1f, 1f), icon: "worlds");
         dash.AddScreen<GroupsScreen>("Groups", new color(0.55f, 0.45f, 0.95f, 1f), icon: "groups");
-        // No friends/contacts backend exists yet, so present this honestly as a placeholder rather
-        // than a working social feature: a dimmed "(Soon)" app whose window says it isn't available. -xlinka
-        AddComingSoonScreen("Friends", new color(0.30f, 1f, 0.80f, 1f),
-            "A friends and direct-message system isn't available yet.");
+        dash.AddScreen<PeopleScreen>("Friends", new color(0.30f, 1f, 0.80f, 1f), icon: "friends");
         dash.AddScreen<InventoryScreen>("Inventory", new color(0.85f, 0.60f, 0.22f, 1f), icon: "inventory");
         dash.AddScreen<SessionScreen>("Session", new color(0.25f, 0.55f, 1f, 1f), icon: "session");
         // Only where this machine's desktop can actually be reached (not under Wine, not without a display
@@ -1003,35 +1008,6 @@ public class UserspaceDashboard : UIComponent
         // including when an older installation has a saved workspace. Home widget positions are preferences.
         dash.RestoreLayout(persist: false);
         home.RestoreDesk(persist: true);
-    }
-
-    // An honest placeholder tab for a feature with no backend yet: a "(Soon)" nav label and a body
-    // that plainly states it isn't available, so it never reads as a working feature. -xlinka
-    private void AddComingSoonScreen(string label, color accent, string body)
-    {
-        if (_dashboard == null) return;
-
-        var screen = _dashboard.AddScreen<DashboardScreen>(label + " (Soon)", accent, icon: label.ToLowerInvariant());
-        screen.Placeholder.Value = true;
-        var content = screen.ContentSlot;
-        if (content == null) return;
-
-        var builder = new UIBuilder(content);
-        builder.Font(FontBold.Target ?? Font.Target).TextColor(DashTheme.Text).BackgroundColor(DashTheme.Panel);
-        var layout = builder.VerticalLayout(DashTheme.Gap, DashTheme.Inset);
-        Fill(layout.RectTransform!);
-
-        builder.FontSize(DashTheme.FontTitle).MinHeight(44f).PreferredHeight(48f).FlexibleHeight(0f);
-        var heading = builder.Text($"{label} - coming soon", DashTheme.FontTitle, DashTheme.TextDim);
-        heading.HorizontalAlignment.Value = TextHorizontalAlignment.Center;
-        heading.VerticalAlignment.Value = TextVerticalAlignment.Middle;
-
-        builder.Font(Font.Target).FontSize(DashTheme.FontBody).MinHeight(60f).PreferredHeight(90f).FlexibleHeight(0f);
-        var text = builder.Text(body, DashTheme.FontBody, DashTheme.TextMuted);
-        text.HorizontalAlignment.Value = TextHorizontalAlignment.Center;
-        text.VerticalAlignment.Value = TextVerticalAlignment.Top;
-
-        builder.NestOut();
     }
 
     private void ApplyOpenState()

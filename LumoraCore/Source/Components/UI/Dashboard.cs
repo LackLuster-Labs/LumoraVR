@@ -238,7 +238,8 @@ public class Dashboard : UIComponent, IUIGrabReceiver
         if (type == typeof(SessionScreen)) return new float2(760f, 560f);
         if (type == typeof(SettingsScreen)) return new float2(900f, 600f);
         if (type == typeof(InventoryScreen)) return new float2(960f, 600f);
-        if (type == typeof(GroupsScreen)) return new float2(720f, 540f);
+        if (type == typeof(GroupsScreen)) return new float2(1000f, 620f);
+        if (type == typeof(PeopleScreen)) return new float2(1000f, 620f);
         if (type == typeof(FileBrowserScreen)) return new float2(800f, 540f);
         if (type == typeof(ExitScreen)) return new float2(660f, 420f);
         if (type == typeof(DebugScreen)) return new float2(600f, 460f);
@@ -252,7 +253,9 @@ public class Dashboard : UIComponent, IUIGrabReceiver
         if (type == typeof(WorldsScreen)) return new float2(680f, 500f);
         if (type == typeof(InventoryScreen)) return new float2(680f, 560f);
         if (type == typeof(SessionScreen)) return new float2(520f, 420f);
-        if (type == typeof(GroupsScreen)) return new float2(520f, 400f);
+        // Narrower than this the list and the page stack; the header still needs its height.
+        if (type == typeof(GroupsScreen)) return new float2(460f, 500f);
+        if (type == typeof(PeopleScreen)) return new float2(460f, 500f);
         if (type == typeof(SettingsScreen)) return new float2(600f, 440f);
         if (type == typeof(DesktopScreen)) return new float2(DesktopScreen.StripWidth + 2f * DashWindow.BodyInset, 380f);
         if (type == typeof(ExitScreen)) return new float2(480f, 410f);
@@ -669,7 +672,8 @@ public class Dashboard : UIComponent, IUIGrabReceiver
         var rect = _tip.AttachComponent<RectTransform>();
         rect.AnchorMin.Value = new float2(0f, 1f);
         rect.AnchorMax.Value = new float2(0f, 1f);
-        _tip.AttachComponent<GraphicChunkRoot>();
+        // Over an open top bar popover too, which draws at the modal level.
+        _tip.AttachComponent<GraphicChunkRoot>().OverlayLevel = 3;
         // It hangs over whatever window is beside the dock, so it covers like a window does.
         var panel = _tip.AttachComponent<RoundedPanel>();
         panel.CornerRadius.Value = 8f;

@@ -6,9 +6,9 @@ using Lumora.Core.Math;
 
 namespace Lumora.Core.Components.UI;
 
-// The camera on and off, how it moves, and what it takes. A mode the world's rules refuse is greyed; the
-// mirror only means something in a headset, and while it is off there it blinks, because a headset user
-// streaming without it is streaming their own eyes. -xlinka
+// The camera on and off, how it moves, and what it takes. A mode the world's rules refuse is greyed. The
+// mirror puts the camera on the desktop window; on a desktop that is while the dash is shut. In a headset it
+// blinks while off, because a headset user streaming without it is streaming their own eyes. -xlinka
 [ComponentCategory("Hidden")]
 public sealed class CameraControlsWidgetPreset : DirectorWidgetPreset
 {
@@ -60,7 +60,7 @@ public sealed class CameraControlsWidgetPreset : DirectorWidgetPreset
         var actions = Row(root, "Actions", ActionsTop, StripHeight, Pad, Pad);
         int count = Shapes.Length + 1;
         _mirror = Chip(Cell(actions, "Mirror", 0, count), "Mirror", director => director.Mirror = !director.Mirror,
-            live: _ => InVR, painted: true);
+            painted: true);
         for (int i = 0; i < Shapes.Length; i++)
         {
             var shape = Shapes[i];
@@ -77,13 +77,17 @@ public sealed class CameraControlsWidgetPreset : DirectorWidgetPreset
         if (_mirror == null)
             return;
         var director = Director;
-        if (director == null || !InVR)
+        if (director == null)
         {
             PaintChip(_mirror, false, false);
         }
         else if (director.Mirror)
         {
             PaintChip(_mirror, true, true);
+        }
+        else if (!InVR)
+        {
+            PaintChip(_mirror, false, true);
         }
         else
         {

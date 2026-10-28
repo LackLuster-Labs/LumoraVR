@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Text;
 using Helio.UI;
 using Helio.UI.Layout;
+using Lumora.Core.Assets;
+using Lumora.Core.Localization;
 using Lumora.Core.Math;
 
 namespace Lumora.Core.Components.UI;
@@ -15,7 +17,7 @@ namespace Lumora.Core.Components.UI;
 [ComponentCategory("Hidden")]
 public sealed class DebugScreen : WidgetScreen, ITabbedScreen
 {
-    // The capture harness raises a named tab; nothing in the dash calls this.
+    // A screen capture raises a named tab; nothing in the dash calls this.
     public bool ShowTab(string name)
     {
         for (int i = 0; i < _tabs.Count; i++)
@@ -73,8 +75,65 @@ public sealed class DebugScreen : WidgetScreen, ITabbedScreen
 
         _networkText = AddTab(tabBar, contentHost, "Network");
         _assetsText = AddTab(tabBar, contentHost, "Assets");
+        AddReloadRow(_tabs[^1].page, _assetsText);
 
         SelectTab(0);
+    }
+
+    private const float ActionRowHeight = 40f;
+    private static readonly LocaleText ReloadLabel = LocaleText.Keyed("Debug.Assets.Reload", "Reload assets");
+    private Text? _reloadStatus;
+
+    // Here and not on any menu: a reload throws away every decoded asset of the world in focus and loads them
+    // all again, a hitch on a big world. It is for checking a fix or a changed file, not for play. -xlinka
+    private void AddReloadRow(Slot page, Text info)
+    {
+        var column = page.AttachComponent<VerticalLayout>();
+        column.Spacing.Value = 8f;
+        column.ForceExpandWidth.Value = true;
+        column.ForceExpandHeight.Value = false;
+        info.Slot.AttachComponent<LayoutElement>().FlexibleHeight.Value = 1f;
+
+        var row = page.AddSlot("Actions");
+        row.AttachComponent<RectTransform>();
+        SetFixedHeight(row, ActionRowHeight);
+        var layout = row.AttachComponent<HorizontalLayout>();
+        layout.Spacing.Value = 10f;
+        layout.ForceExpandWidth.Value = false;
+        layout.ForceExpandHeight.Value = true;
+        AddInlineButton(row, ReloadLabel.Resolve(), ControlFill, 170f, ReloadFocused);
+
+        var status = row.AddSlot("Status");
+        status.AttachComponent<RectTransform>();
+        var element = status.AttachComponent<LayoutElement>();
+        element.FlexibleWidth.Value = 1f;
+        element.FlexibleHeight.Value = 1f;
+        _reloadStatus = AddFillLabel(status, string.Empty, DashTheme.FontSmall, TextDim);
+        _reloadStatus.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
+        _reloadStatus.ClipToRect.Value = true;
+        _reloadStatus.Ellipsis.Value = true;
+    }
+
+    private void ReloadFocused()
+    {
+        var world = Engine.Current?.WorldManager?.FocusedWorld;
+        if (world == null || world.IsDestroyed)
+        {
+            ShowReloadStatus(LocaleText.Keyed("Debug.Assets.NoWorld", "No world in focus."));
+            return;
+        }
+        string name = world.WorldName?.Value ?? string.Empty;
+        ShowReloadStatus(LocaleText.Keyed("Debug.Assets.Reloading", "Reloading the assets of {0}…", name));
+        AssetReload.Run(world, report => World?.RunSynchronously(() => ShowReloadStatus(LocaleText.Keyed("Debug.Assets.Reloaded",
+            "{0}: {1} loading again, {2} held by another world, {3} downloading again.", name, report.Reloaded, report.Kept, report.Downloads))));
+    }
+
+    private void ShowReloadStatus(LocaleText text)
+    {
+        if (_reloadStatus == null || _reloadStatus.IsDestroyed)
+            return;
+        _reloadStatus.Content.Value = text.Resolve();
+        MarkDirty();
     }
 
     private Text AddTab(Slot tabBar, Slot contentHost, string name)

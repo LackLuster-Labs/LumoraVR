@@ -174,9 +174,9 @@ public sealed class DashWindow : UIComponent
         _layer = Slot.AttachComponent<StackLayer>();
         Slot.AttachComponent<GraphicChunkRoot>();
 
-        // The backing lays down depth, which is what lets a higher window cover a lower one however their
-        // render bands land: what it covers and draws later is gone, not tinted. It is glass all the same,
-        // so the world behind the dash reads through it.
+        // The backing lays down depth, and the canvas draws it ahead of everything of every window, the highest
+        // window first, so whatever of a lower window it covers is gone rather than seen through it. It is glass
+        // all the same, so the world behind the dash reads through it, and only the world.
         _backing = Slot.AttachComponent<RoundedPanel>();
         _backing.CornerRadius.Value = Corner;
         _backing.Color.Value = DashTheme.GlassWindow;

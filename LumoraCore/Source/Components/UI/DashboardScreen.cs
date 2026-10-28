@@ -20,6 +20,10 @@ public class DashboardScreen : UIComponent
     // Idle color of this screen's nav label. Override to make one tab stand out (Exit does).
     public virtual color NavLabelColor => DashTheme.TextDim;
 
+    // What is waiting in this screen, shown as a count on its dock plate; 0 shows nothing. The dock reads
+    // it every frame, so it has to be cheap. -xlinka
+    public virtual int DockBadge => 0;
+
     private bool _built;
     private Slot? _contentSlot;
     // Overlays this screen parents OUTSIDE its own content slot - e.g. a modal + dim backdrop hosted on the

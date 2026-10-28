@@ -75,6 +75,9 @@ public sealed class PanelSurfacePortal : Component, ILaserPointerTarget, ILaserA
     public bool WantsLaserAxis(InteractionLaser laser, int pointerId)
         => Surface?.Canvas?.WantsAxis(SourceOf(laser), pointerId) == true;
 
+    public Helio.UI.ScrollRect? ScrollUnderLaser(InteractionLaser laser, int pointerId)
+        => Surface?.Canvas?.ScrollUnder(SourceOf(laser), pointerId);
+
     public bool TriggerLaserSecondary(InteractionLaser laser, int pointerId)
         => Surface?.Canvas?.TriggerSecondary(SourceOf(laser), pointerId) == true;
 

@@ -35,7 +35,11 @@ public sealed class DashTopBar : UIComponent
     private const float TipGap = 6f;
     private const float PopoverPad = 8f;
     private const float AccountWidth = 340f;
-    private const float AccountHeight = 196f;
+    // A popover hangs over the dock and the windows, so it draws at the modal level and anything inside it
+    // that makes a chunk of its own one above that. As plain shell chunks the dock's plates, packed into
+    // the same band, drew over the account card. -xlinka
+    private const int PopoverLevel = 2;
+    private const int PopoverContentLevel = 3;
     private const float VoiceStripHeight = 40f;
     private const float MoreRow = 38f;
     private const float MoreWidth = 220f;
@@ -80,6 +84,7 @@ public sealed class DashTopBar : UIComponent
     private BarButton? _more;
     private BarButton? _leave;
     private Slot? _accountPopover;
+    private float _accountHeight;
     private Slot? _voicePopover;
     private Slot? _morePopover;
     private AccountWidgetPreset? _account;
@@ -177,6 +182,9 @@ public sealed class DashTopBar : UIComponent
         _accountPopover = BuildAccountPopover(dash, shell);
         _voicePopover = BuildVoicePopover(dash, shell);
         _morePopover = BuildMorePopover(dash, shell);
+        LiftContent(_accountPopover);
+        LiftContent(_voicePopover);
+        LiftContent(_morePopover);
         Layout();
         RefreshProfile();
         RefreshMic();
@@ -346,10 +354,12 @@ public sealed class DashTopBar : UIComponent
         var rect = popover.AttachComponent<RectTransform>();
         rect.AnchorMin.Value = new float2(0f, 1f);
         rect.AnchorMax.Value = new float2(0f, 1f);
-        popover.AttachComponent<GraphicChunkRoot>();
+        popover.AttachComponent<GraphicChunkRoot>().OverlayLevel = PopoverLevel;
         var panel = popover.AttachComponent<RoundedPanel>();
         panel.CornerRadius.Value = DashTheme.RadiusPanel;
-        panel.Color.Value = DashTheme.GlassWindow;
+        // Solid, not the windows' glass: a popover hangs over the dock and whatever window is open, and
+        // through glass their icons read as ghosts behind the text.
+        panel.Color.Value = DashTheme.Panel;
         panel.OutlineColor.Value = DashTheme.OutlineStrong;
         panel.OutlineThickness.Value = DashTheme.OutlineWidth;
         panel.Material.Target = dash.BackingMaterial!;
@@ -357,6 +367,12 @@ public sealed class DashTopBar : UIComponent
         popover.AttachComponent<InteractionElement>();
         popover.ActiveSelf.Value = false;
         return popover;
+    }
+
+    private static void LiftContent(Slot popover)
+    {
+        foreach (var chunk in popover.GetComponentsInChildren<GraphicChunkRoot>(includeSelf: false))
+            chunk.OverlayLevel = PopoverContentLevel;
     }
 
     // Hung below the bar at a left edge, kept on the dash.
@@ -379,7 +395,8 @@ public sealed class DashTopBar : UIComponent
         _account.BorderColor.Value = color.Transparent;
         // Its quota feeds the always-visible bar, even before the popover has been opened.
         _account.EnsureBuilt();
-        PlacePopover(popover, Dashboard.Outer, AccountWidth, AccountHeight);
+        _accountHeight = _account.CardHeight;
+        PlacePopover(popover, Dashboard.Outer, AccountWidth, _accountHeight);
         return popover;
     }
 
@@ -675,6 +692,12 @@ public sealed class DashTopBar : UIComponent
         else
             HideOwnTip("account");
         RefreshStorage(account, signedIn);
+        // The card grows a row when the account has group storage to show.
+        if (account != null && account.CardHeight != _accountHeight)
+        {
+            _accountHeight = account.CardHeight;
+            PlacePopover(_accountPopover, Dashboard.Outer, AccountWidth, _accountHeight);
+        }
         if (!signedIn && PopoverOpen)
             SetPopover(false);
         string name = !signedIn ? "Sign in"

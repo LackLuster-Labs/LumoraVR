@@ -214,10 +214,8 @@ public sealed class PanelSurface : Component
 
         int width = System.Math.Max(1, (int)MathF.Round(_size.x * _density));
         int height = System.Math.Max(1, (int)MathF.Round(_size.y * _density));
-        if (_texture.Width.Value != width)
-            _texture.Width.Value = width;
-        if (_texture.Height.Value != height)
-            _texture.Height.Value = height;
+        if (_texture.Size.Value != new int2(width, height))
+            _texture.Size.Value = new int2(width, height);
         if (_texture.OrthographicSize.Value != meters.y)
             _texture.OrthographicSize.Value = meters.y;
         var camera = _canvasSlot.LocalPointToGlobal(new float3(center.x, center.y, 0f)) + float3.Forward * CaptureDistance;

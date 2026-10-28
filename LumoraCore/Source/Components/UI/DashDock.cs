@@ -25,6 +25,9 @@ public sealed class DashDock : UIComponent
     private const float Glyph = 24f;
     private const float PlateCorner = 15f;
     private const float SeparatorSpace = 11f;
+    private const float BadgeHeight = 18f;
+    private const float BadgeDigit = 8f;
+    private const int BadgeCap = 99;
 
     private static readonly color Ground = DashTheme.GlassChrome;
     private static readonly color PlateRest = DashTheme.GlassCard;
@@ -44,6 +47,9 @@ public sealed class DashDock : UIComponent
         public float CenterY;
         public bool Hovered;
         public color Ink;
+        public Slot? Badge;
+        public Text? BadgeText;
+        public int BadgeShown;
     }
 
     private readonly List<Entry> _entries = new();
@@ -86,6 +92,35 @@ public sealed class DashDock : UIComponent
             _seenRevision = _workspace.Revision;
             Repaint();
         }
+        foreach (var entry in _entries)
+            ShowBadge(entry, entry.Window?.Screen?.DockBadge ?? 0);
+    }
+
+    // A count over the plate's top right corner: messages, requests, whatever the app has waiting.
+    private void ShowBadge(Entry entry, int count)
+    {
+        if (count == entry.BadgeShown || entry.Slot.IsDestroyed)
+            return;
+        entry.BadgeShown = count;
+        if (count <= 0)
+        {
+            if (entry.Badge != null)
+                ListingStyle.SetActive(entry.Badge, false);
+            return;
+        }
+        if (entry.Badge == null || entry.Badge.IsDestroyed)
+        {
+            entry.Badge = SettingsUI.Child(entry.Slot, "Badge", float2.One, float2.One, float2.Zero, float2.Zero);
+            // under the plate's own button, so a press on the count is a press on the app
+            var pill = SettingsUI.Panel(entry.Badge, DashTheme.Negative, Ground, BadgeHeight * 0.5f);
+            pill.OutlineThickness.Value = 2f;
+            entry.BadgeText = SettingsUI.FillLabel(entry.Badge, "Count", _dash?.FontSemibold.Target, 12f, DashTheme.OnAccent);
+        }
+        string text = count > BadgeCap ? BadgeCap + "+" : count.ToString();
+        float width = System.MathF.Max(BadgeHeight, BadgeDigit * text.Length + 8f);
+        SettingsUI.SetOffsets(SettingsUI.Rect(entry.Badge), new float2(-width + 5f, -BadgeHeight + 5f), new float2(5f, 5f));
+        ListingStyle.SetText(entry.BadgeText!, text);
+        ListingStyle.SetActive(entry.Badge, true);
     }
 
     private int DockedCount()

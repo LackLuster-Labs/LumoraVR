@@ -34,6 +34,7 @@ internal sealed class DashScrollbar
     private const float HandleFollowRate = 18f;
 
     private readonly Slot _track;
+    private readonly RectTransform? _trackRect;
     private readonly RectTransform _handle;
 
     private ScrollRect? _scroll;
@@ -51,6 +52,7 @@ internal sealed class DashScrollbar
     private DashScrollbar(Slot track, RectTransform handle)
     {
         _track = track;
+        _trackRect = track.GetComponent<RectTransform>();
         _handle = handle;
     }
 
@@ -95,6 +97,23 @@ internal sealed class DashScrollbar
         // The handle is the draggable element (classic scrollbar feel); the viewport's own ScrollRect
         // already takes drag-on-content and the wheel.
         var interaction = CreateHandleInteraction(handleSlot, handlePanel.Color);
+        interaction.Pressed += bar.OnPress;
+        interaction.Dragged += bar.OnDrag;
+        interaction.Released += bar.OnRelease;
+        return bar;
+    }
+
+    // A track some earlier build left behind (a panel saved and loaded again): its handle's drag goes through
+    // closures, which never travel with the slots, so they are hooked up again here. Null when the track is
+    // not one of these.
+    public static DashScrollbar? Adopt(Slot? track)
+    {
+        var handleSlot = track?.FindChild("Handle", recursive: false);
+        var handle = handleSlot?.GetComponent<RectTransform>();
+        var interaction = handleSlot?.GetComponent<InteractionElement>();
+        if (track == null || handle == null || interaction == null)
+            return null;
+        var bar = new DashScrollbar(track, handle);
         interaction.Pressed += bar.OnPress;
         interaction.Dragged += bar.OnDrag;
         interaction.Released += bar.OnRelease;
@@ -149,7 +168,8 @@ internal sealed class DashScrollbar
         float maxScroll = MathF.Max(0f, contentHeight - viewportHeight);
         if (maxScroll <= 0f)
             return;
-        float travel = viewportHeight - HandleHeight(viewportHeight, contentHeight);
+        float track = TrackHeight(viewportHeight);
+        float travel = track - HandleHeight(track, viewportHeight, contentHeight);
         if (travel <= 0f)
             return;
 
@@ -206,7 +226,6 @@ internal sealed class DashScrollbar
             }
             return;
         }
-        _retries = 0;
 
         float maxScroll = MathF.Max(0f, contentHeight - viewportHeight);
         if (maxScroll <= 0.5f)
@@ -221,14 +240,26 @@ internal sealed class DashScrollbar
         }
         if (!_track.ActiveSelf.Value)
             _track.ActiveSelf.Value = true;
+        // A track just shown has no rect of its own until the next layout pass.
+        if ((_trackRect?.LocalComputeRect.height ?? 0f) <= MinHandleHeight)
+        {
+            if (!_retryQueued && _retries++ < MaxRetries)
+            {
+                _retryQueued = true;
+                _track.World?.RunInUpdates(1, RetryRefresh);
+            }
+            return;
+        }
+        _retries = 0;
 
         // Clamp an existing scroll to the (possibly reduced) real range so it cannot rest past the bottom.
         if (_scroll.AbsolutePosition.y > maxScroll)
             _scroll.AbsolutePosition = new float2(0f, maxScroll);
 
-        float handleHeight = HandleHeight(viewportHeight, contentHeight);
+        float track = TrackHeight(viewportHeight);
+        float handleHeight = HandleHeight(track, viewportHeight, contentHeight);
         float fraction = System.Math.Clamp(_scroll.AbsolutePosition.y / maxScroll, 0f, 1f);
-        float offset = fraction * (viewportHeight - handleHeight);
+        float offset = fraction * (track - handleHeight);
         SettingsUI.SetOffsets(_handle, new float2(HandleInset, -(offset + handleHeight)),
             new float2(-HandleInset, -offset));
     }
@@ -247,6 +278,15 @@ internal sealed class DashScrollbar
             && viewportHeight > LaidOutViewportFloor && contentHeight > 0f;
     }
 
-    private static float HandleHeight(float viewportHeight, float contentHeight)
-        => MathF.Max(MinHandleHeight, viewportHeight * (viewportHeight / contentHeight));
+    // The handle runs in the track, which a page may keep shorter than the viewport (the inspector puts its
+    // jump-to-top and jump-to-bottom caps at the ends), so its size and travel are the track's. Sized off the
+    // viewport it ran past the track's end onto the bottom cap. -xlinka
+    private float TrackHeight(float viewportHeight)
+    {
+        float height = _trackRect?.LocalComputeRect.height ?? 0f;
+        return height > MinHandleHeight ? height : viewportHeight;
+    }
+
+    private static float HandleHeight(float trackHeight, float viewportHeight, float contentHeight)
+        => MathF.Min(trackHeight, MathF.Max(MinHandleHeight, trackHeight * (viewportHeight / contentHeight)));
 }

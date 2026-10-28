@@ -9,14 +9,14 @@ using Lumora.Core.Components.Import;
 using Lumora.Core.Math;
 using Lumora.Core.Networking.Session;
 using Lumora.Core.Templates;
-using Lumora.Nexus.Cloud;
 
 namespace Lumora.Core.Components.UI;
 
 // Home is the workspace itself: the desk under the windows, one widget grid filling it. Everything on it is
 // a WidgetPreset, so any of them can be lifted off onto a panel of its own in the room and put back down.
-// On the floor of the column on the right, what you have left out in the room and who is online; your account,
-// your microphone and the tools are on the top bar, the time, the frame rate and the way out in its middle.
+// On the floor of the column on the right, what you have left out in the room, who is online and seated
+// mode; your account, your microphone and the tools are on the top bar, the time, the frame rate and the way
+// out in its middle.
 // Windows go over the desk, so it stays one Workspace plate away.
 // -xlinka
 [ComponentCategory("Hidden")]
@@ -39,6 +39,7 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
     private int _columns;
     private int _rows;
     private bool _floorStacked;
+    private bool _seatStacked;
     private bool _floorEditing;
     private WidgetGrid? _grid;
     private float2 _gridDesk;
@@ -47,7 +48,12 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
     private static readonly color ScrimFill = DashTheme.ModalScrim;
 
     private string _template = "LocalHome";
-    private SessionVisibility _visibility = SessionVisibility.Private;
+    // Starts at the account's default join level and follows it when the setting moves, the same as the
+    // Worlds create page; a pick made in the dialog stands until then.
+    private World.WorldAccessLevel _access = EngineSettings.DefaultJoinLevel;
+    private World.WorldAccessLevel _accessDefault = EngineSettings.DefaultJoinLevel;
+    private readonly List<(World.WorldAccessLevel level, Radio radio)> _accessRadios = new();
+    private readonly List<(bool membersOnly, Radio radio)> _groupAccessRadios = new();
     private WorldMode _mode = WorldMode.Builder;
     private int _maxUsers = 16;
     private Text? _status;
@@ -68,6 +74,7 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
     private bool _hostGroupsLoaded;
     private Slot? _hostForSection;
     private Text? _hostForLabel;
+    private TextInput? _nameInput;
     private Slot? _visibilityStack;
     private Slot? _groupAccessStack;
 
@@ -118,12 +125,15 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         int left = _columns - column;
         int tray = Cells(PoppedOutWidgetPreset.HeightFor(0), _pitch.y);
         int online = Cells(UsersOnlineHeight, _pitch.y);
+        int seated = Cells(SeatedModeWidgetPreset.CardHeight, _pitch.y);
 
-        // One group on the floor of the column: the windows out in the room on the floor, and who is online
-        // standing on them.
+        // One group on the floor of the column: the windows out in the room on the floor, who is online
+        // standing on them, and seated mode on top.
         Place<PoppedOutWidgetPreset>(root, "PoppedOut", left, _rows - tray, column, tray);
         Place<DirectoryWidgetPreset>(root, "UsersOnline", left, _rows - tray - online, column, online);
+        Place<SeatedModeWidgetPreset>(root, "SeatedMode", left, _rows - tray - online - seated, column, seated);
         _floorStacked = true;
+        _seatStacked = true;
 
         BuildCreateOverlay(root);
     }
@@ -157,13 +167,18 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         if (dc == 0 && dr == 0)
             return;
         // Users online standing on the tray goes wherever the tray goes, or the tray moving up would land on it
-        // and the grid would put it in the first free spot instead.
-        var riding = _floorStacked ? DeskWidget("UsersOnline") : null;
+        // and the grid would put it in the first free spot instead. Seated mode standing on Users online goes
+        // with it the same way.
+        var online = DeskWidget("UsersOnline");
+        var riding = _floorStacked ? online : null;
+        bool onlineMoves = online != null && (riding != null || online.GridY.Value + online.GridHeight.Value >= _rows - 1);
+        var seat = _seatStacked && onlineMoves ? DeskWidget("SeatedMode") : null;
         foreach (var widget in _grid.Slot.GetComponentsInChildren<Widget>(false))
         {
             if (dc != 0 && widget.GridX.Value + widget.GridWidth.Value >= _columns - 1)
                 widget.GridX.Value = System.Math.Clamp(widget.GridX.Value + dc, 0, System.Math.Max(0, columns - widget.GridWidth.Value));
-            if (dr != 0 && (widget.GridY.Value + widget.GridHeight.Value >= _rows - 1 || ReferenceEquals(widget, riding)))
+            if (dr != 0 && (widget.GridY.Value + widget.GridHeight.Value >= _rows - 1 || ReferenceEquals(widget, riding)
+                || ReferenceEquals(widget, seat)))
                 widget.GridY.Value = System.Math.Clamp(widget.GridY.Value + dr, 0, System.Math.Max(0, rows - widget.GridHeight.Value));
         }
         _columns = columns;
@@ -176,15 +191,16 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
 
     // THE FLOOR
     //
-    // The tray of windows out in the room and Users online are one group on the floor of the column: the tray
-    // on the floor, growing up a row per window, and Users online standing on it. Each card writes its own
-    // height; this keeps the second standing on the first. Moved apart by hand in edit mode, they stay where
-    // they were put. -xlinka
+    // The tray of windows out in the room, Users online and Seated mode are one group on the floor of the
+    // column: the tray on the floor, growing up a row per window, Users online standing on it and Seated mode
+    // on that. Each card writes its own height; this keeps each one standing on the one under it. Moved apart
+    // by hand in edit mode, they stay where they were put. -xlinka
     private void StackFloor()
     {
         var tray = DeskWidget("PoppedOut");
         var online = DeskWidget("UsersOnline");
-        if (tray == null || online == null)
+        var seat = DeskWidget("SeatedMode");
+        if (online == null || (tray == null && seat == null))
             return;
         if (WidgetPanel.EditMode)
         {
@@ -194,19 +210,31 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         if (_floorEditing)
         {
             _floorEditing = false;
-            _floorStacked = Stacked(tray.GridX.Value, tray.GridY.Value, online.GridX.Value, online.GridY.Value, online.GridHeight.Value);
+            if (tray != null)
+                _floorStacked = Stacked(tray, online);
+            if (seat != null)
+                _seatStacked = Stacked(online, seat);
         }
-        if (!_floorStacked)
-            return;
-        int y = System.Math.Max(0, tray.GridY.Value - online.GridHeight.Value);
-        if (online.GridY.Value != y)
-            online.GridY.Value = y;
-        if (online.GridX.Value != tray.GridX.Value)
-            online.GridX.Value = tray.GridX.Value;
+        if (_floorStacked && tray != null)
+            StandOn(online, tray);
+        if (_seatStacked && seat != null)
+            StandOn(seat, online);
     }
 
-    private static bool Stacked(int trayX, int trayY, int onlineX, int onlineY, int onlineHeight)
-        => trayX == onlineX && onlineY + onlineHeight == trayY;
+    private static void StandOn(Widget upper, Widget lower)
+    {
+        int y = System.Math.Max(0, lower.GridY.Value - upper.GridHeight.Value);
+        if (upper.GridY.Value != y)
+            upper.GridY.Value = y;
+        if (upper.GridX.Value != lower.GridX.Value)
+            upper.GridX.Value = lower.GridX.Value;
+    }
+
+    private static bool Stacked(Widget lower, Widget upper)
+        => Stacked(lower.GridX.Value, lower.GridY.Value, upper.GridX.Value, upper.GridY.Value, upper.GridHeight.Value);
+
+    private static bool Stacked(int lowerX, int lowerY, int upperX, int upperY, int upperHeight)
+        => lowerX == upperX && upperY + upperHeight == lowerY;
 
     private Widget? DeskWidget(string name)
     {
@@ -236,18 +264,25 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         if (saved.Length > 0 && ApplyDesk(saved))
         {
             _deskSaved = DeskSignature();
-            // Kept apart last time, kept apart now.
-            DeskCard? tray = null, online = null;
+            // Kept apart last time, kept apart now. A card the save never had joins the group it was built in.
+            DeskCard? tray = null, online = null, seat = null;
             foreach (var card in DeskCards())
             {
                 if (card.Slot.Name.Value == "PoppedOut") tray = card;
                 else if (card.Slot.Name.Value == "UsersOnline") online = card;
+                else if (card.Slot.Name.Value == "SeatedMode") seat = card;
             }
             if (tray != null && online != null)
             {
                 var t = tray.Cells;
                 var o = online.Cells;
                 _floorStacked = Stacked(t.X, t.Y, o.X, o.Y, o.H);
+            }
+            if (online != null && seat != null && saved.Contains("|SeatedMode=", StringComparison.Ordinal))
+            {
+                var o = online.Cells;
+                var s = seat.Cells;
+                _seatStacked = Stacked(o.X, o.Y, s.X, s.Y, s.H);
             }
         }
     }
@@ -346,6 +381,7 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
             byName.TryAdd(card.Slot.Name.Value ?? string.Empty, card);
 
         var placed = new Dictionary<DeskCard, (int X, int Y, int W, int H)>();
+        var known = new HashSet<DeskCard>();
         foreach (var card in cards)
             placed[card] = card.Cells;
         for (int i = 2; i < parts.Length; i++)
@@ -366,9 +402,17 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
             x = System.Math.Clamp(x, 0, _columns - w);
             y = System.Math.Clamp(y, 0, _rows - h);
             placed[widget] = (x, y, w, h);
+            known.Add(widget);
         }
 
-        var cells = new List<(int X, int Y, int W, int H)>(placed.Values);
+        // A card added to the desk since the save keeps the cell it was built in and is left out of the test, so
+        // a new card never costs anyone their arrangement; the floor stacking and the grid find it a place.
+        var cells = new List<(int X, int Y, int W, int H)>();
+        foreach (var pair in placed)
+        {
+            if (known.Contains(pair.Key))
+                cells.Add(pair.Value);
+        }
         for (int a = 0; a < cells.Count; a++)
         {
             for (int b = a + 1; b < cells.Count; b++)
@@ -520,7 +564,7 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         {
             var captured = template;
             RadioRow(left, "home-template", PrettyTemplate(template), template == _template,
-                () => _template = captured);
+                () => { _template = captured; ShowDefaultName(); });
         }
 
         Header(left, "Mode");
@@ -531,6 +575,7 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         }
 
         Header(right, "Session");
+        _nameInput = NameRow(right);
         SliderRow(right, "Max Users", 1f, 64f, _maxUsers,
             v => { _maxUsers = (int)MathF.Round(v); return _maxUsers.ToString(); });
 
@@ -549,22 +594,28 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
 
         Header(right, "Who Can Join");
 
+        _accessRadios.Clear();
         _visibilityStack = AddStack(right, "Visibility");
-        foreach (SessionVisibility visibility in Enum.GetValues<SessionVisibility>())
+        foreach (var level in AccessLabels.Offered(hostedForGroup: false))
         {
-            var captured = visibility;
-            RadioRow(_visibilityStack, "home-access", AccessLabels.Label(visibility).Resolve(), visibility == _visibility,
-                () => _visibility = captured);
+            var captured = level;
+            var row = RadioRow(_visibilityStack, "home-access", AccessLabels.Label(level).Resolve(), level == _access,
+                () => _access = captured);
+            if (row.GetComponentInChildren<Radio>() is { } radio)
+                _accessRadios.Add((level, radio));
         }
 
         // Members only or anyone, and nothing else. Group+ would be the same world as members only while
         // there are no contacts, so it is not offered. -xlinka
+        _groupAccessRadios.Clear();
         _groupAccessStack = AddStack(right, "GroupVisibility");
         foreach (bool membersOnly in new[] { true, false })
         {
             var captured = membersOnly;
-            RadioRow(_groupAccessStack, "home-group-access", GroupAccessLabel(membersOnly),
+            var row = RadioRow(_groupAccessStack, "home-group-access", GroupAccessLabel(membersOnly),
                 membersOnly == _groupMembersOnly, () => _groupMembersOnly = captured);
+            if (row.GetComponentInChildren<Radio>() is { } radio)
+                _groupAccessRadios.Add((membersOnly, radio));
         }
         _groupAccessStack.ActiveSelf.Value = false;
 
@@ -620,6 +671,7 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         base.OnHide();
         CloseCreateMenu();
         Account?.CloseSignInDialog();
+        Account?.CloseFlow();
     }
 
     // Entry point for the New World widget, which can be sitting on a panel in the world rather than on
@@ -637,6 +689,13 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         Account?.OpenSignInDialog();
     }
 
+    // The account window (making an account, two-factor, the email) takes the keys the way the sign-in dialog does.
+    public void MakeRoomForAccount()
+    {
+        SetCreateMenuOpen(false);
+        _dashboard?.Workspace?.FocusDesk();
+    }
+
     private void CloseCreateMenu() => SetCreateMenuOpen(false);
 
     private void SetCreateMenuOpen(bool open)
@@ -645,6 +704,7 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         {
             Account?.CloseSignInDialog();
             EnsureHostGroups();
+            FollowDefaultAccess();
         }
         _createOpen = open;
         if (_createOverlay != null && !_createOverlay.IsDestroyed)
@@ -663,12 +723,9 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
             return;
         }
 
-        // This dialog has no name well, so the name is the template's - or the group's, when the world is
-        // being hosted for one. -xlinka
         var picked = SelectedHostGroup;
-        var name = picked.HasValue && picked.Value.Name.Length > 0
-            ? HostForGroups.DefaultWorldName(picked.Value.Name).Resolve()
-            : PrettyTemplate(_template);
+        string typed = _nameInput?.Text.Value?.Trim() ?? string.Empty;
+        var name = typed.Length > 0 ? typed : DefaultName();
         // Clamp to the modes this world allows (a published world may be e.g. social-only).
         var mode = WorldTemplates.DefaultMode(_template);
         foreach (var allowed in WorldTemplates.AllowedModes(_template))
@@ -679,11 +736,28 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
             ? new GroupHosting(picked.Value.Id, picked.Value.Tag, _groupMembersOnly)
             : null;
         SetStatus($"Hosting '{name}'…");
-        var world = manager.HostNewWorld(_template, name, _visibility, _maxUsers, mode, hosting);
+        var world = manager.HostNewWorld(_template, name, _access, _maxUsers, mode, hosting);
         SetStatus(world != null ? $"Now hosting '{name}' ({PrettyMode(mode)})." : "Failed to host world.");
 
+        if (world != null && _nameInput != null && !_nameInput.IsDestroyed)
+            _nameInput.Text.Value = string.Empty;
         // Click Host -> the dialog + backdrop close (you drop into the new world).
         CloseCreateMenu();
+    }
+
+    // Left empty, the world goes by the template's name, or the group's when it is hosted for one. -xlinka
+    private string DefaultName()
+    {
+        var picked = SelectedHostGroup;
+        return picked.HasValue && picked.Value.Name.Length > 0
+            ? HostForGroups.DefaultWorldName(picked.Value.Name).Resolve()
+            : PrettyTemplate(_template);
+    }
+
+    private void ShowDefaultName()
+    {
+        if (_nameInput != null && !_nameInput.IsDestroyed)
+            _nameInput.Placeholder.Value = DefaultName();
     }
 
     private void SetStatus(string text)
@@ -723,8 +797,36 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         if (_hostGroups.Count == 0)
             return;
         _hostGroupIndex = (_hostGroupIndex + 1) % (_hostGroups.Count + 1);
+        // Each group starts on the tier it keeps for its worlds.
+        if (SelectedHostGroup is { } picked)
+        {
+            _groupMembersOnly = picked.MembersOnly;
+            for (int i = 0; i < _groupAccessRadios.Count; i++)
+            {
+                var radio = _groupAccessRadios[i].radio;
+                if (!radio.IsDestroyed)
+                    radio.IsChecked.Value = _groupAccessRadios[i].membersOnly == _groupMembersOnly;
+            }
+        }
         ApplyHostForRow();
+        ShowDefaultName();
         MarkDirty();
+    }
+
+    // The default join level moved since the dialog last took it, so the dialog takes the new one.
+    private void FollowDefaultAccess()
+    {
+        var level = EngineSettings.DefaultJoinLevel;
+        if (level == _accessDefault)
+            return;
+        _accessDefault = level;
+        _access = level;
+        for (int i = 0; i < _accessRadios.Count; i++)
+        {
+            var radio = _accessRadios[i].radio;
+            if (!radio.IsDestroyed)
+                radio.IsChecked.Value = _accessRadios[i].level == level;
+        }
     }
 
     private void ApplyHostForRow()
@@ -807,6 +909,28 @@ public sealed class HomeScreen : WidgetScreen, IDashboardKeyInput
         DriveCardStates(button, panel, DashTheme.Surface, DashTheme.SurfaceHover, DashTheme.SurfacePressed);
         var text = AddFillLabel(cell, initial, DashTheme.FontBody, TextDim, SemiboldFont);
         return text;
+    }
+
+    // Enter hosts, the way it does from the Worlds screen's form.
+    private TextInput NameRow(Slot parent)
+    {
+        var row = BeginRow(parent, "Name");
+        var layout = row.GetComponent<HorizontalLayout>()!;
+        layout.PaddingTop.Value = 5f;
+        layout.PaddingBottom.Value = 5f;
+        var b = RowBuilder(row);
+        b.MinWidth(110f).PreferredWidth(110f).FlexibleWidth(0f);
+        AddRowLabel(b, "Name", DashTheme.FontBody, TextPrimary, TextHorizontalAlignment.Left);
+
+        var cell = row.AddSlot("Field");
+        cell.AttachComponent<RectTransform>();
+        var element = cell.AttachComponent<LayoutElement>();
+        element.MinWidth.Value = 190f;
+        element.FlexibleWidth.Value = 1f;
+        element.FlexibleHeight.Value = 1f;
+        var input = DashTextField.Attach(cell, BodyFont, DashTheme.FontBody, DefaultName(), DashTextField.WorldNameLength);
+        input.EditingFinished += (_, _) => OnCreate();
+        return input;
     }
 
     private void DialogTitle(Slot parent, string title)

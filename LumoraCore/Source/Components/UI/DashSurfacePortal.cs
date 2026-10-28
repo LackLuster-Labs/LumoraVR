@@ -79,6 +79,10 @@ public class DashSurfacePortal : Component, ILaserPointerTarget, ILaserAxisTarge
     public bool WantsLaserAxis(InteractionLaser laser, int pointerId)
         => InHeadset && Dash()?.WantsVrAxis(laser, pointerId) == true;
 
+    // On a monitor too: the middle-button scroll drives the list itself and never goes through the wheel feed.
+    public Helio.UI.ScrollRect? ScrollUnderLaser(InteractionLaser laser, int pointerId)
+        => Dash()?.ScrollUnderVrPointer(laser, pointerId);
+
     private static bool InHeadset => Engine.Current?.InputInterface?.IsVRActive == true;
 
     // The grab and the release of a laser pointing at the surface, forwarded to the dash canvas under

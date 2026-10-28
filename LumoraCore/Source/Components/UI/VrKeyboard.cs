@@ -28,41 +28,8 @@ namespace Lumora.Core.Components.UI;
 [UserspaceOnly]
 public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
 {
-    // Canvas units. Left column is a preview strip over four glyph rows and a modifier row; the right
-    // column carries the numeric pad up top and the arrow cluster at the bottom.
-    private const float PanelWidth = 800f;
-    private const float PanelHeight = 276f;
-    private const float PanelScale = 0.0005f;
-    private const float Padding = 6f;
-    private const float RowSpacing = 4f;
-    private const float KeyGap = 3f;
-    private const float PreviewHeight = 32f;
-    private const float KeyHeight = 33f;
-    private const float KeyWidth = 49f;
-    private const float LabelSize = 16f;
-    // The corner glyph on a dual-face key, as a fraction of the main face.
-    private const float AltLabelScale = 0.55f;
-    private const float PreviewSize = 15f;
-    private const float CornerRadius = 8f;
-    private const float LabelInset = 8f;
-
-    // Right column: three keys wide, so the numpad and the arrow cluster share one width.
-    private const float SideColumnWidth = KeyWidth * 3f + KeyGap * 2f;
-    // Breathing room between the main grid and the right column.
-    private const float SideColumnGap = 7f;
-    private const float NumpadHeight = KeyHeight * 5f + RowSpacing * 4f;
-    private const float ArrowsHeight = KeyHeight * 2f + RowSpacing;
-
-    // Modifier row, left to right. Sums with the eight gaps to exactly the padded content width.
-    private const float ShiftKeyWidth = 78f;
-    private const float TabKeyWidth = 48f;
-    private const float CopyKeyWidth = 52f;
-    private const float SpaceKeyWidth = 130f;
-    private const float PasteKeyWidth = 52f;
-    private const float BackspaceKeyWidth = 78f;
-    private const float EnterKeyWidth = 66f;
-    private const float EscapeKeyWidth = 44f;
-    private const float CloseKeyWidth = 56f;
+    // Metres per canvas unit, where the panel docks at the user's own size.
+    private const float PanelScale = VrKeyboardLayout.PanelScale;
 
     // Keep a useful placement between fields, but bring it back on the next show if the user has
     // walked away or turned around. Distances are relative to the focused user's scale.
@@ -80,41 +47,10 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
     // shows on top of the keys. -xlinka
     private const int KeyboardSortingOrder = 20100;
 
-    private static readonly color KeyFill = new color(0.22f, 0.20f, 0.34f, 1f);
-    private static readonly color KeyBorder = new color(0.52f, 0.46f, 0.82f, 0.45f);
-    private static readonly color PanelBorder = new color(0.52f, 0.46f, 0.82f, 0.55f);
     // Held caps reads brighter than the one-shot accent so the two shift states are never confused.
     private static readonly color ShiftHeldFill = new color(0.62f, 0.55f, 0.98f, 1f);
     // A key that is present but cannot do anything - Paste on a platform with no clipboard.
     private static readonly color KeyDisabledFill = new color(0.15f, 0.14f, 0.20f, 1f);
-
-    private static readonly string[] GlyphRows =
-    {
-        "1234567890-=",
-        "qwertyuiop[]",
-        "asdfghjkl;'\\",
-        "zxcvbnm,./",
-    };
-
-    // Index-aligned with GlyphRows: row r, column c on one is the same key on the other.
-    private static readonly string[] ShiftGlyphRows =
-    {
-        "!@#$%^&*()_+",
-        "QWERTYUIOP{}",
-        "ASDFGHJKL:\"|",
-        "ZXCVBNM<>?",
-    };
-
-    // Numeric pad, top row first. These type themselves whether or not shift is up - there is no
-    // second face for a number pad, and nobody wants a shifted 7 to come out as an ampersand.
-    private static readonly string[] NumpadRows =
-    {
-        "789",
-        "456",
-        "123",
-        "0.-",
-        "+*/",
-    };
 
     // Shift is applying right now, whether that is a one-shot or a held caps.
     public readonly Sync<bool> ShiftActive;
@@ -138,13 +74,15 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
     private readonly SyncRef<VrKey> _shiftKey;
     private readonly SyncRef<VrKey> _pasteKey;
 
-    // Per-peer handles: the panel is rebuilt locally, never loaded, so these are refilled by
-    // BuildLayout rather than replicated.
+    // Per-peer handles, refilled by TakeUpLayout from whatever layout this slot carries rather than
+    // replicated: userspace is this machine's alone.
     private readonly List<VrKey> _keys = new();
-    private UITheme? _theme;
     private Canvas? _canvas;
     private Grabbable? _grab;
     private bool _built;
+    // The shift and paste keys' own fills, which their state tints go back to.
+    private KeyLook _shiftLook;
+    private KeyLook _pasteLook;
     // Whether a field has held focus since the panel came up. Without it, a keyboard summoned by
     // hand with nothing focused would hide itself on its very first update.
     private bool _typingSession;
@@ -194,7 +132,18 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
     {
         base.OnStart();
         LocalInstance = this;
-        BuildLayout();
+        // A layout that cannot be taken up is a favourite gone wrong: the built-in comes back in its place,
+        // so a broken favourite never leaves anyone without a keyboard.
+        try
+        {
+            TakeUpLayout();
+        }
+        catch (Exception ex)
+        {
+            Logging.Logger.Error($"VrKeyboard: could not take up the layout on '{Slot?.Name.Value}': {ex.Message}");
+            FavouriteKeyboard.Broken(this, ex.Message);
+            return;
+        }
         RefreshShiftVisuals();
         RefreshPasteKey();
     }
@@ -289,9 +238,11 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
             Dock();
             _dockFrames = DockSettleFrames;
         }
-        // The clipboard service is wired at startup, before userspace exists, but a harness (or a
+        // The clipboard service is wired at startup, before userspace exists, but a test (or a
         // platform that hands one over late) can arrive after the panel was built.
         RefreshPasteKey();
+        // Why the favourite keyboard is not the one up, or came up without some of its parts.
+        FavouriteKeyboard.Shown();
     }
 
     // Putting the keyboard away ends the typing session too. Leaving the field focused would keep
@@ -334,7 +285,30 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
     {
         var focused = TextInput.Focused;
         if (focused is { IsDestroyed: false })
-            focused.Unfocus();
+        {
+            using (HoldWorldOf(focused))
+                focused.Unfocus();
+        }
+    }
+
+    // A field out in a world is that world's to change, and a session's sync takes the world from a thread of
+    // its own: a keystroke written in from this space's update while it does was refused, and the throw left
+    // the key's press hanging, so the key went on repeating by itself. The world is held for the edit the way
+    // its own update holds it, which waits out a sync pass already under way. A field in this space (the
+    // dash's) is this update's own and the hold is a no-op re-entry. -xlinka
+    private static WorldHold HoldWorldOf(TextInput field) => new(field.World?.HookManager);
+
+    private readonly struct WorldHold : IDisposable
+    {
+        private readonly HookManager? _hooks;
+
+        public WorldHold(HookManager? hooks)
+        {
+            _hooks = hooks;
+            hooks?.DataModelLock(System.Threading.Thread.CurrentThread);
+        }
+
+        public void Dispose() => _hooks?.DataModelUnlock();
     }
 
     // Dock below the field's panel only when that position is comfortable to reach. Large or distant
@@ -515,7 +489,10 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
                 // update. With no field focused the dashboard is the one editing, so it gets the
                 // cancel instead - otherwise Escape is a dead key on every dash screen.
                 if (TextInput.Focused is { IsDestroyed: false } focused)
-                    focused.Cancel();
+                {
+                    using (HoldWorldOf(focused))
+                        focused.Cancel();
+                }
                 else
                     UserspaceDashboard.LocalInstance?.FeedEscape();
                 return;
@@ -531,6 +508,7 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
             return;
         }
 
+        using var hold = HoldWorldOf(input);
         switch (key.Role.Value)
         {
             case VrKeyRole.Character:
@@ -674,15 +652,9 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
         if (shiftKey == null || shiftKey.IsDestroyed || shiftKey.Slot == null)
             return;
 
-        color fill = KeyFill;
-        if (ShiftHeld.Value)
-            fill = ShiftHeldFill;
-        else if (ShiftActive.Value)
-            fill = InspectorUI.AccentColor;
-
-        // Straight through the shared tint rule: a Helio button DRIVES its own backing tint, so a
-        // direct write is reverted on the driver's next pass.
-        InspectorUI.ApplyStateTint(shiftKey.Slot.GetComponent<BorderedImage>()?.Tint, fill);
+        // Off is the key's own fill; the two states paint over it through its colour driver, since a Helio
+        // button drives its own backing and a direct write would be reverted on the driver's next pass.
+        _shiftLook.Show(ShiftHeld.Value ? ShiftHeldFill : ShiftActive.Value ? InspectorUI.AccentColor : null);
     }
 
     // A platform with no clipboard service gets a Paste key that says so: muted fill, muted label, and
@@ -700,11 +672,11 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
         if (button != null && !button.IsDestroyed)
             button.Interactable.Value = available;
 
-        InspectorUI.ApplyStateTint(key.Slot.GetComponent<BorderedImage>()?.Tint, available ? KeyFill : KeyDisabledFill);
+        _pasteLook.Show(available ? null : KeyDisabledFill);
 
         var label = key.Label.Target;
         if (label != null && !label.IsDestroyed)
-            label.Color.Value = available ? InspectorUI.TextColor : InspectorUI.MutedColor;
+            label.Color.Value = available ? _pasteLook.Label : InspectorUI.MutedColor;
     }
 
     // PREVIEW
@@ -732,37 +704,26 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
     }
 
     // LAYOUT
+    // The keys and the panel come from the layout on this slot: the user's favourite keyboard when one was
+    // loaded here (FavouriteKeyboard), else the built-in one, built here now. Either is taken up the same way:
+    // every key types through this keyboard, and the panel gets what this keyboard needs of it, its own
+    // overlay band above the dash and a grab that never types. Nothing else of the layout is touched, so a
+    // favourite keeps its look; only the key faces (they follow the glyphs and shift) and the shift and paste
+    // keys' fills (they show their state) are this keyboard's to write. -xlinka
 
-    private void BuildLayout()
+    private void TakeUpLayout()
     {
         if (_built || Slot == null || Slot.IsDestroyed)
             return;
         _built = true;
 
-        _theme = Slot.GetOrAttachComponent<UITheme>();
-        // Borrow the dash's font provider when there is one: same world so the ref is legal, one glyph
-        // atlas between the two panels, and the keys never come up blank because the theme's own
-        // default font URL had not been registered yet. -xlinka
-        var dash = UserspaceDashboard.LocalInstance;
-        if (dash != null && !dash.IsDestroyed && ReferenceEquals(dash.World, World) && dash.Font.Target != null)
-            _theme.Font.Target = dash.Font.Target;
-        _theme.PanelBackground.Value = InspectorUI.PaneColor;
-        _theme.Header.Value = InspectorUI.HeaderColor;
-        _theme.ButtonFill.Value = KeyFill;
-        _theme.Accent.Value = InspectorUI.AccentColor;
-        _theme.Separator.Value = PanelBorder;
-        _theme.Border.Value = KeyBorder;
-        _theme.CornerRadius.Value = CornerRadius;
+        var design = Slot.GetComponent<KeyboardDesign>() ?? VrKeyboardLayout.Build(Slot);
+        if (Slot.GetComponent<RectTransform>() == null)
+            VrKeyboardLayout.Size(Slot.AttachComponent<RectTransform>());
 
-        var rect = Slot.GetOrAttachComponent<RectTransform>();
-        rect.AnchorMin.Value = new float2(0.5f, 0.5f);
-        rect.AnchorMax.Value = new float2(0.5f, 0.5f);
-        rect.OffsetMin.Value = new float2(PanelWidth * -0.5f, PanelHeight * -0.5f);
-        rect.OffsetMax.Value = new float2(PanelWidth * 0.5f, PanelHeight * 0.5f);
-
-        var canvas = Slot.GetOrAttachComponent<Canvas>();
         // Overlay + a reserved band: a keyboard that world geometry can cut into is unusable, and the
         // depth test alone would clip it against whatever you happen to be standing in front of.
+        var canvas = Slot.GetOrAttachComponent<Canvas>();
         canvas.Overlay.Value = true;
         canvas.SortingOrder.Value = KeyboardSortingOrder;
         _canvas = canvas;
@@ -778,269 +739,82 @@ public sealed class VrKeyboard : Component, Helio.UI.IKeepsTextFocus
         _grab.OnLocalGrabbed += OnGrabbed;
         _grab.OnLocalReleased += OnReleased;
 
-        var background = Slot.GetOrAttachComponent<BorderedImage>();
-        background.Tint.Value = InspectorUI.PaneColor;
-        background.BorderTint.Value = PanelBorder;
-        ApplyRounded(background);
-
-        // The theme parks its font and rounded-sprite providers on child slots of this one, so the
-        // rows go in their own container - a layout on the root would try to lay those out as keys.
-        var content = Slot.FindChildOrAdd("Content");
-        var contentRect = content.GetOrAttachComponent<RectTransform>();
-        contentRect.AnchorMin.Value = float2.Zero;
-        contentRect.AnchorMax.Value = float2.One;
-        contentRect.OffsetMin.Value = new float2(Padding, Padding);
-        // Stops short of the right column, so the main grid's rows are the exact width they always
-        // were and every row below keeps its own key sizes.
-        contentRect.OffsetMax.Value = new float2(-(Padding + SideColumnWidth + SideColumnGap), -Padding);
-
-        var column = content.AttachComponent<VerticalLayout>();
-        column.Spacing.Value = RowSpacing;
-        column.ForceExpandWidth.Value = true;
-        column.ForceExpandHeight.Value = false;
-        // The main grid is shorter than the right column (six rows against seven), so centre it rather
-        // than leaving all the slack in one lump under the modifier row.
-        column.MainAlignment.Value = MainAxisAlignment.Center;
-
-        BuildPreviewStrip(content);
-        for (int i = 0; i < GlyphRows.Length; i++)
-            BuildGlyphRow(content, i);
-        BuildModifierRow(content);
-
-        BuildSideColumn();
-    }
-
-    // The right-hand block: numeric pad anchored to the top, arrow cluster to the bottom. Two
-    // independently anchored containers rather than one long layout, so the gap between the two blocks
-    // is deliberate instead of whatever the leftover space happened to be. -xlinka
-    private void BuildSideColumn()
-    {
-        var side = Slot.FindChildOrAdd("SideColumn");
-        var sideRect = side.GetOrAttachComponent<RectTransform>();
-        sideRect.AnchorMin.Value = new float2(1f, 0f);
-        sideRect.AnchorMax.Value = new float2(1f, 1f);
-        sideRect.OffsetMin.Value = new float2(-(Padding + SideColumnWidth), Padding);
-        sideRect.OffsetMax.Value = new float2(-Padding, -Padding);
-
-        var numpad = side.AddSlot("Numpad");
-        var numpadRect = numpad.AttachComponent<RectTransform>();
-        numpadRect.AnchorMin.Value = new float2(0f, 1f);
-        numpadRect.AnchorMax.Value = new float2(1f, 1f);
-        numpadRect.OffsetMin.Value = new float2(0f, -NumpadHeight);
-        numpadRect.OffsetMax.Value = float2.Zero;
-        var numpadColumn = numpad.AttachComponent<VerticalLayout>();
-        numpadColumn.Spacing.Value = RowSpacing;
-        numpadColumn.ForceExpandWidth.Value = true;
-        numpadColumn.ForceExpandHeight.Value = false;
-
-        for (int i = 0; i < NumpadRows.Length; i++)
+        _keys.Clear();
+        foreach (var key in Slot.GetComponentsInChildren<VrKey>())
         {
-            var row = BuildRow(numpad, "Numpad" + (i + 1), KeyHeight);
-            AddKeyLayout(row);
-            string glyphs = NumpadRows[i];
-            for (int c = 0; c < glyphs.Length; c++)
+            if (key.IsDestroyed)
+                continue;
+            key.Keyboard.Target = this;
+            if (key.Slot.GetComponent<Button>() is { } button)
             {
-                string glyph = glyphs[c].ToString();
-                // Same glyph on both faces: the pad types literally whatever shift is doing.
-                BuildKey(row, "Num" + glyph, glyph, glyph, VrKeyRole.Character, KeyWidth, KeyFill);
+                button.KeepPressUntilRelease.Value = key.Repeats;
+                button.SetAction(key.OnPressed);
             }
+            _keys.Add(key);
+            if (key.Role.Value == VrKeyRole.Shift && _shiftKey.Target == null)
+                _shiftKey.Target = key;
+            else if (key.Role.Value == VrKeyRole.Paste && _pasteKey.Target == null)
+                _pasteKey.Target = key;
         }
-
-        var arrows = side.AddSlot("Arrows");
-        var arrowsRect = arrows.AttachComponent<RectTransform>();
-        arrowsRect.AnchorMin.Value = new float2(0f, 0f);
-        arrowsRect.AnchorMax.Value = new float2(1f, 0f);
-        arrowsRect.OffsetMin.Value = float2.Zero;
-        arrowsRect.OffsetMax.Value = new float2(0f, ArrowsHeight);
-        var arrowColumn = arrows.AttachComponent<VerticalLayout>();
-        arrowColumn.Spacing.Value = RowSpacing;
-        arrowColumn.ForceExpandWidth.Value = true;
-        arrowColumn.ForceExpandHeight.Value = false;
-
-        // Inverted T: up on its own over left/down/right, which is the shape every hand already knows
-        // where to reach on.
-        var top = BuildRow(arrows, "ArrowsTop", KeyHeight);
-        AddKeyLayout(top);
-        BuildKey(top, "ArrowUp", "↑", string.Empty, VrKeyRole.ArrowUp, KeyWidth, KeyFill);
-
-        var bottom = BuildRow(arrows, "ArrowsBottom", KeyHeight);
-        AddKeyLayout(bottom);
-        BuildKey(bottom, "ArrowLeft", "←", string.Empty, VrKeyRole.ArrowLeft, KeyWidth, KeyFill);
-        BuildKey(bottom, "ArrowDown", "↓", string.Empty, VrKeyRole.ArrowDown, KeyWidth, KeyFill);
-        BuildKey(bottom, "ArrowRight", "→", string.Empty, VrKeyRole.ArrowRight, KeyWidth, KeyFill);
+        _preview.Target = design.Preview.Target!;
+        _shiftLook = KeyLook.Of(_shiftKey.Target);
+        _pasteLook = KeyLook.Of(_pasteKey.Target);
     }
 
-    private void BuildPreviewStrip(Slot content)
+    // A key's fill and shades as its layout gave them, for a key whose fill shows a state to come back to.
+    private readonly struct KeyLook
     {
-        var strip = BuildRow(content, "Preview", PreviewHeight);
+        private readonly ColorDriver? _driver;
+        private readonly color _normal, _highlight, _pressed, _disabled;
+        public readonly color Label;
 
-        var backing = strip.AttachComponent<BorderedImage>();
-        backing.Tint.Value = InspectorUI.RowColor;
-        backing.BorderTint.Value = KeyBorder;
-        ApplyRounded(backing);
-
-        var labelSlot = strip.AddSlot("Text");
-        var labelRect = labelSlot.AttachComponent<RectTransform>();
-        labelRect.AnchorMin.Value = float2.Zero;
-        labelRect.AnchorMax.Value = float2.One;
-        labelRect.OffsetMin.Value = new float2(LabelInset, 0f);
-        labelRect.OffsetMax.Value = new float2(-LabelInset, 0f);
-
-        var text = labelSlot.AttachComponent<Text>();
-        text.Content.Value = string.Empty;
-        text.Size.Value = PreviewSize;
-        text.Color.Value = InspectorUI.TextColor;
-        text.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
-        text.VerticalAlignment.Value = TextVerticalAlignment.Middle;
-        ApplyFont(text);
-        _preview.Target = text;
-    }
-
-    private void BuildGlyphRow(Slot content, int index)
-    {
-        var row = BuildRow(content, "Row" + (index + 1), KeyHeight);
-        AddKeyLayout(row);
-
-        string glyphs = GlyphRows[index];
-        string shifted = ShiftGlyphRows[index];
-        for (int i = 0; i < glyphs.Length; i++)
+        private KeyLook(ColorDriver? driver, in color label)
         {
-            string glyph = glyphs[i].ToString();
-            string shiftGlyph = i < shifted.Length ? shifted[i].ToString() : glyph;
-            BuildKey(row, glyph, glyph, shiftGlyph, VrKeyRole.Character, KeyWidth, KeyFill);
+            _driver = driver;
+            Label = label;
+            _normal = driver?.NormalColor.Value ?? default;
+            _highlight = driver?.HighlightColor.Value ?? default;
+            _pressed = driver?.PressedColor.Value ?? default;
+            _disabled = driver?.DisabledColor.Value ?? default;
         }
-    }
 
-    private void BuildModifierRow(Slot content)
-    {
-        var row = BuildRow(content, "Modifiers", KeyHeight);
-        AddKeyLayout(row);
-
-        _shiftKey.Target = BuildKey(row, "Shift", "Shift", string.Empty, VrKeyRole.Shift, ShiftKeyWidth, KeyFill);
-        BuildKey(row, "Tab", "Tab", string.Empty, VrKeyRole.Tab, TabKeyWidth, KeyFill);
-        BuildKey(row, "Copy", "Copy", string.Empty, VrKeyRole.Copy, CopyKeyWidth, KeyFill);
-        BuildKey(row, "Space", "Space", string.Empty, VrKeyRole.Space, SpaceKeyWidth, KeyFill);
-        _pasteKey.Target = BuildKey(row, "Paste", "Paste", string.Empty, VrKeyRole.Paste, PasteKeyWidth, KeyFill);
-        BuildKey(row, "Backspace", "Back", string.Empty, VrKeyRole.Backspace, BackspaceKeyWidth, KeyFill);
-        BuildKey(row, "Enter", "Enter", string.Empty, VrKeyRole.Enter, EnterKeyWidth, InspectorUI.AccentColor);
-        BuildKey(row, "Escape", "Esc", string.Empty, VrKeyRole.Escape, EscapeKeyWidth, KeyFill);
-        BuildKey(row, "Close", "Close", string.Empty, VrKeyRole.Close, CloseKeyWidth, InspectorUI.DangerColor);
-    }
-
-    private static Slot BuildRow(Slot content, string name, float height)
-    {
-        var row = content.AddSlot(name);
-        row.AttachComponent<RectTransform>();
-        var element = row.AttachComponent<LayoutElement>();
-        element.MinHeight.Value = height;
-        element.PreferredHeight.Value = height;
-        element.FlexibleHeight.Value = 0f;
-        element.FlexibleWidth.Value = 1f;
-        // Own chunk per row: a shift flip rewrites four rows of labels, and the preview strip changes
-        // on every keystroke. Chunked, each of those re-meshes one strip instead of the whole panel.
-        row.AttachComponent<GraphicChunkRoot>();
-        return row;
-    }
-
-    // Rows are narrower than the panel by design (twelve keys, then ten), so they centre rather than
-    // leaving a ragged gutter down one side.
-    private static void AddKeyLayout(Slot row)
-    {
-        var layout = row.AttachComponent<HorizontalLayout>();
-        layout.Spacing.Value = KeyGap;
-        layout.ForceExpandWidth.Value = false;
-        layout.ForceExpandHeight.Value = true;
-        layout.MainAlignment.Value = MainAxisAlignment.Center;
-    }
-
-    private VrKey BuildKey(Slot row, string name, string glyph, string shiftGlyph, VrKeyRole role,
-        float width, color fill)
-    {
-        var slot = row.AddSlot(name);
-        slot.AttachComponent<RectTransform>();
-        var element = slot.AttachComponent<LayoutElement>();
-        element.MinWidth.Value = width;
-        element.PreferredWidth.Value = width;
-        element.FlexibleWidth.Value = 0f;
-        element.MinHeight.Value = KeyHeight;
-        element.PreferredHeight.Value = KeyHeight;
-        element.FlexibleHeight.Value = 0f;
-
-        var backing = slot.AttachComponent<BorderedImage>();
-        backing.Tint.Value = fill;
-        backing.BorderTint.Value = KeyBorder;
-        ApplyRounded(backing);
-
-        var button = slot.AttachComponent<Button>();
-        // Button.OnAttach only adopts a plain Image; the rounded keys use BorderedImage, so the
-        // hover/press driver has to be pointed at the tint by hand or the keys never light up.
-        button.SetupBackgroundColor(backing.Tint);
-        // Every point of the key grid is a key: each answers out to the middle of the row gap around it,
-        // which also covers the narrower gap between keys (the right-hand key takes the sliver they share).
-        button.HitOutset.Value = RowSpacing * 0.5f;
-
-        var key = slot.AttachComponent<VrKey>();
-        key.Glyph.Value = glyph;
-        key.ShiftGlyph.Value = shiftGlyph;
-        key.Role.Value = role;
-        key.Keyboard.Target = this;
-        button.KeepPressUntilRelease.Value = key.Repeats;
-        button.SetAction(key.OnPressed);
-
-        key.Label.Target = BuildKeyFace(slot, "Label", glyph, LabelSize, InspectorUI.TextColor,
-            TextHorizontalAlignment.Center, TextVerticalAlignment.Middle, float2.Zero, float2.One,
-            float2.Zero, float2.Zero);
-
-        // Two genuinely different glyphs (a symbol key, not a letter) get a second small face in the
-        // corner showing the one shift is NOT on, so you can read what a key does both ways without
-        // pressing shift to find out. Letters skip it - a big 'a' with a little 'A' beside it is
-        // noise. -xlinka
-        if (key.HasDualFace)
+        // The driver behind the key's backing, whatever kind of graphic that is.
+        public static KeyLook Of(VrKey? key)
         {
-            key.AltLabel.Target = BuildKeyFace(slot, "AltLabel", key.ActiveGlyph(true), LabelSize * AltLabelScale,
-                InspectorUI.MutedColor, TextHorizontalAlignment.Right, TextVerticalAlignment.Top,
-                new float2(0.45f, 0.45f), float2.One, float2.Zero, new float2(-4f, -2f));
+            if (key?.Slot == null || key.IsDestroyed)
+                return new KeyLook(null, InspectorUI.TextColor);
+            ColorDriver? found = null;
+            foreach (var driver in key.Slot.GetComponents<ColorDriver>())
+            {
+                if (driver.Target.Target != null)
+                {
+                    found = driver;
+                    break;
+                }
+            }
+            return new KeyLook(found, key.Label.Target is { IsDestroyed: false } label ? label.Color.Value : InspectorUI.TextColor);
         }
 
-        _keys.Add(key);
-        return key;
-    }
+        // A state's fill, with its shades made from it; null puts the key's own back.
+        public void Show(color? state)
+        {
+            if (_driver == null || _driver.IsDestroyed)
+                return;
+            if (state is { } fill)
+            {
+                _driver.SetColors(fill);
+                return;
+            }
+            Set(_driver.NormalColor, _normal);
+            Set(_driver.HighlightColor, _highlight);
+            Set(_driver.PressedColor, _pressed);
+            Set(_driver.DisabledColor, _disabled);
+        }
 
-    private Text BuildKeyFace(Slot keySlot, string name, string content, float size, color tint,
-        TextHorizontalAlignment horizontal, TextVerticalAlignment vertical,
-        float2 anchorMin, float2 anchorMax, float2 offsetMin, float2 offsetMax)
-    {
-        var faceSlot = keySlot.AddSlot(name);
-        var faceRect = faceSlot.AttachComponent<RectTransform>();
-        faceRect.AnchorMin.Value = anchorMin;
-        faceRect.AnchorMax.Value = anchorMax;
-        faceRect.OffsetMin.Value = offsetMin;
-        faceRect.OffsetMax.Value = offsetMax;
-
-        var text = faceSlot.AttachComponent<Text>();
-        text.Content.Value = content;
-        text.Size.Value = size;
-        text.Color.Value = tint;
-        text.HorizontalAlignment.Value = horizontal;
-        text.VerticalAlignment.Value = vertical;
-        ApplyFont(text);
-        return text;
-    }
-
-    private void ApplyRounded(BorderedImage image)
-    {
-        var sprite = _theme?.RoundedSprite;
-        if (sprite == null)
-            return;
-        image.Texture.Target = sprite;
-        image.NineSlice.Value = true;
-        image.Borders.Value = new float4(CornerRadius, CornerRadius, CornerRadius, CornerRadius);
-    }
-
-    private void ApplyFont(Text text)
-    {
-        var font = _theme?.ThemeFont;
-        if (font != null)
-            text.Font.Target = font;
+        private static void Set(Sync<color> field, in color value)
+        {
+            if (field.Value != value)
+                field.Value = value;
+        }
     }
 }

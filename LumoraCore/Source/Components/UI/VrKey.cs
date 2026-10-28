@@ -100,7 +100,7 @@ public sealed class VrKey : Component
             && ReferenceEquals(_pressedField, TextInput.Focused)
             && _button is { IsDestroyed: false, CanInteract: true }
             && _button.IsPressedNow;
-        int count = _repeat.Advance(held, delta, keyboard?.RepeatInterval.Value ?? KeyRepeat.DefaultInterval);
+        int count = _repeat.Advance(held, Now, keyboard?.RepeatInterval.Value ?? KeyRepeat.DefaultInterval);
         for (int i = 0; i < count; i++) keyboard!.HandleKey(this);
     }
 
@@ -148,9 +148,11 @@ public sealed class VrKey : Component
     {
         _button = button;
         _pressedField = TextInput.Focused;
-        _repeat.Begin(Keyboard.Target?.RepeatDelay.Value ?? KeyRepeat.DefaultDelay);
+        _repeat.Begin(Now, Keyboard.Target?.RepeatDelay.Value ?? KeyRepeat.DefaultDelay);
         Keyboard.Target?.HandleKey(this);
     }
+
+    private double Now => World?.Time?.TotalTime ?? 0.0;
 
     public override void OnDisabled()
     {

@@ -11,7 +11,7 @@ namespace Lumora.Core.Components.UI;
 
 // Who is in the world you are in right now, the host first, each with the role the session gives them.
 // The same people the Session window lists, at a glance from the workspace; pressing the card opens that
-// window. Rows are made once and filled from the session on a slow clock, as many as the card is tall.
+// window, pressing a name opens that person's profile. Rows are made once and filled from the session on a slow clock, as many as the card is tall.
 // -xlinka
 [ComponentCategory("Hidden")]
 public sealed class PeopleHereWidgetPreset : HomeWidgetPreset
@@ -31,6 +31,7 @@ public sealed class PeopleHereWidgetPreset : HomeWidgetPreset
         public Slot Slot = null!;
         public RoundedPanel Dot = null!;
         public Text Name = null!;
+        public ProfileLink Link = null!;
         public Text Role = null!;
     }
 
@@ -69,7 +70,7 @@ public sealed class PeopleHereWidgetPreset : HomeWidgetPreset
             name.AutoSizeMin.Value = 10f;
             var role = Label(slot, "Role", string.Empty, DashTheme.FontLabel, DashTheme.TextMuted, TextHorizontalAlignment.Right,
                 new float2(0.62f, 0f), float2.One, new float2(4f, 0f), float2.Zero);
-            _rows[i] = new PersonRow { Slot = slot, Dot = dot, Name = name, Role = role };
+            _rows[i] = new PersonRow { Slot = slot, Dot = dot, Name = name, Link = ProfileLink.On(name), Role = role };
             slot.ActiveSelf.Value = false;
         }
 
@@ -116,7 +117,10 @@ public sealed class PeopleHereWidgetPreset : HomeWidgetPreset
             if (ReferenceEquals(user, world?.LocalUser))
                 name += " (you)";
             ListingStyle.SetText(row.Name, name);
+            row.Link.Bind(user, !WidgetPanel.EditMode);
             string role = user.IsHost ? RoleLabels.Host.Resolve() : RoleLabels.Of(world?.DataModelPermissions?.GetRole(user));
+            if (user.IsBot)
+                role = PeopleLocale.ChipBot.Resolve() + " · " + role;
             ListingStyle.SetText(row.Role, role);
             SettingsUI.SetFill(row.Dot, Hues[Hue(user)]);
         }

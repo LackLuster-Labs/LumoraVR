@@ -10,18 +10,20 @@ using Lumora.Nexus.Cloud.Cdn;
 namespace Lumora.Core.Components.UI;
 
 // One group as a create form offers it: the id the world is stamped with, the short tag that rides the
-// session and the card, and the name the pill shows.
+// session and the card, the name the pill shows, and the tier the group wants its worlds to start on.
 internal readonly struct HostGroupOption
 {
     public readonly string Id;
     public readonly string Tag;
     public readonly string Name;
+    public readonly bool MembersOnly;
 
-    public HostGroupOption(string id, string tag, string name)
+    public HostGroupOption(string id, string tag, string name, bool membersOnly = true)
     {
         Id = id ?? string.Empty;
         Tag = tag ?? string.Empty;
         Name = name ?? string.Empty;
+        MembersOnly = membersOnly;
     }
 
     public bool IsEmpty => Id.Length == 0;
@@ -49,6 +51,16 @@ internal static class HostForGroups
             || string.Equals(myRole, "Admin", StringComparison.OrdinalIgnoreCase)
             || string.Equals(myRole, "Moderator", StringComparison.OrdinalIgnoreCase)
             || string.Equals(myRole, "Builder", StringComparison.OrdinalIgnoreCase);
+
+    // The tier a group keeps for the worlds hosted for it. Blank or unknown, from a service too old to keep
+    // one, reads as members only, the tier the forms always started on.
+    public static World.WorldAccessLevel GroupDefault(string? level)
+        => Enum.TryParse<World.WorldAccessLevel>(level, ignoreCase: true, out var parsed)
+            ? SettingsCatalog.GroupJoinLevel.Clamp(parsed)
+            : SettingsCatalog.GroupJoinLevel.Default;
+
+    public static bool MembersOnlyByDefault(string? level)
+        => GroupDefault(level) != World.WorldAccessLevel.GroupPublic;
 
     public static bool SignedIn
     {
@@ -87,7 +99,7 @@ internal static class HostForGroups
             var group = mine.Data[i];
             if (group == null || string.IsNullOrEmpty(group.Id) || !CanHost(group.MyRole))
                 continue;
-            options.Add(new HostGroupOption(group.Id, group.Tag, group.Name));
+            options.Add(new HostGroupOption(group.Id, group.Tag, group.Name, MembersOnlyByDefault(group.DefaultJoinLevel)));
         }
         return options;
     }

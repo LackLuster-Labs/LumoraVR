@@ -611,9 +611,12 @@ public class PanelShell : UIComponent
         Set(rect.OffsetMax, offsetMax);
     }
 
+    // Every peer works these out from the same synced fields. One this machine may not write (a panel in
+    // somebody else's hand) is theirs to write: asking first keeps the refusal out of the log, and racing a
+    // pickup it reached the host and counted against whoever sent it. -xlinka
     private static void Set<T>(Sync<T> field, T value)
     {
-        if (!EqualityComparer<T>.Default.Equals(field.Value, value))
+        if (!EqualityComparer<T>.Default.Equals(field.Value, value) && field.IsWriteAllowedQuietly())
         {
             field.Value = value;
         }

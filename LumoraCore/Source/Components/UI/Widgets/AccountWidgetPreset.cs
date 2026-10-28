@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Collections.Generic;
 using System.Globalization;
 using System.Net;
 using Helio.UI;
@@ -22,7 +23,7 @@ namespace Lumora.Core.Components.UI;
 // sync member, never written to the settings store and never logged. What CAN be remembered is the
 // session token the server hands back, and only when the box is ticked. -xlinka
 [ComponentCategory("Hidden")]
-public sealed class AccountWidgetPreset : HomeWidgetPreset
+public sealed partial class AccountWidgetPreset : HomeWidgetPreset
 {
     private const string UserKey = "Account.UserId";
     private const string TokenKey = "Account.Token";
@@ -37,6 +38,9 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     private const float SignOutWidth = 88f;
     private const float SignOutHeight = 36f;
     private const float BarHeight = 7f;
+    private const float CardBaseHeight = 196f;
+    // The group storage row and its bar, under the account's own.
+    private const float GroupRowsHeight = 44f;
     // Right-hand strip the sign-out pill sits in, kept clear of the status line.
     private const float StatusRightInset = Pad + 96f;
 
@@ -45,6 +49,8 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     private const float DialogPad = 28f;
     private const float FieldHeight = 68f;
     private const float RememberHeight = 32f;
+    private const float RememberToggleWidth = 200f;
+    private const float CodeLinkWidth = 150f;
     private const float StatusHeight = 28f;
     private const float TitleHeight = 28f;
     private const float SubmitWidth = 260f;
@@ -52,9 +58,9 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     private const float ActionHeight = 44f;
 
     // Row tops for the two shapes the dialog takes, and the panel height that goes with each. The
-    // two-factor field only exists after the service asks for a code, and reserving its space up front
-    // left the form floating above its own buttons. Order: title, username, password, code, remember,
-    // buttons, status.
+    // two-factor field only shows once the service asks for a code or you open it from the link, and
+    // reserving its space up front left the form floating above its own buttons. Order: title, username,
+    // password, code, remember, buttons, status.
     private static readonly float[] TopsPlain = { 24f, 88f, 166f, 0f, 244f, 294f, 352f };
     private static readonly float[] TopsWithCode = { 24f, 88f, 166f, 244f, 322f, 372f, 430f };
     private const float DialogHeightPlain = 400f;
@@ -72,7 +78,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     private const double StorageRefresh = 30.0;
     private const long Megabyte = 1024L * 1024L;
 
-    private enum Focus { None, Username, Password, Code }
+    private enum Focus { None, Username, Password, Code, NewName, NewEmail, NewPassword, NewConfirm, Totp }
 
     private sealed class Pill
     {
@@ -114,13 +120,22 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     private Pill? _loginPill;
     private Pill? _signOutPill;
     private Text? _status;
+    private Slot? _avatar;
     private Text? _name;
+    private ProfileLink? _nameLink;
+    private color _nameInk = DashTheme.Text;
     private Text? _accountState;
     private Slot? _verified;
     private Text? _storage;
     private Text? _storageHint;
     private RoundedPanel? _barPaint;
     private RectTransform? _barFill;
+    private Text? _tier;
+    private Slot? _groupRows;
+    private Text? _groupTitle;
+    private Text? _groupStorage;
+    private RoundedPanel? _groupBarPaint;
+    private RectTransform? _groupBarFill;
 
     private Slot? _dialogBackdrop;
     private Slot? _dialogPanel;
@@ -133,6 +148,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     private Slot? _rememberCheck;
     private RectTransform? _rememberRect;
     private Button? _rememberButton;
+    private Text? _codeLink;
     private RectTransform? _buttonRowRect;
     private Pill? _submit;
     private Pill? _cancel;
@@ -164,13 +180,15 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     // What the dash's top bar shows for this account: the name once the profile is in, empty before that.
     public bool IsSignedIn => SignedIn;
     public string ProfileName { get; private set; } = string.Empty;
-    public bool DialogOpen => _dialogOpen;
+    public bool DialogOpen => _dialogOpen || _flowOpen;
     public bool HasStorageUsage { get; private set; }
     public string StorageLabel { get; private set; } = "Loading storage…";
     public long StorageUsedBytes { get; private set; }
     public long StorageLimitBytes { get; private set; }
     public float StorageFraction => !HasStorageUsage ? 0f : StorageLimitBytes <= 0 ? 1f
         : (float)System.Math.Clamp((double)StorageUsedBytes / StorageLimitBytes, 0d, 1d);
+    public bool HasGroupStorage { get; private set; }
+    public float CardHeight => CardBaseHeight + (HasGroupStorage ? GroupRowsHeight : 0f) + (HasAccountRow ? AccountRowHeight : 0f);
 
     public AccountWidgetPreset()
     {
@@ -184,7 +202,10 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         _remember = Lumora.Core.Settings.HasValue(TokenKey);
 
         if (OnDashboard)
+        {
             BuildDialog();
+            BuildFlowShell();
+        }
 
         BuildAvatar(root);
         BuildSignedOut(root);
@@ -210,6 +231,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
             _dialogBackdrop.Destroy();
         if (_dialogPanel != null && !_dialogPanel.IsDestroyed)
             _dialogPanel.Destroy();
+        DestroyFlow();
         base.OnDestroy();
     }
 
@@ -218,12 +240,14 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         // Only the pills on the card are gated: the dialog lives above the grid, never under a drag.
         GateForEdit(_loginPill?.Button);
         GateForEdit(_signOutPill?.Button);
+        _nameLink?.Bind(_nameLink.Account, _nameInk, !WidgetPanel.EditMode);
         PollStorage();
     }
 
     // The top bar calls this too: a closed account popover does not receive component updates.
     internal void PollStorage()
     {
+        PollEmailNotice();
         double now = World.Time.TotalTime;
         if (SignedIn && now - _storageReadAt >= StorageRefresh)
             _storageDue = true;
@@ -264,6 +288,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         var disc = SettingsUI.Child(root, "Avatar", new float2(0f, 1f), new float2(0f, 1f),
             new float2(Pad, -Pad - AvatarSize), new float2(Pad + AvatarSize, -Pad));
         SettingsUI.Panel(disc, DashTheme.AccentSoft, color.Transparent, half);
+        _avatar = disc;
 
         var clip = SettingsUI.Fill(disc, "Clip");
         SettingsUI.Panel(clip, color.White, color.Transparent, half);
@@ -289,8 +314,11 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         CardLabel(_signedOutRoot, "Subtitle", "Make yourself at home.", TextLeft, 44f, Pad, 20f, 13f, DashTheme.TextDim);
         if (_dialogPanel != null)
         {
-            var slot = Row(_signedOutRoot, "Login", 88f, 40f, Pad, Pad);
-            _loginPill = AttachPill(slot, "Sign in", 16f, OnLoginPressed);
+            var row = Row(_signedOutRoot, "Login", 88f, 40f, Pad, Pad);
+            var signIn = SettingsUI.Child(row, "SignIn", float2.Zero, new float2(0.5f, 1f), float2.Zero, new float2(-4f, 0f));
+            _loginPill = AttachPill(signIn, "Sign in", 16f, OnLoginPressed);
+            var join = SettingsUI.Child(row, "Create", new float2(0.5f, 0f), float2.One, new float2(4f, 0f), float2.Zero);
+            _createPill = AttachPill(join, AccountFlowLocale.CreatePill.Resolve(), 16f, () => OpenFlow(FlowPage.Register));
         }
         else
             CardLabel(_signedOutRoot, "LoginNote", "Sign in from this widget on the workspace", Pad, 88f, Pad, 40f, 15f, DashTheme.TextDim);
@@ -302,12 +330,18 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     {
         _signedInRoot = SettingsUI.Fill(root, "SignedIn");
         _name = CardLabel(_signedInRoot, "Name", "Your account", TextLeft, 18f, Pad, 26f, 20f, DashTheme.Text, BoldFont);
+        _nameLink = ProfileLink.On(_name);
+        if (_avatar != null)
+            _nameLink.Add(_avatar);
         _accountState = CardLabel(_signedInRoot, "AccountState", "Signed in", TextLeft, 46f, Pad, 18f, 13f, DashTheme.TextDim);
         _verified = SettingsUI.Child(_signedInRoot, "Verified", new float2(0f, 1f), new float2(0f, 1f),
             new float2(Pad + AvatarSize - 15f, -Pad - AvatarSize), new float2(Pad + AvatarSize + 3f, -Pad - AvatarSize + 18f));
         SettingsUI.Panel(_verified, DashTheme.Positive, DashTheme.Surface, 9f);
         CheckIcon(_verified, DashTheme.TextOnLight);
         SetActive(_verified, false);
+        // The tier as the account service names and colours it; the game keeps no list of tiers.
+        _tier = CardLabel(_signedInRoot, "Tier", string.Empty, TextLeft, 65f, Pad, 18f, 13f, DashTheme.Text, SemiboldFont);
+        SetActive(_tier.Slot.Parent, false);
         CardLabel(_signedInRoot, "StorageTitle", "Cloud storage", Pad, 88f, 160f, 20f, 13f, DashTheme.TextDim);
         _storage = CardLabel(_signedInRoot, "Storage", "Loading…", 140f, 88f, Pad, 20f, 13f, DashTheme.Text, SemiboldFont);
         _storage.HorizontalAlignment.Value = TextHorizontalAlignment.Right;
@@ -316,6 +350,17 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         var fill = SettingsUI.Child(track, "Fill", float2.Zero, new float2(0f, 1f), float2.Zero, float2.Zero);
         _barPaint = SettingsUI.Panel(fill, DashTheme.Accent, color.Transparent, BarHeight * 0.5f);
         _barFill = SettingsUI.Rect(fill);
+        _groupRows = SettingsUI.Fill(_signedInRoot, "GroupStorage");
+        _groupTitle = CardLabel(_groupRows, "GroupTitle", "Group storage", Pad, 138f, 160f, 20f, 13f, DashTheme.TextDim);
+        _groupStorage = CardLabel(_groupRows, "GroupValue", string.Empty, 140f, 138f, Pad, 20f, 13f, DashTheme.Text, SemiboldFont);
+        _groupStorage.HorizontalAlignment.Value = TextHorizontalAlignment.Right;
+        var groupTrack = Row(_groupRows, "GroupTrack", 166f, BarHeight, Pad, Pad);
+        SettingsUI.Panel(groupTrack, DashTheme.Field, color.Transparent, BarHeight * 0.5f);
+        var groupFill = SettingsUI.Child(groupTrack, "Fill", float2.Zero, new float2(0f, 1f), float2.Zero, float2.Zero);
+        _groupBarPaint = SettingsUI.Panel(groupFill, DashTheme.Accent, color.Transparent, BarHeight * 0.5f);
+        _groupBarFill = SettingsUI.Rect(groupFill);
+        SetActive(_groupRows, false);
+        BuildAccountRow(_signedInRoot);
         _storageHint = Label(_signedInRoot, "StorageHint", "Checking storage…", 13f, DashTheme.TextDim,
             TextHorizontalAlignment.Left, float2.Zero, new float2(1f, 0f),
             new float2(Pad, Pad + 8f), new float2(-StatusRightInset, Pad + 28f));
@@ -416,7 +461,21 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
             TextHorizontalAlignment.Left, new float2(0f, 1f), new float2(1f, 1f),
             new float2(DialogPad, -52f), new float2(-DialogPad, -24f), BoldFont);
         _titleRect = SettingsUI.Rect(title.Slot);
-        CardLabel(_dialogPanel, "Subtitle", "Sign in to your Lumora account", DialogPad, 57f, DialogPad, 22f, 14f, DashTheme.TextDim);
+        CardLabel(_dialogPanel, "Subtitle", "Sign in to your Lumora account", DialogPad, 57f, DialogPad + CreateLinkWidth, 22f, 14f, DashTheme.TextDim);
+        // The way to a new account sits where a newcomer looks first, beside the line that asks for one.
+        var createLink = SettingsUI.Child(_dialogPanel, "CreateLink", new float2(1f, 1f), new float2(1f, 1f),
+            new float2(-(DialogPad + CreateLinkWidth), -79f), new float2(-DialogPad, -57f));
+        var createText = Label(createLink, "Text", AccountFlowLocale.CreateLink.Resolve(), 14f, DashTheme.Accent,
+            TextHorizontalAlignment.Right, float2.Zero, float2.One, float2.Zero, float2.Zero, SemiboldFont);
+        var createButton = createLink.AttachComponent<Button>();
+        var createInk = createButton.AddColorDriver(createText.Color, DashTheme.Accent, InteractionColorMode.Direct);
+        createInk.HighlightColor.Value = DashTheme.AccentHover;
+        createInk.PressedColor.Value = DashTheme.AccentPressed;
+        createButton.Clicked += (_, _) =>
+        {
+            if (!_busy)
+                OpenFlow(FlowPage.Register);
+        };
 
         _userField = BuildField(_dialogPanel, "Username", TopsPlain[1]);
         _passField = BuildField(_dialogPanel, "Password", TopsPlain[2]);
@@ -424,19 +483,38 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
 
         var rememberRow = Row(_dialogPanel, "Remember", TopsPlain[4], RememberHeight, DialogPad, DialogPad);
         _rememberRect = SettingsUI.Rect(rememberRow);
-        var box = SettingsUI.Child(rememberRow, "Box", new float2(0f, 0.5f), new float2(0f, 0.5f),
+        // The toggle is the box and its words only, so the right end of the row is free for the code link.
+        var toggle = SettingsUI.Child(rememberRow, "Toggle", float2.Zero, new float2(0f, 1f),
+            float2.Zero, new float2(RememberToggleWidth, 0f));
+        var box = SettingsUI.Child(toggle, "Box", new float2(0f, 0.5f), new float2(0f, 0.5f),
             new float2(0f, -11f), new float2(22f, 11f));
         _rememberBox = SettingsUI.Panel(box, DashTheme.Field, DashTheme.Outline, DashTheme.RadiusChip);
         _rememberCheck = CheckIcon(box, DashTheme.OnAccent);
-        Label(rememberRow, "Text", "Keep me signed in", 14f, DashTheme.TextDim,
+        Label(toggle, "Text", "Keep me signed in", 14f, DashTheme.TextDim,
             TextHorizontalAlignment.Left, float2.Zero, new float2(1f, 1f), new float2(34f, 0f), float2.Zero);
-        _rememberButton = rememberRow.AttachComponent<Button>();
+        _rememberButton = toggle.AttachComponent<Button>();
         _rememberButton.Clicked += (_, _) =>
         {
             _remember = !_remember;
             if (!_remember)
                 ForgetToken();
             UpdateRemember();
+        };
+
+        // Anyone who knows their account has two-factor on can open the code field before the first try,
+        // instead of failing once to be asked for it. -xlinka
+        var codeLink = SettingsUI.Child(rememberRow, "CodeLink", new float2(1f, 0f), new float2(1f, 1f),
+            new float2(-CodeLinkWidth, 0f), float2.Zero);
+        _codeLink = Label(codeLink, "Text", "Use 2FA code", 14f, DashTheme.Accent,
+            TextHorizontalAlignment.Right, float2.Zero, float2.One, float2.Zero, float2.Zero);
+        var codeButton = codeLink.AttachComponent<Button>();
+        var ink = codeButton.AddColorDriver(_codeLink.Color, DashTheme.Accent, InteractionColorMode.Direct);
+        ink.HighlightColor.Value = DashTheme.AccentHover;
+        ink.PressedColor.Value = DashTheme.AccentPressed;
+        codeButton.Clicked += (_, _) =>
+        {
+            if (!_busy)
+                ShowCodeField(!_needsCode);
         };
 
         var buttonRow = Row(_dialogPanel, "Actions", TopsPlain[5], ActionHeight, DialogPad, DialogPad);
@@ -561,8 +639,27 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         ApplyDialogLayout();
         UpdateFields();
         UpdateRemember();
+        UpdateCodeLink();
         UpdateSubmitButton();
         Repaint();
+    }
+
+    private void ShowCodeField(bool show)
+    {
+        _needsCode = show;
+        if (!show)
+            _code = string.Empty;
+        SetActive(_codeField?.Slot, show);
+        ApplyDialogLayout();
+        UpdateCodeLink();
+        UpdateSubmitButton();
+        SetFocus(show ? Focus.Code : _focus == Focus.Code ? Focus.Password : _focus);
+    }
+
+    private void UpdateCodeLink()
+    {
+        if (_codeLink != null && !_codeLink.IsDestroyed)
+            ListingStyle.SetText(_codeLink, _needsCode ? "Hide 2FA code" : "Use 2FA code");
     }
 
     private void ApplyDialogLayout()
@@ -611,6 +708,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         Paint(_userField, Focus.Username, _username, "Username or email");
         Paint(_passField, Focus.Password, new string('•', _password.Length), "Password");
         Paint(_codeField, Focus.Code, _code, "Two-factor code");
+        UpdateFlowFields();
     }
 
     private void Paint(Field? field, Focus which, string value, string placeholder)
@@ -684,8 +782,8 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
     // KEY INPUT (routed here by HomeScreen while this widget is docked on it)
     // The dialog is modal, so while it is up it takes the keyboard whole and everything else answers false.
 
-    public bool HasFieldFocus => _dialogOpen && _focus != Focus.None;
-    public string? CopyText => !_dialogOpen ? null : _focus switch
+    public bool HasFieldFocus => (_dialogOpen || _flowOpen) && _focus != Focus.None;
+    public string? CopyText => _flowOpen ? FlowCopyText : !_dialogOpen ? null : _focus switch
     {
         Focus.Username => _username,
         Focus.Code => _code,
@@ -694,6 +792,8 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
 
     public bool ConsumeChar(char c)
     {
+        if (_flowOpen)
+            return FlowChar(c);
         if (!_dialogOpen)
             return false;
         if (_focus == Focus.None || char.IsControl(c))
@@ -717,6 +817,8 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
 
     public bool ConsumeBackspace()
     {
+        if (_flowOpen)
+            return FlowBackspace();
         if (!_dialogOpen)
             return false;
         switch (_focus)
@@ -738,6 +840,8 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
 
     public bool ConsumeEnter()
     {
+        if (_flowOpen)
+            return FlowEnter();
         if (!_dialogOpen)
             return false;
         SetFocus(Focus.None);
@@ -747,6 +851,11 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
 
     public bool ConsumeEscape()
     {
+        if (_flowOpen)
+        {
+            CloseFlow();
+            return true;
+        }
         if (!_dialogOpen)
             return false;
         CloseSignInDialog();
@@ -808,10 +917,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
                 {
                     // 403 is the answer when the account has two-factor on and no code came with the
                     // request. Same credentials, resubmitted with the code.
-                    _needsCode = true;
-                    SetActive(_codeField?.Slot, true);
-                    ApplyDialogLayout();
-                    SetFocus(Focus.Code);
+                    ShowCodeField(true);
                     SetStatus(result.Message ?? "Enter your two-factor code.", DashTheme.Warning);
                 }
                 else
@@ -895,8 +1001,15 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
                 UpdateSubmitButton();
                 if (result.Success)
                     return;
-                ForgetToken();
-                SetStatus("Saved sign-in expired.", DashTheme.TextMuted);
+                // Only a refusal ends the saved sign in. The service being away, slow or erroring keeps it
+                // for the next launch, or one bad connection at startup signs you out for good.
+                if (result.Status is HttpStatusCode.Unauthorized or HttpStatusCode.BadRequest or HttpStatusCode.Forbidden)
+                {
+                    ForgetToken();
+                    SetStatus("Saved sign-in expired.", DashTheme.TextMuted);
+                    return;
+                }
+                SetStatus("Could not reach the sign-in service.", DashTheme.TextMuted);
             });
         }
         catch (Exception ex)
@@ -925,12 +1038,15 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         {
             var profile = await client.GetCurrentUser();
             var quota = await client.GetQuota();
+            var groups = await client.GetMyGroups();
+            var pool = await client.GetGroupStorage();
             OnUi(world, () =>
             {
                 if (!SignedIn || generation != _accountGeneration)
                     return;
                 ApplyProfile(profile);
                 ApplyQuota(quota, read, keepOnFailure: false);
+                ApplyGroupStorage(groups, pool, keepOnFailure: false);
             });
         }
         catch (Exception ex)
@@ -961,7 +1077,15 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         try
         {
             var quota = await client.GetQuota();
-            OnUi(world, () => ApplyQuota(quota, read, keepOnFailure: true));
+            var groups = await client.GetMyGroups();
+            var pool = await client.GetGroupStorage();
+            int generation = _accountGeneration;
+            OnUi(world, () =>
+            {
+                ApplyQuota(quota, read, keepOnFailure: true);
+                if (SignedIn && generation == _accountGeneration)
+                    ApplyGroupStorage(groups, pool, keepOnFailure: true);
+            });
         }
         catch (Exception ex)
         {
@@ -983,12 +1107,14 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
                 ListingStyle.SetText(_name, ProfileName);
                 // The display color comes back as hex, written in sRGB like every other token, so it has
                 // to be decoded before it lands on a vertex.
-                ListingStyle.SetTextColor(_name,
-                    ColorSwatchStore.TryParseHex(data.NameColor, out var tint) ? tint.ToLinear() : DashTheme.Text);
+                _nameInk = ColorSwatchStore.TryParseHex(data.NameColor, out var tint) ? tint.ToLinear() : DashTheme.Text;
+                _nameLink?.Bind(data.Id, _nameInk, !WidgetPanel.EditMode);
             }
-            if (_accountState != null && !_accountState.IsDestroyed)
-                ListingStyle.SetText(_accountState, data.IsVerified ? "Verified account" : "Signed in");
-            SetActive(_verified, data.IsVerified);
+            _profileKnown = true;
+            _profileVerified = data.IsVerified;
+            _twoFactorOn = data.TwoFactorEnabled;
+            ApplyEmailState();
+            ApplyTier(data.PatreonData);
             SetStatus(string.Empty, DashTheme.TextMuted);
             RememberToken(data.Id);
         }
@@ -1036,6 +1162,100 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
             if (_storageHint != null) ListingStyle.SetText(_storageHint, "Check your connection");
         }
 
+        Repaint();
+    }
+
+    // The tier name in the tier's own colour, both straight from the account service. A tier with no
+    // colour of its own reads in the text colour; nobody who is not an active supporter shows a tier.
+    private void ApplyTier(PatreonInfo? patreon)
+    {
+        if (_tier == null || _tier.IsDestroyed)
+            return;
+        bool show = patreon is { IsActiveSupporter: true } && !string.IsNullOrWhiteSpace(patreon.TierName);
+        SetActive(_tier.Slot.Parent, show);
+        if (!show)
+            return;
+        ListingStyle.SetText(_tier, patreon!.TierName);
+        ListingStyle.SetTextColor(_tier,
+            ColorSwatchStore.TryParseHex(patreon.TierColor, out var tint) ? tint.ToLinear() : DashTheme.Text);
+    }
+
+    // The group storage this account answers for. An owner's tier gives ONE pool for all the groups they own,
+    // so an owner sees the whole of it, used across every one of those groups; anyone else sees their own
+    // slice of a group they are in. Neither, and there is no second bar. A read that fails leaves the last
+    // bar up rather than blanking it.
+    private void ApplyGroupStorage(ApiResponse<List<GroupInfo>> groups, ApiResponse<GroupStorageInfo> pool, bool keepOnFailure)
+    {
+        if (IsDestroyed)
+            return;
+
+        if (pool.Success && pool.Data is { TotalBytes: > 0 } owned && owned.Groups.Count > 0)
+        {
+            int count = owned.Groups.Count;
+            DrawGroupBar(count == 1 ? "Group storage · 1 group" : $"Group storage · {count} groups",
+                owned.UsedBytes, owned.TotalBytes);
+            return;
+        }
+
+        if (!groups.Success || groups.Data == null || (!pool.Success && keepOnFailure))
+        {
+            if (!keepOnFailure)
+                ShowGroupStorage(false);
+            return;
+        }
+
+        GroupInfo? slice = null;
+        foreach (var group in groups.Data)
+        {
+            if (group.MyRole != "Owner" && group.MyAllocatedBytes > 0)
+            {
+                slice = group;
+                break;
+            }
+        }
+        if (slice == null)
+        {
+            ShowGroupStorage(false);
+            return;
+        }
+
+        string name = string.IsNullOrWhiteSpace(slice.Tag) ? slice.Name : slice.Tag;
+        DrawGroupBar($"Group storage · {name}", slice.MyUsedBytes, slice.MyAllocatedBytes);
+    }
+
+    private void DrawGroupBar(string title, long usedBytes, long limitBytes)
+    {
+        long used = System.Math.Max(0, usedBytes);
+        long limit = System.Math.Max(0, limitBytes);
+        float fraction = limit <= 0 ? 1f : (float)System.Math.Clamp((double)used / limit, 0d, 1d);
+        if (_groupTitle != null && !_groupTitle.IsDestroyed)
+            ListingStyle.SetText(_groupTitle, title);
+        if (_groupStorage != null && !_groupStorage.IsDestroyed)
+            ListingStyle.SetText(_groupStorage, $"{FormatSize(used)} of {FormatSize(limit)}");
+        if (_groupBarPaint != null && !_groupBarPaint.IsDestroyed)
+            _groupBarPaint.Color.Value = fraction >= 1f ? DashTheme.Negative : fraction >= 0.85f ? DashTheme.Warning : DashTheme.Accent;
+        if (_groupBarFill != null && !_groupBarFill.IsDestroyed)
+            SettingsUI.SetAnchors(_groupBarFill, float2.Zero, new float2(fraction, 1f));
+        ShowGroupStorage(true);
+    }
+
+    private void ShowGroupStorage(bool show)
+    {
+        SetActive(_groupRows, show);
+        if (HasGroupStorage == show)
+            return;
+        HasGroupStorage = show;
+        FitCard();
+    }
+
+    // The card grows a row for group storage and one for the account's own actions, the actions under whichever
+    // comes last.
+    private void FitCard()
+    {
+        float extra = (HasGroupStorage ? GroupRowsHeight : 0f) + (HasAccountRow ? AccountRowHeight : 0f);
+        MinSize.Value = new float2(MinSize.Value.x, 188f + extra);
+        PreferredSize.Value = new float2(PreferredSize.Value.x, CardBaseHeight + extra);
+        PlaceAccountRow();
         Repaint();
     }
 
@@ -1117,6 +1337,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         _hooked = true;
         client.Authenticated += OnAuthenticated;
         client.SignedOut += OnSignedOut;
+        AccountEmail.Changed += OnEmailChanged;
     }
 
     private void Unhook()
@@ -1127,6 +1348,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         _hooked = false;
         client.Authenticated -= OnAuthenticated;
         client.SignedOut -= OnSignedOut;
+        AccountEmail.Changed -= OnEmailChanged;
     }
 
     private void OnAuthenticated(Lumora.Nexus.Cloud.Cdn.Session session)
@@ -1155,7 +1377,12 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
             _focus = Focus.None;
             _resumeTried = true;
             ProfileName = string.Empty;
+            _profileKnown = false;
+            _profileVerified = false;
+            _twoFactorOn = false;
+            CloseFlow();
             ApplyState();
+            ApplyEmailState();
         });
     }
 
@@ -1164,6 +1391,7 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
         ++_accountGeneration;
         ++_storageReads;
         ProfileName = string.Empty;
+        _nameLink?.Bind(null, _nameInk);
         HasStorageUsage = false;
         StorageUsedBytes = StorageLimitBytes = 0;
         StorageLabel = "Loading storage…";
@@ -1174,6 +1402,8 @@ public sealed class AccountWidgetPreset : HomeWidgetPreset
             ListingStyle.SetText(_storageHint, "Checking storage…");
         if (_barFill != null && !_barFill.IsDestroyed)
             SettingsUI.SetAnchors(_barFill, float2.Zero, new float2(0f, 1f));
+        ApplyTier(null);
+        ShowGroupStorage(false);
     }
 
     // The account service answers on a background thread; nothing here may touch the UI tree until it is

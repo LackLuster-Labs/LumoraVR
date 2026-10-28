@@ -31,7 +31,7 @@ namespace Lumora.Core.Components.UI;
 // it does not go on this screen. -xlinka
 [ComponentCategory("Hidden")]
 [UserspaceOnly]
-public sealed class SettingsScreen : DashboardScreen
+public sealed partial class SettingsScreen : DashboardScreen
 {
     private const string KindBinding = "binding";
     private const string KindLocomotion = "locomotion";
@@ -43,6 +43,8 @@ public sealed class SettingsScreen : DashboardScreen
     // Web access rows sort after every other General row, all of which sit at Order 0, so the section
     // stays last however often its rows are torn out and re-added.
     private const long WebAccessOrder = 1L << 20;
+    // Favourites are rebuilt the same way and sit just above Web Access.
+    private const long FavouritesOrder = 1L << 19;
 
     private const float MetresPerInch = 0.0254f;
 
@@ -71,6 +73,8 @@ public sealed class SettingsScreen : DashboardScreen
     private ListingDropdown? _streamDeviceChoice;
     private readonly List<ListingItem> _webAccessRows = new();
     private int _webAccessVersion = -1;
+    private readonly List<ListingItem> _favouriteRows = new();
+    private int _favouritesVersion = -1;
     private ListingSlider? _heightRow;
     private ListingSlider? _tooltipDelayRow;
     private LocaleText _controlsStatus = "Settings.Controls.Hint".AsLocale("Click a binding to rebind it. Escape cancels.");
@@ -170,6 +174,7 @@ public sealed class SettingsScreen : DashboardScreen
         BuildDeviceChoices(input: true);
         BuildDeviceChoices(input: false);
         BuildStreamDeviceChoices();
+        BuildNetworkChoices();
         _sidebarView?.RefreshValues();
         _entryView?.RefreshValues();
         if (_title != null && _activeItem != null)
@@ -187,11 +192,13 @@ public sealed class SettingsScreen : DashboardScreen
         mapper.Map<ListingChoice>(new SettingsChoiceTemplate(_fonts) { Fit = _rowFit });
         mapper.Map<ListingDropdown>(new SettingsDropdownTemplate(_fonts) { Fit = _rowFit });
         mapper.Map<ListingAction>(new SettingsActionTemplate(_fonts) { Fit = _rowFit });
+        mapper.Map<ListingTextField>(new SettingsTextFieldTemplate(_fonts) { Fit = _rowFit });
         mapper.Map<ListingLabel>(labels);
         mapper.Fallback(labels);
         mapper.MapKind(KindBinding, new SettingsBindingTemplate(_fonts, this) { Fit = _rowFit });
         mapper.MapKind(KindLocomotion, new SettingsLocomotionTemplate(_fonts, this) { Fit = _rowFit });
         mapper.MapKind(KindWebAccess, new WebAccessRowTemplate(_fonts, this) { Fit = _rowFit });
+        mapper.MapKind(KindProse, new SettingsProseTemplate(_fonts) { Fit = _rowFit });
         return mapper;
     }
 
@@ -223,6 +230,8 @@ public sealed class SettingsScreen : DashboardScreen
         AddCategory("movement", "Settings.Category.Movement".AsLocale("Movement"));
         AddCategory("controls", "Settings.Category.Controls".AsLocale("Controls"));
         AddCategory("interface", "Settings.Category.Interface".AsLocale("Interface"));
+        AddCategory(NetworkPath, "Settings.Category.Network".AsLocale("Network"));
+        AddCategory(BackupPath, "Settings.Category.Backup".AsLocale("Backup"));
     }
 
     private void AddCategory(string key, LocaleText label)
@@ -243,6 +252,8 @@ public sealed class SettingsScreen : DashboardScreen
         _entryView?.SetPath(item.Key);
         if (_title != null)
             ListingStyle.SetText(_title, item.Label);
+        if (item.Key == NetworkPath)
+            MeasureNodes(force: false);
         MarkDirty();
     }
 
@@ -261,6 +272,8 @@ public sealed class SettingsScreen : DashboardScreen
         BuildMovement();
         BuildControls();
         BuildInterface();
+        BuildNetwork();
+        BuildBackup();
     }
 
     private void BuildGeneral()
@@ -273,6 +286,11 @@ public sealed class SettingsScreen : DashboardScreen
         _heightRow = Slider(path, "height", "Settings.General.Height".AsLocale("Height"), SettingsCatalog.UserHeight,
             () => EngineSettings.UserHeight, v => EngineSettings.UserHeight = v, DescribeHeight);
         ApplyHeightStep();
+        // Lifts a seated player to the eye height the row above gives. Turning it on measures the headset,
+        // which a screen cannot do, so there it stays off.
+        Toggle(path, "seatedmode", "Settings.General.SeatedMode".AsLocale("Seated Mode"),
+            () => EngineSettings.SeatedMode, v => Lumora.Core.Input.SeatedMode.SetEnabled(v),
+            "Settings.General.SeatedMode.Hint".AsLocale("Sit in VR, stand at full height"));
 
         Header(path, "Video", "Settings.General.Section.Video".AsLocale("Video"));
         // The cap a link is resolved at when the player itself asks for nothing in particular. Decode
@@ -292,11 +310,23 @@ public sealed class SettingsScreen : DashboardScreen
         Slider(path, "assetcache", "Settings.General.AssetCache".AsLocale("Asset Cache"), SettingsCatalog.AssetCacheGigabytes,
             () => EngineSettings.AssetCacheGigabytes, v => EngineSettings.AssetCacheGigabytes = (int)v, v => $"{(int)v} GB");
 
+        _entries.Add(path, new ListingHeader(path + ".h.Favourites", "Settings.General.Section.Favourites".AsLocale("Favourites"))
+        {
+            Order = FavouritesOrder,
+        });
+        BuildFavouriteRows();
+
         _entries.Add(path, new ListingHeader(path + ".h.WebAccess", "Settings.General.Section.WebAccess".AsLocale("Web Access"))
         {
             Order = WebAccessOrder,
         });
         BuildWebAccessRows();
+    }
+
+    private void BuildFavouriteRows()
+    {
+        _favouritesVersion = Favourites.Version;
+        FavouriteSettingsRows.Build(_entries, GeneralPath, _favouriteRows, FavouritesOrder);
     }
 
     // WEB ACCESS
@@ -683,25 +713,6 @@ public sealed class SettingsScreen : DashboardScreen
         }
 
         Header(path, "Image", "Settings.Graphics.Section.Image".AsLocale("Image"));
-        // The renderer shipped on the platform's untouched defaults: a LINEAR tonemapper with a white
-        // point of 1.0, which clips every value above 1 - exactly the range colorHDR exists to carry.
-        // AgX holds saturated brights where ACES skews them toward white, and saturated brights are
-        // what emissives are made of.
-        _entries.Add(path, new ListingChoice("tonemap", "Settings.Graphics.Tonemap".AsLocale("Tonemap"))
-        {
-            Options = EngineSettings.TonemapOptions,
-            Read = () => EngineSettings.Tonemap,
-            Write = index => EngineSettings.Tonemap = index,
-        });
-        // The luminance that maps to full white. At 1 everything brighter clips, which is the default
-        // that made every emissive flat.
-        Slider(path, "exposure", "Settings.Graphics.WhitePoint".AsLocale("White Point"), SettingsCatalog.Exposure,
-            () => EngineSettings.Exposure, v => EngineSettings.Exposure = v, v => $"{v:0.#}");
-        // After the tonemapper. AgX flattens the midtones by design; these put the punch back.
-        Slider(path, "contrast", "Settings.Graphics.Contrast".AsLocale("Contrast"), SettingsCatalog.Contrast,
-            () => EngineSettings.Contrast, v => EngineSettings.Contrast = v, v => $"{v:0.00}");
-        Slider(path, "saturation", "Settings.Graphics.Saturation".AsLocale("Saturation"), SettingsCatalog.Saturation,
-            () => EngineSettings.Saturation, v => EngineSettings.Saturation = v, v => $"{v:0.00}");
         if (HasDesktopWindow)
         {
             Slider(path, "bloom", "Settings.Graphics.Bloom".AsLocale("Bloom"), SettingsCatalog.Bloom,
@@ -776,6 +787,26 @@ public sealed class SettingsScreen : DashboardScreen
         // else authored.
         Slider(path, "shadowdistance", "Settings.Graphics.ShadowDistance".AsLocale("Shadow Distance"), SettingsCatalog.ShadowDistanceScale,
             () => EngineSettings.ShadowDistanceScale, v => EngineSettings.ShadowDistanceScale = v, v => $"{v:0.00}x");
+        // Other people's avatars, from where you stand. Yours is never touched by any of the three.
+        Toggle(path, "reducedistantavatars", "Settings.Graphics.ReduceDistantAvatars".AsLocale("Ease Off Distant Avatars"),
+            () => EngineSettings.ReduceDistantAvatars, v => EngineSettings.ReduceDistantAvatars = v,
+            "Settings.Graphics.ReduceDistantAvatars.Hint".AsLocale("Avatars behind you or far away animate and swing less often"));
+        Slider(path, "avatarshadowdistance", "Settings.Graphics.AvatarShadowDistance".AsLocale("Avatar Shadow Distance"), SettingsCatalog.AvatarShadowDistance,
+            () => EngineSettings.AvatarShadowDistance, v => EngineSettings.AvatarShadowDistance = v, v => v <= 0f ? "Always" : $"{v:0} m");
+        Slider(path, "avatardrawdistance", "Settings.Graphics.AvatarDrawDistance".AsLocale("Avatar Draw Distance"), SettingsCatalog.AvatarDrawDistance,
+            () => EngineSettings.AvatarDrawDistance, v => EngineSettings.AvatarDrawDistance = v, v => v <= 0f ? "Always" : $"{v:0} m");
+        // Past this, or further down the list than the nearest few, an avatar is a picture of itself.
+        Slider(path, "avatarstandindistance", "Settings.Graphics.AvatarStandInDistance".AsLocale("Avatar Picture Distance"), SettingsCatalog.AvatarStandInDistance,
+            () => EngineSettings.AvatarStandInDistance, v => EngineSettings.AvatarStandInDistance = v, v => v <= 0f ? "Never" : $"{v:0} m");
+        Slider(path, "avatarfulldetail", "Settings.Graphics.AvatarFullDetailCount".AsLocale("Full Avatars Nearby"), SettingsCatalog.AvatarFullDetailCount,
+            () => EngineSettings.AvatarFullDetailCount, v => EngineSettings.AvatarFullDetailCount = (int)MathF.Round(v), v => v <= 0f ? "Everyone" : $"{v:0}");
+        _entries.Add(path, new ListingChoice("othersavatarshaders", "Settings.Graphics.OthersAvatarShaders".AsLocale("Other Avatars' Shaders"))
+        {
+            Options = EngineSettings.OthersAvatarShaderOptions,
+            Read = () => EngineSettings.OthersAvatarShaders,
+            Write = index => EngineSettings.OthersAvatarShaders = index,
+            DetailText = "Settings.Graphics.OthersAvatarShaders.Hint".AsLocale("Simple draws other people's toon-shaded avatars with plain colours and textures, many times cheaper up close"),
+        });
         if (DrawsOwnScreen)
         {
             // Point and spot lights that cast at once, nearest and brightest first; the rest light
@@ -881,6 +912,9 @@ public sealed class SettingsScreen : DashboardScreen
         Toggle(path, "photosinventory", "Settings.Photos.ToInventory".AsLocale("Save Photos to Inventory"),
             () => EngineSettings.PhotosToInventory, v => EngineSettings.PhotosToInventory = v,
             "Settings.Photos.ToInventory.Hint".AsLocale("Every photo also goes into the Photos folder of your inventory"));
+        Toggle(path, "showcapture", "Settings.Photos.ShowCapture".AsLocale("Show When I'm Recording"),
+            () => EngineSettings.ShowCapture, v => EngineSettings.ShowCapture = v,
+            "Settings.Photos.ShowCapture.Hint".AsLocale("Others see REC or LIVE over your name while OBS records or streams"));
 
         Header(path, "Reticle", "Settings.Interface.Section.Reticle".AsLocale("Reticle"));
         // The desktop cursor drawer reads these through InterfaceSettings, which forwards to the same
@@ -907,6 +941,14 @@ public sealed class SettingsScreen : DashboardScreen
         Toggle(path, "avatararrival", "Settings.Interface.AvatarArrival".AsLocale("Avatar Arrival"),
             () => EngineSettings.AvatarArrival, v => EngineSettings.AvatarArrival = v,
             "Settings.Interface.AvatarArrival.Hint".AsLocale("Show a glowing stand-in with progress while someone's avatar loads"));
+
+        Header(path, "Chat", "Settings.Interface.Section.Chat".AsLocale("Chat"));
+        Toggle(path, "chatbubbles", "Settings.Interface.ChatBubbles".AsLocale("Show Chat Bubbles"),
+            () => EngineSettings.ShowChatBubbles, v => EngineSettings.ShowChatBubbles = v,
+            "Settings.Interface.ChatBubbles.Hint".AsLocale("A bubble beside someone's head while they type and after they send"));
+        Toggle(path, "desktopchat", "Settings.Interface.DesktopChat".AsLocale("Show Chat Box on Desktop"),
+            () => EngineSettings.ShowDesktopChat, v => EngineSettings.ShowDesktopChat = v,
+            "Settings.Interface.DesktopChat.Hint".AsLocale("New lines show in the bottom left corner for a while. Off, it only shows while you type"));
 
         Header(path, "Dashboard", "Settings.Interface.Section.Dashboard".AsLocale("Dashboard"));
         // Freeform leaves the panel where you put it instead of pinning it in front of your view. VR
@@ -949,6 +991,15 @@ public sealed class SettingsScreen : DashboardScreen
             () => EngineSettings.HapticsStrength, v => EngineSettings.HapticsStrength = v,
             v => v <= 0.001f ? "Off" : $"{v * 100f:0}%");
         _entries.Add(path, new ListingLabel("pad", "Settings.Controls.Gamepad".AsLocale("Gamepad"), DescribePad));
+        // A pad's look stick on a screen. A headset turns with its own stick and Turn instead.
+        if (DrawsOwnScreen)
+        {
+            Slider(path, "sticklook", "Settings.Controls.StickLookSpeed".AsLocale("Stick Look Speed"), SettingsCatalog.StickLookSpeed,
+                () => EngineSettings.StickLookSpeed, v => EngineSettings.StickLookSpeed = v, v => $"{v:0.00}x");
+            Toggle(path, "invertsticklook", "Settings.Controls.InvertStickLook".AsLocale("Invert Stick Look"),
+                () => EngineSettings.InvertStickLook, v => EngineSettings.InvertStickLook = v,
+                "Settings.Controls.InvertStickLook.Hint".AsLocale("Push the look stick up to look down"));
+        }
         _entries.Add(path, new ListingLabel("lastinput", "Settings.Controls.LastInput".AsLocale("Last input"), DescribeLastInput));
         _entries.Add(path, new ListingAction("resetall", "Settings.Controls.ResetAll".AsLocale("Every control back to stock"))
         {
@@ -1133,6 +1184,10 @@ public sealed class SettingsScreen : DashboardScreen
         ApplyHeightStep();
         if (WebAccess.Shared.Version != _webAccessVersion)
             BuildWebAccessRows();
+        if (Favourites.Version != _favouritesVersion)
+            BuildFavouriteRows();
+        if (_activeCategory == NetworkPath)
+            RefreshNodeChoice(delta: RefreshInterval);
         _entryView?.RefreshValues();
     }
 
@@ -1176,8 +1231,7 @@ public sealed class SettingsScreen : DashboardScreen
         switch (map.CaptureStatus)
         {
             case InputBindingMap.CaptureState.Listening:
-                _controlsStatus = "Settings.Controls.CapturePrompt"
-                    .AsLocale("For \"{0}\": {1}. Escape cancels.", map.CaptureTarget?.Label ?? string.Empty, map.CapturePrompt);
+                _controlsStatus = CapturePromptText(map.CaptureTarget?.Label ?? string.Empty, map.CapturePrompt);
                 break;
 
             case InputBindingMap.CaptureState.Captured:
@@ -1214,10 +1268,15 @@ public sealed class SettingsScreen : DashboardScreen
             return;
         map.ClearCapture();
         map.BeginCapture(action, devices);
-        _controlsStatus = "Settings.Controls.CapturePrompt"
-            .AsLocale("For \"{0}\": {1}. Escape cancels.", action.Label, map.CapturePrompt);
+        _controlsStatus = CapturePromptText(action.Label, map.CapturePrompt);
         _entryView?.RefreshValues();
     }
+
+    // A pad has no Escape. Its listener lets go on its own when nothing comes.
+    private static LocaleText CapturePromptText(string label, string prompt)
+        => InputHints.PadNames
+            ? "Settings.Controls.CapturePromptPad".AsLocale("For \"{0}\": {1}. Leave it a few seconds to cancel.", label, prompt)
+            : "Settings.Controls.CapturePrompt".AsLocale("For \"{0}\": {1}. Escape cancels.", label, prompt);
 
     internal void ClearAllBindings(InputAction action)
     {

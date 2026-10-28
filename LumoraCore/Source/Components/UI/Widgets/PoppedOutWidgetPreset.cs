@@ -37,6 +37,7 @@ public sealed class PoppedOutWidgetPreset : HomeWidgetPreset
     private readonly List<WindowRow> _rows = new();
     private readonly List<WindowRow> _scrolledRows = new();
     private readonly List<DashWindow> _out = new();
+    private readonly List<DashWindow> _listed = new();
     private RectTransform? _titleRect;
     private Text? _none;
     private Slot? _plain;
@@ -121,6 +122,15 @@ public sealed class PoppedOutWidgetPreset : HomeWidgetPreset
             if (window.State == DashWindow.WindowState.Out)
                 _out.Add(window);
         }
+        // The revision moves on every raise, tile and open; the card only changes when the windows out do. Its
+        // repaint re-meshes the whole dash, which every focus change used to set off half a second later.
+        if (_count >= 0 && SameAsListed())
+        {
+            _out.Clear();
+            return;
+        }
+        _listed.Clear();
+        _listed.AddRange(_out);
         bool scrolling = _out.Count > VisibleRows;
         while (scrolling && _scrolledRows.Count < _out.Count)
             _scrolledRows.Add(NewRow(_contentRect!.Slot, _scrolledRows.Count));
@@ -151,6 +161,18 @@ public sealed class PoppedOutWidgetPreset : HomeWidgetPreset
         _count = _out.Count;
         _out.Clear();
         Repaint();
+    }
+
+    private bool SameAsListed()
+    {
+        if (_listed.Count != _out.Count)
+            return false;
+        for (int i = 0; i < _out.Count; i++)
+        {
+            if (!ReferenceEquals(_listed[i], _out[i]))
+                return false;
+        }
+        return true;
     }
 
     private void Fill(List<WindowRow> rows, int count)

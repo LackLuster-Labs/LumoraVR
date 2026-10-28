@@ -3,7 +3,6 @@
 
 using System.Collections.Generic;
 using Lumora.Core.Localization;
-using Lumora.Nexus.Cloud;
 
 namespace Lumora.Core.Components.UI;
 
@@ -27,7 +26,7 @@ public static class AccessLabels
 
     // What each level does today, said plainly. Friends lists do not exist yet, and the session directory
     // never lists a friends-only session to anybody, so the hint says that rather than promising a list.
-    public static readonly LocaleText HintPrivate = "Access.Hint.Private".AsLocale("Not listed anywhere.");
+    public static readonly LocaleText HintPrivate = "Access.Hint.Private".AsLocale("Not listed anywhere. Only you, your co-hosts and people you invite get in.");
     public static readonly LocaleText HintLan = "Access.Hint.LAN".AsLocale("Listed to people on your local network.");
     public static readonly LocaleText HintFriends =
         "Access.Hint.Friends".AsLocale("Unlisted until friends lists arrive.");
@@ -35,23 +34,9 @@ public static class AccessLabels
     public static readonly LocaleText HintMembersOnly =
         "Access.Hint.MembersOnly".AsLocale("Listed for everyone. Only the group's members get in.");
 
-    private static readonly World.WorldAccessLevel[] WorldLevels =
-    {
-        World.WorldAccessLevel.Private,
-        World.WorldAccessLevel.LAN,
-        World.WorldAccessLevel.Contacts,
-        World.WorldAccessLevel.ContactsPlus,
-        World.WorldAccessLevel.Anyone,
-    };
-
-    private static readonly World.WorldAccessLevel[] GroupLevels =
-    {
-        World.WorldAccessLevel.GroupMembers,
-        World.WorldAccessLevel.GroupPublic,
-    };
-
+    // The same sets the join level defaults choose from, so a default is always a level the screens offer.
     public static IReadOnlyList<World.WorldAccessLevel> Offered(bool hostedForGroup)
-        => hostedForGroup ? GroupLevels : WorldLevels;
+        => hostedForGroup ? SettingsCatalog.GroupJoinLevel.Options : SettingsCatalog.DefaultJoinLevel.Options;
 
     public static LocaleText Label(World.WorldAccessLevel level) => level switch
     {
@@ -73,14 +58,6 @@ public static class AccessLabels
         World.WorldAccessLevel.GroupMembers or World.WorldAccessLevel.GroupPlus
             => hostedForGroup ? HintMembersOnly : HintPrivate,
         _ => HintAnyone,
-    };
-
-    public static LocaleText Label(SessionVisibility visibility) => visibility switch
-    {
-        SessionVisibility.Private => Private,
-        SessionVisibility.LAN => Lan,
-        SessionVisibility.Contacts => Friends,
-        _ => Anyone,
     };
 
     public static LocaleText GroupLabel(bool membersOnly) => membersOnly ? MembersOnly : Anyone;

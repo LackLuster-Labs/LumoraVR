@@ -31,7 +31,7 @@ public sealed class LeaveWorldWidgetPreset : ActionWidgetPreset
     {
         var world = FocusedWorld;
         var dash = Dash;
-        if (world == null || dash == null)
+        if (world == null || dash == null || IsLocalHome(world))
             return;
         foreach (var screen in dash.Screens)
         {

@@ -417,9 +417,8 @@ public sealed class PanelPlacement : Component
         }
     }
 
-    // Whether the view went to another frame in one step since the last update: another world focused, a new
-    // root, a root override taken up or put down. The frame moving on its own is the wearer walking and turning,
-    // which each mode answers its own way.
+    // Follow panels ride locomotion immediately, leaving only tracked head motion to ease toward.
+    // World and facing panels stay put unless the view changes to a different origin. -xlinka
     private bool StepOrigin(out float3 shift, out floatQ turn)
     {
         shift = float3.Zero;
@@ -427,7 +426,8 @@ public sealed class PanelPlacement : Component
         if (!TryOriginFrame(out var world, out var root, out var frame, out var position, out var rotation))
             return false;
         bool jumped = _originSeen && (!ReferenceEquals(world, _originWorld) || !ReferenceEquals(root, _originRoot)
-            || !ReferenceEquals(frame, _originSlot));
+            || !ReferenceEquals(frame, _originSlot)
+            || (Mode == PanelAnchor.Follow && (position != _originPosition || rotation != _originRotation)));
         if (jumped)
             FrameShift(_originPosition, _originRotation, position, rotation, out shift, out turn);
         _originWorld = world;

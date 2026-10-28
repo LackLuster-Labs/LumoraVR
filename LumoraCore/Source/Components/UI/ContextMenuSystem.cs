@@ -211,6 +211,7 @@ public class ContextMenuSystem : Component
         IsOpen.Value = true;
 
         _openTime = 0f;
+        _edgeArmed = Engine.Current?.InputInterface?.VR_Active == true;
         PositionMenu(CurrentContext.Pointer);
         RebuildVisual();
         SuppressLocomotion();
@@ -265,6 +266,7 @@ public class ContextMenuSystem : Component
         _shown = true;
         IsOpen.Value = true;
         _openTime = 0f;
+        _edgeArmed = Engine.Current?.InputInterface?.VR_Active == true;
         PositionMenu(CurrentContext.Pointer);
         RebuildVisual();
         SuppressLocomotion();
@@ -557,6 +559,7 @@ public class ContextMenuSystem : Component
     public override void OnDestroy()
     {
         ReleaseLocomotionSuppression();
+        DropStickHold();
         DestroyVisual();
         base.OnDestroy();
     }
@@ -580,10 +583,15 @@ public class ContextMenuSystem : Component
             Close();
             return;
         }
-        if (_heldState != null && !_shown)
+        // Another world in front: the ring goes, and the hands are that world's now.
+        if (_shown && World?.Focus == World.WorldFocus.Background)
+            Close();
+        if ((_heldState != null || _cursorFreed) && !_shown)
             ReleaseLocomotionSuppression();
+        UpdateStickHold();
         RefreshItems();
         UpdateDialInput();
+        PinToView();
         UpdateVisuals(delta);
         UpdateOpeningPressGuard();
         UpdateFlickSelect();
@@ -874,16 +882,14 @@ public class ContextMenuSystem : Component
         return false;
     }
 
-    // Desktop selection: mouse look is frozen while the menu is open and the
-    // mouse deflects the hand laser instead (HandTool.UpdateDesktopMenuAim),
-    // so the laser cursor is the single pointer and hover/click flow through
-    // the normal laser-canvas path.
-    private bool _restoreMouseLook;
-
     // Close when the pointer wanders past the outermost control by EdgeMargin: moving the aim well off the
     // menu dismisses it without a button press. Set with each layout.
     private float _edgeRadius = EdgeMin;
     private float _openTime;
+    // On a screen the edge only closes the ring once the pointer has been over its controls: one that opens
+    // with the arrow outside its reach (pulled in from the window's edge) waits for the arrow to come in rather
+    // than shutting itself a moment later. In a headset it is armed from the start, as it always was.
+    private bool _edgeArmed;
 
     private void UpdateEdgeClose(float delta)
     {
@@ -905,11 +911,14 @@ public class ContextMenuSystem : Component
         // Pointing away from the plane entirely also counts as leaving.
         if (!TryAimPoint(out var point, out bool behind))
         {
-            if (behind)
+            if (behind && _edgeArmed)
                 Close();
             return;
         }
-        if (MathF.Sqrt(point.x * point.x + point.y * point.y) > _edgeRadius)
+        float reach = MathF.Sqrt(point.x * point.x + point.y * point.y);
+        if (reach <= _edgeRadius - EdgeMargin)
+            _edgeArmed = true;
+        else if (reach > _edgeRadius && _edgeArmed)
             Close();
     }
 
@@ -935,7 +944,16 @@ public class ContextMenuSystem : Component
         // slams the menu shut the moment the aim leaves the ring). -xlinka
         float3 origin, direction;
         var laser = rayOrigin.GetComponent<Interaction.InteractionLaser>();
-        if (laser != null)
+        var input = Engine.Current?.InputInterface;
+        if (input?.IsVRActive == false && input.CursorFree && input.DesktopCursorRayValid
+            && TryDesktopView(out var viewPosition, out var viewRotation))
+        {
+            // The menu has already followed the view this update. Use the same view for its pointer,
+            // or walking makes yesterday's cast look like the cursor left the ring. -xlinka
+            origin = viewPosition;
+            direction = viewRotation * (input.DesktopCameraRotation.Inverse * input.DesktopCursorRayDirection);
+        }
+        else if (laser != null)
         {
             origin = laser.CastOrigin;
             direction = laser.CastDirection;
@@ -985,7 +1003,7 @@ public class ContextMenuSystem : Component
         dial.Turning = false;
         var side = CurrentContext?.Side;
         var actions = Engine.Current?.InputInterface?.Actions;
-        if (side != null && actions != null)
+        if (side != null && actions != null && HasStick(side.Value))
         {
             var push = actions.Interaction(side.Value).Stick.Value;
             float magnitude = MathF.Sqrt(push.x * push.x + push.y * push.y);
@@ -1025,8 +1043,8 @@ public class ContextMenuSystem : Component
             PulseHand(TouchHaptics.Light);
     }
 
-    // Deflect the summoning hand's stick toward an item, release to pick it.
-    // Locomotion is suppressed while open so the gesture doesn't snap-turn.
+    // Deflect the summoning hand's stick toward an item, release to pick it. The ring holds that stick while
+    // it is up (UpdateStickHold), so the gesture never walks or snap-turns.
     private void UpdateFlickSelect()
     {
         if (!_shown || _builtItems.Count == 0)
@@ -1038,6 +1056,13 @@ public class ContextMenuSystem : Component
         var side = CurrentContext?.Side;
         if (side == null)
             return;
+
+        if (!HasStick(side.Value))
+        {
+            if (_flickItem != null)
+                SetFlickItem(null);
+            return;
+        }
 
         var actions = Engine.Current?.InputInterface?.Actions;
         if (actions == null)
@@ -1092,6 +1117,119 @@ public class ContextMenuSystem : Component
         _flickItem = item;
     }
 
+    // ── The summoning hand's stick ──────────────────────────────────────────
+
+    // In a headset the ring shares one control with locomotion: its own hand's stick, which the flick and the
+    // dial read. That is all it takes. The other hand walks, turns and flies as if the ring were not there, and
+    // the summoning hand keeps its trigger for the plates, its grip, its stick click and, where the controller
+    // has one beside the stick, its trackpad. The ring used to take the whole desktop input channel here, and
+    // in a headset that silenced every locomotion module on both hands for as long as it was up.
+    //
+    // The hold is on the controls the hand's flick action is bound to (the thumbstick, or a wand's trackpad,
+    // or whatever the user moved it to), at the hand's own priority in the action map: the flick reads them
+    // live, walking and turning a set below read them centred. The ring takes the stick once it has seen it at
+    // rest since opening, so a thumb still walking when a confirm comes up keeps walking and a stick already
+    // pushed never picks anything, and keeps it past the close until it is back at rest, so the release that
+    // picked an item never turns or walks. -xlinka
+    private const float StickRest = 0.15f;
+    // A ring that has not stepped for this many input passes stops holding, whatever it last said. Counted in
+    // passes, not time, so one long hitch never lets a held stick through.
+    private const int StickHoldStalePasses = 30;
+
+    private static readonly Input.Chirality[] StickHands = { Input.Chirality.Left, Input.Chirality.Right };
+
+    // One bit per hand whose stick the ring has. Written on the world update, read by the input pass.
+    private int _stickHands;
+    private int _stickPassesSinceStep;
+    private Input.Actions.InputBindingMap? _stickMap;
+
+    private static int StickBit(Input.Chirality side)
+        => side == Input.Chirality.Left ? 1 : side == Input.Chirality.Right ? 2 : 0;
+
+    // Whether the flick and the dial may read this hand's stick: in a headset once the ring has it. On a screen
+    // a pad's stick is the ring's while it is up; the view stands still for it (SuppressLocomotion).
+    private bool HasStick(Input.Chirality side)
+    {
+        var input = Engine.Current?.InputInterface;
+        if (input == null || !input.IsVRActive)
+            return true;
+        return (System.Threading.Volatile.Read(ref _stickHands) & StickBit(side)) != 0;
+    }
+
+    private void UpdateStickHold()
+    {
+        var input = Engine.Current?.InputInterface;
+        var map = input?.Actions;
+        int hands = System.Threading.Volatile.Read(ref _stickHands);
+        if (map == null)
+        {
+            hands = 0;
+        }
+        else
+        {
+            int wanted = 0;
+            if (_shown && input!.IsVRActive && World != null && World.Focus != World.WorldFocus.Background
+                && Slot?.ActiveUserRoot?.ActiveUser == World.LocalUser && CurrentContext?.Side is Input.Chirality side)
+                wanted = StickBit(side);
+            foreach (var hand in StickHands)
+            {
+                int bit = StickBit(hand);
+                bool atRest = map.Interaction(hand).Stick.Value.Length <= StickRest;
+                if ((wanted & bit) != 0)
+                {
+                    if (atRest)
+                        hands |= bit;
+                }
+                else if (atRest)
+                {
+                    hands &= ~bit;
+                }
+            }
+        }
+        System.Threading.Volatile.Write(ref _stickPassesSinceStep, 0);
+        System.Threading.Volatile.Write(ref _stickHands, hands);
+        BindStickHold(hands != 0 ? map : null);
+    }
+
+    private void DropStickHold()
+    {
+        System.Threading.Volatile.Write(ref _stickHands, 0);
+        BindStickHold(null);
+    }
+
+    private void BindStickHold(Input.Actions.InputBindingMap? map)
+    {
+        if (ReferenceEquals(map, _stickMap))
+            return;
+        if (_stickMap != null)
+            _stickMap.BeforeEvaluate -= HoldSticks;
+        _stickMap = map;
+        if (map != null)
+            map.BeforeEvaluate += HoldSticks;
+    }
+
+    // In the input pass, before any action is read. A hold lapses a pass after the last ask, so this asks every
+    // pass; one from a ring that is gone, switched off or behind another world asks nothing.
+    private void HoldSticks()
+    {
+        var map = _stickMap;
+        int hands = System.Threading.Volatile.Read(ref _stickHands);
+        if (map == null || hands == 0)
+            return;
+        if (System.Threading.Interlocked.Increment(ref _stickPassesSinceStep) > StickHoldStalePasses
+            || IsDestroyed || !Enabled.Value || World == null || World.Focus == World.WorldFocus.Background)
+            return;
+        foreach (var hand in StickHands)
+        {
+            if ((hands & StickBit(hand)) == 0)
+                continue;
+            var actions = map.Interaction(hand);
+            var bindings = actions.Stick.Bindings;
+            for (int i = 0; i < bindings.Count; i++)
+                map.HoldControl(actions.Set, bindings[i].Control);
+        }
+    }
+
     // The input state the menu is holding down, so the release lands on the same one. It used to ask for the
     // focused world's on both ends, and a world switch while the ring was up (a join finishing, a portal)
     // released the wrong world's: the one the ring was in kept its locomotion off until the menu was
@@ -1106,6 +1244,23 @@ public class ContextMenuSystem : Component
         if (Slot?.ActiveUserRoot?.ActiveUser != World?.LocalUser)
             return;
 
+        // On a screen the ring frees the cursor while it is up and the cursor is the pointer: the laser rides
+        // the ray through it, so in any view the item under the arrow is the one that lights, where a mouse
+        // steering an unseen offset off a frozen crosshair was hard to land in third person or free cam. A pad
+        // has no cursor to free and keeps steering the frozen aim. -xlinka
+        var input = Engine.Current?.InputInterface;
+        if (input != null && !input.IsVRActive
+            && input.Actions?.HintDevice != Lumora.Core.Input.Actions.InputDeviceKind.Gamepad)
+        {
+            input.SetCursorFree(this, true);
+            _cursorFreed = true;
+        }
+
+        // In a headset the ring takes nothing here: its hand's stick is held in the action map instead
+        // (UpdateStickHold), and walking, turning and the other hand carry on.
+        if (Engine.Current?.InputInterface?.VR_Active == true)
+            return;
+
         var state = OwnInputState();
         if (state == null)
             return;
@@ -1113,39 +1268,27 @@ public class ContextMenuSystem : Component
             ReleaseLocomotionSuppression();
         _heldState = state;
 
-        if (Engine.Current?.InputInterface?.VR_Active == true)
-        {
-            // VR: the flick gesture shares the stick with locomotion.
-            state.SetDesktopInputSuppressed(this, true);
-        }
-        else if (Engine.Current?.InputInterface?.DesktopExternalCameraAim == true)
-        {
-            // Third-person / free-cam: the mouse is steering the CAMERA, and the menu aim rides the camera
-            // ray. Leaving it live would move the aim twice per mouse delta - once by orbiting/flying the
-            // view, once by the menu's own deflection. Freeze the camera the way first person freezes head
-            // look; WASD stays live either way. -xlinka
-            state.SetDesktopInputSuppressed(this, true);
-        }
-        else if (!state.MouseLookSuppressed)
-        {
-            // Desktop: freeze the camera and hand the mouse to the menu
-            // pointer. WASD stays live.
-            state.SetMouseLookSuppressed(true);
-            _restoreMouseLook = true;
-        }
+        // The view holds still under the ring in every desktop mode: head look, the orbit and the free camera
+        // turn for nothing while it is up, and WASD still walks. It used to pick a hold by the mode it opened in
+        // and take the third-person flag in first person, so a camera switch while it was up left the head
+        // turning under the arrow, and closing it handed the mouse back to the head in third person. -xlinka
+        state.SetViewHeld(this, true);
     }
+
+    private bool _cursorFreed;
 
     private void ReleaseLocomotionSuppression()
     {
+        if (_cursorFreed)
+        {
+            _cursorFreed = false;
+            Engine.Current?.InputInterface?.SetCursorFree(this, false);
+        }
+
         var state = _heldState;
         _heldState = null;
         state?.SetDesktopInputSuppressed(this, false);
-
-        if (_restoreMouseLook)
-        {
-            state?.SetMouseLookSuppressed(false);
-            _restoreMouseLook = false;
-        }
+        state?.SetViewHeld(this, false);
     }
 
     // Visual (a replicated Helio canvas, built and driven by the owner only)
@@ -1154,6 +1297,7 @@ public class ContextMenuSystem : Component
     {
         EnsureVisualRoot();
         _placing = false;
+        _viewPinned = false;
 
         var head = Slot.ActiveUserRoot?.HeadSlot;
         var input = Engine.Current?.InputInterface;
@@ -1193,9 +1337,20 @@ public class ContextMenuSystem : Component
             return;
         }
 
-        // Desktop: half a metre out along the view (scaled with the avatar, except for the drone camera,
-        // which does not grow with it), square to the lens, and a constant size on screen whatever the
-        // distance or the avatar's scale. -xlinka
+        // Desktop: half a metre out (scaled with the avatar, except for the drone camera, which does not grow
+        // with it) under the pointer, the loose arrow or the crosshair, square to the lens and a constant size on
+        // screen whatever the distance or the avatar's scale. From then on it is held in the view's own space
+        // (PinToView). -xlinka
+        if (hasView && !vrActive)
+        {
+            float scale = freeCam ? 1f : (Slot.ActiveUserRoot?.GlobalScale ?? 1f);
+            _viewOffset = OpenDirection(input, viewRotation) * (0.5f * scale);
+            _viewPinned = true;
+            PinToView();
+            return;
+        }
+
+        // A headset with no pointer to open off: in front of the head.
         if (hasView)
         {
             float scale = freeCam ? 1f : (Slot.ActiveUserRoot?.GlobalScale ?? 1f);
@@ -1254,6 +1409,96 @@ public class ContextMenuSystem : Component
         float keep = MathF.Pow(_openLerp, 6f);
         _menuRoot.GlobalPosition = float3.Lerp(position, _menuRoot.GlobalPosition, keep);
         _menuRoot.GlobalRotation = floatQ.Slerp(rotation, _menuRoot.GlobalRotation, keep);
+    }
+
+    // DESKTOP: THE RING STAYS IN VIEW
+    //
+    // On a screen the ring is held where it opened in the view's own space for as long as it is up. It used to
+    // be left in the user's space, so anything that moved the view off the body took it out of sight: a camera
+    // switch (the third-person lens two metres back, the free camera flying back to the head), the third-person
+    // body turning to face where it walks, the shoulder easing over while it opened. The edge close then read
+    // the arrow as gone off the ring and shut it, which is the menu that kept vanishing. -xlinka
+    private bool _viewPinned;
+    // Metres from the eye in the view's space, the view looking down -Z.
+    private float3 _viewOffset;
+    // A canvas unit is 1.5 mm per metre of distance, so the ring keeps one size on screen. FitRadius is the
+    // largest ring a page can make, outer row included, so one opened near the window's edge comes in far enough
+    // to show whole.
+    private const float DesktopScalePerMetre = 1.5f;
+    private const float FitRadius = RingMax + PlateSize * 0.5f + OuterGap + OuterThickness;
+
+    // The eye a desktop ring sits in front of: the camera while it flies on its own (third person, the free
+    // camera, a view taken by something worn, or on its way back to the head), the head otherwise.
+    private bool TryDesktopView(out float3 position, out floatQ rotation)
+    {
+        var input = Engine.Current?.InputInterface;
+        bool external = input != null && !input.VR_Active && input.DesktopCameraPoseValid
+            && (input.DesktopExternalCameraAim || UserInputState.FocusedFreeCamActive);
+        if (external)
+        {
+            position = input!.DesktopCameraPosition;
+            rotation = input.DesktopCameraRotation;
+            return true;
+        }
+        var head = Slot.ActiveUserRoot?.HeadSlot;
+        position = head?.GlobalPosition ?? float3.Zero;
+        rotation = head?.GlobalRotation ?? floatQ.Identity;
+        return head != null && !head.IsDestroyed;
+    }
+
+    // Which way from the eye the ring opens, in the view's space: through the loose arrow when there is one,
+    // straight ahead on the crosshair otherwise, then pulled in until the largest ring fits the window.
+    private static float3 OpenDirection(Input.InputInterface? input, in floatQ viewRotation)
+    {
+        float3 look = float3.Backward;
+        if (input == null)
+            return look;
+        if (input.CursorFree && input.DesktopCursorRayValid)
+        {
+            float3 through = viewRotation.Inverse * input.DesktopCursorRayDirection;
+            if (through.z < -0.05f)
+                look = through;
+        }
+        float tanY = MathF.Tan(input.DesktopCameraFovY * 0.5f * (MathF.PI / 180f));
+        float tanX = tanY * input.DesktopViewportAspect;
+        // The ring's reach as a slope off the line of sight, the same at any distance since it grows with it.
+        float reach = FitRadius * CanvasScale * DesktopScalePerMetre;
+        float limitX = MathF.Max(tanX - reach, 0f);
+        float limitY = MathF.Max(tanY - reach, 0f);
+        float x = System.Math.Clamp(look.x / -look.z, -limitX, limitX);
+        float y = System.Math.Clamp(look.y / -look.z, -limitY, limitY);
+        return new float3(x, y, -1f).Normalized;
+    }
+
+    // Puts the ring at its offset from wherever the eye is now, square to the lens. Written only on a change,
+    // so a ring riding along with a walking body in first person sends nothing.
+    private void PinToView()
+    {
+        if (!_viewPinned || _menuRoot == null || _menuRoot.IsDestroyed)
+            return;
+        if (Engine.Current?.InputInterface?.VR_Active == true)
+        {
+            _viewPinned = false;
+            return;
+        }
+        if (!TryDesktopView(out var viewPosition, out var viewRotation))
+            return;
+
+        var parent = _menuRoot.Parent;
+        float3 position = viewPosition + viewRotation * _viewOffset;
+        float3 localPosition = parent != null ? parent.GlobalPointToLocal(position) : position;
+        floatQ localRotation = parent != null ? parent.GlobalRotationToLocal(viewRotation) : viewRotation;
+        float parentScale = MathF.Max(Slot.GlobalScale.x, 1e-4f);
+        // Screen size follows depth, so an off-centre ring fits the same edge margin. -xlinka
+        float3 localScale = float3.One * (DesktopScalePerMetre * MathF.Max(-_viewOffset.z, 0.001f) / parentScale);
+
+        if ((localPosition - _menuRoot.LocalPosition.Value).LengthSquared > 1e-10f)
+            _menuRoot.LocalPosition.Value = localPosition;
+        float dot = MathF.Abs(floatQ.Dot(localRotation, _menuRoot.LocalRotation.Value));
+        if (1f - dot > 1e-9f)
+            _menuRoot.LocalRotation.Value = localRotation;
+        if ((localScale - _menuRoot.LocalScale.Value).LengthSquared > 1e-10f)
+            _menuRoot.LocalScale.Value = localScale;
     }
 
     private void EnsureVisualRoot()
@@ -2116,6 +2361,7 @@ public class ContextMenuSystem : Component
         _dial = null;
         _closing = false;
         _placing = false;
+        _viewPinned = false;
     }
 
     // Every ring under the menu's slot goes, the current one and any other, so opens can never stack.

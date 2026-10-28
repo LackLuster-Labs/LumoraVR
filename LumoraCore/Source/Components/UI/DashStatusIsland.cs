@@ -291,7 +291,7 @@ public sealed class DashStatusIsland : UIComponent
     {
         if (_worldName == null)
             return;
-        string name = world == null ? "No world" : IsLocalHome(world) ? "Home" : (world.Name ?? "World");
+        string name = world == null ? "No world" : IsLocalHome(world) ? Management.WorldManager.LocalHomeTitle.Resolve() : (world.Name ?? "World");
         ListingStyle.SetText(_worldName, name);
 
         var mode = world?.RootSlot?.GetComponent<WorldSettings>()?.Mode.Value ?? WorldMode.Builder;
@@ -335,6 +335,12 @@ public sealed class DashStatusIsland : UIComponent
         {
             shown = SyncShown.Full;
             text = "Out of space";
+        }
+        // saves kept on this machine wait for the email, so no spinner that never ends
+        else if (status.WaitingForEmail && waiting > 0)
+        {
+            shown = SyncShown.Full;
+            text = AccountEmailLocale.ChipWaiting.Resolve();
         }
         else if (status.Variants > 0 || waiting > 0)
         {

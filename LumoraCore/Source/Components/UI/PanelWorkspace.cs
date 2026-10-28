@@ -23,15 +23,28 @@ public sealed class PanelWorkspace : Component
         DashTheme.Accent, DashTheme.IconPink, DashTheme.IconTeal,
     };
 
-    private color? _fallbackHeader, _fallbackBorder;
+    // The header and edge from before the frame colour went on, while it is on.
+    private (color Header, color Border)? _tintedFrom;
 
     public color? FrameColor => ColorIndex.Value >= 1 && ColorIndex.Value <= Colors.Length ? Colors[ColorIndex.Value - 1] : null;
 
-    public override void OnStart() { base.OnStart(); Apply(); }
-    public override void OnChanges() { base.OnChanges(); Apply(); }
+    public override void OnStart() { base.OnStart(); Keep(); }
+    public override void OnChanges() { base.OnChanges(); Keep(); }
 
-    // Every peer runs this, so every write is equality-gated: agreeing peers write nothing and the
-    // synced shell fields never ping-pong. -xlinka
+    // What a change from elsewhere leaves to redo is redone by the authority, which keeps every panel up, the
+    // one in somebody's hand or pinned to them included. Every peer used to, and on a panel somebody else held
+    // the others' writes were refused, the hidden-from-cameras layer among them. Whoever presses a control
+    // still applies it on the spot. -xlinka
+    private void Keep()
+    {
+        if (World?.IsAuthority != true)
+            return;
+        using var keep = World.DataModelPermissions?.EnterUiUpkeep(this);
+        Apply();
+    }
+
+    // Every write is equality-gated: agreeing peers write nothing and the synced shell fields never
+    // ping-pong. -xlinka
     private void Apply()
     {
         var shell = Slot.GetComponent<PanelShell>();
@@ -47,15 +60,27 @@ public sealed class PanelWorkspace : Component
         if (layer != null)
             Set(layer.Layer, HideFromCamera.Value ? RenderLayerOverride.EyesOnlyLayer : 1);
 
+        // The frame colour lays a tint over the shell's own header and edge and takes it off again; without one
+        // the shell's colours are the panel's own, a player's recolour included, and are left alone. The edge
+        // still wearing one of the frame colours is a tint somebody else's machine laid. -xlinka
+        var tint = FrameColor;
+        bool laidElsewhere = _tintedFrom == null && System.Array.IndexOf(Colors, shell.BorderColor.Value) >= 0;
+        if (tint == null && _tintedFrom == null && !laidElsewhere)
+            return;
+        // Under a tint this machine did not lay, the shell's own colours are gone; the theme's stand in for them.
         var theme = Slot.GetComponent<UITheme>();
-        _fallbackHeader ??= shell.HeaderColor.Value;
-        _fallbackBorder ??= shell.BorderColor.Value;
-        color header = theme?.Header.Value ?? _fallbackHeader.Value;
-        color border = theme?.Border.Value ?? _fallbackBorder.Value;
-        if (FrameColor is { } tint)
+        var (header, border) = _tintedFrom ?? (laidElsewhere
+            ? (theme?.Header.Value ?? shell.HeaderColor.Value, theme?.Border.Value ?? shell.BorderColor.Value)
+            : (shell.HeaderColor.Value, shell.BorderColor.Value));
+        if (tint is { } frame)
         {
-            header = Mix(header, tint, 0.3f);
-            border = tint;
+            _tintedFrom ??= (header, border);
+            header = Mix(header, frame, 0.3f);
+            border = frame;
+        }
+        else
+        {
+            _tintedFrom = null;
         }
         Set(shell.HeaderColor, header);
         Set(shell.BorderColor, border);

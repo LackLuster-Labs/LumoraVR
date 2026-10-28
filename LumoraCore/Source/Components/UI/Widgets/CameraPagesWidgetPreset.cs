@@ -70,6 +70,7 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
     // ANCHORS
     private readonly ListingItemSource _anchorItems = new();
     private readonly List<CameraAnchor> _anchorScratch = new();
+    private readonly List<CameraRoute> _routeScratch = new();
     private ListingView? _anchorView;
     private Slot? _noAnchors;
     private Slot? _release;
@@ -259,20 +260,25 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
         SwitchRow(page, "Glide", "Glide", Top(0), d => d.AnchorEase, (d, v) => d.AnchorEase = v);
         NumberRow(page, "Speed", "Speed", Top(1), d => d.AnchorSpeed, (d, v) => d.AnchorSpeed = v, "0.0", 0.1f, 20f);
         SwitchRow(page, "Steady", "Steady glide", Top(2), d => d.AnchorLinear, (d, v) => d.AnchorLinear = v);
-        Caption(page, "ListCaption", "Anchors here", Top(3));
+        Caption(page, "ListCaption", CameraLocale.AnchorsAndRoutes.Resolve(), Top(3));
 
         float listTop = Top(3) + 24f;
         float listBottom = LineHeight + 8f;
         var list = SettingsUI.Fill(page, "List", 0f, listBottom, 0f, listTop);
         var templates = new ListingTemplateMapper { DefaultHeight = AnchorRowHeight };
         templates.MapKind("anchor", new AnchorTemplate(this));
+        templates.MapKind("route", new AnchorTemplate(this));
         _anchorView = ListingView.Attach(list, ListStyle(AnchorRowHeight), templates, _anchorItems);
 
         _noAnchors = SettingsUI.Fill(page, "None", 0f, listBottom, 0f, listTop);
         Label(_noAnchors, "Text", "No anchors here", DashTheme.FontSmall, DashTheme.TextMuted,
             TextHorizontalAlignment.Center, float2.Zero, float2.One, float2.Zero, float2.Zero);
 
-        _release = SettingsUI.Child(page, "Release", float2.Zero, new float2(1f, 0f), float2.Zero, new float2(0f, LineHeight));
+        // A route runs through every anchor listed, in the list's order.
+        var bottom = SettingsUI.Child(page, "Bottom", float2.Zero, new float2(1f, 0f), float2.Zero, new float2(0f, LineHeight));
+        Chip(Cell(bottom, "NewRoute", 0, 2), CameraLocale.NewRoute.Resolve(), d => d.CreateRoute(),
+            live: _ => _anchorScratch.Count >= 2);
+        _release = Cell(bottom, "Release", 1, 2);
         Chip(_release, "Release", d => d.Release());
     }
 
@@ -295,6 +301,12 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
                 if (anchor != null && !anchor.IsDestroyed)
                     _anchorScratch.Add(anchor);
             }
+            _routeScratch.Clear();
+            foreach (var route in CameraRoute.InWorld(world))
+            {
+                if (route != null && !route.IsDestroyed)
+                    _routeScratch.Add(route);
+            }
         }
         catch (InvalidOperationException)
         {
@@ -302,11 +314,14 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
             return;
         }
         _anchorScratch.Sort((a, b) => a.ReferenceID.CompareTo(b.ReferenceID));
+        _routeScratch.Sort((a, b) => a.ReferenceID.CompareTo(b.ReferenceID));
 
         var signature = new StringBuilder();
         signature.Append(world?.GetHashCode() ?? 0);
         foreach (var anchor in _anchorScratch)
             signature.Append(':').Append((ulong)anchor.ReferenceID).Append('=').Append(anchor.Slot?.SlotName.Value);
+        foreach (var route in _routeScratch)
+            signature.Append('|').Append((ulong)route.ReferenceID).Append('=').Append(route.StopCount).Append('/').Append(route.Duration.Value);
         string key = signature.ToString();
         if (!string.Equals(key, _anchorSignature, StringComparison.Ordinal))
         {
@@ -321,10 +336,18 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
                     Tag = anchor,
                 });
             }
+            foreach (var route in _routeScratch)
+            {
+                _anchorItems.AddRoot(new ListingCustom("route." + (ulong)route.ReferenceID, "route",
+                    CameraLocale.RouteRow.WithArgs(route.StopCount, route.Duration.Value.ToString("0.#")).Resolve())
+                {
+                    Tag = route,
+                });
+            }
         }
         _anchorView?.RefreshValues();
-        Show(_noAnchors, _anchorScratch.Count == 0);
-        Show(_release, Director?.Anchor != null);
+        Show(_noAnchors, _anchorScratch.Count == 0 && _routeScratch.Count == 0);
+        Show(_release, Director?.Anchor != null || Director?.Route != null);
     }
 
     private ListingRow BuildAnchorRow(Slot row)
@@ -340,6 +363,11 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
                 Director?.UseAnchor(anchor);
                 MarkChanged();
             }
+            else if (listingRow.Item?.Tag is CameraRoute route && !route.IsDestroyed)
+            {
+                Director?.PlayRoute(route);
+                MarkChanged();
+            }
         };
         return listingRow;
     }
@@ -347,8 +375,15 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
     private void BindAnchor(AnchorRow row, ListingItem item)
     {
         ListingStyle.SetText(row.Chip.Text, item.Label);
-        var anchor = item.Tag as CameraAnchor;
         var director = Director;
+        if (item.Tag is CameraRoute route)
+        {
+            bool playing = !route.IsDestroyed && director != null && ReferenceEquals(director.Route, route);
+            PaintChip(row.Chip, playing, !route.IsDestroyed, playing ? DashTheme.Positive : null);
+            row.Chip.SetInteractable(!route.IsDestroyed && !Editing);
+            return;
+        }
+        var anchor = item.Tag as CameraAnchor;
         bool here = anchor != null && !anchor.IsDestroyed;
         bool current = here && director != null && ReferenceEquals(director.Anchor, anchor);
         // Another camera sitting on it keeps it; one camera to an anchor.
@@ -426,6 +461,7 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
             float2.Zero, float2.One, float2.Zero, new float2(-(OperatorWidth + FrameWidth + 2f * CellGap), 0f), SemiboldFont);
         listingRow.Name.AutoSizeHorizontal.Value = true;
         listingRow.Name.AutoSizeMin.Value = 10f;
+        listingRow.NameLink = ProfileLink.On(listingRow.Name);
         listingRow.Operator = RowChip(SettingsUI.Child(top, "Operator", new float2(1f, 0f), float2.One,
             new float2(-(OperatorWidth + CellGap + FrameWidth), 0f), new float2(-(FrameWidth + CellGap), 0f)), listingRow,
             user =>
@@ -502,6 +538,7 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
         var user = item.Tag as User;
         var director = Director;
         bool editing = Editing;
+        row.NameLink.Bind(user, !editing);
         if (user == null || user.IsDestroyed || director == null)
         {
             foreach (var chip in new[] { row.Operator, row.Frame, row.Hear, row.Group })
@@ -1093,6 +1130,7 @@ public sealed class CameraPagesWidgetPreset : DirectorWidgetPreset
     {
         public CameraPagesWidgetPreset Owner = null!;
         public Text Name = null!;
+        public ProfileLink NameLink = null!;
         public SettingsChip Operator = null!;
         public SettingsChip Frame = null!;
         public SettingsChip Hear = null!;

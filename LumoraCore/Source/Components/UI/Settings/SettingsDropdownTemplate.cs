@@ -1,8 +1,10 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
+using System;
 using Helio.UI;
 using Helio.UI.Listing;
+using Lumora.Core.Assets;
 using Lumora.Core.Localization;
 using Lumora.Core.Math;
 
@@ -10,6 +12,8 @@ namespace Lumora.Core.Components.UI;
 
 internal sealed class SettingsDropdownTemplate : SettingsRowTemplate
 {
+    private static readonly Uri ArrowIcon = new("res://Assets/Textures/Icons/chevron-down.svg");
+
     public SettingsDropdownTemplate(SettingsFonts fonts) : base(fonts) { }
 
     public override ListingRow Build(ListingView view, UIBuilder builder, Slot row)
@@ -23,9 +27,15 @@ internal sealed class SettingsDropdownTemplate : SettingsRowTemplate
         var labelRect = chip.Text.Slot.GetComponent<RectTransform>()!;
         labelRect.OffsetMin.Value = new float2(12f, 0f);
         labelRect.OffsetMax.Value = new float2(-32f, 0f);
-        SettingsUI.Label(host, "Arrow", Fonts.Medium, DashTheme.FontSmall, DashTheme.TextDim,
-            TextHorizontalAlignment.Center,
-            new float2(1f, 0f), float2.One, new float2(-28f, 0f), new float2(-8f, 0f)).Content.Value = "▾";
+        // The fonts have no arrow glyph, so the chevron is an icon. -xlinka
+        var arrow = SettingsUI.Child(host, "Arrow", new float2(1f, 0.5f), new float2(1f, 0.5f),
+            new float2(-24f, -6f), new float2(-12f, 6f));
+        var arrowPicture = arrow.AttachComponent<ImageProvider>();
+        arrowPicture.GenerateMipmaps.Value = false;
+        arrowPicture.URL.Value = ArrowIcon;
+        var arrowImage = arrow.AttachComponent<Image>();
+        arrowImage.Texture.Target = arrowPicture;
+        arrowImage.Tint.Value = DashTheme.TextDim;
         var listingRow = new DropdownRow { Shell = shell, Chip = chip };
         chip.Button.ActOnRelease.Value = true;
         chip.Button.Clicked += (_, _) => listingRow.Open();

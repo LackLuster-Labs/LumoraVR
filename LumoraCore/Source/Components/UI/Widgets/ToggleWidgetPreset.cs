@@ -26,6 +26,13 @@ public abstract class ToggleWidgetPreset : HomeWidgetPreset
     protected virtual string? Icon => null;
     protected virtual color IconTint => DashTheme.Accent;
 
+    // A card whose state says more than On or Off keeps it on a line of its own under the title at any width.
+    // StateRevision changes whenever that line would read differently with the value unchanged.
+    protected virtual bool StateLine => false;
+    protected virtual int StateRevision => 0;
+
+    protected virtual string StateText(bool on) => StateFor(on);
+
     // Under this width the card is a tile: the title on one line and the state under it, instead of
     // "Title: State" squeezed onto one.
     private const float CompactWidth = 210f;
@@ -35,12 +42,13 @@ public abstract class ToggleWidgetPreset : HomeWidgetPreset
     private Button? _cardButton;
     private ColorDriver? _driver;
     private bool _last;
+    private int _lastRevision;
     private bool _known;
     private bool _compact;
     private bool _layoutKnown;
     private float _titleLeft = Pad;
 
-    public override string Tip => Title + ": " + StateFor(Value);
+    public override string Tip => Title + ": " + StateText(Value);
 
     protected ToggleWidgetPreset()
     {
@@ -73,10 +81,15 @@ public abstract class ToggleWidgetPreset : HomeWidgetPreset
             new float2(titleLeft, 0f), new float2(-Pad, 0f), SemiboldFont);
         _title.AutoSizeHorizontal.Value = true;
         _title.AutoSizeMin.Value = 11f;
-        _state = Label(root, "State", StateFor(Value), DashTheme.FontSmall, DashTheme.TextDim,
+        _state = Label(root, "State", StateText(Value), DashTheme.FontSmall, DashTheme.TextDim,
             TextHorizontalAlignment.Left, new float2(0f, 0f), new float2(1f, 0.5f),
             new float2(titleLeft, 4f), new float2(-Pad, 0f));
         _state.Slot.ActiveSelf.Value = false;
+        if (StateLine)
+        {
+            _state.AutoSizeHorizontal.Value = true;
+            _state.AutoSizeMin.Value = 10f;
+        }
 
         _cardButton = AddCardButton(Flip);
         _driver = DriveCard(_cardButton, DashTheme.GlassCard, DashTheme.GlassCardHover, DashTheme.GlassCardPressed);
@@ -98,7 +111,7 @@ public abstract class ToggleWidgetPreset : HomeWidgetPreset
         float width = Slot.GetComponent<RectTransform>()?.LocalComputeRect.width ?? 0f;
         if (width <= 1f || _title == null || _title.IsDestroyed)
             return;
-        bool compact = width < CompactWidth;
+        bool compact = StateLine || width < CompactWidth;
         if (_layoutKnown && _compact == compact)
             return;
         _layoutKnown = true;
@@ -120,10 +133,12 @@ public abstract class ToggleWidgetPreset : HomeWidgetPreset
     private void Refresh()
     {
         bool on = Value;
-        if (_known && on == _last)
+        int revision = StateRevision;
+        if (_known && on == _last && revision == _lastRevision)
             return;
         _known = true;
         _last = on;
+        _lastRevision = revision;
 
         if (IconOnly)
         {
@@ -139,18 +154,19 @@ public abstract class ToggleWidgetPreset : HomeWidgetPreset
         if (_title != null && !_title.IsDestroyed)
         {
             ListingStyle.SetText(_title, _compact ? Title : TitleFor(on));
-            ListingStyle.SetTextColor(_title, WidgetScreen.OnFill(fill));
+            // on the accent, the accent's own ink, as every lit button has it
+            ListingStyle.SetTextColor(_title, on ? DashTheme.OnAccent : WidgetScreen.OnFill(fill));
         }
         if (_state != null && !_state.IsDestroyed)
         {
-            ListingStyle.SetText(_state, StateFor(on));
-            ListingStyle.SetTextColor(_state, on ? WidgetScreen.OnFill(fill) : DashTheme.TextDim);
+            ListingStyle.SetText(_state, StateText(on));
+            ListingStyle.SetTextColor(_state, on ? DashTheme.OnAccent : DashTheme.TextDim);
         }
         Repaint();
     }
 
-    private string TitleFor(bool on) => Title + ": " + StateFor(on);
+    private string TitleFor(bool on) => Title + ": " + StateText(on);
 
-    private static string StateFor(bool on)
+    protected static string StateFor(bool on)
         => (on ? "Widget.Toggle.On".AsLocale("On") : "Widget.Toggle.Off".AsLocale("Off")).Resolve();
 }

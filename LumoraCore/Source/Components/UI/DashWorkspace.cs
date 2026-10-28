@@ -26,6 +26,7 @@ namespace Lumora.Core.Components.UI;
 [UserspaceOnly]
 public sealed class DashWorkspace : UIComponent
 {
+    // 6 mm a window on the dash's canvas, clear of the 4 mm a window backing pushes its depth back.
     public const float LiftStep = 6f;
     public const string LayoutKey = "Dash.Workspace.Layout";
     public const string PanelsKey = "Dash.Workspace.Panels";
@@ -331,7 +332,10 @@ public sealed class DashWorkspace : UIComponent
         return null;
     }
 
-    // Tree order and lift from the stack. Closed windows sit at the bottom of the tree, hidden.
+    // Tree order and lift from the stack. Closed windows sit at the bottom of the tree, hidden. A window on
+    // its way to the dock or away is still drawn until its motion ends, so it keeps a lift until then: at
+    // lift 0 the desk drew over it for the length of the motion. One being closed has left the stack and
+    // goes over the rest, where it was when it was closed. -xlinka
     private void Restack()
     {
         int lifted = 0;
@@ -339,14 +343,14 @@ public sealed class DashWorkspace : UIComponent
         {
             var window = _stack[i];
             bool open = window.State == DashWindow.WindowState.Open;
-            float lift = open ? LiftStep * ++lifted : 0f;
+            float lift = open || window.Moving ? LiftStep * ++lifted : 0f;
             window.SetStack(OrderBase + 1 + i, lift, open && ReferenceEquals(window, _focused));
         }
         for (int i = 0; i < _windows.Count; i++)
         {
             var window = _windows[i];
             if (!_stack.Contains(window))
-                window.SetStack(OrderBase, 0f, false);
+                window.SetStack(OrderBase, window.Moving ? LiftStep * ++lifted : 0f, false);
             window.SetFilledGlyph(window.Snap == DashWindow.WindowSnap.Fill);
             window.SetPopAvailable(CanPopOut(window));
         }
