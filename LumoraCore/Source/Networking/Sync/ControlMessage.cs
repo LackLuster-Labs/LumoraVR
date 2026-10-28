@@ -64,11 +64,12 @@ public class ControlMessage : SyncMessage
     public override MessageType MessageType => MessageType.Control;
     public override bool Reliable => true;
 
-    // Asset transfer rides the background channel, every message of it, so a start never overtakes or
-    // trails its own chunks. On the foreground channel a big transfer filled the reliable window and the
-    // world's own changes queued behind it for as long as it ran. -xlinka
-    public override bool Background => ControlMessageType is Message.AssetRequest or Message.AssetTransmissionStart
+    public bool IsAssetTransfer => ControlMessageType is Message.AssetRequest or Message.AssetTransmissionStart
         or Message.AssetChunk or Message.AssetNextChunkRequest or Message.AssetNotAvailable;
+
+    // Acknowledgements must get past our own uploads or transfers in both directions stall each other.
+    // Starts and chunks keep their ordering on the background channel. -xlinka
+    public override bool Background => IsAssetTransfer && ControlMessageType != Message.AssetNextChunkRequest;
 
     public Message ControlMessageType { get; set; }
     public byte[] Payload { get; set; } = null!;
@@ -79,11 +80,28 @@ public class ControlMessage : SyncMessage
         ControlMessageType = type;
     }
 
+    // Straight into the encoder's own stream. Through Encode, every 64 KB chunk was copied into a scratch
+    // stream and out again before the encoder copied it a third time: garbage at three times the link rate.
+    // -xlinka
+    public override int EncodeInto(MemoryStream output, BinaryWriter writer)
+    {
+        output.SetLength(0);
+        Write(writer);
+        writer.Flush();
+        return (int)output.Length;
+    }
+
     public override byte[] Encode()
     {
-        using var output = new MemoryStream();
+        using var output = new MemoryStream((Payload?.Length ?? 0) + 32);
         using var writer = new BinaryWriter(output);
+        Write(writer);
+        writer.Flush();
+        return output.ToArray();
+    }
 
+    private void Write(BinaryWriter writer)
+    {
         writer.Write((byte)MessageType);
         writer.Write7BitEncoded(SenderStateVersion);
         writer.Write7BitEncoded(SenderSyncTick);
@@ -98,8 +116,6 @@ public class ControlMessage : SyncMessage
         {
             writer.Write7BitEncoded(0UL);
         }
-
-        return output.ToArray();
     }
 
     public static ControlMessage Decode(BinaryReader reader)

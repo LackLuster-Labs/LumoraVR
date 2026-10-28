@@ -15,6 +15,7 @@ using Lumora.Core.Networking.Sync;
 using Lumora.Nexus.Transport;
 using Lumora.Nexus.Protocol;
 using Lumora.Nexus.Transport.LNL;
+using Lumora.Core.Security.Integrity;
 using LegacyJoinGrantData = Lumora.Core.Networking.Messages.JoinGrantData;
 using LegacyJoinRequestData = Lumora.Core.Networking.Messages.JoinRequestData;
 using LegacyJoinRejectData = Lumora.Core.Networking.Messages.JoinRejectData;
@@ -266,7 +267,8 @@ public partial class SessionConnectionManager : IDisposable
     // own interface addresses) - i.e. the join target is a session hosted on the same PC. -xlinka
     private static bool IsLocalAddress(string host)
     {
-        if (string.IsNullOrEmpty(host) || !IPAddress.TryParse(host, out var target))
+        // IPv4 only: an IPv6 address is dialled as it is, so a join over IPv6 stays one.
+        if (string.IsNullOrEmpty(host) || !IPAddress.TryParse(host, out var target) || target.AddressFamily != AddressFamily.InterNetwork)
             return false;
 
         if (IPAddress.IsLoopback(target))
@@ -471,8 +473,10 @@ public partial class SessionConnectionManager : IDisposable
         }
     }
 
+    // A relayed peer shares the node's address with every other relayed peer, so it counts by its own endpoint.
     private static string GetIpKey(IConnection connection)
-        => connection?.IP?.ToString() ?? connection?.Identifier ?? "<unknown>";
+        => (connection?.ViaRelay == true ? connection.Identifier : connection?.IP?.ToString())
+           ?? connection?.Identifier ?? "<unknown>";
 
     public void HandleJoinRequest(IConnection connection, LegacyJoinRequestData requestData)
     {
@@ -608,7 +612,7 @@ public partial class SessionConnectionManager : IDisposable
         });
     }
 
-    private void SendJoinGrant(IConnection connection, AccountCard? account, string machineId, bool forceSilenced = false)
+    private void SendJoinGrant(IConnection connection, AccountCard? account, string machineId, bool forceSilenced = false, string? joinRole = null)
     {
         var userName = account?.Username ?? AccountCard.GuestName(machineId);
         if (!World.IsAuthority)
@@ -672,6 +676,14 @@ public partial class SessionConnectionManager : IDisposable
 
         lock (_lock)
         {
+            // Gone while its grant waited for the world: its disconnect has been and found no user to take down,
+            // so one made now would stand in the world for good.
+            if (!connection.IsOpen)
+            {
+                LumoraLogger.Log($"[lnl] SendJoinGrant: {connection.Identifier} left before its grant - not adding '{userName}'");
+                World.RefIDAllocator?.ReleaseUserAllocation(userRefID.GetUserByte());
+                return;
+            }
             _connectionToUser[connection] = user;
             _userToConnection[user] = connection;
         }
@@ -697,6 +709,8 @@ public partial class SessionConnectionManager : IDisposable
             throw;
         }
         LumoraLogger.Log($"[lnl] SendJoinGrant: User '{userName}' added to world");
+        if (joinRole != null)
+            Lumora.Core.Scripting.ScriptJoinChecks.GiveRole(World, user, joinRole);
 
         if (Session.Sync != null)
         {
@@ -731,7 +745,9 @@ public partial class SessionConnectionManager : IDisposable
             Nonce = nonce,
             HostMachineId = hostIdentity.MachineId,
             HostMachinePublicKey = hostIdentity.PublicKey,
-            HostMachineSignature = hostSignature
+            HostMachineSignature = hostSignature,
+            HostBuild = BuildIdentity.Hash,
+            HostModified = BuildIdentity.IsModified
         };
         var controlMessage = new ControlMessage(ControlMessage.Message.JoinChallenge)
         {
@@ -771,6 +787,21 @@ public partial class SessionConnectionManager : IDisposable
             return;
         }
 
+        // Other game files on either side: stop here and say which, rather than answering into the host's refusal.
+        // An older host sends no build and gets the answer; its own check turns us away. -xlinka
+        if (!string.IsNullOrEmpty(challenge.HostBuild) && !BuildIdentity.Matches(challenge.HostBuild))
+        {
+            string refusal = BuildIdentity.IsModified ? BuildRefusals.Modified
+                : challenge.HostModified ? BuildRefusals.HostModified
+                : BuildRefusals.OtherVersion;
+            LumoraLogger.Warn($"[lnl] HandleJoinChallenge: the host runs build {BuildIdentity.Short(challenge.HostBuild)}{(challenge.HostModified ? " (modified)" : string.Empty)}, "
+                + $"this game {BuildIdentity.Short(BuildIdentity.Hash)}{(BuildIdentity.IsModified ? " (modified: " + GameIntegrity.Describe() + ")" : string.Empty)} - not joining");
+            _hostVerificationToken = null;
+            World?.InitializationFailed(refusal);
+            (connection ?? HostConnection)?.Close();
+            return;
+        }
+
         byte[] signature;
         try
         {
@@ -797,8 +828,8 @@ public partial class SessionConnectionManager : IDisposable
             catch (Exception ex) { LumoraLogger.Warn($"[lnl] HandleJoinChallenge: account sign failed ({ex.Message})"); }
         }
 
-        // Hash our datamodel schema with the host's nonce so the host can confirm we run a compatible
-        // build before granting the join. -xlinka
+        // Hash our build identity with the host's nonce so the host can confirm we run the same build, files
+        // included, before granting the join. -xlinka
         byte[] compatHash;
         try
         {
@@ -814,7 +845,8 @@ public partial class SessionConnectionManager : IDisposable
         {
             Signature = signature,
             AccountSignature = accountSignature,
-            CompatHash = compatHash
+            CompatHash = compatHash,
+            Modified = BuildIdentity.IsModified
         };
         var controlMessage = new ControlMessage(ControlMessage.Message.JoinAuthenticate)
         {
@@ -863,13 +895,17 @@ public partial class SessionConnectionManager : IDisposable
                 return;
             }
 
-            // Datamodel compatibility: the joiner must report the same synced-component schema we do (salted
-            // with this join's nonce). A mismatch means an incompatible build, so reject before attempting a
-            // doomed join. -xlinka
+            // Build compatibility: the joiner must report the same build identity we do (release, schema and
+            // whether the game files are the shipped ones, salted with this join's nonce). A mismatch is another
+            // release or modified files on one side, so reject before attempting a doomed join, saying which. -xlinka
             if (!Lumora.Core.Networking.Sync.ProtocolCompatibility.Verify(pending.Nonce, auth.CompatHash))
             {
-                LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: datamodel schema mismatch for {connection.Identifier} - rejecting");
-                SendJoinReject(connection, "Incompatible client version");
+                string refusal = auth.Modified ? BuildRefusals.Modified
+                    : BuildIdentity.IsModified ? BuildRefusals.HostModified
+                    : BuildRefusals.OtherVersion;
+                LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: build mismatch for {connection.Identifier}"
+                    + $"{(auth.Modified ? " (joiner says its files are modified)" : string.Empty)}{(BuildIdentity.IsModified ? " (this host is modified)" : string.Empty)} - rejecting");
+                SendJoinReject(connection, refusal);
                 return;
             }
 
@@ -879,13 +915,15 @@ public partial class SessionConnectionManager : IDisposable
             var claimedAccount = pending.Request.AccountUserId;
             if (!string.IsNullOrEmpty(claimedAccount))
             {
+                string? refusal = null;
                 var verified = await VerifyAccountAsync(
-                    claimedAccount, pending.Request.AccountSessionId, pending.Nonce, auth.AccountSignature, JoinContextUserAccount);
+                    claimedAccount, pending.Request.AccountSessionId, pending.Nonce, auth.AccountSignature, JoinContextUserAccount,
+                    said => refusal = said);
 
                 if (verified == null)
                 {
-                    LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: account verification FAILED for {connection.Identifier} (claimed '{claimedAccount}') - rejecting");
-                    SendJoinReject(connection, "Account verification failed");
+                    LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: account verification FAILED for {connection.Identifier} (claimed '{claimedAccount}') - rejecting{(refusal != null ? ", the account service held it back (" + refusal + ")" : string.Empty)}");
+                    SendJoinReject(connection, refusal ?? EmailJoinGate.Unverifiable);
                     return;
                 }
 
@@ -925,25 +963,62 @@ public partial class SessionConnectionManager : IDisposable
                     SendJoinReject(connection, groupRefusal);
                     return;
                 }
+                var friendsRefusal = CheckFriendsDoor(verifiedAccountId);
+                if (friendsRefusal != null)
+                {
+                    LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: {connection.Identifier} (account '{verifiedAccountId}') refused by the friends door - {friendsRefusal}");
+                    SendJoinReject(connection, friendsRefusal);
+                    return;
+                }
+                var privateRefusal = CheckPrivateDoor(verifiedAccountId);
+                if (privateRefusal != null)
+                {
+                    LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: {connection.Identifier} (account '{verifiedAccountId}') refused by the private door");
+                    SendJoinReject(connection, privateRefusal);
+                    return;
+                }
+
+                // Last, the world's own join checks, which the host switched on for this session if any. -xlinka
+                var verdict = await Lumora.Core.Scripting.ScriptJoinChecks.AskAsync(world, verifiedAccountId, verifiedCard.Username,
+                    req.MachineID, Engine.Current?.Social?.IsFriend(verifiedAccountId) == true, forceSilenced);
+                if (verdict.Refused)
+                {
+                    LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: {connection.Identifier} (account '{verifiedAccountId}') turned away by a join check - {verdict.Reason}");
+                    SendJoinReject(connection, verdict.Reason ?? "Join rejected");
+                    return;
+                }
 
                 LumoraLogger.Log($"[lnl] HandleJoinAuthenticate: {connection.Identifier} authenticated (account='{verifiedAccountId}', silenced={forceSilenced}) - granting");
-                world.RunSynchronously(() => SendJoinGrant(conn, verifiedCard, req.MachineID, forceSilenced));
+                world.RunSynchronously(() => SendJoinGrant(conn, verifiedCard, req.MachineID, forceSilenced, verdict.Role));
                 return;
             }
 
-            // Guest path: no await happened, so we're still on the sync/message thread, grant inline. -xlinka
-            // A guest carries no account, so a members-only group world has nothing to check them against
+            // Guest path. A guest carries no account, so a members-only group world has nothing to check them against
             // and the answer is no. A group-public one lets them in like anyone else.
-            var guestRefusal = CheckGroupDoor(string.Empty);
+            var guestRefusal = CheckGroupDoor(string.Empty) ?? CheckFriendsDoor(string.Empty) ?? CheckPrivateDoor(string.Empty);
             if (guestRefusal != null)
             {
-                LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: {connection.Identifier} (guest) refused by the group door - {guestRefusal}");
+                LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: {connection.Identifier} (guest) refused at the door - {guestRefusal}");
                 SendJoinReject(connection, guestRefusal);
                 return;
             }
 
+            // The world's join checks hear guests too. Asking them waits, so the grant then goes back onto the
+            // world's thread as the account path's does.
+            var guestWorld = World;
+            var guestMachine = pending.Request.MachineID;
+            var guestVerdict = await Lumora.Core.Scripting.ScriptJoinChecks.AskAsync(guestWorld, string.Empty,
+                AccountCard.GuestName(guestMachine), guestMachine, false, false);
+            if (guestVerdict.Refused)
+            {
+                LumoraLogger.Warn($"[lnl] HandleJoinAuthenticate: {connection.Identifier} (guest) turned away by a join check - {guestVerdict.Reason}");
+                SendJoinReject(connection, guestVerdict.Reason ?? "Join rejected");
+                return;
+            }
+
             LumoraLogger.Log($"[lnl] HandleJoinAuthenticate: {connection.Identifier} authenticated (guest) - granting");
-            SendJoinGrant(connection, null, pending.Request.MachineID);
+            var guestConnection = connection;
+            guestWorld.RunSynchronously(() => SendJoinGrant(guestConnection, null, guestMachine, joinRole: guestVerdict.Role));
         }
         catch (Exception ex)
         {
@@ -987,6 +1062,9 @@ public partial class SessionConnectionManager : IDisposable
 
         if (permissions != null && haveAccount && permissions.IsGroupMember(verifiedAccountId))
             return null;
+        // on the host's invite book, written by the host alone (SessionInvites)
+        if (haveAccount && SessionInvites.Admits(world, verifiedAccountId))
+            return null;
 
         // The short tag if the host published one, else the id: a refusal that names nothing tells the
         // person nothing about which door they are standing at.
@@ -994,11 +1072,80 @@ public partial class SessionConnectionManager : IDisposable
         return $"This world is for members of {(shortTag.Length > 0 ? shortTag : groupId)}";
     }
 
+    // THE FRIENDS DOOR
+    //
+    // Same rules of evidence as the group door: a verified account id or an empty string for a guest, read
+    // against the host's own lists off its signed-in social service. Someone the host blocked stays out
+    // whatever the tier. A Friends world takes the host's friends and the host's own account on another
+    // machine. Friends+ waits on friends of friends, so until then it takes friends only. Lists that have
+    // not arrived, or a host signed out, take nobody: there is no list to be on. An account on the host's
+    // invite book gets in for as long as its line lasts, whatever the lists say. -xlinka
+    private string? CheckFriendsDoor(string verifiedAccountId)
+    {
+        var config = World?.Configuration;
+        if (config == null)
+            return null;
+        var social = Engine.Current?.Social;
+        bool haveAccount = !string.IsNullOrEmpty(verifiedAccountId);
+
+        // worded like any closed door, so a refusal never tells anyone they were blocked
+        if (haveAccount && social != null && social.IsBlocked(verifiedAccountId))
+            return "You can't join this world";
+
+        var level = config.AccessLevel.Value;
+        if (level != Lumora.Core.World.WorldAccessLevel.Contacts && level != Lumora.Core.World.WorldAccessLevel.ContactsPlus)
+            return null;
+        if (!haveAccount)
+            return "This world is for the host's friends. Sign in to join";
+        if (SessionInvites.Admits(World, verifiedAccountId))
+            return null;
+        if (social == null || !social.IsReady)
+            return "The host's friends list hasn't loaded yet. Try again in a moment";
+        if (verifiedAccountId == social.SelfId || social.IsFriend(verifiedAccountId))
+            return null;
+        return "This world is for the host's friends";
+    }
+
+    public const string PrivateRefusal = "This world is private. Ask the host for an invite.";
+    public const string LocalRefusal = "This is the host's local world. Nobody else can join it.";
+
+    // THE PRIVATE DOOR
+    //
+    // A Private world takes the host's own account on another machine, its co-hosts (an Admin role pinned to
+    // their account in the host's permission config) and accounts with a live line on the host's invite book.
+    // Nobody else: no guest, and nobody who only has its address. Every fact is the host's: its own user, its
+    // config, its book. LAN is not this door's business; it stays open to whoever reaches it on the network.
+    // -xlinka
+    private string? CheckPrivateDoor(string verifiedAccountId)
+    {
+        var world = World;
+        var config = world?.Configuration;
+        // The home answers as Private whatever its config says, and only to the host's own account. -xlinka
+        bool home = Lumora.Core.Management.WorldManager.IsLocalHome(world);
+        if (world == null || config == null || (!home && config.AccessLevel.Value != Lumora.Core.World.WorldAccessLevel.Private))
+            return null;
+        if (string.IsNullOrEmpty(verifiedAccountId))
+            return home ? LocalRefusal : PrivateRefusal;
+        string host = world.LocalUser?.AccountId?.Value ?? string.Empty;
+        if (verifiedAccountId == host || verifiedAccountId == Engine.Current?.Social?.SelfId)
+            return null;
+        if (home)
+            return LocalRefusal;
+        // found, never made: this runs off the world's thread, and asking World.PermissionConfig would attach one
+        var permissions = world.RootSlot?.GetComponent<WorldPermissionConfig>();
+        if (permissions?.FindAssignment(null, verifiedAccountId) is { } assigned
+            && string.Equals(assigned.Role.Value, SessionInvites.CoHostRole, StringComparison.Ordinal))
+            return null;
+        return SessionInvites.Admits(world, verifiedAccountId) ? null : PrivateRefusal;
+    }
+
     // Verify a joiner's CLAIMED account: fetch the public key that account published to the cloud for the
     // given login session, verify the account signature over the challenge nonce against THAT key (so the
     // joiner can't present a key of their choosing), then check platform moderation ban status. Returns
-    // the verified account id, or null if anything fails. World bans are a separate, host-side check. -xlinka
-    private async Task<(AccountCard card, bool forceSilenced)?> VerifyAccountAsync(string accountUserId, string accountSessionId, byte[] nonce, byte[] accountSignature, string context)
+    // the verified account id, or null if anything fails. World bans are a separate, host-side check. refused hears
+    // the words to turn the joiner away with when the service held the account back on purpose. -xlinka
+    private async Task<(AccountCard card, bool forceSilenced)?> VerifyAccountAsync(string accountUserId, string accountSessionId, byte[] nonce, byte[] accountSignature, string context,
+        Action<string>? refused = null)
     {
         var cdn = Engine.Current?.CDNClient;
         if (cdn == null)
@@ -1009,10 +1156,25 @@ public partial class SessionConnectionManager : IDisposable
         if (string.IsNullOrEmpty(accountSessionId) || accountSignature == null || accountSignature.Length == 0)
             return null;
 
-        var publishedKey = await cdn.GetSessionPublicKeyAsync(accountUserId, accountSessionId);
+        // The session's own id lets the account service hold the key back from a session registered under another
+        // build than the one this login reported.
+        var (publishedKey, keyRefusal) = await cdn.GetSessionPublicKeyAsync(accountUserId, accountSessionId, World?.Session?.Metadata?.SessionId);
         if (publishedKey == null)
         {
-            LumoraLogger.Warn($"[lnl] VerifyAccount: no published key for {accountUserId}/{accountSessionId}.");
+            if (keyRefusal == AccountEmail.NotVerifiedCode)
+            {
+                LumoraLogger.Warn($"[lnl] VerifyAccount: the account service holds {accountUserId} back until its email is verified.");
+                refused?.Invoke(EmailJoinGate.Refusal);
+            }
+            else if (keyRefusal == BuildRefusals.ServiceCode)
+            {
+                LumoraLogger.Warn($"[lnl] VerifyAccount: the account service says {accountUserId} reported other game files than this session was listed with.");
+                refused?.Invoke(BuildRefusals.Modified);
+            }
+            else
+            {
+                LumoraLogger.Warn($"[lnl] VerifyAccount: no published key for {accountUserId}/{accountSessionId}.");
+            }
             return null;
         }
 
@@ -1067,10 +1229,20 @@ public partial class SessionConnectionManager : IDisposable
         return (card, forceSilenced);
     }
 
+    // A user leaves on the world's own thread, inside its update, whichever thread lost the link. Every transport
+    // raises its disconnects on a network thread of its own, and the removal from there wrote the user list, the
+    // reference registry and the leave events while the world's update or a sync cycle was in the middle of them.
+    // -xlinka
     private void RemoveUser(User user)
     {
-        World.RemoveUser(user);
-        user.Dispose();
+        var world = World;
+        if (world == null || user == null)
+            return;
+        world.RunSynchronously(() =>
+        {
+            world.RemoveUser(user);
+            user.Dispose();
+        });
     }
 
     // Cut a peer off and take their user down with them. Host only; the host cannot remove itself. Used by
@@ -1102,11 +1274,15 @@ public partial class SessionConnectionManager : IDisposable
         RemoveUser(user);
     }
 
+    // What arrived before the session's sync manager was there to take it. A joiner sends its join request the moment
+    // its link is up and starts its sync manager after, and a host quick enough to challenge in between had its
+    // challenge dropped and the join waiting for good. Kept here in order until the sync manager starts. -xlinka
+    private readonly Queue<RawInMessage> _early = new();
+    private volatile bool _earlyTaken;
+    private const int MaxEarlyMessages = 256;
+
     private void OnConnectionDataReceived(IConnection connection, byte[] data, int length)
     {
-        if (Session?.Sync == null)
-            return;
-
         var raw = new RawInMessage
         {
             Data = data,
@@ -1116,7 +1292,31 @@ public partial class SessionConnectionManager : IDisposable
             Arrived = System.Diagnostics.Stopwatch.GetTimestamp(),
         };
 
-        Session.Sync.QueueRawIncoming(raw);
+        if (!_earlyTaken)
+        {
+            lock (_early)
+            {
+                if (!_earlyTaken)
+                {
+                    if (_early.Count < MaxEarlyMessages)
+                        _early.Enqueue(raw);
+                    return;
+                }
+            }
+        }
+
+        Session?.Sync?.QueueRawIncoming(raw);
+    }
+
+    // The sync manager, as it starts: everything held so far, then everything as it arrives.
+    internal void TakeEarlyMessages(SessionSyncManager sync)
+    {
+        lock (_early)
+        {
+            while (_early.TryDequeue(out var raw))
+                sync.QueueRawIncoming(raw);
+            _earlyTaken = true;
+        }
     }
 
     public bool TryGetUser(IConnection connection, out User user)
@@ -1158,6 +1358,17 @@ public partial class SessionConnectionManager : IDisposable
         }
     }
 
+    // The same list written into one the caller keeps, so a sender asking per message makes none.
+    public void CopyAllConnections(List<IConnection> into)
+    {
+        into.Clear();
+        lock (_lock)
+        {
+            foreach (var connection in _connectionToUser.Keys)
+                into.Add(connection);
+        }
+    }
+
     public List<IConnection> GetAllConnections()
     {
         lock (_lock)
@@ -1167,6 +1378,11 @@ public partial class SessionConnectionManager : IDisposable
     }
 
     public void Broadcast(byte[] data, List<IConnection> targets, bool reliable, bool background = false, bool bulk = false)
+        => Broadcast(data, data.Length, targets, reliable, background, bulk);
+
+    // The first length bytes of data. Every link copies what it is handed before it returns, so the caller may
+    // write its next frame into the same buffer.
+    public void Broadcast(byte[] data, int length, List<IConnection> targets, bool reliable, bool background = false, bool bulk = false)
     {
         // One link refusing a send must not cost every target after it the same message. -xlinka
         foreach (var target in targets)
@@ -1174,13 +1390,13 @@ public partial class SessionConnectionManager : IDisposable
             try
             {
                 if (bulk)
-                    target.SendBulk(data, data.Length);
+                    target.SendBulk(data, length);
                 else
-                    target.Send(data, data.Length, reliable, background);
+                    target.Send(data, length, reliable, background);
             }
             catch (Exception ex)
             {
-                LumoraLogger.Warn($"[lnl] Broadcast: sending {data.Length} bytes to {target?.Identifier} failed: {ex.Message}");
+                LumoraLogger.Warn($"[lnl] Broadcast: sending {length} bytes to {target?.Identifier} failed: {ex.Message}");
             }
         }
     }

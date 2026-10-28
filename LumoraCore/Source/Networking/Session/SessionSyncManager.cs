@@ -5,6 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using Lumora.Core;
 using Lumora.Core.Networking.Streams;
@@ -46,10 +47,12 @@ public class SessionSyncManager : IDisposable
 
     private Thread _decodeThread = null!;
     private Thread _encodeThread = null!;
+    private Thread _bulkEncodeThread = null!;
     private Thread _syncThread = null!;
 
     private readonly AutoResetEvent _decodeThreadEvent = new(false);
     private readonly AutoResetEvent _encodeThreadEvent = new(false);
+    private readonly AutoResetEvent _bulkEncodeThreadEvent = new(false);
     private readonly AutoResetEvent _syncThreadEvent = new(false);
     private readonly ManualResetEvent _syncThreadInitEvent = new(false);
     private readonly ManualResetEvent _refreshFinished = new(false);
@@ -58,6 +61,9 @@ public class SessionSyncManager : IDisposable
     private readonly ConcurrentQueue<RawInMessage> _rawInMessages = new();
     private readonly ConcurrentQueue<SyncMessage> _messagesToProcess = new();
     private readonly ConcurrentQueue<SyncMessage> _messagesToTransmit = new();
+    // Asset chunks, encoded and handed to the links on a thread of their own. In the one queue a window of
+    // them sat in front of the next pose, voice frame and world change for as long as copying them out took.
+    private readonly ConcurrentQueue<SyncMessage> _bulkToTransmit = new();
     // A LinkedList and not a Queue because the replay path has to be able to STOP at the head and leave
     // the rest of the backlog untouched: order is the only thing that makes replaying ops correct, so a
     // batch we can't apply yet must stay exactly where it is rather than going round to the back.
@@ -174,6 +180,8 @@ public class SessionSyncManager : IDisposable
         public int Next;
         public ulong Tag;
         public bool Started;
+        // Entries of the type table the joiners hold: none until the table's own record has gone out.
+        public int TypesHeld;
 
         public FullStateSend(List<User> users) => Users = users;
 
@@ -237,6 +245,14 @@ public class SessionSyncManager : IDisposable
     public int MessagesToTransmitCount => _messagesToTransmit.Count;
     public int IncomingRawCount => _rawInMessages.Count;
     public int PendingStreamCount => _pendingStreamMessages.Count;
+
+    // Tracking samples sent less often to whoever is far off or looking away (StreamInterest).
+    private StreamInterest? _interest;
+    private StreamInterest Interest => _interest ??= new StreamInterest(World);
+    public long StreamTargetsSkipped => _interest?.Skipped ?? 0;
+    public long StreamTargetsPassed => _interest?.Passed ?? 0;
+    public long StreamBytesSent => _interest?.SentBytes ?? 0;
+    public long StreamBytesSkipped => _interest?.SkippedBytes ?? 0;
     public int PendingDeltaCount => _pendingDeltaBatches.Count;
     public long PendingDeltaBytes => _pendingDeltaBytes;
 
@@ -296,6 +312,12 @@ public class SessionSyncManager : IDisposable
             Priority = ThreadPriority.AboveNormal
         };
 
+        _bulkEncodeThread = new Thread(BulkEncodeLoop)
+        {
+            Name = "SessionBulkEncodeThread",
+            IsBackground = true
+        };
+
         _syncThread = new Thread(SyncLoop)
         {
             Name = "SessionSyncThread",
@@ -305,7 +327,9 @@ public class SessionSyncManager : IDisposable
 
         _decodeThread.Start();
         _encodeThread.Start();
+        _bulkEncodeThread.Start();
         _syncThread.Start();
+        Session?.Connections?.TakeEarlyMessages(this);
 
         // Wait for sync thread to initialize - BOUNDED so a stuck/failed sync thread can never permanently block
         // the caller (the join handshake). The sync thread sets this almost immediately at the top of SyncLoop;
@@ -342,6 +366,12 @@ public class SessionSyncManager : IDisposable
 
     public void EnqueueForTransmission(SyncMessage message)
     {
+        if (message.Bulk)
+        {
+            _bulkToTransmit.Enqueue(message);
+            _bulkEncodeThreadEvent.Set();
+            return;
+        }
         _messagesToTransmit.Enqueue(message);
         _encodeThreadEvent.Set();
     }
@@ -367,6 +397,12 @@ public class SessionSyncManager : IDisposable
 
     // DECODE THREAD
 
+    // The three loops are compiled optimized up front, never tiered. Each is a method that never returns, so
+    // the runtime starts it unoptimized and swaps in an optimized copy mid-loop once its loops have run about a
+    // thousand times, compiling that copy right there on this thread. For SyncLoop that landed inside the
+    // stream fan-out with the data model lock held: about 16 s into a hosted session the world thread sat 30
+    // to 46 ms waiting on the JIT, with nobody connected. -xlinka
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private void DecodeLoop()
     {
         LumoraLogger.Debug("[Sync] DecodeLoop started");
@@ -396,7 +432,19 @@ public class SessionSyncManager : IDisposable
                         && Session?.Connections?.TryGetUser(rawMessage.Sender, out var from) == true)
                         from.CountReceived(syncMessage);
 
-                    EnqueueForProcessing(syncMessage);
+                    // File chunks and their acknowledgements do not touch the world. Waiting for its next
+                    // frame made asset throughput depend on rendering and put file I/O under its lock. -xlinka
+                    if (syncMessage is ControlMessage { IsAssetTransfer: true } assetMessage)
+                    {
+                        if (Session?.AssetTransferer is { } transferer)
+                            transferer.EnqueueMessage(assetMessage);
+                        else
+                            assetMessage.Dispose();
+                    }
+                    else
+                    {
+                        EnqueueForProcessing(syncMessage);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -410,6 +458,12 @@ public class SessionSyncManager : IDisposable
 
     // ENCODE THREAD
 
+    private const int MaxKeptEncodeBytes = 256 * 1024;
+    private MemoryStream _encodeStream = new();
+    private BinaryWriter? _encodeWriter;
+    private byte[]? _compressBuffer;
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private void EncodeLoop()
     {
         LumoraLogger.Debug("[Sync] EncodeLoop started");
@@ -442,11 +496,23 @@ public class SessionSyncManager : IDisposable
                     // in (Delta/Full/Stream) and it's actually big enough to be worth it - the
                     // codec returns the frame unchanged if it wouldn't shrink, and the receiver
                     // unwraps transparently. - xlinka
-                    var encoded = message.Encode();
+                    // Written into this thread's own stream and compressed into its own buffer; every link
+                    // copies what it is handed before the next message is written. -xlinka
+                    var encodeWriter = _encodeWriter ??= new BinaryWriter(_encodeStream);
+                    int length = message.EncodeInto(_encodeStream, encodeWriter);
+                    var encoded = _encodeStream.GetBuffer();
                     int threshold = message.CompressionThreshold;
-                    if (threshold > 0 && encoded.Length >= threshold)
-                        encoded = SyncFrameCodec.WrapCompressed(encoded);
-                    Session.Connections.Broadcast(encoded, message.Targets, message.Reliable, message.Background, message.Bulk);
+                    if (threshold > 0 && length >= threshold)
+                        encoded = SyncFrameCodec.WrapCompressed(encoded, ref length, ref _compressBuffer);
+                    Session.Connections.Broadcast(encoded, length, message.Targets, message.Reliable, message.Background, message.Bulk);
+                    // A world's worth of full state is not kept for the next pose.
+                    if (_encodeStream.Capacity > MaxKeptEncodeBytes)
+                    {
+                        _encodeStream = new MemoryStream();
+                        _encodeWriter = null;
+                    }
+                    if (_compressBuffer != null && _compressBuffer.Length > MaxKeptEncodeBytes)
+                        _compressBuffer = null;
                 }
                 catch (Exception ex)
                 {
@@ -462,8 +528,43 @@ public class SessionSyncManager : IDisposable
         LumoraLogger.Debug("[Sync] EncodeLoop stopped");
     }
 
+    private MemoryStream _bulkStream = new();
+    private BinaryWriter? _bulkWriter;
+
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private void BulkEncodeLoop()
+    {
+        while (_running && !_isDisposed)
+        {
+            _bulkEncodeThreadEvent.WaitOne();
+            if (_isDisposed) break;
+            while (_bulkToTransmit.TryDequeue(out var message))
+            {
+                try
+                {
+                    if (message.Targets.Count == 0)
+                        continue;
+                    var writer = _bulkWriter ??= new BinaryWriter(_bulkStream);
+                    int length = message.EncodeInto(_bulkStream, writer);
+                    Session.Connections.Broadcast(_bulkStream.GetBuffer(), length, message.Targets, message.Reliable, message.Background, message.Bulk);
+                }
+                catch (Exception ex)
+                {
+                    LumoraLogger.Error($"[Sync] BulkEncodeLoop: Exception encoding message: {ex.Message}");
+                }
+                finally
+                {
+                    message.Dispose();
+                }
+            }
+        }
+        while (_bulkToTransmit.TryDequeue(out var left))
+            left.Dispose();
+    }
+
     // SYNC THREAD
 
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
     private void SyncLoop()
     {
         LumoraLogger.Debug("[Sync] SyncLoop started");
@@ -693,7 +794,9 @@ public class SessionSyncManager : IDisposable
                     released.Clear();
                     World.LinkManager?.GetReleasedDrives(released);
 
-                    if (released.Count > 0)
+                    // With nobody connected there is nobody to correct: encoding the batch under the lock only to
+                    // throw it away is time the world thread waits for, and a later joiner gets these as they stand.
+                    if (released.Count > 0 && anyReceiver)
                     {
                         // A joiner mid-send never gets this batch. What it already holds, from a slice
                         // encoded while the drive still had it, rides the next delta instead, in order
@@ -738,7 +841,16 @@ public class SessionSyncManager : IDisposable
                     int sentCount = 0;
                     foreach (var stream in streams)
                     {
+                        // A guest's own tracking goes up as often as whoever needs it most; the host's own goes to
+                        // each receiver as often as that one does.
+                        if (!World.IsAuthority && World.LocalUser is { } self && !Interest.OwnDue(self, stream.StreamGroup, stream.StreamTime))
+                        {
+                            stream.Dispose();
+                            continue;
+                        }
                         AddStreamTargets(stream, excludeSender: false);
+                        if (World.IsAuthority && World.LocalUser is { } host)
+                            Interest.ThinTargets(stream, host, Session.Connections, LinkBehindTest);
                         if (stream.Targets.Count > 0)
                         {
                             EnqueueForTransmission(stream);
@@ -776,7 +888,6 @@ public class SessionSyncManager : IDisposable
                 SendClockProbe();
                 SendPendingResyncRequests();
                 PruneStaleChangeConfirmations();
-                Session.AssetTransferer?.Update();
 
                 // Keep a deferred join advancing - OnFullStateReceived may have held Running back waiting for
                 // the local user, and every sync cycle is a chance to claim it. Cheap + idempotent. -xlinka
@@ -956,6 +1067,8 @@ public class SessionSyncManager : IDisposable
 
                         var forwarded = CloneStreamMessage(streamMessage);
                         AddStreamTargets(forwarded, excludeSender: true);
+                        if (Session.Connections.TryGetUser(streamMessage.Sender, out var owner) && owner != null)
+                            Interest.ThinTargets(forwarded, owner, Session.Connections, LinkBehindTest);
                         if (forwarded.Targets.Count > 0)
                         {
                             EnqueueForTransmission(forwarded);
@@ -1325,14 +1438,32 @@ public class SessionSyncManager : IDisposable
         var elements = send.Elements;
         long started = System.Diagnostics.Stopwatch.GetTimestamp();
         long budget = (long)(SliceBudgetMs * System.Diagnostics.Stopwatch.Frequency / 1000.0);
-        while (send.Next < elements.Length)
+        // A component names its type by an index into the type table, and the joiners hold that table as it
+        // stood when its record went out, slices ago. Anything registered since goes by name in this slice.
+        var workers = World.Workers;
+        var typeTable = workers?.TypeTable;
+        if (workers != null)
+            workers.NameIndexesFrom = send.TypesHeld;
+        try
         {
-            var element = elements[send.Next++];
-            // Gone since the send began: whatever owned it says so in a change the joiner gets.
-            if (!element.IsDisposed)
-                World.SyncController.EncodeFullRecord(element, slice);
-            if ((send.Next & 15) == 0 && System.Diagnostics.Stopwatch.GetTimestamp() - started >= budget)
-                break;
+            while (send.Next < elements.Length)
+            {
+                var element = elements[send.Next++];
+                // Gone since the send began: whatever owned it says so in a change the joiner gets.
+                if (!element.IsDisposed)
+                {
+                    World.SyncController.EncodeFullRecord(element, slice);
+                    if (ReferenceEquals(element, typeTable))
+                        workers!.NameIndexesFrom = send.TypesHeld = workers.TypeCount;
+                }
+                if ((send.Next & 15) == 0 && System.Diagnostics.Stopwatch.GetTimestamp() - started >= budget)
+                    break;
+            }
+        }
+        finally
+        {
+            if (workers != null)
+                workers.NameIndexesFrom = int.MaxValue;
         }
 
         slice.Targets.AddRange(_sendTargets);
@@ -1451,6 +1582,16 @@ public class SessionSyncManager : IDisposable
             LumoraLogger.Log($"[Sync] {LinkName(worstLink)} is behind: {worst / 1024} KB waiting (peak {worstPeer.PeakPending / 1024} KB), "
                 + $"drains ~{worstPeer.DrainRate / 1024:0} KB/s, {worstPeer.OwedCount} values owed; {TotalCoalescedRecords} skipped for newer so far");
         }
+    }
+
+    // Asked by the stream thinning only while some link is behind; none is the usual case and costs nothing.
+    private Func<IConnection, bool>? _isLinkBehind;
+    private Func<IConnection, bool>? LinkBehindTest => PeersBehind > 0 ? _isLinkBehind ??= IsLinkBehind : null;
+
+    private bool IsLinkBehind(IConnection link)
+    {
+        lock (_linkLock)
+            return _backlogs.TryGetValue(link, out var backlog) && backlog.Behind;
     }
 
     private bool AnyLinkFull(List<IConnection> links)
@@ -2086,9 +2227,14 @@ public class SessionSyncManager : IDisposable
     // relayed-delta retransmit, instead of a separate per-tick `new HashSet<User>()` snapshot of the
     // init queue for each: the ReceiveStreams flag already carries the "still initializing" state, so a
     // dedicated snapshot per call site would just be per-message allocation and lock round-trip waste. -xlinka
+    // Every message asked for a new list of the session's links; each thread keeps one to copy them into.
+    [ThreadStatic] private static List<IConnection>? t_fanout;
+
     private void AddAuthorityFanoutTargets(SyncMessage message, IConnection? excludeConnection = null)
     {
-        var connections = Session.Connections.GetAllConnections();
+        var connections = t_fanout ??= new List<IConnection>();
+        Session.Connections.CopyAllConnections(connections);
+        message.Targets.EnsureCapacity(message.Targets.Count + connections.Count);
         foreach (var connection in connections)
         {
             if (excludeConnection != null && connection == excludeConnection)
@@ -2146,20 +2292,9 @@ public class SessionSyncManager : IDisposable
     {
         var copy = new DeltaBatch(World.StateVersion, World.SyncTick);
 
-		for (int i = 0; i < source.DataRecordCount; i++)
-		{
-			var record = source.GetDataRecord(i);
-			var length = record.EndOffset - record.StartOffset;
-			var reader = source.SeekDataRecord(i);
-			var buffer = length > 0 ? reader.ReadBytes(length) : Array.Empty<byte>();
-
-			var writer = copy.BeginNewDataRecord(record.TargetID);
-			if (buffer.Length > 0)
-			{
-				writer.Write(buffer);
-			}
-			copy.FinishDataRecord(record.TargetID);
-		}
+        // Straight out of the source's buffer: a relayed delta made an array for every record in it.
+        for (int i = 0; i < source.DataRecordCount; i++)
+            source.CopyDataRecordTo(i, copy);
 
         return copy;
     }
@@ -2168,8 +2303,6 @@ public class SessionSyncManager : IDisposable
     {
         int remaining = batch.DataRecordCount;
         int passes = 0;
-
-        // LumoraLogger.Log($"[Sync] ApplyDataRecords: Starting with {batch.DataRecordCount} records, isFull={batch is FullBatch}");
 
         while (remaining > 0)
         {
@@ -2273,8 +2406,6 @@ public class SessionSyncManager : IDisposable
                     LumoraLogger.Debug($"[Sync] ApplyDataRecords: Decode failed for {dataRecord.TargetID}: {ex.Message}");
                 }
             }
-
-            // LumoraLogger.Log($"[Sync] ApplyDataRecords: Pass {passes} decoded {decodedThisPass} records, {remaining} remaining");
 
             if (remaining == startRemaining)
             {
@@ -2618,6 +2749,15 @@ public class SessionSyncManager : IDisposable
         {
             // Common case: delta applied to a locally dirty element. Keep pending for later.
             LumoraLogger.Debug($"[Sync] TryDecodePendingRecord: Deferred {record.TargetID} ({(isFull ? "full" : "delta")}) - {ex.Message}");
+            return false;
+        }
+        catch (Exception ex)
+        {
+            // Anything else a decode throws stays this record's problem. Out of here it stopped the sync loop at
+            // this record every cycle: control messages, the join gate and the tick that ages pending records out
+            // all stopped with it, and the world never moved again. It retries and ages out like any other. -xlinka
+            if (record.Attempts == 0)
+                LumoraLogger.Warn($"[Sync] TryDecodePendingRecord: {record.TargetID} ({(isFull ? "full" : "delta")}) threw, keeping it pending - {ex.Message}");
             return false;
         }
         finally
@@ -2975,14 +3115,6 @@ public class SessionSyncManager : IDisposable
                     _ = Session.Connections.HandleAccountProof(message.Sender, message.Payload);
                 break;
 
-            case ControlMessage.Message.AssetRequest:
-            case ControlMessage.Message.AssetTransmissionStart:
-            case ControlMessage.Message.AssetChunk:
-            case ControlMessage.Message.AssetNextChunkRequest:
-            case ControlMessage.Message.AssetNotAvailable:
-                Session.AssetTransferer?.ProcessMessage(message);
-                break;
-
             default:
                 LumoraLogger.Log($"[Sync] ProcessControlMessage: {message.ControlMessageType}");
                 break;
@@ -2997,15 +3129,18 @@ public class SessionSyncManager : IDisposable
 
         _decodeThreadEvent.Set();
         _encodeThreadEvent.Set();
+        _bulkEncodeThreadEvent.Set();
         _syncThreadEvent.Set();
         _refreshFinished.Set();
 
         _decodeThread?.Join(1000);
         _encodeThread?.Join(1000);
+        _bulkEncodeThread?.Join(1000);
         _syncThread?.Join(1000);
 
         _decodeThreadEvent.Dispose();
         _encodeThreadEvent.Dispose();
+        _bulkEncodeThreadEvent.Dispose();
         _syncThreadEvent.Dispose();
         _syncThreadInitEvent.Dispose();
         _refreshFinished.Dispose();

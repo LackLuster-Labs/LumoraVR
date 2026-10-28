@@ -13,6 +13,9 @@ namespace Lumora.Nexus.Transport.LNL;
 public sealed class LNLNetworkManager : INetworkManager
 {
     public const string SCHEME = "lnl";
+    // lnl-nat://<node address>:<port>/<sessionId>: punch through the host's NAT node, relayed through the same
+    // node when the punch does not get through.
+    public const string NAT_SCHEME = "lnl-nat";
 
     private readonly LNLManager _inner = new();
     private readonly List<IListener> _listeners = new();
@@ -52,10 +55,12 @@ public sealed class LNLNetworkManager : INetworkManager
     {
         if (schemes == null) return;
         schemes.Add(SCHEME);
+        schemes.Add(NAT_SCHEME);
     }
 
     public bool SupportsScheme(string scheme)
-        => string.Equals(scheme, SCHEME, StringComparison.OrdinalIgnoreCase);
+        => string.Equals(scheme, SCHEME, StringComparison.OrdinalIgnoreCase)
+           || string.Equals(scheme, NAT_SCHEME, StringComparison.OrdinalIgnoreCase);
 
     public List<Uri> GetPrioritizedUriList(IEnumerable<Uri> uris, out string expectedSessionId)
     {
@@ -64,7 +69,11 @@ public sealed class LNLNetworkManager : INetworkManager
         if (uris == null) return result;
         foreach (var uri in uris)
         {
-            if (uri != null && SupportsScheme(uri.Scheme)) result.Add(uri);
+            if (uri == null || !SupportsScheme(uri.Scheme))
+                continue;
+            result.Add(uri);
+            if (expectedSessionId == null && string.Equals(uri.Scheme, NAT_SCHEME, StringComparison.OrdinalIgnoreCase))
+                expectedSessionId = uri.AbsolutePath.Trim('/');
         }
         return result;
     }

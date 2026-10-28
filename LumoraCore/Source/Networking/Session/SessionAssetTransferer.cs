@@ -6,6 +6,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using Lumora.Core.Assets;
 using Lumora.Core.Networking;
 using Lumora.Core.Networking.Sync;
@@ -33,7 +35,7 @@ namespace Lumora.Core.Networking.Session;
 // the host is neither B nor C.
 //
 // Nothing here waits on an answer forever. A receiver that goes quiet holds only its own slots, and
-// the sender starts its jobs over until it answers again; a requester that hears nothing asks again,
+// the sender retries until it answers again; a requester that hears nothing asks again,
 // and the sender folds a repeated ask into the job it already has. The first three-player session
 // over Steam sat at four uploads of 0 B for good: one guest stopped answering, the pool of four
 // slots was shared by everyone, and the least-recently-served pick kept handing that guest every
@@ -46,9 +48,20 @@ namespace Lumora.Core.Networking.Session;
 // an older one refuses anything over its own cap well before that. -xlinka
 //
 // A receiver on this build names the chunk each ack answers and takes chunks in any order, so the sender
-// spreads its chunks over the transport's bulk lanes and paces each peer by its round trip (LinkPace). A
-// build before that asks once per chunk with no offset, one ask fewer than it gets chunks, and needs them
-// in order: it gets them in order on the background channel, paced the same way. -xlinka
+// spreads its chunks over the transport's bulk lanes. A build before that asks once per chunk with no
+// offset, one ask fewer than it gets chunks, and needs them in order: it gets them in order on the
+// background channel. -xlinka
+//
+// Each active file gets a share of the peer's window, capped by its own fixed limit. This used to steer its own
+// window off round trips and receiver hold times, stacked on top of the transport, which already paces
+// every link and keeps bulk under voice, poses and world changes. The two read each other's queues as
+// congestion: a receiver busy loading or a link carrying an avatar shrank the window to two chunks and a
+// big file crawled or sat at 0 % until the stall timer started it over. Now the transport alone decides
+// what crosses the link, and this only keeps enough out to fill it. -xlinka
+//
+// None of it runs on a world thread or under the data model lock. Messages are handled on this
+// transferer's own thread, files are read and written on the disk threads, and answers to whoever
+// asked go out through the thread pool. -xlinka
 public class SessionAssetTransferer : IDisposable
 {
 
@@ -63,25 +76,18 @@ public class SessionAssetTransferer : IDisposable
         public override int GetHashCode() => HashCode.Combine(Connection, ID);
     }
 
-    private const int ChunkSize = 64 * 1024;
+    // A chunk goes onto the wire as one burst, and live data sent behind it waits for all of it at a thin
+    // link's bottleneck: 64 KB is 21 ms at 3 MB/s, 32 KB half that. -xlinka
+    private const int ChunkSize = 32 * 1024;
     private const int MaxReceiveRuns = 4096;
-    // What a job counts against its peer's start budget.
-    private const int AdmitChunks = 16;
-
-    // Pacing; see LinkPace.
-    private const long InitialWindow = 4L * ChunkSize;
-    private const long MinWindow = 2L * ChunkSize;
-    private const long MaxWindow = 16L * 1024 * 1024;
-    private const double MinRoundSeconds = 0.02;
-    private const double QueueMarginSeconds = 0.005;
-    private const double QueueMarginShare = 0.05;
-    private const double FloorEpochSeconds = 10;
-    private const double IdleResetSeconds = 1;
-    private const int RateRounds = 8;
-    // How long a round's middle chunk may sit at its receiver before it is acked. Past this the receiver is
-    // not keeping up: chunks queue in front of its world changes and streams, in the one line every
-    // message waits in. A frame at the slowest rate anything renders at, and then some.
-    private const double MaxHeldSeconds = 0.15;
+    // Out and not acked yet, per file and per peer. 64 chunks is 2 MB, 20 MB/s on a 100 ms path for one file;
+    // a peer's whole window covers a fast long link with several files going. -xlinka
+    private const long JobWindow = 64L * ChunkSize;
+    private const long PeerWindow = 16L * 1024 * 1024;
+    // Read ahead of the window, one disk read at a time per file.
+    private const int ReadAheadChunks = 16;
+    // Chunks one disk write takes from a file's backlog.
+    private const int WriteBatchChunks = 32;
 
     // Outbound (we are sending)
 
@@ -102,13 +108,48 @@ public class SessionAssetTransferer : IDisposable
         public long TotalBytes { get; private set; }
         public long SentBytes => _offset;
 
-        // What this job costs against its peer's start budget: a first window, or the whole file if smaller.
-        public long Window => System.Math.Min(System.Math.Max(TotalBytes, 1), (long)AdmitChunks * ChunkSize);
+        public bool Loading;
+        public bool Reading;
+        public bool Busy => Loading || Reading;
+        public int Generation;
+        // Chunks read and waiting for room in the window, in file order from SentBytes on.
+        public readonly Queue<ControlMessage> Prepared = new();
+        public long ReadTo;
+
+        public void ResumeAt(long offset)
+        {
+            if (offset < 0 || offset > TotalBytes)
+                throw new InvalidDataException("Asset resume offset exceeds its length.");
+            _offset = offset;
+            ReadTo = offset;
+            ClearPrepared();
+        }
+
+        public void Advance(int size) => _offset += size;
+
+        public void ClearPrepared()
+        {
+            while (Prepared.TryDequeue(out var stale))
+                stale.Dispose();
+        }
 
         // When the receiver last asked for a chunk, or the start last went out, and how many starts
         // have gone. Read by the stall sweep.
         public double LastHeard;
         public int Starts;
+        public double StartSentAt;
+
+        // When the oldest chunk still waiting for its ack went out, or 0 with none out.
+        public double OldestOut()
+        {
+            double oldest = 0;
+            foreach (var (at, _) in _byOffset.Values)
+                if (oldest == 0 || at < oldest)
+                    oldest = at;
+            if (_inOrder.TryPeek(out var first) && (oldest == 0 || first.At < oldest))
+                oldest = first.At;
+            return oldest;
+        }
 
         // The receiver asked for this start's first chunk, and whether it acks each chunk by offset and
         // takes them in any order.
@@ -164,19 +205,27 @@ public class SessionAssetTransferer : IDisposable
             AssetUri = assetUri;
             _filePath = filePath;
             // A local:// URI is a content hash and carries no format. The only machine that still knows
-            // what these bytes are is the one holding the file, and it knows because its cache file kept
-            // the extension, so send it. Without it the receiver has a nameless blob and every decoder
-            // that dispatches on extension - the mesh decoder above all - has nothing to dispatch on.
-            // -xlinka
-            _format = Path.GetExtension(filePath) ?? string.Empty;
-            try { TotalBytes = new FileInfo(filePath).Length; }
-            catch { TotalBytes = 0; }
+            // what these bytes are is the one holding the file, and it knows because its record kept the
+            // extension, so send it. Without it the receiver has a nameless blob and every decoder that
+            // dispatches on extension - the mesh decoder above all - has nothing to dispatch on. -xlinka
+            var db = Engine.Current?.LocalDB;
+            var filed = db?.GetExtension(assetUri.OriginalString);
+            _format = !string.IsNullOrEmpty(filed) ? filed! : Path.GetExtension(filePath) ?? string.Empty;
+            long plain = db?.GetPlainSize(assetUri.OriginalString) ?? -1;
+            if (plain >= 0)
+                TotalBytes = plain;
+            else
+            {
+                try { TotalBytes = new FileInfo(filePath).Length; }
+                catch { TotalBytes = 0; }
+            }
         }
 
         // A queued job holds the path, not the bytes, and a started one reads its file as it goes. Reading
         // whole files at queue time put every file an avatar has into memory at once, read on the sync
         // thread under the data model lock in a single cycle, for jobs that would wait minutes for a slot.
-        // A record stored encrypted is the one exception: its plaintext only exists in memory. -xlinka
+        // A file the store keeps sealed is read through a decrypting stream, a chunk at a time, so the peer
+        // gets exactly the plaintext it always got and the hash in the address still holds. -xlinka
         public bool Load(LocalDB? db)
         {
             if (_source != null)
@@ -184,12 +233,14 @@ public class SessionAssetTransferer : IDisposable
             try
             {
                 var uriStr = AssetUri.OriginalString;
-                if (db != null && db.IsStoredEncrypted(uriStr))
+                var stored = db?.OpenRead(uriStr);
+                if (stored != null)
                 {
-                    var plain = db.ReadAssetBytesAsync(uriStr).GetAwaiter().GetResult();
-                    if (plain == null)
-                        return false;
-                    _source = new MemoryStream(plain, writable: false);
+                    _source = stored;
+                }
+                else if (db != null && db.OwnsPath(_filePath))
+                {
+                    return false;
                 }
                 else
                 {
@@ -207,11 +258,13 @@ public class SessionAssetTransferer : IDisposable
             }
         }
 
-        // Also the restart: a start sent again begins the file over, and the receiver drops whatever it
-        // had for this job and begins over with it.
+        // A new start defaults to offset zero; a receiver with retained ranges supplies its resume offset.
         public ControlMessage Initialize()
         {
+            Generation++;
+            ClearPrepared();
             _offset = 0;
+            ReadTo = 0;
             Ready = false;
             var msg = new ControlMessage(ControlMessage.Message.AssetTransmissionStart);
             msg.Targets.Add(Target);
@@ -228,19 +281,32 @@ public class SessionAssetTransferer : IDisposable
             return msg;
         }
 
-        public ControlMessage GetChunk()
+        // Up to count chunks from offset on, in one pass over the file. Runs on a disk thread, never two at once
+        // for one job.
+        public List<ControlMessage> ReadChunks(long offset, int count)
         {
-            int size = (int)System.Math.Min(ChunkSize, TotalBytes - _offset);
+            var chunks = new List<ControlMessage>(count);
+            for (int i = 0; i < count && offset < TotalBytes; i++)
+            {
+                chunks.Add(GetChunk(offset));
+                offset += System.Math.Min(ChunkSize, TotalBytes - offset);
+            }
+            return chunks;
+        }
+
+        public ControlMessage GetChunk(long offset)
+        {
+            int size = (int)System.Math.Min(ChunkSize, TotalBytes - offset);
             _scratch ??= new byte[ChunkSize];
             int read = 0;
             if (size > 0)
             {
-                _source!.Position = _offset;
+                _source!.Position = offset;
                 while (read < size)
                 {
                     int n = _source.Read(_scratch, read, size - read);
                     if (n <= 0)
-                        throw new EndOfStreamException($"{_filePath} ended at {_offset + read} of {TotalBytes} bytes");
+                        throw new EndOfStreamException($"{_filePath} ended at {offset + read} of {TotalBytes} bytes");
                     read += n;
                 }
             }
@@ -250,17 +316,17 @@ public class SessionAssetTransferer : IDisposable
             using var ms = new MemoryStream(size + 32);
             using var w = new BinaryWriter(ms);
             w.Write(ID);
-            w.Write((int)System.Math.Min(_offset, int.MaxValue));
+            w.Write((int)System.Math.Min(offset, int.MaxValue));
             w.Write(size);
             w.Write(_scratch, 0, size);
-            w.Write(_offset);
+            w.Write(offset);
             msg.Payload = ms.ToArray();
-            _offset += size;
             return msg;
         }
 
         public void Dispose()
         {
+            ClearPrepared();
             _source?.Dispose();
             _source = null;
         }
@@ -282,20 +348,30 @@ public class SessionAssetTransferer : IDisposable
         private readonly List<(long Start, long End)> _runs = new();
         private readonly string _tempPath;
         private FileStream? _sink;
+        // With a store to adopt into, the bytes land sealed from the first chunk, under a key that goes into
+        // the store's record with the file. Only a run with no store keeps a plain temp file.
+        private Lumora.Nexus.Storage.SealedScatterWriter? _sealed;
         private bool _finished;
 
         public bool IsDone => _received >= _totalSize;
 
         public long TotalBytes => _totalSize;
         public long ReceivedBytes => _received;
+        public long ResumeOffset => _runs.Count > 0 && _runs[0].Start == 0 ? _runs[0].End : 0;
 
         public double LastProgress;
+        public readonly Queue<(byte[] Payload, long Arrived)> PendingChunks = new();
+        public long PendingBytes;
+        public bool Writing;
+        public bool RestartPending;
 
         // tempPathFor is handed the sender's declared format so the file we land on disk keeps the
         // extension the asset actually has. The temp name is what the local database then adopts, and
         // the extension on that cache file is the only thing an extension-dispatching decoder has to go
         // on later, so losing it here quietly breaks every load of that asset from then on. -xlinka
-        public FileReceiveJob(IConnection source, BinaryReader reader, Func<string, string> tempPathFor)
+        public byte[]? SealKey { get; }
+
+        public FileReceiveJob(IConnection source, BinaryReader reader, Func<string, string> tempPathFor, bool seal)
         {
             Source = source;
             ID = reader.ReadInt32();
@@ -318,7 +394,15 @@ public class SessionAssetTransferer : IDisposable
             _totalSize = total;
 
             _tempPath = tempPathFor(Format);
-            _sink = new FileStream(_tempPath, FileMode.Create, FileAccess.Write, FileShare.None, ChunkSize);
+            if (seal)
+            {
+                SealKey = Lumora.Nexus.Storage.SealedKeys.NewKey();
+                _sealed = new Lumora.Nexus.Storage.SealedScatterWriter(_tempPath, total, SealKey);
+            }
+            else
+            {
+                _sink = new FileStream(_tempPath, FileMode.Create, FileAccess.Write, FileShare.None, ChunkSize);
+            }
         }
 
         public string Format { get; }
@@ -353,8 +437,15 @@ public class SessionAssetTransferer : IDisposable
             // slivers to grow the list without end is not sending a file.
             if (_runs.Count >= MaxReceiveRuns)
                 throw new InvalidDataException($"Asset chunks scattered over more than {MaxReceiveRuns} runs.");
-            _sink!.Position = offset;
-            _sink.Write(data, 0, size);
+            if (_sealed != null)
+            {
+                _sealed.Write(offset, data.AsSpan(0, size));
+            }
+            else
+            {
+                _sink!.Position = offset;
+                _sink.Write(data, 0, size);
+            }
             Cover(offset, offset + size);
             return offset;
         }
@@ -409,15 +500,25 @@ public class SessionAssetTransferer : IDisposable
             w.Write(ID);
             w.Write(offset);
             w.Write(heldMicros);
+            if (offset == -1)
+                w.Write(ResumeOffset);
             msg.Payload = ms.ToArray();
             return msg;
         }
 
         public string FinalizeAndGetFile()
         {
-            _sink!.Flush();
-            _sink.Dispose();
-            _sink = null;
+            if (_sealed != null)
+            {
+                _sealed.Complete();
+                _sealed = null;
+            }
+            else
+            {
+                _sink!.Flush();
+                _sink.Dispose();
+                _sink = null;
+            }
             _finished = true;
             return _tempPath;
         }
@@ -425,6 +526,11 @@ public class SessionAssetTransferer : IDisposable
         // A job let go of before it finished takes its partial file with it.
         public void Dispose()
         {
+            if (_sealed != null)
+            {
+                try { _sealed.Dispose(); } catch { }
+                _sealed = null;
+            }
             if (_sink != null)
             {
                 try { _sink.Dispose(); } catch { }
@@ -437,204 +543,63 @@ public class SessionAssetTransferer : IDisposable
         }
     }
 
-    // Uploads in flight per peer, and in all. Per peer so a peer that stops answering ties up its own
-    // transfers and nobody else's. Within its count a peer is also held to a byte budget, each job costing
-    // what it can have on the wire at once: a thousand small files go many at a time, big ones a few. -xlinka
-    private const int MaxTransmitJobsPerPeer = 16;
-    private const int MaxTransmitJobs = 64;
-    private const long MaxInFlightBytesPerPeer = 4L * 1024 * 1024;
+    // Uploads in flight per peer, and in all. Byte budgets are spent on chunks, not on opening files:
+    // charging each large file a megabyte here limited every peer to four active files. A file in flight
+    // costs one start and a small window, so a body of a few hundred small parts goes many at a time.
+    // -xlinka
+    private const int MaxTransmitJobsPerPeer = 32;
+    private const int MaxTransmitJobs = 128;
 
-    // How much one peer gets on the wire at once, learned from its own chunks: the trip from a chunk going
-    // out to its ack coming back, and the bytes acked each round. The least trip seen lately is the link
-    // with nothing queued on it, and the most it delivered a second over the last few rounds is what it
-    // carries. Each round, about one least trip long:
-    //   a middle trip more than a margin over that floor means data is sitting in a queue somewhere, holding
-    //   up whatever else crosses the link, hands and voice with it, for as long as the window keeps it
-    //   there. The window drops to what the link carries in one floor trip and half the margin, held
-    //   between half and three quarters of what it was. The middle trip and not the best, since the queue
-    //   anything else meets is the one most of the round saw;
-    //   otherwise, if the window was in use, it grows: doubling until delay first starts to build, then a
-    //   sixteenth a round.
-    // Trips are the wire's alone: the receiver says how long it held each chunk before acking, and the ack is
-    // timed from when it came off the wire, so neither end's frame shows up as a queue. What noise is left, a
-    // transport that hands messages over once a frame above all, is measured as the usual gap between a
-    // round's middle and least trips and allowed for. The hold is a queue of its own and is judged on its
-    // own: a receiver too slow to keep up holds chunks in front of its world changes and streams, so a round
-    // whose middle hold is past MaxHeldSeconds backs off the same way, whatever the wire looks like. On a
-    // receiver drawing ten frames a second, allowing for noise and counting the hold as wire both let its
-    // backlog grow to seconds of chunks with everything else waiting behind them.
-    // A lost packet alone moves nothing, since the transport sends it again; if it means anything it shows
-    // up as delay. A window left idle goes back to slow start from a quarter of itself, so what a busy link
-    // learned does not land on it all at once later. -xlinka
-    private sealed class LinkPace
+    // One peer's uploads: whose turn is next, and how far its acks have got.
+    private sealed class PeerSend
     {
         public readonly List<FileTransmitJob> Jobs = new();
         public int Next;
-        public long Window = InitialWindow;
-        public long InFlight;
-        private bool _slowStart = true;
-        private double _floor = double.MaxValue;
-        private double _epochBest = double.MaxValue, _lastEpochBest = double.MaxValue, _epochStart = -1;
-        private double _epochMiddle = double.MaxValue, _lastEpochMiddle = double.MaxValue, _lastMiddle = -1, _middleJitter;
-        private double _roundStart = -1;
-        private readonly List<double> _roundTrips = new();
-        private readonly List<double> _roundHolds = new();
-        private long _roundPeak, _roundAcked;
-        private readonly double[] _rates = new double[RateRounds];
-        private int _rateAt;
-        private readonly double[] _recent = new double[3];
-        private readonly double[] _recentHolds = new double[3];
-        private int _recentAt;
-        private double _lastActive = -1;
-        private double _noise = -1;
+        // The latest send time of any chunk this peer has acked. Past what a file is waiting on, the link
+        // carried newer data than it, so the file's own chunks or start went missing on the far side.
+        public double AckedSentAt;
 
-        public bool HasRoom => InFlight + ChunkSize <= Window;
-
-        private double Carries()
-        {
-            double most = 0;
-            foreach (var rate in _rates)
-                most = System.Math.Max(most, rate);
-            return most;
-        }
-
-        public void Sent(int size, double now)
-        {
-            if (InFlight == 0 && _lastActive >= 0 && now - _lastActive > IdleResetSeconds)
-            {
-                Window = System.Math.Max(InitialWindow, Window / 4);
-                _slowStart = true;
-                _roundStart = -1;
-            }
-            InFlight += size;
-            _lastActive = now;
-            if (InFlight > _roundPeak)
-                _roundPeak = InFlight;
-        }
-
-        public void Released(long size) => InFlight = System.Math.Max(0, InFlight - size);
-
-        public void Acked(int size, double trip, double held, double now)
-        {
-            Released(size);
-            _lastActive = now;
-            if (trip <= 0)
-                return;
-            if (_epochStart < 0 || now - _epochStart > FloorEpochSeconds)
-            {
-                _lastEpochBest = _epochStart < 0 ? double.MaxValue : _epochBest;
-                _epochBest = double.MaxValue;
-                _lastEpochMiddle = _epochStart < 0 ? double.MaxValue : _epochMiddle;
-                _epochMiddle = double.MaxValue;
-                _epochStart = now;
-            }
-            _epochBest = System.Math.Min(_epochBest, trip);
-            _floor = System.Math.Min(_epochBest, _lastEpochBest);
-
-            if (_roundStart < 0)
-            {
-                _roundStart = now;
-                _roundTrips.Clear();
-                _roundHolds.Clear();
-                _roundPeak = InFlight;
-                _roundAcked = 0;
-            }
-            _roundTrips.Add(trip);
-            _roundHolds.Add(held);
-            _roundAcked += size;
-            double span = now - _roundStart;
-            double margin = QueueMarginSeconds + _floor * QueueMarginShare;
-
-            // Slow start doubles a round, so a queue it starts is a round deep before any round ends; it
-            // stops on the least of the last three trips, at once. It allows an eighth of the floor more:
-            // each doubling goes out as one burst, and the tail of a burst waits behind its head on its way
-            // out, which on a long link would end slow start long before the link is full.
-            _recentHolds[_recentAt % _recent.Length] = held;
-            _recent[_recentAt++ % _recent.Length] = trip;
-            if (_slowStart && _recentAt >= _recent.Length)
-            {
-                double recent = double.MaxValue, recentHold = double.MaxValue;
-                foreach (var t in _recent)
-                    recent = System.Math.Min(recent, t);
-                foreach (var h in _recentHolds)
-                    recentHold = System.Math.Min(recentHold, h);
-                if (recent - _floor > margin + _floor / 8 + System.Math.Max(0, _noise) || recentHold > MaxHeldSeconds)
-                {
-                    _slowStart = false;
-                    double rate = span > 0 ? _roundAcked / span : 0;
-                    long fits = (long)(System.Math.Max(rate, Carries()) * (_floor + margin / 2));
-                    Window = System.Math.Max(MinWindow, System.Math.Max(Window / 2, System.Math.Min(Window * 3 / 4, fits)));
-                    _roundStart = -1;
-                    return;
-                }
-            }
-
-            if (span < System.Math.Max(_floor, MinRoundSeconds))
-                return;
-
-            _rates[_rateAt++ % RateRounds] = _roundAcked / span;
-            _roundTrips.Sort();
-            double middle = _roundTrips[_roundTrips.Count / 2];
-            if (_roundTrips.Count >= 4)
-            {
-                double spread = middle - _roundTrips[0];
-                _noise = _noise < 0 ? spread : _noise + (spread - _noise) / 8;
-            }
-            // The middle trip held against the best middle trip of lately, not the best single trip: the two
-            // carry the same scatter, so a transport that hands messages over a frame at a time does not
-            // look like a queue, and anything standing in a queue lifts every trip and so the middle. What
-            // the middle itself wanders round to round is allowed for.
-            _epochMiddle = System.Math.Min(_epochMiddle, middle);
-            double middleFloor = System.Math.Min(_epochMiddle, _lastEpochMiddle);
-            if (_lastMiddle >= 0)
-                _middleJitter += (System.Math.Abs(middle - _lastMiddle) - _middleJitter) / 8;
-            _lastMiddle = middle;
-            double queued = System.Math.Min(middle - _floor - System.Math.Max(0, _noise), middle - middleFloor - _middleJitter);
-            _roundHolds.Sort();
-            bool backlogged = _roundHolds[_roundHolds.Count / 2] > MaxHeldSeconds;
-            if (queued > margin || backlogged)
-            {
-                long fits = (long)(Carries() * (_floor + margin / 2));
-                Window = System.Math.Max(MinWindow, System.Math.Max(Window / 2, System.Math.Min(Window * 3 / 4, fits)));
-                _slowStart = false;
-            }
-            else if (_slowStart && queued > margin / 2)
-            {
-                _slowStart = false;
-            }
-            else if (_roundPeak >= Window * 3 / 4)
-            {
-                Window = System.Math.Min(MaxWindow, _slowStart ? Window * 2 : Window + System.Math.Max(ChunkSize, Window / 16));
-            }
-            _roundStart = now;
-            _roundTrips.Clear();
-            _roundHolds.Clear();
-            _roundPeak = InFlight;
-            _roundAcked = 0;
-        }
     }
 
-    private readonly Dictionary<IConnection, LinkPace> _paces = new();
+    private readonly Dictionary<IConnection, PeerSend> _peers = new();
 
-    private LinkPace PaceFor(IConnection target)
+    private PeerSend PeerFor(IConnection target)
     {
-        if (!_paces.TryGetValue(target, out var pace))
-            _paces[target] = pace = new LinkPace();
-        return pace;
+        if (!_peers.TryGetValue(target, out var peer))
+            _peers[target] = peer = new PeerSend();
+        return peer;
     }
 
-    // A started upload that hears nothing from its receiver for this long (times its start, up to four)
-    // sends its start again, from the top, for as long as the link stays up. The wait grows so a receiver
-    // whose round trip is longer than one window still gets a run long enough to finish. Fields, not
-    // constants, so a test can shorten them. -xlinka
+    // SENDER STALLS
+    //
+    // A file is only started over when its receiver has said nothing about it for StallSeconds while acking
+    // chunks this machine sent after the ones the file waits on: the link carried newer data, so the far side
+    // lost the job. A fresh start lets it resume. A link that is merely slow or full acks nothing newer, and
+    // starting its files over only put the same chunks on it twice and threw the receiver back to 0 %. A file
+    // that stays lost through MaxStarts starts, or that hears nothing at all for DropSeconds, is let go with
+    // an explicit no, so the slot frees and whoever asked hears why. Fields, not constants, so a test can
+    // shorten them. -xlinka
     internal static double StallSeconds = 15;
-    // A request that has heard nothing back for this long (times its attempt, up to four) is asked
-    // again. A request still waiting its turn at the sender costs one small message per ask.
-    internal static double RequestRetrySeconds = 30;
+    internal static double DropSeconds = 300;
+    private const int MaxStarts = 3;
+    private const double OvertakeSlackSeconds = 2;
+
+    // REQUESTER RETRIES
+    //
+    // A request that has heard nothing back is asked again after RequestRetrySeconds, doubling to four times
+    // that. A request still waiting its turn at the sender costs one small message per ask. One whose sender
+    // has sent this machine no asset traffic at all for GiveUpSeconds fails, so a load shows an error instead
+    // of a bar at 0 % for the rest of the session; one stuck behind other files from a sender that is
+    // still sending waits its turn. -xlinka
+    internal static double RequestRetrySeconds = 10;
+    internal static double GiveUpSeconds = 300;
     // A receive buffer nothing has touched for this long is let go. Anything still wanted is asked for
-    // again by its request and starts over.
+    // again by its request and resumes or starts over.
     internal static double ReceiveIdleSeconds = 120;
     private const double SweepIntervalSeconds = 0.5;
+
+    // When each peer last sent this machine a start or a chunk, read by the give-up rule.
+    private readonly Dictionary<IConnection, double> _heardFrom = new();
 
     // What an incoming asset is called when the sender declared no format, or declared one we refuse.
     private const string UnknownFormat = ".asset";
@@ -674,21 +639,12 @@ public class SessionAssetTransferer : IDisposable
 
     private static double Now => Stopwatch.GetTimestamp() / (double)Stopwatch.Frequency;
 
-    // How long a message sat here since it came off the wire, in microseconds.
-    private static int HeldMicros(SyncMessage message, double now)
-    {
-        if (message.Arrived <= 0)
-            return 0;
-        double held = now - message.Arrived / (double)Stopwatch.Frequency;
-        return (int)System.Math.Clamp(held * 1e6, 0, int.MaxValue);
-    }
-
     // A derived address (a texture's sidecar or a smaller rung) is asked for on the chance its owner made
     // it, so a no is routine and not worth a warning.
     private static bool IsDerived(string uriStr) => uriStr.IndexOf('~') >= 0;
 
     // Holds the completion callback plus an optional per-chunk progress callback for an in-flight fetch. -xlinka
-    private readonly struct GatherCallbacks
+    private sealed class GatherCallbacks
     {
         public readonly Action<Uri, string> OnGathered;
         public readonly Action<Uri, long, long>? OnProgress; // (uri, totalBytes, receivedBytes)
@@ -696,6 +652,26 @@ public class SessionAssetTransferer : IDisposable
         {
             OnGathered = onGathered;
             OnProgress = onProgress;
+        }
+
+        private Task _notifications = Task.CompletedTask;
+
+        // Callbacks run in order for this consumer, outside every transfer lock. A decoder or consumer
+        // that blocks must not stop the other files or sessions. -xlinka
+        public void Gathered(Uri uri, string path) => Notify(() => OnGathered(uri, path));
+        public void Progress(Uri uri, long total, long received)
+        {
+            if (OnProgress != null)
+                Notify(() => OnProgress(uri, total, received));
+        }
+
+        private void Notify(Action action)
+        {
+            _notifications = _notifications.ContinueWith(_ =>
+            {
+                try { action(); }
+                catch (Exception ex) { LumoraLogger.Warn($"AssetTransferer: asset callback failed: {ex.Message}"); }
+            }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default);
         }
     }
 
@@ -708,17 +684,22 @@ public class SessionAssetTransferer : IDisposable
         // never arrive - a permanent hang, not a slow load. Every waiter is answered from the one transfer.
         public readonly List<GatherCallbacks> Waiters = new();
         public readonly IConnection Target;
-        public double LastProgress;
+        public readonly double Since = Now;
+        public double LastProgress = Now;
+        public double LastAsked = Now;
         public int Asks = 1;
 
         public PendingFetch(IConnection target)
         {
             Target = target;
-            LastProgress = Now;
         }
     }
 
     private readonly object _lock = new();
+    private readonly System.Collections.Concurrent.ConcurrentQueue<ControlMessage> _incoming = new();
+    private readonly AutoResetEvent _incomingSignal = new(false);
+    private readonly Thread _worker;
+    private volatile bool _disposed;
     private readonly Dictionary<JobID, FileTransmitJob> _transmitJobs = new();
     private readonly Dictionary<JobID, FileReceiveJob> _receiveJobs = new();
     private readonly Dictionary<string, PendingFetch> _fetches = new();
@@ -846,6 +827,99 @@ public class SessionAssetTransferer : IDisposable
         Session = session;
         lock (_live)
             _live.Add(this);
+        _worker = new Thread(ProcessIncoming)
+        {
+            Name = "SessionAssetTransfer",
+            IsBackground = true,
+            Priority = ThreadPriority.AboveNormal
+        };
+        _worker.Start();
+    }
+
+    // One reader preserves start/chunk ordering without tying disk work to a frame or the decode thread.
+    // Ownership of the message passes to this queue, including when the session is closing. -xlinka
+    internal void EnqueueMessage(ControlMessage message)
+    {
+        if (_disposed)
+        {
+            message.Dispose();
+            return;
+        }
+        _incoming.Enqueue(message);
+        _incomingSignal.Set();
+    }
+
+    // Its own thread, not the pool's: an avatar load fills every pool thread with decodes for seconds, and a
+    // chunk or an ack waiting behind them for a thread held the whole link up. -xlinka
+    private void ProcessIncoming()
+    {
+        double nextSweep = Now + SweepIntervalSeconds;
+        while (!_disposed)
+        {
+            double wait = nextSweep - Now;
+            if (wait > 0 && _incoming.IsEmpty)
+                _incomingSignal.WaitOne(TimeSpan.FromSeconds(wait));
+            while (_incoming.TryDequeue(out var message))
+            {
+                try
+                {
+                    ProcessMessage(message);
+                }
+                catch (Exception ex)
+                {
+                    LumoraLogger.Warn($"AssetTransferer: processing {message.ControlMessageType} failed: {ex.Message}");
+                }
+                finally
+                {
+                    message.Dispose();
+                }
+            }
+            if (Now >= nextSweep)
+            {
+                nextSweep = Now + SweepIntervalSeconds;
+                try
+                {
+                    Update();
+                }
+                catch (Exception ex)
+                {
+                    LumoraLogger.Warn($"AssetTransferer: sweep failed: {ex.Message}");
+                }
+            }
+        }
+        while (_incoming.TryDequeue(out var left))
+            left.Dispose();
+    }
+
+    // File reads and writes, on threads of their own for the same reason. Two, so one file on a stalled disk
+    // does not stop the others. Shared by every session's transferer. -xlinka
+    private static class Disk
+    {
+        private static readonly System.Collections.Concurrent.BlockingCollection<Action> _work = Start();
+
+        private static System.Collections.Concurrent.BlockingCollection<Action> Start()
+        {
+            var work = new System.Collections.Concurrent.BlockingCollection<Action>();
+            for (int i = 0; i < 2; i++)
+            {
+                new Thread(() =>
+                {
+                    foreach (var item in work.GetConsumingEnumerable())
+                    {
+                        try { item(); }
+                        catch (Exception ex) { LumoraLogger.Warn($"AssetTransferer: disk work failed: {ex.Message}"); }
+                    }
+                })
+                {
+                    Name = "SessionAssetDisk",
+                    IsBackground = true,
+                    Priority = ThreadPriority.AboveNormal
+                }.Start();
+            }
+            return work;
+        }
+
+        public static void Run(Action action) => _work.Add(action);
     }
 
     // The session to ask for a local:// asset this machine does not hold. A single "active" transferer used
@@ -893,6 +967,11 @@ public class SessionAssetTransferer : IDisposable
     {
         lock (_lock)
         {
+            if (_disposed)
+            {
+                onGathered(assetUri, null!);
+                return;
+            }
             var uriStr = UriKey(assetUri);
             if (_fetches.TryGetValue(uriStr, out var waiting))
             {
@@ -999,6 +1078,8 @@ public class SessionAssetTransferer : IDisposable
     {
         lock (_lock)
         {
+            if (_disposed || message.Sender?.IsOpen != true)
+                return;
             // Per-message try/catch so a malformed payload from one peer doesn't take
             // down the asset transfer system for everyone. Bounds-check failures from
             // the decoders surface here as InvalidDataException.
@@ -1021,12 +1102,13 @@ public class SessionAssetTransferer : IDisposable
         }
     }
 
-    // Runs once per sync cycle. Restarts uploads whose receiver has gone quiet, asks again for downloads
-    // nothing has come back for, lets go of receive buffers nobody is filling, and fills free slots.
+    // Runs independently of world frames. Retries silent peers, expires idle receives and fills free slots.
     public void Update()
     {
         lock (_lock)
         {
+            if (_disposed)
+                return;
             double now = Now;
             if (now < _nextSweep)
                 return;
@@ -1035,34 +1117,77 @@ public class SessionAssetTransferer : IDisposable
 
             try
             {
-                foreach (var job in _transmitJobs.Values)
+                foreach (var job in _transmitJobs.Values.ToList())
                 {
+                    if (job.Busy)
+                        continue;
+                    var peer = PeerFor(job.Target);
                     if (job.Ready && job.OutBytes == 0)
                     {
                         job.LastHeard = now;
                         continue;
                     }
-                    if (now - job.LastHeard < StallSeconds * System.Math.Min(job.Starts, 4))
+                    double silent = now - job.LastHeard;
+                    var key = new JobID(job.Target, job.ID);
+                    if (silent >= StallSeconds && _transmitJobsToInitialize.Any(pending => pending.Target == job.Target))
+                    {
+                        // Waiting files get a turn even when every active file is silent. Waiting for a newer
+                        // ack here would deadlock the queue: none of those files can start to send one.
+                        DropTransmit(key, dispose: false);
+                        _transmitJobsToInitialize.Add(job);
                         continue;
-                    Restart(job, now, $"no answer for {now - job.LastHeard:0}s");
+                    }
+                    // Nothing newer than what this file waits on has been acked: it is queued behind the rest of
+                    // a full link, or the receiver froze, not a lost job.
+                    double waitingOn = job.Ready ? job.OldestOut() : job.StartSentAt;
+                    if (waitingOn <= 0 || peer.AckedSentAt <= waitingOn + OvertakeSlackSeconds)
+                    {
+                        if (silent >= DropSeconds)
+                            GiveUpTransmit(key, job, $"nothing acked by {job.Target.Identifier} for {silent:0} s");
+                        continue;
+                    }
+                    if (silent < StallSeconds)
+                        continue;
+                    if (job.Starts >= MaxStarts)
+                    {
+                        GiveUpTransmit(key, job, $"{job.Target.Identifier} answered none of {job.Starts} starts");
+                        continue;
+                    }
+                    Restart(job, now, $"no answer for {silent:0}s");
                 }
 
                 // A long queue at the sender asks again for every asset in it at once, so one line per sweep.
                 int asked = 0;
                 string? firstAsked = null;
+                List<string>? givenUp = null;
                 foreach (var (uriStr, fetch) in _fetches)
                 {
-                    double wait = RequestRetrySeconds * System.Math.Min(fetch.Asks, 4);
-                    if (now - fetch.LastProgress < wait || fetch.Target == null || !fetch.Target.IsOpen)
+                    if (fetch.Target == null || !fetch.Target.IsOpen)
+                        continue;
+                    double waited = now - fetch.LastProgress;
+                    double quiet = now - System.Math.Max(fetch.Since, _heardFrom.TryGetValue(fetch.Target, out var heard) ? heard : 0);
+                    if (waited >= GiveUpSeconds && quiet >= GiveUpSeconds)
+                    {
+                        (givenUp ??= new List<string>()).Add(uriStr);
+                        continue;
+                    }
+                    double wait = RequestRetrySeconds * System.Math.Min(1 << System.Math.Min(fetch.Asks - 1, 2), 4);
+                    if (now - fetch.LastAsked < wait || waited < wait)
                         continue;
                     fetch.Asks++;
-                    fetch.LastProgress = now;
+                    fetch.LastAsked = now;
                     asked++;
                     firstAsked ??= $"{uriStr} from {fetch.Target.Identifier} (ask {fetch.Asks})";
                     SendAssetRequest(new Uri(uriStr), fetch.Target);
                 }
                 if (asked > 0)
                     LumoraLogger.Warn($"AssetTransferer: nothing back yet on {asked} request(s), asked again; first {firstAsked}");
+                if (givenUp != null)
+                {
+                    LumoraLogger.Warn($"AssetTransferer: giving up on {givenUp.Count} request(s), nothing from their sender for {GiveUpSeconds:0} s; first {givenUp[0]}");
+                    foreach (var uriStr in givenUp)
+                        FailFetch(uriStr);
+                }
 
                 List<JobID>? idle = null;
                 foreach (var (key, job) in _receiveJobs)
@@ -1088,50 +1213,66 @@ public class SessionAssetTransferer : IDisposable
         }
     }
 
-    // Begin an upload over: the receiver gets a fresh start under the same id, drops whatever it held for
-    // it, and pulls from the top. A receiver that never saw the first start, or that lost its job, comes
-    // back this way; one that is merely slow answers the first start and never gets here. -xlinka
+    // A fresh start under the same id lets the receiver resume retained ranges or request the whole file.
     private void Restart(FileTransmitJob job, double now, string why)
     {
         job.Starts++;
         job.LastHeard = now;
         var log = job.Starts == 2 ? (Action<string>)LumoraLogger.Warn : LumoraLogger.Debug;
         log($"AssetTransferer: {why} from {job.Target.Identifier} on {UriKey(job.AssetUri)} (job {job.ID}), sending its start again (start {job.Starts})");
-        PaceFor(job.Target).Released(job.ClearFlight());
+        job.ClearFlight();
+        job.StartSentAt = now;
         Session.Sync.EnqueueForTransmission(job.Initialize());
     }
 
-    private void DropTransmit(JobID key)
+    // Let go of an upload nobody is taking, with a no to the receiver so its fetch ends instead of waiting.
+    private void GiveUpTransmit(JobID key, FileTransmitJob job, string why)
+    {
+        LumoraLogger.Warn($"AssetTransferer: dropping upload of {UriKey(job.AssetUri)} (job {job.ID}): {why}");
+        DropTransmit(key);
+        SendNotAvailable(UriKey(job.AssetUri), job.Target);
+    }
+
+    private void DropTransmit(JobID key, bool dispose = true)
     {
         if (!_transmitJobs.Remove(key, out var job))
             return;
-        if (_paces.TryGetValue(job.Target, out var pace))
+        if (_peers.TryGetValue(job.Target, out var peer))
         {
-            pace.Released(job.ClearFlight());
-            int at = pace.Jobs.IndexOf(job);
+            job.ClearFlight();
+            int at = peer.Jobs.IndexOf(job);
             if (at >= 0)
             {
-                pace.Jobs.RemoveAt(at);
-                if (pace.Next > at)
-                    pace.Next--;
+                peer.Jobs.RemoveAt(at);
+                if (peer.Next > at)
+                    peer.Next--;
             }
         }
-        job.Dispose();
+        if (dispose && !job.Busy)
+            job.Dispose();
     }
 
     private void DropReceive(JobID key)
     {
         if (_receiveJobs.Remove(key, out var job))
-            job.Dispose();
+        {
+            job.PendingChunks.Clear();
+            job.PendingBytes = 0;
+            if (!job.Writing)
+                job.Dispose();
+        }
     }
 
     public void ConnectionClosed(IConnection connection)
     {
         lock (_lock)
         {
+            if (_disposed)
+                return;
             foreach (var key in _transmitJobs.Keys.Where(k => k.Connection == connection).ToList())
                 DropTransmit(key);
-            _paces.Remove(connection);
+            _peers.Remove(connection);
+            _heardFrom.Remove(connection);
 
             foreach (var key in _receiveJobs.Keys.Where(k => k.Connection == connection).ToList())
                 DropReceive(key);
@@ -1177,12 +1318,14 @@ public class SessionAssetTransferer : IDisposable
         var assetUri = new Uri(uriStr);
 
         // The same peer asking again for what we already have for it: it heard nothing for a while. A job
-        // still waiting for a slot stays in line; one already started is started over, since the asker
-        // has just said it holds nothing of it. -xlinka
+        // still waiting for a slot stays in line, and so does one whose chunks are still being acked: they
+        // are on their way behind the rest of the link. One its receiver has gone quiet on is started over,
+        // and the receiver resumes from what it holds. -xlinka
         var existing = FindTransmitJob(message.Sender, uriStr);
         if (existing != null)
         {
-            if (_transmitJobs.ContainsKey(new JobID(existing.Target, existing.ID)))
+            if (!existing.Busy && _transmitJobs.ContainsKey(new JobID(existing.Target, existing.ID))
+                && Now - existing.LastHeard >= StallSeconds)
                 Restart(existing, Now, "asked again");
             return;
         }
@@ -1374,7 +1517,7 @@ public class SessionAssetTransferer : IDisposable
         {
             var uri = new Uri(uriStr);
             foreach (var cb in fetch.Waiters)
-                cb.OnGathered(uri, null!);
+                cb.Gathered(uri, null!);
         }
         foreach (var key in _receiveJobs.Where(kv => UriKey(kv.Value.AssetUri) == uriStr).Select(kv => kv.Key).ToList())
             DropReceive(key);
@@ -1396,19 +1539,36 @@ public class SessionAssetTransferer : IDisposable
         using var ms = new MemoryStream(message.Payload);
         using var r = new BinaryReader(ms);
         var job = new FileReceiveJob(message.Sender, r, format =>
-            localDB?.GetTempFilePath(format) ?? Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + format));
+            localDB?.GetTempFilePath() ?? Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N") + format), seal: localDB != null);
         double now = Now;
         job.LastProgress = now;
-        // A start for a job we already hold is the sender beginning it over: the new one replaces it.
+        _heardFrom[message.Sender] = now;
+        // A repeated start keeps verified ranges for the same content instead of throwing progress away.
         var key = new JobID(message.Sender, job.ID);
-        DropReceive(key);
-        _receiveJobs[key] = job;
+        if (_receiveJobs.TryGetValue(key, out var previous)
+            && UriKey(previous.AssetUri) == UriKey(job.AssetUri) && previous.TotalBytes == job.TotalBytes
+            && previous.Format == job.Format)
+        {
+            job.Dispose();
+            job = previous;
+            job.LastProgress = now;
+        }
+        else
+        {
+            DropReceive(key);
+            _receiveJobs[key] = job;
+        }
         NoteProgress(UriKey(job.AssetUri), now);
 
+        if (job.Writing)
+        {
+            job.RestartPending = true;
+            return;
+        }
         if (job.IsDone)
         {
             // Nothing to pull: an empty file is whole the moment it starts.
-            Complete(key, job);
+            WriteChunk(key, job);
             return;
         }
         Session.Sync.EnqueueForTransmission(job.NextChunkRequest(message.Sender, -1));
@@ -1419,74 +1579,108 @@ public class SessionAssetTransferer : IDisposable
     {
         using var ms = new MemoryStream(message.Payload);
         using var r = new BinaryReader(ms);
-
         int id = r.ReadInt32();
         var key = new JobID(message.Sender, id);
+        _heardFrom[message.Sender] = Now;
         if (!_receiveJobs.TryGetValue(key, out var job))
             return;
 
-        long offset;
-        try
+        if (job.PendingBytes + message.Payload.Length > 2 * PeerWindow)
         {
-            offset = job.ApplyChunk(r);
-        }
-        catch
-        {
-            // A chunk that does not fit what its start announced leaves the job with nothing it can trust.
             DropReceive(key);
-            throw;
+            throw new InvalidDataException("Too many asset bytes waiting for disk.");
         }
-
-        double now = Now;
-        job.LastProgress = now;
-        var uriStr = UriKey(job.AssetUri);
-        NoteProgress(uriStr, now);
-
-        // Every chunk is acked, the last too: the sender paces on these.
-        var ack = job.NextChunkRequest(message.Sender, offset, HeldMicros(message, now));
-        if (job.IsDone)
-        {
-            Complete(key, job);
-        }
-        else
-        {
-            // Report progress per chunk so a requester can drive a download bar / detect a stall. -xlinka
-            if (_fetches.TryGetValue(uriStr, out var progressFetch))
-            {
-                foreach (var pcb in progressFetch.Waiters)
-                    pcb.OnProgress?.Invoke(job.AssetUri, job.TotalBytes, job.ReceivedBytes);
-            }
-        }
-        Session.Sync.EnqueueForTransmission(ack);
+        job.PendingChunks.Enqueue((message.Payload, message.Arrived));
+        job.PendingBytes += message.Payload.Length;
+        WriteChunk(key, job);
     }
 
-    private void Complete(JobID key, FileReceiveJob job)
+    // Each file has at most one write running, on a disk thread, taking whatever chunks have piled up for it
+    // since the last. Its disk wait and final flush hold no session lock, so a slow destination cannot delay
+    // another download's acknowledgements. -xlinka
+    private void WriteChunk(JobID key, FileReceiveJob job)
     {
-        _receiveJobs.Remove(key);
-        string path = job.FinalizeAndGetFile();
-        var uriStr = UriKey(job.AssetUri);
-
-        // Adopt before the path goes anywhere. The file is already addressed - the hash is in the URI
-        // we asked for - so taking that address costs nothing, where re-deriving it means a second
-        // full read of a file we are about to decode anyway.
-        //
-        // It also has to happen here rather than in each consumer. Both of the two below can be live
-        // at once (the host wanted this asset AND is relaying it), and whichever adopted first would
-        // move the temp file out from under the other, which then reads a path that no longer exists.
-        //
-        // The side effect is deliberate: a host that only relayed this now holds it, so the next
-        // joiner is served from the cache instead of the owner being asked all over again. -xlinka
-        var localDB = Engine.Current?.LocalDB;
-        string adopted = localDB?.AdoptGatheredAsset(job.AssetUri.OriginalString, path, job.Format) ?? path;
-        LumoraLogger.Debug($"AssetTransferer: finished receiving {job.AssetUri} -> {adopted}");
-
-        if (_fetches.Remove(uriStr, out var fetch))
+        if (job.Writing || (job.PendingChunks.Count == 0 && !job.IsDone))
+            return;
+        job.Writing = true;
+        var batch = new List<(byte[] Payload, long Arrived)>(System.Math.Min(job.PendingChunks.Count, WriteBatchChunks));
+        while (batch.Count < WriteBatchChunks && job.PendingChunks.TryDequeue(out var chunk))
         {
-            foreach (var cb in fetch.Waiters)
-                cb.OnGathered(job.AssetUri, adopted);
+            job.PendingBytes -= chunk.Payload.Length;
+            batch.Add(chunk);
         }
-        // Hand the freshly gathered bytes to anyone the host was relaying this asset to. -xlinka
-        ServePendingRelays(job.AssetUri, adopted);
+        Disk.Run(() =>
+        {
+            var offsets = new List<long>(batch.Count);
+            string? path = null;
+            Exception? failure = null;
+            try
+            {
+                foreach (var chunk in batch)
+                {
+                    using var reader = new BinaryReader(new MemoryStream(chunk.Payload));
+                    reader.ReadInt32();
+                    offsets.Add(job.ApplyChunk(reader));
+                }
+                if (job.IsDone)
+                {
+                    path = job.FinalizeAndGetFile();
+                    var db = Engine.Current?.LocalDB;
+                    // Adopt once before either a local waiter or a relay uses the same file.
+                    if (db != null)
+                        path = db.AdoptGatheredAsset(UriKey(job.AssetUri), path, job.Format, job.SealKey)
+                            ?? throw new IOException("Could not store the received asset.");
+                }
+            }
+            catch (Exception ex) { failure = ex; }
+            lock (_lock)
+            {
+                job.Writing = false;
+                if (_disposed || !_receiveJobs.TryGetValue(key, out var current) || current != job)
+                {
+                    job.Dispose();
+                    return;
+                }
+                if (failure != null)
+                {
+                    DropReceive(key);
+                    LumoraLogger.Warn($"AssetTransferer: receiving {UriKey(job.AssetUri)} failed: {failure.Message}");
+                    return;
+                }
+                double now = Now;
+                job.LastProgress = now;
+                var uri = UriKey(job.AssetUri);
+                NoteProgress(uri, now);
+                if (job.RestartPending)
+                {
+                    job.RestartPending = false;
+                    Session.Sync.EnqueueForTransmission(job.NextChunkRequest(job.Source, -1));
+                }
+                for (int i = 0; i < offsets.Count; i++)
+                {
+                    long arrived = batch[i].Arrived;
+                    int held = arrived <= 0 ? 0 : (int)System.Math.Clamp(
+                        (now - arrived / (double)Stopwatch.Frequency) * 1e6, 0, int.MaxValue);
+                    Session.Sync.EnqueueForTransmission(job.NextChunkRequest(job.Source, offsets[i], held));
+                }
+                if (path != null)
+                {
+                    _receiveJobs.Remove(key);
+                    job.PendingChunks.Clear();
+                    job.PendingBytes = 0;
+                    if (_fetches.Remove(uri, out var fetch))
+                        foreach (var cb in fetch.Waiters)
+                            cb.Gathered(job.AssetUri, path);
+                    ServePendingRelays(job.AssetUri, path);
+                    RefreshJobs();
+                    return;
+                }
+                if (_fetches.TryGetValue(uri, out var progress))
+                    foreach (var cb in progress.Waiters)
+                        cb.Progress(job.AssetUri, job.TotalBytes, job.ReceivedBytes);
+                WriteChunk(key, job);
+            }
+        });
     }
 
     private void HandleNextChunkRequest(ControlMessage message)
@@ -1495,16 +1689,15 @@ public class SessionAssetTransferer : IDisposable
         using var r = new BinaryReader(ms);
         int id = r.ReadInt32();
         long? offset = ms.Length - ms.Position >= sizeof(long) ? r.ReadInt64() : null;
-        double held = ms.Length - ms.Position >= sizeof(int) ? System.Math.Max(0, r.ReadInt32() / 1e6) : 0;
+        if (ms.Length - ms.Position >= sizeof(int))
+            r.ReadInt32();
+        long resume = ms.Length - ms.Position >= sizeof(long) ? r.ReadInt64() : 0;
 
         var key = new JobID(message.Sender, id);
         if (!_transmitJobs.TryGetValue(key, out var job))
             return;
-
-        double now = Now;
-        double heard = message.Arrived > 0 ? message.Arrived / (double)Stopwatch.Frequency : now;
-        job.LastHeard = now;
-        var pace = PaceFor(job.Target);
+        var peer = PeerFor(message.Sender);
+        job.LastHeard = Now;
 
         if (!job.Ready)
         {
@@ -1512,6 +1705,8 @@ public class SessionAssetTransferer : IDisposable
             // sent for the start this one replaced is not taken for it.
             if (offset is long named && named != -1)
                 return;
+            if (offset == -1)
+                job.ResumeAt(resume);
             job.Ready = true;
             job.Lanes = offset == -1;
         }
@@ -1519,7 +1714,7 @@ public class SessionAssetTransferer : IDisposable
         {
             var (at, size) = job.Acked(offset);
             if (size > 0)
-                pace.Acked(size, heard - at - held, held, now);
+                peer.AckedSentAt = System.Math.Max(peer.AckedSentAt, at);
         }
 
         if (job.AllSent && job.Drained)
@@ -1527,47 +1722,44 @@ public class SessionAssetTransferer : IDisposable
             DropTransmit(key);
             LumoraLogger.Debug($"AssetTransferer: finished sending job {id}");
         }
-        Pump(pace);
+        Pump(peer);
     }
 
-    // Sends to one peer while its window has room, a chunk from each job with one to send in turn.
-    private void Pump(LinkPace pace)
+    // Round the peer's files a chunk at a time, with a window share reserved for each. Shares shrink when
+    // files join, but bytes already sent keep draining: they cannot spend a new file's allowance. Otherwise
+    // silent files can fill the peer's entire window and prevent a healthy file from sending its first chunk.
+    // -xlinka
+    private void Pump(PeerSend peer)
     {
-        var jobs = pace.Jobs;
+        var jobs = peer.Jobs;
         int passed = 0;
-        while (pace.HasRoom && jobs.Count > 0 && passed < jobs.Count)
+        double now = Now;
+        long share = System.Math.Max(2L * ChunkSize, System.Math.Min(JobWindow, PeerWindow / System.Math.Max(1, jobs.Count)));
+        while (jobs.Count > 0 && passed < jobs.Count)
         {
-            if (pace.Next >= jobs.Count)
-                pace.Next = 0;
-            var job = jobs[pace.Next++];
+            if (peer.Next >= jobs.Count)
+                peer.Next = 0;
+            var job = jobs[peer.Next++];
             if (!job.Ready || job.AllSent)
             {
                 passed++;
                 continue;
             }
-            passed = 0;
-
-            long offset = job.SentBytes;
-            ControlMessage chunk;
-            try
+            if (job.Prepared.Count < ReadAheadChunks && !job.Busy && job.ReadTo < job.TotalBytes)
+                ReadChunks(job);
+            if (job.OutBytes + ChunkSize > share || !job.Prepared.TryDequeue(out var chunk))
             {
-                chunk = job.GetChunk();
-            }
-            catch (Exception ex)
-            {
-                // The file went away or changed under us; the receiver hears no and asks another way.
-                LumoraLogger.Warn($"AssetTransferer: reading {UriKey(job.AssetUri)} for {job.Target?.Identifier} failed: {ex.Message}");
-                DropTransmit(new JobID(job.Target!, job.ID));
-                SendNotAvailable(UriKey(job.AssetUri), job.Target!);
+                passed++;
                 continue;
             }
-            int size = (int)(job.SentBytes - offset);
+            passed = 0;
+            long offset = job.SentBytes;
+            int size = (int)System.Math.Min(ChunkSize, job.TotalBytes - offset);
+            job.Advance(size);
             chunk.Bulk = job.Lanes;
             if (job.Lanes || !job.AllSent)
             {
-                double now = Now;
                 job.Track(offset, now, size);
-                pace.Sent(size, now);
             }
             Session.Sync.EnqueueForTransmission(chunk);
             if (job.AllSent && job.Drained)
@@ -1576,6 +1768,52 @@ public class SessionAssetTransferer : IDisposable
                 LumoraLogger.Debug($"AssetTransferer: finished sending job {job.ID}");
             }
         }
+    }
+
+    private void ReadChunks(FileTransmitJob job)
+    {
+        job.Reading = true;
+        long offset = job.ReadTo;
+        int count = ReadAheadChunks - job.Prepared.Count;
+        int generation = job.Generation;
+        Disk.Run(() =>
+        {
+            List<ControlMessage>? chunks = null;
+            Exception? failure = null;
+            try { chunks = job.ReadChunks(offset, count); }
+            catch (Exception ex) { failure = ex; }
+            lock (_lock)
+            {
+                job.Reading = false;
+                var key = new JobID(job.Target, job.ID);
+                bool live = !_disposed && _transmitJobs.TryGetValue(key, out var current) && current == job;
+                if (!live || generation != job.Generation || offset != job.ReadTo)
+                {
+                    if (chunks != null)
+                        foreach (var stale in chunks)
+                            stale.Dispose();
+                    if (!live && !_transmitJobsToInitialize.Contains(job))
+                        job.Dispose();
+                    if (live)
+                        Pump(PeerFor(job.Target));
+                    return;
+                }
+                if (failure != null)
+                {
+                    LumoraLogger.Warn($"AssetTransferer: reading {UriKey(job.AssetUri)} failed: {failure.Message}");
+                    DropTransmit(key);
+                    SendNotAvailable(UriKey(job.AssetUri), job.Target);
+                    RefreshJobs();
+                    return;
+                }
+                foreach (var chunk in chunks!)
+                {
+                    job.Prepared.Enqueue(chunk);
+                    job.ReadTo += System.Math.Min(ChunkSize, job.TotalBytes - job.ReadTo);
+                }
+                Pump(PeerFor(job.Target));
+            }
+        });
     }
 
     private void HandleNotAvailable(ControlMessage message)
@@ -1628,16 +1866,16 @@ public class SessionAssetTransferer : IDisposable
         // one whose target connection has waited longest (a never-served connection sorts first). This
         // stops a single peer that floods requests from monopolizing the outbound slots, and the per-peer
         // caps stop a peer that has gone quiet from collecting them. -xlinka
-        Dictionary<IConnection, (int Jobs, long Bytes)>? active = null;
+        Dictionary<IConnection, int>? active = null;
         while (_transmitJobs.Count < MaxTransmitJobs && _transmitJobsToInitialize.Count > 0)
         {
             if (active == null)
             {
-                active = new Dictionary<IConnection, (int, long)>();
+                active = new Dictionary<IConnection, int>();
                 foreach (var running in _transmitJobs.Values)
                 {
                     active.TryGetValue(running.Target, out var load);
-                    active[running.Target] = (load.Jobs + 1, load.Bytes + running.Window);
+                    active[running.Target] = load + 1;
                 }
             }
 
@@ -1647,7 +1885,7 @@ public class SessionAssetTransferer : IDisposable
             {
                 var candidate = _transmitJobsToInitialize[i];
                 if (active.TryGetValue(candidate.Target, out var busy)
-                    && (busy.Jobs >= MaxTransmitJobsPerPeer || busy.Bytes + candidate.Window > MaxInFlightBytesPerPeer))
+                    && busy >= MaxTransmitJobsPerPeer)
                     continue;
                 if (!_connectionIndexes.TryGetValue(candidate.Target, out var served))
                     served = -1;
@@ -1669,25 +1907,46 @@ public class SessionAssetTransferer : IDisposable
             if (_globalConnectionIndex == int.MaxValue)
                 _globalConnectionIndex = 0;
 
-            if (!job.Load(Engine.Current?.LocalDB))
-            {
-                SendNotAvailable(UriKey(job.AssetUri), job.Target);
-                continue;
-            }
-
             job.LastHeard = Now;
-            job.Starts = 1;
+            job.Starts++;
             var key = new JobID(job.Target, job.ID);
             _transmitJobs[key] = job;
-            PaceFor(job.Target).Jobs.Add(job);
+            PeerFor(job.Target).Jobs.Add(job);
             active.TryGetValue(job.Target, out var had);
-            active[job.Target] = (had.Jobs + 1, had.Bytes + job.Window);
-            Session.Sync.EnqueueForTransmission(job.Initialize());
-            // An empty file is whole at its start and never asked for a chunk; kept, it would only be
-            // started over by the stall sweep, again and again.
-            if (job.AllSent)
-                DropTransmit(key);
+            active[job.Target] = had + 1;
+            PrepareFile(job);
         }
+    }
+
+    private void PrepareFile(FileTransmitJob job)
+    {
+        job.Loading = true;
+        job.Ready = false;
+        Disk.Run(() =>
+        {
+            bool loaded = job.Load(Engine.Current?.LocalDB);
+            lock (_lock)
+            {
+                job.Loading = false;
+                var key = new JobID(job.Target, job.ID);
+                if (_disposed || !_transmitJobs.TryGetValue(key, out var current) || current != job)
+                {
+                    job.Dispose();
+                    return;
+                }
+                if (!loaded)
+                {
+                    DropTransmit(key);
+                    SendNotAvailable(UriKey(job.AssetUri), job.Target);
+                    RefreshJobs();
+                    return;
+                }
+                job.LastHeard = job.StartSentAt = Now;
+                Session.Sync.EnqueueForTransmission(job.Initialize());
+                if (job.AllSent)
+                    DropTransmit(key);
+            }
+        });
     }
 
     // Leaving a session answers everything still asked of it. Clearing the asks without a word left every
@@ -1701,11 +1960,23 @@ public class SessionAssetTransferer : IDisposable
         List<(Uri Uri, List<GatherCallbacks> Waiters)> unanswered;
         lock (_lock)
         {
+            if (_disposed)
+                return;
+            _disposed = true;
+            _incomingSignal.Set();
             unanswered = _fetches.Select(kv => (new Uri(kv.Key), kv.Value.Waiters.ToList())).ToList();
             foreach (var job in _transmitJobs.Values)
+                if (!job.Busy)
+                    job.Dispose();
+            foreach (var job in _transmitJobsToInitialize)
                 job.Dispose();
             foreach (var job in _receiveJobs.Values)
-                job.Dispose();
+            {
+                job.PendingChunks.Clear();
+                job.PendingBytes = 0;
+                if (!job.Writing)
+                    job.Dispose();
+            }
             _transmitJobs.Clear();
             _receiveJobs.Clear();
             _fetches.Clear();
@@ -1714,7 +1985,8 @@ public class SessionAssetTransferer : IDisposable
             _relayBacklog.Clear();
             _transmitJobsToInitialize.Clear();
             _connectionIndexes.Clear();
-            _paces.Clear();
+            _peers.Clear();
+            _heardFrom.Clear();
         }
 
         foreach (var (uri, waiters) in unanswered)
@@ -1723,7 +1995,7 @@ public class SessionAssetTransferer : IDisposable
             {
                 try
                 {
-                    waiter.OnGathered(uri, null!);
+                    waiter.Gathered(uri, null!);
                 }
                 catch (Exception ex)
                 {

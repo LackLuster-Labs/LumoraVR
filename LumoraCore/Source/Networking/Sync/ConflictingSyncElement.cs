@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using Lumora.Core;
+using Lumora.Warden;
 
 namespace Lumora.Core.Networking.Sync;
 
@@ -17,6 +18,7 @@ public abstract class ConflictingSyncElement : SyncElement
         IsValid = 13,
         IsHostOnly = 14,
         DirectAccessOnly = 15,
+        OwnUserOnly = 22,
         END = 16
     }
 
@@ -91,6 +93,21 @@ public abstract class ConflictingSyncElement : SyncElement
         DirectAccessOnly = true;
     }
 
+    // A member of a user's record that only that user's own machine may write from the wire: what it says
+    // about itself, like being live. Anyone else's write is refused on the host whatever their role. The
+    // host writing on its own machine is not the wire and stays as free as on any other member.
+    public bool IsOwnUserOnly
+    {
+        get => GetFlag((int)InternalFlags.OwnUserOnly);
+        private set => SetFlag((int)InternalFlags.OwnUserOnly, value);
+    }
+
+    public void MarkOwnUserOnly()
+    {
+        IsOwnUserOnly = true;
+        MarkInboundRules();
+    }
+
     protected override bool LoadReplicates => base.LoadReplicates && (!IsHostOnly || World?.IsAuthority == true);
 
     public override MessageValidity Validate(BinaryMessageBatch inboundMessage, BinaryReader reader, List<ValidationGroup.Rule> rules)
@@ -120,7 +137,8 @@ public abstract class ConflictingSyncElement : SyncElement
                 messageNewer = inboundMessage.SenderSyncTick > LastVersion;
             }
 
-            if (!messageNewer)
+            bool grabHandoff = IsRigidGrabHandoff(inboundMessage, rules);
+            if (!messageNewer && !grabHandoff)
                 return MessageValidity.Conflict;
 
             var surface = this is IField ? DataModelPermissionSurface.Field : DataModelPermissionSurface.SyncElement;
@@ -151,7 +169,13 @@ public abstract class ConflictingSyncElement : SyncElement
         BinaryMessageBatch inboundMessage, BinaryReader reader, List<ValidationGroup.Rule> rules)
     {
         if (!IsHostOnly && !IsConfigLocked)
-            return MessageValidity.Valid;
+        {
+            var sender = inboundMessage?.SenderUser;
+            if (!IsOwnUserOnly || (Parent is User owner && ReferenceEquals(sender, owner)))
+                return MessageValidity.Valid;
+            World?.DataModelPermissions?.ReportDenial(sender, DataModelDenialKind.ForeignWrite, $"{Name} on another user's record");
+            return MessageValidity.Conflict;
+        }
 
         // Worth reporting, and worth the highest weight there is: these members are identity, allocation
         // bytes and permission config. A correct client never sends one, so a peer that does is not
@@ -161,6 +185,22 @@ public abstract class ConflictingSyncElement : SyncElement
             IsHostOnly ? $"host-only member {Name}" : $"config-locked member {Name}");
 
         return MessageValidity.Conflict;
+    }
+
+    private bool IsRigidGrabHandoff(BinaryMessageBatch batch, List<ValidationGroup.Rule> rules)
+    {
+        if (World == null || batch.SenderUser == null || Parent is not Slot slot
+            || slot.GetComponent<Components.RigidBody>() == null
+            || slot.GrabSurface is not Components.IGrabHolderSurface holder)
+            return false;
+        if (!ReferenceEquals(this, slot.ParentSlotRef) && !ReferenceEquals(this, slot.LocalPosition)
+            && !ReferenceEquals(this, slot.LocalRotation) && !ReferenceEquals(this, slot.LocalScale))
+            return false;
+        if (!((IPermissionWorldFacts)World).BatchClaimsGrab((IPermissionGrabSurface)slot, batch.SenderUser))
+            return false;
+        // Physics may advance before the claim arrives; its parent and relative pose must follow the accepted claim. -xlinka
+        rules.Add(new ValidationGroup.Rule(holder.GrabHolderRefId, mustExist: true));
+        return LastModifyingUser == World.LocalUser && batch.SenderUser != LastModifyingUser;
     }
 
     public override void Invalidate()

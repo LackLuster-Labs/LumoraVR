@@ -35,6 +35,8 @@ public partial class SessionConnectionManager
     }
 
     private readonly Dictionary<IConnection, PendingClaim> _pendingClaims = new();
+    // Sign ins asked for and not yet decided, from the claim until its proof is checked or turned down.
+    private readonly Dictionary<IConnection, DateTime> _settling = new();
     private readonly Dictionary<IConnection, DateTime> _lastClaimAt = new();
 
     // Peer side: tell the host which account this machine holds now. Empty for signed out.
@@ -92,8 +94,31 @@ public partial class SessionConnectionManager
 
         var nonce = RandomNumberGenerator.GetBytes(32);
         lock (_lock)
+        {
             _pendingClaims[connection] = new PendingClaim { AccountId = accountId, SessionId = sessionId, Nonce = nonce, CreatedAt = now };
+            _settling[connection] = now;
+        }
         SendControl(connection, ControlMessage.Message.AccountChallenge, nonce);
+    }
+
+    // Host side: whether a sign in this user asked for is still being proved, so its account id may yet change. A
+    // claim nobody answers counts for twice its lifetime at most.
+    internal bool IsAccountSettling(User user)
+    {
+        if (user == null)
+            return false;
+        var now = DateTime.UtcNow;
+        lock (_lock)
+        {
+            foreach (var (connection, since) in _settling)
+            {
+                if (now - since > AccountClaimLifetime + AccountClaimLifetime)
+                    continue;
+                if (TryGetUser(connection, out var claimant) && ReferenceEquals(claimant, user))
+                    return true;
+            }
+        }
+        return false;
     }
 
     // Peer side: sign the host's nonce with the account key this login holds.
@@ -139,6 +164,8 @@ public partial class SessionConnectionManager
         }
         if (claim == null || DateTime.UtcNow - claim.CreatedAt > AccountClaimLifetime)
         {
+            lock (_lock)
+                _settling.Remove(connection);
             LumoraLogger.Warn($"[lnl] Account proof from {connection.Identifier} with no open claim, ignored");
             return;
         }
@@ -160,6 +187,8 @@ public partial class SessionConnectionManager
 
         world.RunSynchronously(() =>
         {
+            lock (_lock)
+                _settling.Remove(connection);
             if (!TryGetUser(connection, out var user) || user == null || user.IsDestroyed)
                 return;
 
@@ -176,7 +205,7 @@ public partial class SessionConnectionManager
                 DisconnectUser(user, "signed in as an account banned from this world");
                 return;
             }
-            var refusal = CheckGroupDoor(card.AccountId);
+            var refusal = CheckGroupDoor(card.AccountId) ?? CheckFriendsDoor(card.AccountId);
             if (refusal != null)
             {
                 DisconnectUser(user, refusal);

@@ -56,16 +56,55 @@ public abstract class SyncMessage : IDisposable
 
     public abstract byte[] Encode();
 
+    // The frame written into a stream the caller keeps, through the writer it keeps on it, from the start; how
+    // many bytes it came to. The encode thread sends from that stream's buffer, so a message costs no array of
+    // its own. A kind that writes no frame here hands over what Encode made. -xlinka
+    public virtual int EncodeInto(MemoryStream output, BinaryWriter writer)
+    {
+        var bytes = Encode();
+        output.SetLength(0);
+        output.Write(bytes, 0, bytes.Length);
+        return bytes.Length;
+    }
+
     public static SyncMessage Decode(RawInMessage raw)
     {
         // Transparently unwrap a compressed frame before anything reads it. For an
         // uncompressed full-array frame this returns raw.Data unchanged (no copy), so the
         // common path is identical to before; it also normalizes the frame to start at
         // index 0, keeping the reader and the batch decoder consistent. - xlinka
-        var frame = SyncFrameCodec.UnwrapIfCompressed(raw.Data, raw.Offset, raw.Length);
+        // Unwrapped into this thread's own buffer and read through this thread's own reader: a copy, a stream
+        // and a reader or two a message were most of what decoding allocated besides what a message keeps.
+        // Every decoder reads all it keeps before it returns. -xlinka
+        int offset = raw.Offset, length = raw.Length;
+        var frame = SyncFrameCodec.UnwrapInto(raw.Data, ref offset, ref length, ref t_unwrapped);
+        try
+        {
+            return DecodeFrame(raw, frame, offset, length);
+        }
+        finally
+        {
+            if (t_unwrapped != null && t_unwrapped.Length > MaxKeptFrameBytes)
+                t_unwrapped = null;
+        }
+    }
 
-        using var ms = new MemoryStream(frame);
-        using var reader = new BinaryReader(ms);
+    private const int MaxKeptFrameBytes = 256 * 1024;
+    [ThreadStatic] private static byte[]? t_unwrapped;
+    [ThreadStatic] private static FrameStream? t_frame;
+    [ThreadStatic] private static BinaryReader? t_reader;
+
+    // This thread's reader, pointed at data[offset .. offset + length) from its start.
+    internal static BinaryReader ReaderOver(byte[] data, int offset, int length)
+    {
+        var stream = t_frame ??= new FrameStream();
+        stream.Reset(data, offset, length);
+        return t_reader ??= new BinaryReader(stream, System.Text.Encoding.UTF8, leaveOpen: true);
+    }
+
+    private static SyncMessage DecodeFrame(RawInMessage raw, byte[] frame, int offset, int length)
+    {
+        var reader = ReaderOver(frame, offset, length);
 
         var messageType = (MessageType)(reader.ReadByte() & ~SyncFrameCodec.CompressedFlag);
         var stateVersion = reader.Read7BitEncoded();
@@ -73,9 +112,9 @@ public abstract class SyncMessage : IDisposable
 
         SyncMessage message = (messageType switch
         {
-            MessageType.Delta => BinaryMessageBatch.Decode(frame) as DeltaBatch,
-            MessageType.Full => BinaryMessageBatch.Decode(frame) as FullBatch,
-            MessageType.Confirmation => BinaryMessageBatch.Decode(frame) as ConfirmationMessage,
+            MessageType.Delta => BinaryMessageBatch.Decode(frame, offset, length) as DeltaBatch,
+            MessageType.Full => BinaryMessageBatch.Decode(frame, offset, length) as FullBatch,
+            MessageType.Confirmation => BinaryMessageBatch.Decode(frame, offset, length) as ConfirmationMessage,
             MessageType.Control => ControlMessage.Decode(reader),
             MessageType.Stream => StreamMessage.Decode(reader),
             MessageType.RawFrame => RawFrameMessage.Decode(reader),
@@ -92,5 +131,63 @@ public abstract class SyncMessage : IDisposable
     public virtual void Dispose()
     {
         Targets.Clear();
+    }
+
+    // A read-only view of part of an array that a reader can be pointed at again and again.
+    private sealed class FrameStream : Stream
+    {
+        private byte[] _data = Array.Empty<byte>();
+        private int _start;
+        private int _length;
+        private int _position;
+
+        public void Reset(byte[] data, int offset, int length)
+        {
+            _data = data;
+            _start = offset;
+            _length = length;
+            _position = 0;
+        }
+
+        public override bool CanRead => true;
+        public override bool CanSeek => true;
+        public override bool CanWrite => false;
+        public override long Length => _length;
+
+        public override long Position
+        {
+            get => _position;
+            set => _position = (int)System.Math.Clamp(value, 0L, _length);
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => Read(buffer.AsSpan(offset, count));
+
+        public override int Read(Span<byte> buffer)
+        {
+            int n = System.Math.Min(buffer.Length, _length - _position);
+            if (n <= 0)
+                return 0;
+            _data.AsSpan(_start + _position, n).CopyTo(buffer);
+            _position += n;
+            return n;
+        }
+
+        public override int ReadByte() => _position < _length ? _data[_start + _position++] : -1;
+
+        public override long Seek(long offset, SeekOrigin origin)
+        {
+            long target = origin switch
+            {
+                SeekOrigin.Begin => offset,
+                SeekOrigin.Current => _position + offset,
+                _ => _length + offset,
+            };
+            Position = target;
+            return _position;
+        }
+
+        public override void Flush() { }
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
     }
 }

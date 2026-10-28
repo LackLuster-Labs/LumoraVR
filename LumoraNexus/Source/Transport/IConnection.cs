@@ -25,12 +25,16 @@ public interface IConnection : IDisposable
     // Milliseconds, -1 if unknown (e.g. not yet connected). Diagnostics only.
     int Ping { get; }
 
-    // Packets sent on this link since it opened, how many of those had to go again, and reliable packets
-    // still waiting to go out. Zero where the transport does not count them. Diagnostics only.
+    // Packets sent on this link since it opened that the transport sends again when they do not arrive, and how
+    // many of them had to go again: lost over sent is the link's loss. Data this side lets go unsent behind a
+    // backlog is not loss. Zero where the transport cannot see it, as over a stream, which resends below us.
+    // Diagnostics only.
     long PacketsSent => 0;
 
     long PacketsLost => 0;
 
+    // Packets' worth of data handed to this link and not on the wire yet, held by its pacing or by the
+    // transport. Diagnostics only.
     int QueuedPackets => 0;
 
     // Bytes handed to this link that have not gone out on the wire yet, every channel: how far behind the
@@ -42,6 +46,9 @@ public interface IConnection : IDisposable
 
     // Short transport name for diagnostics, e.g. "LNL", "Steam".
     string TransportName { get; }
+
+    // Carried through a relay node, so its address is the node's and shared with every other relayed peer.
+    bool ViaRelay => false;
 
     event Action<IConnection> Closed;
 

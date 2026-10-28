@@ -45,7 +45,20 @@ public class StreamMessage : SyncMessage
     {
         using var output = new MemoryStream();
         using var writer = new BinaryWriter(output);
+        WriteFrame(writer, output);
+        return output.ToArray();
+    }
 
+    public override int EncodeInto(MemoryStream output, BinaryWriter writer)
+    {
+        output.SetLength(0);
+        WriteFrame(writer, output);
+        writer.Flush();
+        return (int)output.Length;
+    }
+
+    private void WriteFrame(BinaryWriter writer, Stream output)
+    {
         writer.Write((byte)MessageType);
         writer.Write7BitEncoded(SenderStateVersion);
         writer.Write7BitEncoded(SenderSyncTick);
@@ -55,25 +68,35 @@ public class StreamMessage : SyncMessage
         writer.Write(StreamGroup);
         writer.Write7BitEncoded((ulong)_memoryStream.Length);
 
+        writer.Flush();
         _memoryStream.Position = 0;
         _memoryStream.CopyTo(output);
-
-        return output.ToArray();
     }
 
     public static StreamMessage Decode(BinaryReader reader)
     {
-        var msg = new StreamMessage(0, 0);
-        msg.UserID = reader.Read7BitEncodedUInt64();
-        msg.StreamStateVersion = (uint)reader.Read7BitEncodedUInt64();
-        msg.StreamTime = reader.ReadDouble();
-        msg.StreamGroup = reader.ReadUInt16();
+        var userId = reader.Read7BitEncodedUInt64();
+        var streamStateVersion = (uint)reader.Read7BitEncodedUInt64();
+        var streamTime = reader.ReadDouble();
+        var streamGroup = reader.ReadUInt16();
 
         // Bounded: peer-declared payload size is capped before allocation.
         var data = reader.ReadBoundedBytes7Bit(NetworkLimits.MaxStreamMessageData);
-        msg._memoryStream = new MemoryStream(data);
 
-        return msg;
+        return new StreamMessage(new MemoryStream(data))
+        {
+            UserID = userId,
+            StreamStateVersion = streamStateVersion,
+            StreamTime = streamTime,
+            StreamGroup = streamGroup,
+        };
+    }
+
+    // A received message holds the bytes it came with; the empty stream the other constructor makes is not made.
+    private StreamMessage(MemoryStream data)
+        : base(0, 0)
+    {
+        _memoryStream = data;
     }
 
     public override void Dispose()

@@ -236,6 +236,11 @@ public struct JoinChallengeData
     public byte[] HostMachinePublicKey;
     public byte[] HostMachineSignature;
 
+    // The host's build identity and whether its own game files are modified, so a joiner on other files can stop
+    // here and say which side differs instead of answering into a refusal. -xlinka
+    public string HostBuild;
+    public bool HostModified;
+
     public byte[] Encode()
     {
         using var ms = new MemoryStream();
@@ -251,6 +256,8 @@ public struct JoinChallengeData
         writer.Write(HostMachineSignature?.Length ?? 0);
         if (HostMachineSignature != null && HostMachineSignature.Length > 0)
             writer.Write(HostMachineSignature);
+        writer.Write(HostBuild ?? "");
+        writer.Write(HostModified);
 
         return ms.ToArray();
     }
@@ -265,7 +272,8 @@ public struct JoinChallengeData
             Nonce = Array.Empty<byte>(),
             HostMachineId = "",
             HostMachinePublicKey = Array.Empty<byte>(),
-            HostMachineSignature = Array.Empty<byte>()
+            HostMachineSignature = Array.Empty<byte>(),
+            HostBuild = ""
         };
         int len = reader.ReadInt32();
         if (len > 0 && len <= 1024)
@@ -285,6 +293,10 @@ public struct JoinChallengeData
             if (sigLen > 0 && sigLen <= 4096)
                 result.HostMachineSignature = reader.ReadBytes(sigLen);
         }
+        if (ms.Position < ms.Length)
+            result.HostBuild = reader.ReadString();
+        if (ms.Position < ms.Length)
+            result.HostModified = reader.ReadBoolean();
         return result;
     }
 }
@@ -295,7 +307,8 @@ public struct JoinAuthenticateData
 {
     public byte[] Signature;          // machine-key signature over the challenge nonce
     public byte[] AccountSignature;   // optional account-key signature over the same nonce, when signed in
-    public byte[] CompatHash;         // salted datamodel-compatibility proof: hash(schema base hash || challenge nonce)
+    public byte[] CompatHash;         // salted build proof: hash(build identity || challenge nonce)
+    public bool Modified;             // the joiner's own game files are modified, so a refusal can say which side
 
     public byte[] Encode()
     {
@@ -311,6 +324,7 @@ public struct JoinAuthenticateData
         writer.Write(CompatHash?.Length ?? 0);
         if (CompatHash != null && CompatHash.Length > 0)
             writer.Write(CompatHash);
+        writer.Write(Modified);
 
         return ms.ToArray();
     }
@@ -343,6 +357,8 @@ public struct JoinAuthenticateData
             if (hashLen > 0 && hashLen <= 4096)
                 result.CompatHash = reader.ReadBytes(hashLen);
         }
+        if (ms.Position < ms.Length)
+            result.Modified = reader.ReadBoolean();
         return result;
     }
 }

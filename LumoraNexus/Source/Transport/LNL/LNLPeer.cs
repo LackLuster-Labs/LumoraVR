@@ -15,6 +15,8 @@ public class LNLPeer : IConnection
     internal readonly NetPeer Peer;
     private readonly LNLCryptoSession _crypto = new(isClient: false);
     private readonly LinkEmulator? _emulator = LinkEmulator.Create();
+    // Everything goes through the outbox, which hands LNL no more than the link carries.
+    private readonly LNLOutbox _outbox;
 
     public bool IsOpen { get; private set; }
     public string FailReason { get; private set; } = null!;
@@ -22,15 +24,16 @@ public class LNLPeer : IConnection
     public Uri Address { get; private set; }
     public string Identifier { get; private set; }
     public ulong ReceivedBytes { get; private set; }
-    private long _sentBytes;
-    public ulong SentBytes => (ulong)Interlocked.Read(ref _sentBytes);
+    public ulong SentBytes => _outbox.SentBytes;
     public int Ping => Peer?.Ping ?? -1;
-    public long PacketsSent => Peer?.Statistics.PacketsSent ?? 0;
-    public long PacketsLost => Peer?.Statistics.PacketLoss ?? 0;
-    public int QueuedPackets => LNLLanes.Queued(Peer);
-    public long PendingSendBytes => (long)LNLLanes.Queued(Peer) * LNLLanes.PacketBytes + (_emulator?.QueuedBytes ?? 0);
+    public long PacketsSent => _outbox.ReliablePackets;
+    public long PacketsLost => _outbox.Resent;
+    public int QueuedPackets => LNLLanes.Queued(Peer) + _outbox.HeldPackets;
+    public long PendingSendBytes => _outbox.LiveBacklogBytes;
+    public long DroppedUnreliable => _outbox.DroppedUnreliable;
     public bool IsEncrypted => _crypto.IsEstablished;
     public string TransportName => "LNL";
+    public bool ViaRelay { get; }
 
     public event Action<IConnection> Closed = null!;
     public event Action<IConnection> Connected
@@ -50,12 +53,18 @@ public class LNLPeer : IConnection
     internal DateTime CreatedUtc { get; } = DateTime.UtcNow;
     internal bool IsCryptoEstablished => _crypto.IsEstablished;
 
-    public LNLPeer(NetManager server, NetPeer peer)
+    public LNLPeer(NetManager server, NetPeer peer, bool viaRelay = false)
     {
         Server = server;
         Peer = peer;
+        _outbox = new LNLOutbox(peer, server, _emulator);
+        ViaRelay = viaRelay;
         IsOpen = true;
-        Address = new Uri($"lnl://{peer.Address}:{peer.Port}");
+        // An IPv6 peer needs brackets in a URL, and its zone id cannot go in one at all.
+        var address = peer.Address;
+        Address = address.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6
+            ? new Uri($"lnl://[{new IPAddress(address.GetAddressBytes())}]:{peer.Port}")
+            : new Uri($"lnl://{address}:{peer.Port}");
         Identifier = $"LNL:{peer.Address}:{peer.Port}";
 
         LumoraLogger.Debug($"[lnl] LNL Peer created: {Identifier}");
@@ -92,85 +101,57 @@ public class LNLPeer : IConnection
         }
         _loggedNotConnected = false;
 
-        byte[] encrypted;
-        try
+        // Encrypted into this peer's own buffer and handed to LNL, which copies it, before the next frame.
+        lock (_sendBufferLock)
         {
-            encrypted = _crypto.Encrypt(data, length);
-        }
-        catch (Exception ex)
-        {
-            LumoraLogger.Warn($"[lnl] Send to {Identifier} failed before LNL crypto was ready ({ex.Message})");
-            return;
-        }
+            byte[] encrypted;
+            int count;
+            try
+            {
+                encrypted = _crypto.EncryptReusing(data, length, ref _sendBuffer, out count);
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Warn($"[lnl] Send to {Identifier} failed before LNL crypto was ready ({ex.Message})");
+                return;
+            }
 
-        SendRaw(encrypted, encrypted.Length, reliable, background);
+            SendRaw(encrypted, count, reliable, background);
+        }
     }
 
-    private readonly LNLLanes _lanes = new();
+    private readonly object _sendBufferLock = new();
+    private byte[]? _sendBuffer;
 
     public void SendBulk(byte[] data, int length)
     {
         if (Peer == null || Peer.ConnectionState != ConnectionState.Connected)
             return;
-        byte[] encrypted;
-        try
+        lock (_sendBufferLock)
         {
-            encrypted = _crypto.Encrypt(data, length);
-        }
-        catch (Exception ex)
-        {
-            LumoraLogger.Warn($"[lnl] Bulk send to {Identifier} failed before LNL crypto was ready ({ex.Message})");
-            return;
-        }
-        Interlocked.Add(ref _sentBytes, encrypted.Length);
-        if (_emulator != null)
-        {
-            _emulator.Send(encrypted.Length, droppable: false, () =>
+            byte[] encrypted;
+            int count;
+            try
             {
-                if (Peer.ConnectionState != ConnectionState.Connected)
-                    return;
-                _lanes.Send(Peer, encrypted, encrypted.Length);
-                Server.TriggerUpdate();
-            });
-            return;
+                encrypted = _crypto.EncryptReusing(data, length, ref _sendBuffer, out count);
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Warn($"[lnl] Bulk send to {Identifier} failed before LNL crypto was ready ({ex.Message})");
+                return;
+            }
+            _outbox.SendBulk(encrypted, count);
         }
-        _lanes.Send(Peer, encrypted, encrypted.Length);
-        Server.TriggerUpdate();
     }
 
+    // Channel 0 foreground, 1 background; unreliable data too big for one packet goes reliable and unordered.
     private void SendRaw(byte[] data, int length, bool reliable, bool background)
-    {
-        DeliveryMethod method = reliable
-            ? DeliveryMethod.ReliableOrdered
-            : DeliveryMethod.Sequenced;
+        => _outbox.Send(data, length, reliable, background);
 
-        byte channel = (byte)(background ? 1 : 0);
-
-        if (method == DeliveryMethod.Sequenced &&
-            Peer.GetMaxSinglePacketSize(method) < length)
-        {
-            method = DeliveryMethod.ReliableUnordered;
-        }
-
-        Interlocked.Add(ref _sentBytes, length);
-        if (_emulator != null)
-        {
-            _emulator.Send(length, droppable: !reliable, () =>
-            {
-                if (Peer.ConnectionState != ConnectionState.Connected)
-                    return;
-                Peer.Send(data, 0, length, channel, method);
-                Server.TriggerUpdate();
-            });
-            return;
-        }
-        Peer.Send(data, 0, length, channel, method);
-        Server.TriggerUpdate();
-    }
-
-    // No-op. LNLPeer shares the listener's NetManager; the listener polls
-    // for both. - xlinka
+    // LNLPeer shares the listener's NetManager; the listener polls it and pumps every peer's outbox.
     public void Poll() { }
+
+    internal void PumpOutbox() => _outbox.Pump();
 
     internal void InformOfNewData(byte[] data, int length)
     {

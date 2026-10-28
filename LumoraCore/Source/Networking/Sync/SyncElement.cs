@@ -92,7 +92,9 @@ public abstract class SyncElement : IWorldElement, IDisposable, IInitializable, 
         HasInboundRules = 19,
         IsConfigLocked = 20,
         ConfigLockWarned = 21,
-        // 22+ available for derived classes
+        // 22 belongs to ConflictingSyncElement (OwnUserOnly)
+        UiState = 23,
+        // 24+ available for derived classes
     }
 
     public World World
@@ -421,6 +423,33 @@ public abstract class SyncElement : IWorldElement, IDisposable, IInitializable, 
         return AuthorizeDataModelAccess(action, surface, actor, isNetwork, isFullState, index, key, throwOnError);
     }
 
+    // The same question asked without acting or logging, optionally as the actor stands with no scope open.
+    protected bool AllowsDataModelMutation(
+        DataModelPermissionAction action,
+        DataModelPermissionSurface surface,
+        User? actor,
+        object? key,
+        bool unscoped)
+    {
+        var permissions = World?.DataModelPermissions;
+        if (permissions == null)
+            return true;
+
+        var request = new DataModelPermissionRequest(
+            World,
+            actor,
+            this,
+            Parent,
+            this,
+            surface,
+            action,
+            false,
+            false,
+            null,
+            key);
+        return permissions.Allows(request, unscoped);
+    }
+
     protected void BeginHook()
     {
         if (IsWithinHookCallback)
@@ -531,6 +560,15 @@ public abstract class SyncElement : IWorldElement, IDisposable, IInitializable, 
             this is IField ? DataModelPermissionSurface.Field : DataModelPermissionSurface.SyncElement,
             throwOnError: false);
 
+    // The same, with nothing logged, for deciding which way to go before writing.
+    public bool IsWriteAllowedQuietly()
+        => AllowsDataModelMutation(
+            DataModelPermissionAction.Write,
+            this is IField ? DataModelPermissionSurface.Field : DataModelPermissionSurface.SyncElement,
+            null,
+            null,
+            unscoped: false);
+
     protected void EndModification()
     {
         if (_modificationLevel == 0)
@@ -579,6 +617,14 @@ public abstract class SyncElement : IWorldElement, IDisposable, IInitializable, 
     {
         NonPersistent = true;
     }
+
+    // State a control keeps for whoever points at it (hover, press, scroll, typed text) or a panel's own view of
+    // what it shows. Anyone may set it on a panel somebody holds or has pinned; the role and the freeze still
+    // decide. A list's entries answer as the list does. Never for a value the control is there to change: that
+    // write is an edit of whatever it points at, and is judged as one. -xlinka
+    public bool IsUiState => GetFlag((int)InternalFlags.UiState) || (Parent as SyncElement)?.GetFlag((int)InternalFlags.UiState) == true;
+
+    public void MarkUiState() => SetFlag((int)InternalFlags.UiState, true);
 
     public void MarkNonDrivable()
     {

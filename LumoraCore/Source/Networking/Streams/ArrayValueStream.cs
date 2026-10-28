@@ -130,10 +130,10 @@ public class ArrayValueStream<T> : ImplicitStream
         bool quantized = _encoding.Value == ValueEncoding.Quantized && StreamCoder.SupportsQuantization(typeof(T));
         if (quantized)
         {
-            var bw = new BitWriter();
+            var bw = BitScratch.Writer();
             for (int i = 0; i < count; i++)
                 StreamCoder.EncodeQuantized(bw, _values[i], _fullFrameMin.Value, _fullFrameMax.Value, _fullFrameBits.Value);
-            var bytes = bw.ToArray();
+            var bytes = bw.Packed();
             writer.Write7BitEncodedInt(bytes.Length);
             writer.Write(bytes);
         }
@@ -147,15 +147,19 @@ public class ArrayValueStream<T> : ImplicitStream
     public override void Decode(BinaryReader reader, StreamMessage message)
     {
         int count = _count.Value;
-        var temp = new T[count];
 
         bool quantized = _encoding.Value == ValueEncoding.Quantized && StreamCoder.SupportsQuantization(typeof(T));
+        int length = 0;
         if (quantized)
         {
-            int length = reader.Read7BitEncodedInt();
+            length = reader.Read7BitEncodedInt();
             if (length <= 0)
                 return;
-            var br = new BitReader(reader.ReadBytes(length));
+        }
+        var temp = TakeSample(count);
+        if (quantized)
+        {
+            var br = BitScratch.Read(reader, length);
             for (int i = 0; i < count; i++)
                 temp[i] = StreamCoder.DecodeQuantized(br, _fullFrameMin.Value, _fullFrameMax.Value, _fullFrameBits.Value);
         }
@@ -171,11 +175,40 @@ public class ArrayValueStream<T> : ImplicitStream
             _values = (T[])temp.Clone();
 
         if (IsInterpolated)
-            WriteDataPoint(temp, DateTime.FromBinary((long)(message.StreamTime * TimeSpan.TicksPerSecond)));
+        {
+            if (!WriteDataPoint(temp, DateTime.FromBinary((long)(message.StreamTime * TimeSpan.TicksPerSecond))))
+                GiveBack(temp);
+        }
         else
-            _values = temp;
+        {
+            EnsureSize(count);
+            Array.Copy(temp, _values, count);
+            GiveBack(temp);
+        }
 
         _receivedFirstData = true;
+    }
+
+    // Samples go back here once interpolation is past them and come out again for the next decode: a pose a
+    // message for every avatar in the session made a new array each time. Decode and Update both run under the
+    // data model lock. -xlinka
+    private readonly Stack<T[]> _spareSamples = new();
+
+    private T[] TakeSample(int count)
+    {
+        while (_spareSamples.Count > 0)
+        {
+            var spare = _spareSamples.Pop();
+            if (spare.Length == count)
+                return spare;
+        }
+        return new T[count];
+    }
+
+    private void GiveBack(T[] sample)
+    {
+        if (_spareSamples.Count < 4)
+            _spareSamples.Push(sample);
     }
 
     public override void Update()
@@ -207,9 +240,22 @@ public class ArrayValueStream<T> : ImplicitStream
         _timeTransition = Progress01(_timeTransition, delta / System.Math.Max(InterpolationOffset, 1e-4f));
 
         var currentTime = CurrentTime;
-        int lastIndex = _dataPoints.FindLastIndex(p => currentTime >= p.Time);
+        int lastIndex = -1;
+        for (int i = _dataPoints.Count - 1; i >= 0; i--)
+        {
+            if (currentTime >= _dataPoints[i].Time)
+            {
+                lastIndex = i;
+                break;
+            }
+        }
         if (lastIndex > 0)
-            _dataPoints.RemoveRange(0, System.Math.Min(lastIndex, _dataPoints.Count - 2));
+        {
+            int drop = System.Math.Min(lastIndex, _dataPoints.Count - 2);
+            for (int i = 0; i < drop; i++)
+                GiveBack(_dataPoints[i].Value);
+            _dataPoints.RemoveRange(0, drop);
+        }
 
         if (_dataPoints.Count >= 2)
         {
@@ -218,10 +264,10 @@ public class ArrayValueStream<T> : ImplicitStream
         }
     }
 
-    private void WriteDataPoint(T[] value, DateTime time)
+    private bool WriteDataPoint(T[] value, DateTime time)
     {
         if (_dataPoints.Count > 0 && time < _dataPoints[_dataPoints.Count - 1].Time)
-            return; // out of order
+            return false; // out of order
 
         _dataPoints.Add(new DataPoint(value, time));
 
@@ -237,6 +283,7 @@ public class ArrayValueStream<T> : ImplicitStream
             _trailingTime = _leadingTime = time;
             _timeTransition = 1f;
         }
+        return true;
     }
 
     private void InterpolateInto(T[] a, T[] b, float lerp)

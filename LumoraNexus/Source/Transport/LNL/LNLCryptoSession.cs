@@ -85,24 +85,58 @@ internal sealed class LNLCryptoSession : IDisposable
 
     public byte[] Encrypt(byte[] data, int length)
     {
+        CheckSend(data, length);
+        var output = new byte[EncryptedHeaderLen + length + TagLen];
+        EncryptCore(data, length, output);
+        return output;
+    }
+
+    // Frames up to this size are written into the caller's own buffer.
+    private const int ReusableFrameBytes = 256 * 1024;
+
+    // The same frame written into a buffer the sender keeps, grown as frames need it, so a host sending every
+    // guest every pose makes no new array per guest per message: that was the largest steady allocation with a
+    // crowd in. The caller must have handed the buffer on (the transport copies it) before the next frame goes
+    // in. A frame past the reusable size gets an array of its own. -xlinka
+    public byte[] EncryptReusing(byte[] data, int length, ref byte[]? scratch, out int count)
+    {
+        CheckSend(data, length);
+        count = EncryptedHeaderLen + length + TagLen;
+        byte[] output;
+        if (count > ReusableFrameBytes)
+            output = new byte[count];
+        else
+        {
+            if (scratch == null || scratch.Length < count)
+                scratch = new byte[System.Math.Min(ReusableFrameBytes, System.Math.Max(count, (scratch?.Length ?? 1024) * 2))];
+            output = scratch;
+        }
+        EncryptCore(data, length, output);
+        return output;
+    }
+
+    private void CheckSend(byte[] data, int length)
+    {
         if (!IsEstablished || _sendKey == null || _sendNonceBase == null)
             throw new InvalidOperationException("LNL crypto is not established yet.");
         if (data == null)
             throw new ArgumentNullException(nameof(data));
         if (length < 0 || length > data.Length)
             throw new ArgumentOutOfRangeException(nameof(length));
+    }
 
+    private void EncryptCore(byte[] data, int length, byte[] output)
+    {
         lock (_sendLock)
         {
             ulong sequence = _sendSequence++;
-            var output = new byte[EncryptedHeaderLen + length + TagLen];
             WriteEncryptedHeader(output, sequence);
 
-            var nonce = BuildNonce(_sendNonceBase, sequence);
+            Span<byte> nonce = stackalloc byte[NonceLen];
+            BuildNonce(_sendNonceBase!, sequence, nonce);
             var cipher = output.AsSpan(EncryptedHeaderLen, length);
             var tag = output.AsSpan(EncryptedHeaderLen + length, TagLen);
             _txGcm!.Encrypt(nonce, data.AsSpan(0, length), cipher, tag, output.AsSpan(0, EncryptedHeaderLen));
-            return output;
         }
     }
 
@@ -196,7 +230,8 @@ internal sealed class LNLCryptoSession : IDisposable
             return false;
 
         ulong sequence = BinaryPrimitives.ReadUInt64BigEndian(data.AsSpan(6, 8));
-        var nonce = BuildNonce(_receiveNonceBase, sequence);
+        Span<byte> nonce = stackalloc byte[NonceLen];
+        BuildNonce(_receiveNonceBase, sequence, nonce);
         var plain = new byte[cipherLen];
 
         try
@@ -302,15 +337,13 @@ internal sealed class LNLCryptoSession : IDisposable
         BinaryPrimitives.WriteUInt64BigEndian(output.AsSpan(6, 8), sequence);
     }
 
-    private static byte[] BuildNonce(byte[] nonceBase, ulong sequence)
+    private static void BuildNonce(byte[] nonceBase, ulong sequence, Span<byte> nonce)
     {
-        var nonce = new byte[NonceLen];
-        Buffer.BlockCopy(nonceBase, 0, nonce, 0, NonceLen);
+        nonceBase.AsSpan(0, NonceLen).CopyTo(nonce);
         Span<byte> sequenceBytes = stackalloc byte[8];
         BinaryPrimitives.WriteUInt64BigEndian(sequenceBytes, sequence);
         for (int i = 0; i < sequenceBytes.Length; i++)
             nonce[NonceLen - sequenceBytes.Length + i] ^= sequenceBytes[i];
-        return nonce;
     }
 
     private static bool HasMagic(byte[] data, int length)

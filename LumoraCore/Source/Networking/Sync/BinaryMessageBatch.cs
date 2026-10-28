@@ -226,7 +226,20 @@ public abstract class BinaryMessageBatch : SyncMessage
 
         using var output = new MemoryStream(payloadSize + _dataRecords.Count * RecordHeaderAllowance + BatchHeaderAllowance);
         using var writer = new BinaryWriter(output);
+        WriteFrame(writer);
+        return output.ToArray();
+    }
 
+    public override int EncodeInto(MemoryStream output, BinaryWriter writer)
+    {
+        output.SetLength(0);
+        WriteFrame(writer);
+        writer.Flush();
+        return (int)output.Length;
+    }
+
+    private void WriteFrame(BinaryWriter writer)
+    {
         writer.Write((byte)MessageType);
         writer.Write7BitEncoded(SenderStateVersion);
         writer.Write7BitEncoded(SenderSyncTick);
@@ -256,14 +269,15 @@ public abstract class BinaryMessageBatch : SyncMessage
             writer.Write7BitEncoded((ulong)dataSize);
             writer.Write(source.Array!, source.Offset + record.StartOffset, dataSize);
         }
-
-        return output.ToArray();
     }
 
-    public static BinaryMessageBatch Decode(byte[] data)
+    public static BinaryMessageBatch Decode(byte[] data) => Decode(data, 0, data.Length);
+
+    // The frame data[offset .. offset + length), read through the decoding thread's own reader.
+    internal static BinaryMessageBatch Decode(byte[] data, int offset, int length)
     {
-        using var input = new MemoryStream(data);
-        using var reader = new BinaryReader(input);
+        var reader = SyncMessage.ReaderOver(data, offset, length);
+        var input = reader.BaseStream;
 
         // Mask the compression flag defensively; callers hand us an already-unwrapped frame
         // (high bit cleared), but never let a stray 0x80 corrupt the enum value. - xlinka
@@ -300,7 +314,7 @@ public abstract class BinaryMessageBatch : SyncMessage
         // Sized to the frame and filled straight from it. A full world is tens of thousands of records, and
         // a byte array read out per record plus a stream doubling its way up to the size was the bulk of
         // what a join allocated before it applied anything. -xlinka
-        int remaining = System.Math.Max(0, data.Length - (int)input.Position);
+        int remaining = System.Math.Max(0, length - (int)input.Position);
         batch._stream = new MemoryStream(remaining);
         batch._writer = new BinaryWriter(batch._stream);
         // A record is two bytes at the least, so the count a frame can really hold caps what is reserved.
@@ -311,7 +325,7 @@ public abstract class BinaryMessageBatch : SyncMessage
             var targetID = reader.ReadRefID();
             var dataLength = (int)reader.Read7BitEncoded();
             int from = (int)input.Position;
-            if (dataLength < 0 || from + dataLength > data.Length)
+            if (dataLength < 0 || from + dataLength > length)
                 throw new EndOfStreamException($"Record {i} of {recordCount} runs past the end of the frame");
 
             var record = new DataRecord
@@ -324,7 +338,7 @@ public abstract class BinaryMessageBatch : SyncMessage
             };
 
             batch._dataRecords.Add(record);
-            batch._stream.Write(data, from, dataLength);
+            batch._stream.Write(data, offset + from, dataLength);
             input.Position = from + dataLength;
         }
 

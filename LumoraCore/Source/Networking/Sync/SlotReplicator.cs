@@ -8,10 +8,6 @@ using Lumora.Core;
 
 namespace Lumora.Core.Networking.Sync;
 
-/// <summary>
-/// Network collection for Slots.
-/// When a FullBatch is received, this creates the Slot objects that don't exist yet.
-/// </summary>
 public class ReplicatedSlotCollection : ReplicatedObjectCollection<Slot>
 {
     public ReplicatedSlotCollection()
@@ -24,38 +20,28 @@ public class ReplicatedSlotCollection : ReplicatedObjectCollection<Slot>
     // A removal that arrived by decode is another peer's destroy, and the slot goes here too. It used to
     // leave the registry and nothing else, so the object stayed alive and registered on every other peer.
     // A local removal is this peer's own destroy, already under way. On the world thread, where a slot's
-    // hook may be torn down. -xlinka
+    // hook may be torn down. The sender rides along: on the host, whatever that destroy sets off is judged
+    // as the peer who asked for it. -xlinka
     private void HandleSlotRemoved(ReplicatedDictionary<RefID, Slot> dict, RefID key, Slot slot)
     {
         if (!IsLoading || World == null || slot == null || slot.IsDestroyed)
             return;
-        World.RunSynchronously(slot.DestroyFromReplication);
+        var remover = RemovalSender;
+        World.RunSynchronously(() => slot.DestroyFromReplication(remover));
     }
 
-    /// <summary>
-    /// Encode slot data to the stream.
-    /// Slot data itself is empty here - the slot's sync members are encoded separately
-    /// as their own SyncElements with their own RefIDs.
-    /// </summary>
     protected override void EncodeElement(BinaryWriter writer, Slot element)
     {
         // Intentionally empty - slot structure is encoded in the key list,
         // slot VALUES (name, position, etc.) are synced as separate SyncElements
     }
 
-    /// <summary>
-    /// Decode (CREATE) a Slot from the stream.
-    /// This is the magic - it creates a new Slot object during network decode!
-    /// </summary>
     protected override Slot DecodeElement(BinaryReader reader)
     {
         // Create a new slot - it will be initialized in HandleSlotAdded
         return new Slot();
     }
 
-    /// <summary>
-    /// Handle slot addition - initialize and register with World.
-    /// </summary>
     private void HandleSlotAdded(ReplicatedDictionary<RefID, Slot> dict, RefID key, Slot slot, bool isNew)
     {
         if (World == null) return;
@@ -128,12 +114,21 @@ public class ReplicatedSlotCollection : ReplicatedObjectCollection<Slot>
                 }
             }
 
-            if (added.Count == 0 || permissions == null || permissions.AllowsDomain(sender, DataModelPermissionDomain.Spawn))
+            if (added.Count == 0 || permissions == null)
                 return MessageValidity.Valid;
 
+            bool spawns = permissions.AllowsDomain(sender, DataModelPermissionDomain.Spawn);
+            var landings = new Dictionary<RefID, Slot?>();
             foreach (var id in added)
             {
-                if (!LandsUnderSendersOwn(id, added, syncMessage, sender))
+                var landing = LandingParent(id, added, syncMessage, landings);
+                // The person boundary: nothing new grows on somebody who has not said yes to the sender. -xlinka
+                if (landing != null && !permissions.AllowsPlacingUnder(null, landing, sender))
+                {
+                    permissions.ReportDenial(sender, DataModelDenialKind.ForeignWrite, "slot spawned under another person");
+                    return MessageValidity.Conflict;
+                }
+                if (!spawns && !LandsUnderSendersOwn(landing, sender))
                 {
                     permissions.ReportDenial(sender, DataModelDenialKind.Ownership, "slot spawned outside the sender's own hierarchy without Spawn");
                     return MessageValidity.Conflict;
@@ -152,20 +147,27 @@ public class ReplicatedSlotCollection : ReplicatedObjectCollection<Slot>
         }
     }
 
-    // Seeks the batch's shared reader; the caller puts it back.
-    private bool LandsUnderSendersOwn(RefID slotId, HashSet<RefID> added, BinaryMessageBatch batch, User? sender)
+    // The first slot that already exists above a new one, following parents that are new in the same batch; null when
+    // the batch does not say. Every new slot walked on the way lands where this one does, so a big spawn walks each
+    // branch once. Seeks the batch's shared reader; the caller puts it back.
+    private Slot? LandingParent(RefID slotId, HashSet<RefID> added, BinaryMessageBatch batch, Dictionary<RefID, Slot?> landings)
     {
         var root = World?.RootSlot;
-        if (root == null || sender == null)
-            return false;
+        if (root == null)
+            return null;
 
         long parentOffset = root.ReferenceID.DistanceTo(root.ParentSlotRef.ReferenceID);
+        var walked = new List<RefID>();
         var current = slotId;
+        Slot? landing = null;
         for (int depth = 0; depth < 64; depth++)
         {
+            if (landings.TryGetValue(current, out landing))
+                break;
+            walked.Add(current);
             int index = batch.FindDataRecordIndex(current.Offset(parentOffset));
             if (index < 0)
-                return false;
+                break;
 
             var parentId = SyncCoder.Decode<RefID>(batch.SeekDataRecord(index));
             if (added.Contains(parentId))
@@ -173,17 +175,24 @@ public class ReplicatedSlotCollection : ReplicatedObjectCollection<Slot>
                 current = parentId;
                 continue;
             }
-
-            if (World!.ReferenceController?.GetObjectOrNull(in parentId) is not Slot parent)
-                return false;
-
-            if (parentId.GetUserByte() == sender.AllocationID.Value)
-                return true;
-
-            Lumora.Warden.IPermissionTarget gateParent = parent;
-            return gateParent.IsUnderActorRoot(sender);
+            landing = World!.ReferenceController?.GetObjectOrNull(in parentId) as Slot;
+            break;
         }
-        return false;
+        foreach (var id in walked)
+            landings[id] = landing;
+        return landing;
+    }
+
+    private static bool LandsUnderSendersOwn(Slot? parent, User? sender)
+    {
+        if (parent == null || sender == null)
+            return false;
+
+        if (parent.ReferenceID.GetUserByte() == sender.AllocationID.Value)
+            return true;
+
+        Lumora.Warden.IPermissionTarget gateParent = parent;
+        return gateParent.IsUnderActorRoot(sender);
     }
 
     public override void Dispose()

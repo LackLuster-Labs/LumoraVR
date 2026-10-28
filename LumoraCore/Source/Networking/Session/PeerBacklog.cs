@@ -23,8 +23,17 @@ internal sealed class PeerBacklog
     // The least a cycle sends of what is owed once the queue is under the clear mark, so a link whose rate is
     // not known yet still gets there.
     private const long MinFlushBytes = 8 * 1024;
+    // While behind, what is owed still goes out at a share of what the link drains, whatever waits in its queue:
+    // kept only to the room between the marks, a link held over them by changes that must arrive (a spawn, edits,
+    // everyone's voice) sent no moving value at all and everything in the world stood still for as long as that
+    // lasted, sixteen seconds and counting on a 1.5 MB/s uplink. The share grows with how long the oldest owed value
+    // has waited, so a moving thing on a thin link is late and coarse but never frozen. -xlinka
+    private const double MovingShare = 0.2;
+    private const double MovingShareMax = 0.6;
+    private const double OwedSecondsForMax = 1.0;
+    private const long MinMovingBytes = 1024;
 
-    private readonly Queue<RefID> _order = new();
+    private readonly Queue<(RefID Id, long Since)> _order = new();
     private readonly HashSet<RefID> _owed = new();
     private ulong _lastSent;
     private long _lastPending;
@@ -64,9 +73,11 @@ internal sealed class PeerBacklog
     // sent: every byte handed to the link so far. pending: what of that has not left yet.
     public void Update(ulong sent, long pending, long timestamp)
     {
+        double cycleSeconds = 0;
         if (_lastStamp != 0 && timestamp > _lastStamp)
         {
             double seconds = (timestamp - _lastStamp) / (double)Stopwatch.Frequency;
+            cycleSeconds = System.Math.Min(seconds, 0.1);
             long drained = (long)(sent - _lastSent) - (pending - _lastPending);
             // A link with nothing waiting only drains what it is given, which says nothing of what it could take.
             if (seconds > 0 && (pending > 0 || _lastPending > 0))
@@ -92,13 +103,19 @@ internal sealed class PeerBacklog
             Behind = false;
         }
         CycleRoom = FlushRoom;
+        if (Behind && _owed.Count > 0)
+        {
+            double waited = OldestOwedSeconds(timestamp);
+            double share = MovingShare + (MovingShareMax - MovingShare) * System.Math.Clamp(waited / OwedSecondsForMax, 0, 1);
+            CycleRoom = System.Math.Max(CycleRoom, System.Math.Max(MinMovingBytes, (long)(_drainRate * cycleSeconds * share)));
+        }
         Served = false;
     }
 
     public void Owe(RefID id)
     {
         if (_owed.Add(id))
-            _order.Enqueue(id);
+            _order.Enqueue((id, Stopwatch.GetTimestamp()));
     }
 
     // The peer holds something newer than the host could send it: it made the change itself.
@@ -108,11 +125,19 @@ internal sealed class PeerBacklog
     {
         while (_order.Count > 0)
         {
-            id = _order.Dequeue();
+            id = _order.Dequeue().Id;
             if (_owed.Remove(id))
                 return true;
         }
         id = default;
         return false;
+    }
+
+    // How long the value owed longest has waited.
+    private double OldestOwedSeconds(long timestamp)
+    {
+        while (_order.Count > 0 && !_owed.Contains(_order.Peek().Id))
+            _order.Dequeue();
+        return _order.Count > 0 ? System.Math.Max(0, timestamp - _order.Peek().Since) / (double)Stopwatch.Frequency : 0;
     }
 }

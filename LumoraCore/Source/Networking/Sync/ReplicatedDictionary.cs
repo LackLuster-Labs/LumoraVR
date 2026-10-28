@@ -9,20 +9,12 @@ using Lumora.Core;
 
 namespace Lumora.Core.Networking.Sync;
 
-/// <summary>
-/// Base class for network-replicated dictionaries that can CREATE elements during decode.
-/// This is the key to world synchronization - when a client receives a FullBatch,
-/// the ReplicatedDictionary creates the elements (Slots, Users, etc.) that don't exist yet.
-/// </summary>
-/// <typeparam name="TKey">Key type (typically RefID)</typeparam>
-/// <typeparam name="TValue">Value type that implements IWorldElement</typeparam>
+// Decode CREATES elements: a client receiving a FullBatch gets the slots, users and the rest it
+// doesn't have yet built here.
 public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumerable<KeyValuePair<TKey, TValue>>
     where TKey : notnull
     where TValue : class, IWorldElement
 {
-    /// <summary>
-    /// Record of an element addition for delta encoding.
-    /// </summary>
     private struct AdditionRecord
     {
         public TKey Key;
@@ -36,9 +28,6 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
     private List<AdditionRecord> _pendingAdditions;
     private List<TKey> _pendingRemovals;
 
-    /// <summary>
-    /// Number of elements in the dictionary.
-    /// </summary>
     public int Count
     {
         get
@@ -48,9 +37,6 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
         }
     }
 
-    /// <summary>
-    /// Get element by key with caching for repeated access.
-    /// </summary>
     public TValue this[TKey key]
     {
         get
@@ -66,9 +52,6 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
         }
     }
 
-    /// <summary>
-    /// All keys in the dictionary.
-    /// </summary>
     public Dictionary<TKey, TValue>.KeyCollection Keys
     {
         get
@@ -78,9 +61,6 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
         }
     }
 
-    /// <summary>
-    /// All values in the dictionary.
-    /// </summary>
     public Dictionary<TKey, TValue>.ValueCollection Values
     {
         get
@@ -92,14 +72,8 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
 
     public override SyncMemberType MemberType => SyncMemberType.ReplicatedDictionary;
 
-    /// <summary>
-    /// Fired when an element is added.
-    /// </summary>
     public event Action<ReplicatedDictionary<TKey, TValue>, TKey, TValue, bool> OnElementAdded = null!;
 
-    /// <summary>
-    /// Fired when an element is removed.
-    /// </summary>
     public event Action<ReplicatedDictionary<TKey, TValue>, TKey, TValue> OnElementRemoved = null!;
 
     protected ReplicatedDictionary()
@@ -111,43 +85,25 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
 
     #region Abstract Methods - Must be implemented by derived classes
 
-    /// <summary>
-    /// Encode a key to the binary stream.
-    /// </summary>
     protected abstract void EncodeKey(BinaryWriter writer, TKey key);
 
-    /// <summary>
-    /// Encode an element to the binary stream.
-    /// For SlotCollection, this is typically empty since slot data is encoded separately.
-    /// </summary>
+    // May write nothing: the slot collection's slot data travels separately.
     protected abstract void EncodeElement(BinaryWriter writer, TValue element);
 
-    /// <summary>
-    /// Decode a key from the binary stream.
-    /// </summary>
     protected abstract TKey DecodeKey(BinaryReader reader);
 
-    /// <summary>
-    /// Decode (and CREATE) an element from the binary stream.
-    /// This is the key method - it creates new elements during network decode!
-    /// Override this for simple cases where you don't need the key.
-    /// </summary>
+    // Builds a new element, not just reads one. When construction needs the key, override
+    // CreateElementWithKey instead.
     protected abstract TValue DecodeElement(BinaryReader reader);
 
-    /// <summary>
-    /// Create an element with the given key. Override this when the key is needed
-    /// during element construction (e.g., User needs RefID in constructor).
-    /// Default implementation calls DecodeElement.
-    /// </summary>
+    // For elements built around their key, like a User taking its RefID in the constructor.
     protected virtual TValue CreateElementWithKey(TKey key, BinaryReader reader)
     {
         return DecodeElement(reader);
     }
 
-    /// <summary>
-    /// Skip element data when the element already exists.
-    /// Override in derived classes that encode element payloads.
-    /// </summary>
+    // Reads past the payload of an element that already exists. A derived class that writes a payload
+    // must override it, or the stream falls out of step.
     protected virtual void SkipElement(BinaryReader reader)
     {
         // Default is no-op because some replicators encode no element data.
@@ -157,21 +113,11 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
 
     #region Public API
 
-    /// <summary>
-    /// Add an element to the dictionary.
-    /// </summary>
-    /// <param name="key">The key to add</param>
-    /// <param name="element">The element to add</param>
-    /// <param name="isNewlyCreated">True if this is a brand new element, false if existing</param>
-    /// <param name="skipSync">If true, don't mark for network sync</param>
     public void Add(TKey key, TValue element, bool isNewlyCreated, bool skipSync = false)
     {
         InternalAdd(key, element, isNewlyCreated, !skipSync, triggerChanged: true);
     }
 
-    /// <summary>
-    /// Remove an element by key.
-    /// </summary>
     public bool Remove(TKey key)
     {
         return InternalRemove(key, sync: true, triggerChanged: true);
@@ -194,9 +140,23 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
             throwOnError: false);
     }
 
-    /// <summary>
-    /// Remove all elements.
-    /// </summary>
+    // The same, asked quietly: for an offer drawn before anyone presses it, or (unscoped) whether that actor
+    // could remove the key itself with no scope open on this thread.
+    internal bool MayRemoveQuietly(TKey key, User? actor = null, bool unscoped = false)
+    {
+        return AllowsDataModelMutation(
+            DataModelPermissionAction.Write | DataModelPermissionAction.Destroy | DataModelPermissionAction.CollectionRemove,
+            DataModelPermissionSurface.ReplicatedDictionary,
+            actor,
+            key,
+            unscoped);
+    }
+
+    // Who sent the removals being decoded right now; null outside that, and for removals of this peer's own.
+    protected User? RemovalSender { get; private set; }
+
+    internal User? DecodingRemovalSender => RemovalSender;
+
     public void Clear()
     {
         var keysToRemove = new List<TKey>(_elements.Keys);
@@ -206,9 +166,6 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
         }
     }
 
-    /// <summary>
-    /// Try to get a value by key.
-    /// </summary>
     public bool TryGetValue(TKey key, out TValue value)
     {
         AuthorizeDataModelAccess(DataModelPermissionAction.Read, DataModelPermissionSurface.ReplicatedDictionary, key: key);
@@ -221,9 +178,6 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
         return false;
     }
 
-    /// <summary>
-    /// Check if the dictionary contains a key.
-    /// </summary>
     public bool ContainsKey(TKey key)
     {
         AuthorizeDataModelAccess(DataModelPermissionAction.Read, DataModelPermissionSurface.ReplicatedDictionary, key: key);
@@ -452,10 +406,18 @@ public abstract class ReplicatedDictionary<TKey, TValue> : SyncElement, IEnumera
 
         // Decode removals
         uint removeCount = (uint)reader.Read7BitEncoded();
-        for (int i = 0; i < removeCount; i++)
+        RemovalSender = inboundMessage?.SenderUser;
+        try
         {
-            TKey key = DecodeKey(reader);
-            InternalRemove(key, sync: false, triggerChanged: true);
+            for (int i = 0; i < removeCount; i++)
+            {
+                TKey key = DecodeKey(reader);
+                InternalRemove(key, sync: false, triggerChanged: true);
+            }
+        }
+        finally
+        {
+            RemovalSender = null;
         }
     }
 

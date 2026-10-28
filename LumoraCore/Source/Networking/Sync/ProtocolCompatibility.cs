@@ -29,7 +29,20 @@ public static class ProtocolCompatibility
     // 5: a full batch header carries the record count of the world it is a slice of, and Rect, float4x4
     //    and float3? fields carry their values instead of an empty marker.
     // 6: int? fields carry their values instead of an empty marker.
-    private const int ProtocolVersion = 6;
+    // 7: User gained its chat record and typing flag.
+    // 8: int2, int3, bool2-4, float2x2, spherical harmonics, char, decimal and DateTime fields carry their
+    //    values instead of an empty marker.
+    // 9: User gained its invite asks and the host's invite book.
+    // 10: User gained its account kind.
+    // 11: the join challenge carries the host's build identity and the answer proves the joiner's (release, schema
+    //     and whether its game files are the ones that release shipped), not the schema alone.
+    // 12: an array delta can carry only the values appended since the last one (mode 2), which a v11 peer
+    //     would read as a sparse update.
+    // 13: colliders gained Friction and Bounce, squishy bodies their Mass, and the fluid module's types joined
+    //     the schema.
+    // 14: a person's machine carries what a script on the host asks of them in a relay under their user root.
+    // 15: the item seal component is AvatarProtection now.
+    private const int ProtocolVersion = 15;
 
     private static byte[]? _baseHash;
     private static readonly object _lock = new();
@@ -95,11 +108,12 @@ public static class ProtocolCompatibility
         return sha.ComputeHash(ms);
     }
 
-    // The per-join proof: SHA-256(BaseHash || nonce). The joiner computes this over the
-    // host's challenge nonce; the host verifies it against its own schema with Verify.
+    // The per-join proof: SHA-256(build identity || nonce). The identity folds in BaseHash along with the release and
+    // the integrity verdict, so a joiner on the same schema but other game files answers differently. The joiner
+    // computes this over the host's challenge nonce; the host checks it against its own with Verify.
     public static byte[] ComputeChallengeResponse(byte[] nonce)
     {
-        var baseHash = BaseHash;
+        var baseHash = Lumora.Core.Security.Integrity.BuildIdentity.Bytes;
         int nonceLen = nonce?.Length ?? 0;
         var buffer = new byte[baseHash.Length + nonceLen];
         Buffer.BlockCopy(baseHash, 0, buffer, 0, baseHash.Length);
@@ -111,7 +125,7 @@ public static class ProtocolCompatibility
         return sha.ComputeHash(buffer);
     }
 
-    // Constant-time check against our own schema for the given nonce.
+    // Constant-time check against our own build identity for the given nonce.
     public static bool Verify(byte[] nonce, byte[]? response)
     {
         if (response == null || response.Length == 0)

@@ -10,7 +10,7 @@ using Lumora.Nexus.Transport;
 namespace Lumora.Core.Networking.Session;
 
 // The host's figures for its link to each user, put on the user once a second: the share of packets it
-// had to send them again, reliable packets still queued for them, what arrived from them by kind, and
+// had to send them again, packets' worth of data still queued for them, what arrived from them by kind, and
 // whether they have gone quiet. Only the host holds every link, so only the host writes these; every
 // machine reads them. -xlinka
 internal sealed class UserLinkStats

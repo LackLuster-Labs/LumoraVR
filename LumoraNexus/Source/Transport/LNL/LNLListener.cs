@@ -10,7 +10,7 @@ using LumoraLogger = Lumora.Nexus.Diagnostics.NexusLog;
 
 namespace Lumora.Nexus.Transport.LNL;
 
-public class LNLListener : IListener, INetEventListener
+public class LNLListener : IListener, INetEventListener, INatPunchListener
 {
     private readonly NetManager _server;
     private readonly string _appId;
@@ -19,6 +19,7 @@ public class LNLListener : IListener, INetEventListener
     private readonly Dictionary<NetPeer, LNLPeer> _peers = new();
     private readonly string _sessionId;
     private static readonly TimeSpan CryptoHandshakeTimeout = TimeSpan.FromSeconds(10);
+    private LNLNodeLink? _nodeLink;
 
     public bool IsInitialized { get; private set; }
     public bool IsActive => IsInitialized && _server != null && _server.IsRunning;
@@ -29,6 +30,26 @@ public class LNLListener : IListener, INetEventListener
 
     public event Action<IConnection> PeerConnected = null!;
     public event Action<IConnection> PeerDisconnected = null!;
+
+    // The lnl-nat addresses joiners outside this network dial, once a NAT node holds the session: the IPv4
+    // one, and the IPv6 one where the node and this machine both have IPv6. Empty before.
+    public IReadOnlyList<Uri> NatUris => _nodeLink?.Uris ?? Array.Empty<Uri>();
+
+    // The node holding the session and the last round trip to it in milliseconds, -1 before one.
+    public Lumora.Nexus.Cloud.NetworkNode? NatNode => _nodeLink?.Node;
+
+    public double NatRoundTripMs => _nodeLink?.RoundTripMs ?? -1;
+
+    // Off the main thread.
+    public event Action<IReadOnlyList<Uri>>? NatUrisChanged;
+
+    // The router forward of this listener's port while one is asked for; null otherwise.
+    public PortMapping.PortMapper? PortMapper => _portMapper;
+
+    // Off the main thread: the forward was made, renewed elsewhere, refused or taken back.
+    public event Action? PortMappingChanged;
+
+    private PortMapping.PortMapper? _portMapper;
 
     public LNLListener(string appId, ushort port, IPAddress bindIP, string sessionId = null!)
     {
@@ -44,7 +65,8 @@ public class LNLListener : IListener, INetEventListener
         LocalUri = new Uri($"lnl://{bindHost}:{port}/{_sessionId}");
         GlobalUri = new Uri($"lnl://0.0.0.0:{port}/{_sessionId}");
 
-        _server = new NetManager(this);
+        // The tally reads each datagram as it leaves, for the resends LNL does not count.
+        _server = new NetManager(this, LNLSendTally.Layer);
         LNLLanes.Configure(_server);
         _server.UseNativeSockets = false;
         _server.UnsyncedEvents = true;
@@ -52,6 +74,11 @@ public class LNLListener : IListener, INetEventListener
         _server.AutoRecycle = false;
         _server.UnconnectedMessagesEnabled = true;
         _server.EnableStatistics = true;
+        // Introductions from a NAT node are answered from this socket, so the hole a joiner or a relay punches
+        // is the session's own.
+        _server.NatPunchEnabled = true;
+        _server.NatPunchModule.Init(this);
+        _server.NatPunchModule.UnsyncedEvents = true;
 
         try
         {
@@ -77,18 +104,76 @@ public class LNLListener : IListener, INetEventListener
     public void Poll()
     {
         _server?.PollEvents();
+        foreach (var peer in _pumpList)
+            peer.PumpOutbox();
         ReapCryptoHandshakeTimeouts();
+    }
+
+    // The peers whose outboxes the poll pumps, swapped whole as peers come and go: the poll runs on the main
+    // thread and peers arrive on LNL's.
+    private volatile LNLPeer[] _pumpList = Array.Empty<LNLPeer>();
+
+    private void RefreshPumpList()
+    {
+        lock (_peers)
+        {
+            var list = new LNLPeer[_peers.Count];
+            _peers.Values.CopyTo(list, 0);
+            _pumpList = list;
+        }
+    }
+
+    // Holds the session on the nearest NAT node while it is listed; safe to call again.
+    public void StartNodeLink()
+    {
+        if (_nodeLink != null || !IsActive || string.IsNullOrEmpty(_sessionId))
+            return;
+        var link = new LNLNodeLink(_server, _sessionId);
+        link.UrisChanged += uris => NatUrisChanged?.Invoke(uris);
+        _nodeLink = link;
+        link.Start();
+    }
+
+    public void StopNodeLink()
+    {
+        var link = _nodeLink;
+        _nodeLink = null;
+        link?.Stop();
+    }
+
+    // Asks the router to forward this listener's port while the session is listed; safe to call again.
+    public void StartPortMapping()
+    {
+        if (_portMapper != null || !IsActive)
+            return;
+        var mapper = new PortMapping.PortMapper(_server.LocalPort);
+        mapper.Changed += () => PortMappingChanged?.Invoke();
+        _portMapper = mapper;
+        mapper.Start();
+    }
+
+    public void StopPortMapping()
+    {
+        var mapper = _portMapper;
+        _portMapper = null;
+        mapper?.Stop();
+        if (mapper != null)
+            PortMappingChanged?.Invoke();
     }
 
     public void Stop()
     {
+        StopNodeLink();
+        StopPortMapping();
         if (_server != null && _server.IsRunning)
         {
             foreach (var peer in _peers.Values)
             {
                 peer.Close();
             }
-            _peers.Clear();
+            lock (_peers)
+                _peers.Clear();
+            RefreshPumpList();
 
             _server.Stop();
             LumoraLogger.Debug($"[lnl] LNL Listener stopped on {_bindIP}:{_port}");
@@ -108,9 +193,11 @@ public class LNLListener : IListener, INetEventListener
     {
         LumoraLogger.Debug($"[lnl] Peer connected: {peer.Address}:{peer.Port}");
 
-        var lnlPeer = new LNLPeer(_server, peer);
+        var lnlPeer = new LNLPeer(_server, peer, _nodeLink?.IsNodeAddress(peer.Address) == true);
         lnlPeer.CryptoEstablished += OnPeerCryptoEstablished;
-        _peers[peer] = lnlPeer;
+        lock (_peers)
+            _peers[peer] = lnlPeer;
+        RefreshPumpList();
     }
 
     public void OnPeerDisconnected(NetPeer peer, DisconnectInfo disconnectInfo)
@@ -119,7 +206,9 @@ public class LNLListener : IListener, INetEventListener
 
         if (_peers.TryGetValue(peer, out var lnlPeer))
         {
-            _peers.Remove(peer);
+            lock (_peers)
+                _peers.Remove(peer);
+            RefreshPumpList();
             lnlPeer.CryptoEstablished -= OnPeerCryptoEstablished;
             lnlPeer.InformClosed();
             PeerDisconnected?.Invoke(lnlPeer);
@@ -150,7 +239,24 @@ public class LNLListener : IListener, INetEventListener
 
     public void OnNetworkReceiveUnconnected(IPEndPoint remoteEndPoint, NetPacketReader reader, UnconnectedMessageType messageType)
     {
-        // Could be used for discovery/punchthrough
+        var fields = LNLNodeWire.ReadFields(reader);
+        if (fields != null)
+            _nodeLink?.HandleUnconnected(remoteEndPoint, fields, reader);
+        reader.Recycle();
+    }
+
+    public void OnNatIntroductionRequest(IPEndPoint localEndPoint, IPEndPoint remoteEndPoint, string token)
+    {
+    }
+
+    // A joiner's punch got through: say so back from this socket, so a joiner whose copy of our punch was lost
+    // on the way still finds us. A relay port needs nothing; the punch itself is what it waits for.
+    public void OnNatIntroductionSuccess(IPEndPoint targetEndPoint, NatAddressType type, string token)
+    {
+        LumoraLogger.Debug($"[lnl] Punched through to {targetEndPoint} ({type}, '{token}')");
+        if (token == null || !string.Equals(token, _sessionId, StringComparison.OrdinalIgnoreCase))
+            return;
+        LNLNodeWire.SendText(_server, targetEndPoint, $"{LNLNodeWire.Punched};{_sessionId}");
     }
 
     public void OnNetworkLatencyUpdate(NetPeer peer, int latency)
@@ -158,7 +264,7 @@ public class LNLListener : IListener, INetEventListener
         // Can be used to update peer statistics
     }
 
-    public void OnMessageDelivered(NetPeer peer, object userData) => LNLLanes.Delivered(userData);
+    public void OnMessageDelivered(NetPeer peer, object userData) => LNLOutbox.Delivered(userData);
 
     public void OnConnectionRequest(ConnectionRequest request)
     {

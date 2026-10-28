@@ -3,6 +3,8 @@
 
 using System;
 using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Lumora.Core;
 using Lumora.Nexus.Discovery;
@@ -25,9 +27,24 @@ public class Session : IDisposable
     public bool IsDisposed { get; private set; }
     public TimeSpan Latency { get; set; }
 
+    // The session's directory id: the host's own, for a joiner the one the address it came in on carried,
+    // and otherwise (a punched or typed address) the one the host seeds into the world's settings.
+    public string? SessionId => Metadata?.SessionId ?? _joinedSessionId ?? SeededId();
+
+    private string? SeededId()
+    {
+        var id = World?.Configuration?.SessionId.Value;
+        return id != null && SessionIdentifier.IsValid(id) ? id : null;
+    }
+
+    private string? _joinedSessionId;
+
     private LANAnnouncer _lanAnnouncer = null!;
-    private SessionServerClient? _serverClient;
     private BackendSessionDirectoryClient? _directoryClient;
+    private LNLListener? _natListener;
+
+    // The listener holding this session on a NAT node, while it is listed; null otherwise.
+    public LNLListener? NatListener => _natListener;
 
     public event Action OnDisconnected = null!;
 
@@ -42,29 +59,9 @@ public class Session : IDisposable
     // Deployment endpoints are sourced from the config store (Settings) so a build can point at another
     // server without code edits; unset, they follow ServiceConfig. An explicit setter still wins (host
     // bootstrap / tests). -xlinka
-    private const string KeyServerAddress = "Network.SessionServer.Address";
-    private const string KeyServerPort = "Network.SessionServer.Port";
     private const string KeyBackendUrl = "Network.BackendDirectory.Url";
 
-    private static string? _sessionServerAddress;
-    private static int? _sessionServerPort;
     private static string? _backendSessionDirectoryUrl;
-
-    // Config key Network.SessionServer.Address; falls back to the service config's relay host, which is
-    // localhost under --local-services. -xlinka
-    public static string SessionServerAddress
-    {
-        get => _sessionServerAddress ??= Settings.ReadValue(KeyServerAddress,
-            Lumora.Nexus.Cloud.Cdn.ServiceConfig.Current.SessionServerHost);
-        set => _sessionServerAddress = value;
-    }
-
-    // Config key Network.SessionServer.Port; 8000 is the relay box's session port (relay traffic rides it too).
-    public static int SessionServerPort
-    {
-        get => _sessionServerPort ??= Settings.ReadValue(KeyServerPort, 8000);
-        set => _sessionServerPort = value;
-    }
 
     // Read from config key Network.BackendDirectory.Url. The fallback follows the SERVICE CONFIG rather
     // than a hardcoded localhost: everything else in the client already talks to the configured API host,
@@ -120,6 +117,8 @@ public class Session : IDisposable
         session.Metadata.LastUpdate = DateTime.UtcNow;
         session.Metadata.HostUsername ??= Environment.UserName;
         session.Metadata.ActiveUsers = 1;
+        // What browsers match against their own build before they list it.
+        session.Metadata.VersionHash = Lumora.Core.Security.Integrity.BuildIdentity.Hash;
 
         LumoraLogger.Debug($"[lnl] Creating new session '{metadata!.Name}' on port {port}");
         LumoraLogger.Log($"[lnl] Session ID: {session.Metadata.SessionId}");
@@ -147,9 +146,8 @@ public class Session : IDisposable
         session.Metadata.SessionURLs = urls;
 
         session.Sync = new SessionSyncManager(session);
-        session.Sync.Start();
-
         session.AssetTransferer = new SessionAssetTransferer(session);
+        session.Sync.Start();
         if (Engine.Current is { } e)
             e.ActiveSessionTransferer = session.AssetTransferer;
 
@@ -159,7 +157,7 @@ public class Session : IDisposable
             session.StartLANAnnouncer();
         }
 
-        if (metadata.Visibility == SessionVisibility.Public)
+        if (ShouldList(metadata.Visibility))
         {
             // Detached on purpose - don't stall host creation on a public-server round-trip. The method
             // logs its own failures; the continuation catches anything that escapes so it can't go silent.
@@ -190,6 +188,14 @@ public class Session : IDisposable
         if (world.IsUserspace)
             throw new InvalidOperationException("Private userspace cannot join a network session.");
         var session = new Session(world);
+        foreach (var address in addresses)
+        {
+            if (SessionUrlBuilder.TryParseSessionId(address, out var sessionId))
+            {
+                session._joinedSessionId = sessionId;
+                break;
+            }
+        }
 
         LumoraLogger.Debug($"[lnl] Joining session at {string.Join(", ", addresses)}");
 
@@ -217,9 +223,8 @@ public class Session : IDisposable
             }
 
             session.Sync = new SessionSyncManager(session);
-            session.Sync.Start();
-
             session.AssetTransferer = new SessionAssetTransferer(session);
+            session.Sync.Start();
             if (Engine.Current is { } e)
                 e.ActiveSessionTransferer = session.AssetTransferer;
 
@@ -230,7 +235,8 @@ public class Session : IDisposable
 
     private void StartLANAnnouncer()
     {
-        if (_lanAnnouncer != null)
+        // Turned off in the network settings: nothing goes out on this network about the session.
+        if (_lanAnnouncer != null || !EngineSettings.LanDiscovery)
             return;
 
         _lanAnnouncer = new LANAnnouncer();
@@ -246,42 +252,181 @@ public class Session : IDisposable
 
     // Returns a Task so callers can observe faults; it runs detached (callers must not block session setup on a
     // network round-trip).
-    // NAT-host caveat: this only REGISTERS the session and its metadata with the server. The host does
-    // NOT yet act on NAT punch-through: it never subscribes _serverClient.OnNATPunchSuccess /
-    // OnNATIntroStarted to open the punched socket, and there is no relay server / host-side relay bridge
-    // in this repo for the relay fallback. So public discovery works, but a joiner behind NAT cannot
-    // currently be punched through to (or relayed to) this host - those server-side pieces are external
-    // prerequisites that don't exist yet. Direct/LAN joins are unaffected. -xlinka
     private async Task StartPublicServerRegistration()
     {
-        if (_serverClient != null || _directoryClient != null)
+        await StartDirectoryAsync(StartNatNode());
+    }
+
+    private static readonly TimeSpan NatAddressWait = TimeSpan.FromSeconds(3);
+
+    // Listed for others to find. The cloud directory takes Public sessions, and Friends ones so the host's
+    // friends can find and join them, which needs a signed-in host to have any friends at all. Whatever is
+    // listed is held on a NAT node too, so it can be reached from outside this network. -xlinka
+    private static bool ShouldList(SessionVisibility visibility)
+        => visibility == SessionVisibility.Public
+           || (visibility == SessionVisibility.Contacts && !string.IsNullOrWhiteSpace(BackendAuthTokenProvider?.Invoke()));
+
+    // A Private or LAN world is listed nowhere until its host invites someone. Then it goes on the directory
+    // hidden, with its NAT node: the service only carries an invite to a session it knows, and the node is the
+    // way in for an invited account outside this network. Nobody browsing ever sees it, and it stays listed that
+    // way for the rest of the session. -xlinka
+    private volatile bool _listedForInvites;
+
+    private bool CanList(SessionVisibility visibility)
+        => ShouldList(visibility)
+           || (_listedForInvites && visibility is SessionVisibility.Private or SessionVisibility.LAN
+               && !string.IsNullOrWhiteSpace(BackendAuthTokenProvider?.Invoke()));
+
+    // Whether the directory has this session now.
+    public bool IsListed => _directoryClient?.IsRegistered == true;
+
+    // Host side: list this session for invites if nothing has listed it yet. Answers at once; IsListed says
+    // when the directory has it.
+    public void ListForInvites()
+    {
+        if (IsDisposed || Metadata == null || World == null || !World.IsAuthority)
+            return;
+        _listedForInvites = true;
+        if (_directoryClient != null || !CanList(Metadata.Visibility))
+            return;
+        _ = StartPublicServerRegistration().ContinueWith(t =>
+        {
+            if (t.IsFaulted)
+                LumoraLogger.Warn($"[lnl] Session: listing for invites faulted - {t.Exception?.GetBaseException().Message}");
+        }, TaskScheduler.Default);
+    }
+
+    // The session's own LNL listener registers on the nearest official NAT node, so a joiner punches to, or is
+    // relayed into, the socket this session already accepts on, and comes in as any other peer. The same
+    // listener asks the router to forward its port, which lets people outside connect to it directly.
+    private LNLListener? StartNatNode()
+    {
+        var listener = Connections.StartedListeners.OfType<LNLListener>().FirstOrDefault();
+        if (listener == null)
+            return null;
+        if (Interlocked.CompareExchange(ref _natListener, listener, null) != null)
+            return _natListener;
+        listener.NatUrisChanged += OnNatUrisChanged;
+        listener.PortMappingChanged += RebuildReachUrls;
+        EngineSettings.Changed += OnNetworkSettingsChanged;
+        listener.StartNodeLink();
+        if (EngineSettings.PortForwarding)
+            listener.StartPortMapping();
+        _streamReach = new SessionStreamReach(Connections.StartedListeners, listener, RebuildReachUrls);
+        _streamReach.Start(EngineSettings.PortForwarding);
+        _ipv6Listed = EngineSettings.Ipv6;
+        return listener;
+    }
+
+    private void StopNatNode()
+    {
+        var listener = Interlocked.Exchange(ref _natListener, null);
+        if (listener == null)
+            return;
+        listener.NatUrisChanged -= OnNatUrisChanged;
+        listener.PortMappingChanged -= RebuildReachUrls;
+        EngineSettings.Changed -= OnNetworkSettingsChanged;
+        listener.StopNodeLink();
+        listener.StopPortMapping();
+        Interlocked.Exchange(ref _streamReach, null)?.Stop();
+        RebuildReachUrls(listener);
+    }
+
+    // TCP and QUIC reach of a listed session: through a node over TCP, and their router forwards.
+    private SessionStreamReach? _streamReach;
+    private List<Uri> _streamUrls = new();
+
+    internal SessionStreamReach? StreamReach => _streamReach;
+
+    private bool _ipv6Listed;
+
+    // Turning router forwarding or IPv6 on or off reaches a listed session at once. Taking a forward back
+    // waits on the router, so it runs off the thread the setting was changed on.
+    private void OnNetworkSettingsChanged()
+    {
+        var listener = _natListener;
+        if (listener == null)
+            return;
+        if (EngineSettings.PortForwarding && listener.PortMapper == null)
+            listener.StartPortMapping();
+        else if (!EngineSettings.PortForwarding && listener.PortMapper != null)
+            _ = Task.Run(listener.StopPortMapping);
+        _streamReach?.Forwarding(EngineSettings.PortForwarding);
+        if (_ipv6Listed != EngineSettings.Ipv6)
+        {
+            _ipv6Listed = EngineSettings.Ipv6;
+            RebuildReachUrls();
+        }
+    }
+
+    private void OnNatUrisChanged(IReadOnlyList<Uri> uris)
+    {
+        foreach (var uri in uris)
+            LumoraLogger.Log($"[lnl] Session reachable from outside at {uri}");
+        RebuildReachUrls();
+    }
+
+    private void RebuildReachUrls() => RebuildReachUrls(_natListener);
+
+    // Off the main thread. The address list is swapped whole, never edited where someone may be reading it.
+    // What can change while the session runs is put back in place each time: IPv6 direct addresses as the
+    // setting stands, the router-forwarded address, and the node addresses, after the direct ones and ahead
+    // of Steam.
+    private void RebuildReachUrls(LNLListener? listener)
+    {
+        var metadata = Metadata;
+        if (metadata == null || IsDisposed)
+            return;
+        bool held = listener != null && listener == _natListener;
+        var mapped = held && listener!.PortMapper is { State: Lumora.Nexus.Transport.PortMapping.PortMapState.Mapped, External: { } external }
+            ? SessionUrlBuilder.BuildLNLUrl(external.Address.ToString(), external.Port, metadata.SessionId)
+            : null;
+        var direct = new List<Uri>();
+        var rest = new List<Uri>();
+        foreach (var url in metadata.SessionURLs ?? new List<Uri>())
+        {
+            if (url == null || string.Equals(url.Scheme, LNLNetworkManager.NAT_SCHEME, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(url.Scheme, Lumora.Nexus.Transport.LNT.LNTNetworkManager.NAT_SCHEME, StringComparison.OrdinalIgnoreCase)
+                || Equals(url, _mappedUrl) || IsIpv6Direct(url) || _streamUrls.Contains(url))
+                continue;
+            (string.Equals(url.Scheme, LNLNetworkManager.SCHEME, StringComparison.OrdinalIgnoreCase) ? direct : rest).Add(url);
+        }
+        int port = listener?.LocalUri?.Port ?? direct.FirstOrDefault()?.Port ?? 0;
+        if (EngineSettings.Ipv6 && port > 0)
+        {
+            foreach (var address in Lumora.Nexus.Transport.HostAddresses.GlobalIpv6)
+                direct.Add(SessionUrlBuilder.BuildLNLUrl(address.ToString(), port, metadata.SessionId));
+        }
+        if (mapped != null)
+        {
+            direct.Add(mapped);
+            if (!Equals(mapped, _mappedUrl))
+                LumoraLogger.Log($"[lnl] Session reachable through the router at {mapped}");
+        }
+        _mappedUrl = mapped;
+        if (held)
+            direct.AddRange(listener!.NatUris);
+        _streamUrls = held && _streamReach != null ? _streamReach.Urls(metadata.SessionId) : new List<Uri>();
+        direct.AddRange(_streamUrls);
+        direct.AddRange(rest);
+        metadata.SessionURLs = direct;
+        metadata.LastUpdate = DateTime.UtcNow;
+        _lanAnnouncer?.UpdateMetadata(metadata);
+        _directoryClient?.SendHeartbeat(metadata.ActiveUsers, GetUserList(), GetUserIds());
+    }
+
+    private Uri? _mappedUrl;
+
+    private static bool IsIpv6Direct(Uri url)
+        => string.Equals(url.Scheme, LNLNetworkManager.SCHEME, StringComparison.OrdinalIgnoreCase)
+           && url.HostNameType == UriHostNameType.IPv6;
+
+    private async Task StartDirectoryAsync(LNLListener? nat)
+    {
+        if (_directoryClient != null)
             return;
 
-        try
-        {
-            _serverClient = new SessionServerClient(SessionServerAddress, SessionServerPort);
-            var connected = await _serverClient.ConnectAsync(
-                Metadata,
-                GetUserList);
-
-            if (connected)
-            {
-                LumoraLogger.Log($"[lnl] Session registered with public server at {SessionServerAddress}:{SessionServerPort}");
-            }
-            else
-            {
-                LumoraLogger.Warn("[lnl] Session: Failed to register with public server");
-                _serverClient?.Dispose();
-                _serverClient = null;
-            }
-        }
-        catch (Exception ex)
-        {
-            LumoraLogger.Warn($"[lnl] Session: Public server registration failed - {ex.Message}");
-            _serverClient?.Dispose();
-            _serverClient = null;
-        }
-
+        BackendSessionDirectoryClient? client = null;
         try
         {
             var backendUrl = BackendSessionDirectoryUrl;
@@ -296,31 +441,38 @@ public class Session : IDisposable
             // Listed as a guest when nobody is signed in, and it stays a guest's listing for the life of the
             // session: signing in halfway would present a different owner for a listing the guest key holds.
             bool asGuest = string.IsNullOrWhiteSpace(BackendAuthTokenProvider?.Invoke());
-            _directoryClient = new BackendSessionDirectoryClient(
+            client = new BackendSessionDirectoryClient(
                 backendUrl,
                 asGuest ? () => null : () => BackendAuthTokenProvider?.Invoke());
+            _directoryClient = client;
             if (asGuest)
                 LumoraLogger.Log("[lnl] Session: not signed in, listing the session as a guest");
 
+            // The NAT node's address is what lets a joiner outside this network in, so the first listing waits
+            // a moment for it. A node that answers later joins the listing on a heartbeat.
+            var waited = System.Diagnostics.Stopwatch.StartNew();
+            while (nat != null && nat.NatUris.Count == 0 && _natListener == nat && waited.Elapsed < NatAddressWait)
+                await Task.Delay(100);
+            if (_directoryClient != client)
+                return;
+
             // True means the publisher is running, not that the first register succeeded - it keeps retrying
             // and re-registers itself if the directory expires us. Only a missing token gives up here.
-            var publishing = await _directoryClient.StartAsync(Metadata, GetUserList);
-            if (publishing)
+            if (await client.StartAsync(Metadata, GetUserList, GetUserIds))
             {
                 LumoraLogger.Log($"[lnl] Session publishing to backend directory at {BackendSessionDirectoryUrl}");
-            }
-            else
-            {
-                _directoryClient.Dispose();
-                _directoryClient = null;
+                return;
             }
         }
         catch (Exception ex)
         {
             LumoraLogger.Warn($"[lnl] Session: Backend directory registration failed - {ex.Message}");
-            _directoryClient?.Dispose();
-            _directoryClient = null;
         }
+        if (client == null)
+            return;
+        // only our own: a flip to Private and back may already have handed the slot to a newer client
+        if (Interlocked.CompareExchange(ref _directoryClient, null, client) == client)
+            client.Dispose();
     }
 
     private string[] GetUserList()
@@ -343,10 +495,27 @@ public class Session : IDisposable
         return usernames.Count > 0 ? usernames.ToArray() : new[] { Metadata?.HostUsername ?? "Host" };
     }
 
+    // The account ids of the signed-in users here, which is how the directory tells a friend where someone is.
+    // Guests have none and are left out.
+    private string[] GetUserIds()
+    {
+        var world = World;
+        if (world == null)
+            return Array.Empty<string>();
+
+        var ids = new List<string>();
+        foreach (var user in world.GetAllUsers())
+        {
+            var id = user?.AccountId?.Value;
+            if (!string.IsNullOrEmpty(id) && !ids.Contains(id))
+                ids.Add(id);
+        }
+        return ids.ToArray();
+    }
+
     private void StopPublicServerRegistration()
     {
-        _serverClient?.Dispose();
-        _serverClient = null;
+        StopNatNode();
 
         var directory = _directoryClient;
         _directoryClient = null;
@@ -415,14 +584,19 @@ public class Session : IDisposable
 
         _lanAnnouncer?.UpdateMetadata(Metadata);
 
-        _serverClient?.SendSessionUpdate(count, GetUserList());
-        _directoryClient?.SendHeartbeat(count, GetUserList());
+        _directoryClient?.SendHeartbeat(count, GetUserList(), GetUserIds());
     }
 
     public void SetVisibility(SessionVisibility visibility)
     {
         if (Metadata == null)
             return;
+        // The home is never listed or announced, whoever asks. -xlinka
+        if (visibility != SessionVisibility.Private && Lumora.Core.Management.WorldManager.IsLocalHome(World))
+        {
+            LumoraLogger.Warn($"Session: the local world stays private, visibility {visibility} refused");
+            visibility = SessionVisibility.Private;
+        }
 
         var oldVisibility = Metadata.Visibility;
         Metadata.Visibility = visibility;
@@ -447,21 +621,40 @@ public class Session : IDisposable
             _lanAnnouncer?.UpdateMetadata(Metadata);
         }
 
-        bool shouldRegisterPublic = visibility == SessionVisibility.Public;
-        bool wasRegisteredPublic = oldVisibility == SessionVisibility.Public;
+        if (!CanList(visibility))
+        {
+            if (_directoryClient != null || _natListener != null)
+                StopPublicServerRegistration();
+            return;
+        }
 
-        if (shouldRegisterPublic && !wasRegisteredPublic)
+        if (_directoryClient == null)
         {
             _ = StartPublicServerRegistration().ContinueWith(t =>
             {
                 if (t.IsFaulted)
                     LumoraLogger.Warn($"[lnl] Session: Public server registration faulted - {t.Exception?.GetBaseException().Message}");
             }, TaskScheduler.Default);
+            return;
         }
-        else if (!shouldRegisterPublic && wasRegisteredPublic)
-        {
-            StopPublicServerRegistration();
-        }
+
+        // Still listed, Anyone to Friends or back: the directory entry takes the new level where it stands, and
+        // the NAT node keeps holding the session either way.
+        if (oldVisibility != visibility)
+            _directoryClient.PushListing();
+        StartNatNode();
+    }
+
+    // The game's build identity changed while hosting (something was loaded into it): listings take the new one,
+    // so browsers on the old build drop the session and ones on the new build can find it.
+    public void RefreshBuild()
+    {
+        if (Metadata == null || IsDisposed)
+            return;
+        Metadata.VersionHash = Lumora.Core.Security.Integrity.BuildIdentity.Hash;
+        Metadata.LastUpdate = DateTime.UtcNow;
+        _lanAnnouncer?.UpdateMetadata(Metadata);
+        _directoryClient?.PushListing();
     }
 
     public void Dispose()

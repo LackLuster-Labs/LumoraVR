@@ -13,7 +13,7 @@ namespace Lumora.Nexus.Transport.LNL;
 // channels past the two the session uses, ordered and unordered both, so a long link carries many windows
 // at once. Each send takes the lane with the fewest of its packets still unacked, counted off as LNL
 // reports them delivered: a lane whose window is full holds whatever lands on it for a whole round trip.
-// How much goes out in all is the transferer's call; it paces itself by round trip.
+// How much is on the wire in all is the outbox's call (LNLOutbox), held to what the link carries.
 //
 // A build from before the lanes opened two channels and drops anything past them without a word, so bulk
 // only goes on lanes to a peer that has said it takes chunks out of order, and only a build with lanes says
@@ -45,17 +45,12 @@ internal sealed class LNLLanes
         manager.UnsyncedDeliveryEvent = true;
     }
 
-    private sealed class Sent
-    {
-        public LNLLanes Owner = null!;
-        public int Lane;
-        public int Packets;
-    }
-
     private readonly int[] _unacked = new int[LaneCount];
     private int _next;
 
-    public void Send(NetPeer peer, byte[] data, int length)
+    // The lane with the fewest of its packets still unacknowledged, and what this send costs it; the outbox hands
+    // the packet count back through Release when LNL reports the send delivered.
+    public int Choose(NetPeer peer, int length, out byte channel, out DeliveryMethod method, out int packets)
     {
         int best = 0, least = int.MaxValue;
         for (int i = 0; i < LaneCount; i++)
@@ -72,19 +67,39 @@ internal sealed class LNLLanes
         }
         _next = (best + 1) % LaneCount;
 
-        var method = best % 2 == 0 ? DeliveryMethod.ReliableUnordered : DeliveryMethod.ReliableOrdered;
+        method = best % 2 == 0 ? DeliveryMethod.ReliableUnordered : DeliveryMethod.ReliableOrdered;
+        channel = (byte)(FirstLane + best / 2);
         int perPacket = System.Math.Max(1, peer.GetMaxSinglePacketSize(method) - FragmentHeader);
-        int packets = length <= perPacket + FragmentHeader ? 1 : (length + perPacket - 1) / perPacket;
+        packets = length <= perPacket + FragmentHeader ? 1 : (length + perPacket - 1) / perPacket;
         Interlocked.Add(ref _unacked[best], packets);
-        peer.SendWithDeliveryEvent(data, 0, length, (byte)(FirstLane + best / 2), method,
-            new Sent { Owner = this, Lane = best, Packets = packets });
+        return best;
     }
 
-    // From the listener's delivery callback; anything that is not a lane send is passed over.
-    public static void Delivered(object? userData)
+    public void Release(int lane, int packets)
     {
-        if (userData is Sent sent)
-            Interlocked.Add(ref sent.Owner._unacked[sent.Lane], -sent.Packets);
+        if (lane >= 0 && lane < LaneCount)
+            Interlocked.Add(ref _unacked[lane], -packets);
+    }
+
+    // Reliable packets LNL holds unsent on the foreground and background channels: what the next live message
+    // waits behind, bulk lanes left out.
+    public static int QueuedLive(NetPeer? peer)
+    {
+        if (peer == null)
+            return 0;
+        int queued = 0;
+        for (byte channel = 0; channel < FirstLane; channel++)
+            queued += peer.GetPacketsCountInReliableQueue(channel, false) + peer.GetPacketsCountInReliableQueue(channel, true);
+        return queued;
+    }
+
+    // Bulk packets LNL holds and has not put on the wire yet, every lane.
+    public static int QueuedBulk(NetPeer peer)
+    {
+        int queued = 0;
+        for (byte channel = FirstLane; channel < Channels; channel++)
+            queued += peer.GetPacketsCountInReliableQueue(channel, false) + peer.GetPacketsCountInReliableQueue(channel, true);
+        return queued;
     }
 
     // Reliable packets waiting to go out on every channel.

@@ -587,8 +587,6 @@ public class SyncController
 		_streamScratch.SetLength(0);
 	}
 
-	private int _appliedStreamCount;
-
 	// Called by SessionSyncManager when a StreamMessage arrives.
 	public void ApplyStreams(StreamMessage message)
 	{
@@ -613,7 +611,6 @@ public class SyncController
 
 		var data = message.GetData();
 		using var reader = new BinaryReader(data);
-		int streamCount = 0;
 
 		while (data.Position < data.Length)
 		{
@@ -635,7 +632,6 @@ public class SyncController
 					}
 
 					stream.Decode(reader, message);
-					streamCount++;
 				}
 				else
 				{
@@ -659,14 +655,6 @@ public class SyncController
 				break;
 			}
 		}
-
-		_appliedStreamCount += streamCount;
-
-		// Log stream receive summary periodically (every 60 messages)
-		// if (_appliedStreamCount > 0 && _appliedStreamCount % 60 == 0)
-		// {
-		// 	LumoraLogger.Log($"[Stream] Applied {_appliedStreamCount} streams from remote users");
-		// }
 	}
 
 	public void Dispose()

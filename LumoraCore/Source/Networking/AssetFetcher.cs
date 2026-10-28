@@ -64,6 +64,16 @@ public static class AssetFetcher
         }
     }
 
+    // Gathers still running, for background work that should keep off the disk while something loads.
+    public static int InFlight
+    {
+        get
+        {
+            lock (_lock)
+                return _active.Count;
+        }
+    }
+
     // Must be called every frame by the platform driver update loop.
     public static void ProcessQueue()
     {
@@ -112,8 +122,7 @@ public static class AssetFetcher
         // 1. Served from our own LocalDB?
         if (localDB != null)
         {
-            var filePath = localDB.GetFilePath(uri);
-            if (filePath != null && File.Exists(filePath))
+            if (localDB.Exists(uri))
             {
                 lock (_lock)
                 {
@@ -132,7 +141,10 @@ public static class AssetFetcher
                     // So the reads queued behind each other and the whole pipeline moved at a trickle:
                     // measured 67 texture loads started, 34 reads finished, 13 uploaded in 44 seconds.
                     // ReadAllBytesAsync holds no thread while the disk works. -xlinka
-                    var task = File.ReadAllBytesAsync(filePath);
+                    //
+                    // The file is sealed: each batch is decrypted on the thread its read completes on, straight
+                    // into the array the decoder gets, so the plaintext never touches the disk.
+                    var task = ReadHeld(localDB, uri);
                     _active[uri] = (task, [callback]);
                 }
                 return;
@@ -154,7 +166,9 @@ public static class AssetFetcher
                 byte[] data;
                 try
                 {
-                    data = await File.ReadAllBytesAsync(cachedPath).ConfigureAwait(false);
+                    data = localDB != null
+                        ? (await localDB.ReadAssetBytesAsync(uri).ConfigureAwait(false))!
+                        : await AssetFiles.ReadAllBytesAsync(cachedPath).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -165,6 +179,9 @@ public static class AssetFetcher
             });
         });
     }
+
+    private static async Task<byte[]> ReadHeld(LocalDB db, string uri)
+        => (await db.ReadAssetBytesAsync(uri).ConfigureAwait(false))!;
 
     // Fetch a local:// asset from the session into the store and answer its file, or null. Adopted under
     // the hash the URI already carries, before reading a byte: importing instead would re-read and re-hash
@@ -290,20 +307,18 @@ public static class AssetFetcher
         }
     }
 
-    // A local:// asset as a FILE on this machine: the store's own copy, or one fetched from the session
-    // into the store. For whatever plays a file from disk rather than decoding bytes, a video above all,
-    // which can be gigabytes and has no business passing through memory whole. Null when nobody could
-    // provide it.
-    public static Task<string?> FetchLocalFileAsync(string uri)
+    // A local:// asset held in the store, fetched from the session into it first when it is not. For whatever
+    // reads an asset as it goes rather than decoding it whole, a video above all, which can be gigabytes and
+    // has no business passing through memory: it then opens the address through LocalDB.OpenRead. False when
+    // nobody could provide it.
+    public static Task<bool> EnsureLocalAsync(string uri)
     {
-        var engine = Engine.Current;
-        var localDB = engine?.LocalDB;
-        var held = localDB?.GetFilePath(uri);
-        if (!string.IsNullOrEmpty(held) && File.Exists(held))
-            return Task.FromResult<string?>(held);
+        var localDB = Engine.Current?.LocalDB;
+        if (localDB != null && localDB.Exists(uri))
+            return Task.FromResult(true);
 
-        var done = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        GatherFromSession(uri, file => done.TrySetResult(file));
+        var done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        GatherFromSession(uri, file => done.TrySetResult(file != null));
         return done.Task;
     }
 
@@ -353,7 +368,7 @@ public static class AssetFetcher
     {
         var path = u.LocalPath;
         if (File.Exists(path))
-            return File.ReadAllBytes(path);
+            return AssetFiles.ReadAllBytes(path);
 
         var resPath = Engine.Current?.TryGetResourcePath(path);
         var reader = ResourcePackReader;
