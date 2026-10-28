@@ -142,7 +142,8 @@ public static class DiscordManager
             var state = world == null ? null : new DiscordPresenceState(session ?? string.Empty,
                 world.WorldName?.Value ?? world.Name, world.Mode.ToString(), world.UserCount,
                 settings?.MaxUsers.Value ?? 1, settings?.IsPublic.Value ?? false,
-                settings?.AllowJoin.Value ?? false, world.Session != null, world.SessionURLs);
+                settings?.AllowJoin.Value ?? false, world.Session != null, world.SessionURLs,
+                Closed: settings == null || settings.AccessLevel.Value == LumoraWorld.WorldAccessLevel.Private);
             var presence = DiscordPresence.Build(state, _sessionStart, Lumora.Core.EngineVersion.VersionString);
             if (!_client!.HasRegisteredUriScheme) presence.Secrets = null;
             _joinRequestsAllowed = presence.Secrets != null && presence.Party.Privacy == Party.PrivacySetting.Public;

@@ -41,7 +41,10 @@ public static class GodotHookRegistry
         // the first point where the render layer is known to the engine and the renderer is up. -xlinka
         var formats = Lumora.Godot.Hooks.TextureAssetHook.QueryDeviceFormats();
         Lumora.Core.Assets.TextureGpuCache.CompressionTag = Lumora.Godot.Hooks.TextureAssetHook.CompressionTag();
+        Lumora.Core.Assets.TextureGpuCache.BlockWriter = Lumora.Godot.Hooks.TextureAssetHook.WriteBlockCache;
+        Lumora.Godot.Hooks.MeshLodCache.RegisterSealing();
         Lumora.Godot.Hooks.GpuTextureVariants.Install();
+        Lumora.Godot.Hooks.ComputePhysics.Install();
         Lumora.Godot.Hooks.GodotConvexDecomposer.Install();
 
         LumoraLogger.Log($"GodotHookRegistry: registered {componentHooks} component hooks, {assetHooks} asset hooks via reflection "

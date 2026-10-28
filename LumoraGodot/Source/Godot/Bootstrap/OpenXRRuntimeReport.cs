@@ -104,6 +104,34 @@ public static class OpenXRRuntimeReport
         return false;
     }
 
+    // Steam Link streams into SteamVR, and the OpenXR loader only ever asks the ONE active runtime. A PC that
+    // also has Virtual Desktop or the Meta app installed often has theirs active, so a person sitting in a
+    // headset streamed through SteamVR gets a truthful "no headset" and a desktop window. When that runtime
+    // has just said no and SteamVR's server is running, this points the loader at SteamVR for this process
+    // only (the loader reads XR_RUNTIME_JSON on every instance it creates); the machine's own setting is
+    // left as it is. A person who set XR_RUNTIME_JSON themselves is never overridden. -xlinka
+    public static bool SteerToRunningSteamVR()
+    {
+        if (!OperatingSystem.IsWindows())
+            return false;
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("XR_RUNTIME_JSON")))
+            return false;
+        Load();
+        if (ActiveKind == RuntimeKind.SteamVR)
+            return false;
+        var steamVr = _availablePaths.FirstOrDefault(p => Classify(p) == RuntimeKind.SteamVR && File.Exists(p));
+        if (steamVr == null)
+            return false;
+        var servers = Process.GetProcessesByName("vrserver");
+        bool running = servers.Length > 0;
+        foreach (var process in servers)
+            process.Dispose();
+        if (!running)
+            return false;
+        Environment.SetEnvironmentVariable("XR_RUNTIME_JSON", steamVr);
+        return true;
+    }
+
     // What to put in the log when OpenXR reported no headset. Names the runtime that was asked, and
     // where a different installed runtime is the likely answer, says so in the words of the thing the
     // person was trying to do.

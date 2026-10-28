@@ -49,6 +49,13 @@ public partial class HeadOutput : Node
     private const float MinNearClip = 0.001f;
     private const float MinFarClip = 0.5f;
 
+    // The floor above is on the avatar's setting, before the scale goes on. Applied after it, it held every
+    // user under 0.2x at a millimetre of world: 1 cm of their own size at 0.1x and 2 cm at the smallest
+    // allowed, so the smaller you were the more of what you leaned into got sliced. This one only keeps a
+    // projection from collapsing. Measured on Godot 4.8: an XR eye's near plane is in world metres whatever
+    // the origin's scale, so the planes need no other correction for a scaled tracking space. -xlinka
+    private const float MinScaledNearClip = 0.0001f;
+
     // The planes last resolved from the local user's scale and avatar; read back by anything that wants
     // to know what the eyes are using.
     public float NearClip { get; private set; } = DefaultNearClip;
@@ -251,10 +258,10 @@ public partial class HeadOutput : Node
         }
 
         var settings = world.LocalUserRenderSettings;
-        float near = (settings?.NearClip ?? DefaultNearClip) * userScale;
+        float near = Mathf.Max(MinNearClip, settings?.NearClip ?? DefaultNearClip) * userScale;
         float far = settings?.FarClip ?? DefaultFarClip;
 
-        NearClip = Mathf.Max(MinNearClip, near);
+        NearClip = Mathf.Max(MinScaledNearClip, near);
         FarClip = Mathf.Max(MinFarClip, far);
         if (FarClip <= NearClip)
             FarClip = NearClip + 1f;

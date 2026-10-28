@@ -35,6 +35,17 @@ namespace Lumora.Source.Godot.Bootstrap;
 //
 // Seconds > 0 quits the app once that much has been logged, so a measurement run needs no hand on
 // the window. Nothing here runs unless the flag is present. -xlinka
+//
+// Beside it, <path>-textures.csv: every texture load's stages as they happen (asked for, its bytes
+// gathered, waiting for and holding a delivery turn, decoded, preview, compressed or read from the GPU
+// cache, queued for the main thread, built, done) and the variant ladders made behind them, on the same
+// clock as time_s. A world that is slow to show its textures says which stage the time went to. -xlinka
+//
+//   texture  one number per texture load
+//   stage    the stage reached
+//   time_s   on the frame rows' clock
+//   thread   managed thread id
+//   detail   address, size, rung or format, depending on the stage
 public sealed class FrameTimeLog : IDisposable
 {
     public const string PathFlag = "--Lumora-FrameLog";
@@ -42,6 +53,8 @@ public sealed class FrameTimeLog : IDisposable
     private const int FlushEveryFrames = 120;
 
     private readonly StreamWriter _writer;
+    private readonly StreamWriter? _textures;
+    private long _startStamp;
     private readonly double _quitAfterSeconds;
     private readonly StringBuilder _line = new(256);
     private long _prevStamp;
@@ -86,6 +99,18 @@ public sealed class FrameTimeLog : IDisposable
         _writer.WriteLine("frame,time_s,delta_ms,ours_ms,godot_ms,render_cpu_ms,render_gpu_ms,setup_cpu_ms,physics_ticks,physics_ms,max_fps,vsync,focused");
         _quitAfterSeconds = quitAfterSeconds;
         _prevPhysicsFrames = global::Godot.Engine.GetPhysicsFrames();
+
+        var texturesPath = Path.Combine(directory ?? string.Empty, Path.GetFileNameWithoutExtension(resolved) + "-textures.csv");
+        try
+        {
+            _textures = new StreamWriter(texturesPath, false, new UTF8Encoding(false), 1 << 16);
+            _textures.WriteLine("texture,stage,time_s,thread,detail");
+            Lumora.Core.Assets.TextureLoadTrace.Enabled = true;
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Warn($"FrameTimeLog: cannot open '{texturesPath}': {ex.Message}");
+        }
         LumoraLogger.Log($"FrameTimeLog: writing every frame to {resolved}"
             + (quitAfterSeconds > 0 ? $", quitting after {quitAfterSeconds:0.#} s" : string.Empty));
     }
@@ -111,6 +136,8 @@ public sealed class FrameTimeLog : IDisposable
         _prevPhysicsFrames = physicsFrames;
 
         long stamp = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_startStamp == 0)
+            _startStamp = stamp - (long)(delta * System.Diagnostics.Stopwatch.Frequency);
         double deltaMs = _prevStamp != 0 ? (stamp - _prevStamp) * 1000.0 / System.Diagnostics.Stopwatch.Frequency : delta * 1000.0;
         _prevStamp = stamp;
         double oursMs = networkMs + engineMs + tailMs;
@@ -139,8 +166,12 @@ public sealed class FrameTimeLog : IDisposable
         _writer.WriteLine(_line.ToString());
 
         _frame++;
+        WriteTextureStages(c);
         if (_frame % FlushEveryFrames == 0)
+        {
             _writer.Flush();
+            _textures?.Flush();
+        }
 
         if (_quitAfterSeconds > 0 && !_quitRequested && _elapsed >= _quitAfterSeconds)
         {
@@ -150,12 +181,34 @@ public sealed class FrameTimeLog : IDisposable
         }
     }
 
+    private void WriteTextureStages(CultureInfo c)
+    {
+        if (_textures == null)
+            return;
+        foreach (var stamp in Lumora.Core.Assets.TextureLoadTrace.Drain())
+        {
+            _line.Clear();
+            _line.Append(stamp.Id).Append(',')
+                .Append(stamp.Stage).Append(',')
+                .Append(((stamp.Ticks - _startStamp) / (double)System.Diagnostics.Stopwatch.Frequency).ToString("0.0000", c)).Append(',')
+                .Append(stamp.Thread).Append(',')
+                .Append((stamp.Detail ?? string.Empty).Replace(',', ';'));
+            _textures.WriteLine(_line.ToString());
+        }
+    }
+
     public void Dispose()
     {
         try
         {
+            Lumora.Core.Assets.TextureLoadTrace.Enabled = false;
             _writer.Flush();
             _writer.Dispose();
+            if (_textures != null)
+            {
+                WriteTextureStages(CultureInfo.InvariantCulture);
+                _textures.Dispose();
+            }
         }
         catch
         {

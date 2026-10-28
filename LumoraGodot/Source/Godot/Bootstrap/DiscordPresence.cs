@@ -9,8 +9,11 @@ using DiscordRPC;
 
 namespace Lumora.Source.Godot.Bootstrap;
 
+// Closed: a Private world. Its host's door only takes accounts on the host's invite book, and a Discord ask or
+// invite names a Discord user, never one of ours, so there is nothing to put on the book for it. The presence
+// carries no join secret for one, so Discord offers neither.
 public sealed record DiscordPresenceState(string SessionId, string Name, string Mode, int Users, int MaxUsers,
-    bool Public, bool AllowJoin, bool Networked, IReadOnlyList<Uri> Addresses);
+    bool Public, bool AllowJoin, bool Networked, IReadOnlyList<Uri> Addresses, bool Closed = false);
 
 public static class DiscordPresence
 {
@@ -41,7 +44,7 @@ public static class DiscordPresence
                 Privacy = isPublic ? Party.PrivacySetting.Public : Party.PrivacySetting.Private,
             },
         };
-        if (world is { Networked: true, AllowJoin: true } && users < capacity
+        if (world is { Networked: true, AllowJoin: true, Closed: false } && users < capacity
             && DiscordJoinLink.BestAddress(world.Addresses) is { } address)
             presence.Secrets = new Secrets { JoinSecret = address.AbsoluteUri };
         return presence;

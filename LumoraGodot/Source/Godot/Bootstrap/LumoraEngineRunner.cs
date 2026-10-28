@@ -58,6 +58,7 @@ public partial class LumoraEngineRunner : Node
 	private Lumora.Core.Engine _engine = null!;
 	private HeadOutput _headOutput = null!;
 	private Lumora.Source.Godot.UI.DashScreenOverlay _dashOverlay = null!;
+	private Lumora.Source.Godot.UI.ChatBoxOverlay _chatOverlay = null!;
 	private SystemInfoHook _systemInfoHook = null!;
 	private InputInterface _inputInterface = null!;
 	private LoadingScreen _loadingScreen = null!;
@@ -102,6 +103,8 @@ public partial class LumoraEngineRunner : Node
 	// SCENE REFERENCES
 	private Node3D _inputRoot = null!;
 	private Camera3D _mainCamera = null!;
+	private Camera3D? _xrEyeCamera;
+	private uint _eyesSkipFilmedAlone;
 	private Viewport _xrViewport = null!;
 
 	// Where the headset renders from. On a standalone headset XR goes on the ROOT viewport; on desktop
@@ -128,34 +131,23 @@ public partial class LumoraEngineRunner : Node
 	// Fallback for image formats the engine's own decoder cannot read - WebP above all, which imported
 	// avatars use constantly. Godot decodes it here and hands back straight RGBA rows in the same
 	// top-down order everything else uses.
-	// An animated WebP as one vertical strip of composited frames. Each frame's bitstream is a still
-	// the decoder accepts; the canvas is carried between frames the way the file says (blend or
-	// replace, keep or clear), and every Nth frame is kept so the strip stays under the texture cap.
-	private static byte[]? DecodeAnimatedWithGodot(byte[] encoded, out int width, out int height, out int frames, out float fps)
+	// An animated WebP as a FrameSheet of composited frames. Each frame's bitstream is a still the decoder
+	// accepts; the canvas is carried between frames the way the file says (blend or replace, keep or clear), and
+	// only the frames the sheet keeps are read back off it.
+	private static Lumora.Core.Assets.FrameSheet? DecodeAnimatedWithGodot(byte[] encoded, int cap)
 	{
-		width = 0;
-		height = 0;
-		frames = 1;
-		fps = 0f;
 		if (!Lumora.Core.Assets.WebpStill.TryExtractFrames(encoded, out int canvasWidth, out int canvasHeight, out var list) || list.Count == 0
 			|| canvasWidth <= 0 || canvasHeight <= 0)
 			return null;
 
-		const int MaxFrames = 48;
-		const int MaxStripHeight = 4096;
-		int limit = System.Math.Max(1, System.Math.Min(MaxFrames, MaxStripHeight / canvasHeight));
-		int step = System.Math.Max(1, (int)System.Math.Ceiling(list.Count / (double)limit));
-		int selected = 0;
-		for (int i = 0; i < list.Count; i += step) selected++;
+		var sheet = Lumora.Core.Assets.FrameSheet.Builder.Begin(canvasWidth, canvasHeight, list.Count, cap);
+		if (sheet == null)
+			return null;
 
 		var clear = new Color(0f, 0f, 0f, 0f);
 		using var canvas = Image.CreateEmpty(canvasWidth, canvasHeight, false, Image.Format.Rgba8);
 		canvas.Fill(clear);
-		using var strip = Image.CreateEmpty(canvasWidth, canvasHeight * selected, false, Image.Format.Rgba8);
-		strip.Fill(clear);
 
-		double totalMs = 0;
-		int placed = 0;
 		Rect2I previousRect = default;
 		bool previousDispose = false;
 		for (int i = 0; i < list.Count; i++)
@@ -181,22 +173,10 @@ public partial class LumoraEngineRunner : Node
 
 			previousRect = new Rect2I(frame.X, frame.Y, frame.Width, frame.Height);
 			previousDispose = frame.DisposeToBackground;
-			if (i % step == 0 && placed < selected)
-			{
-				strip.BlitRect(canvas, new Rect2I(0, 0, canvasWidth, canvasHeight), new Vector2I(0, placed * canvasHeight));
-				placed++;
-			}
-			totalMs += frame.DurationMs;
+			sheet.Add(i, sheet.Wants(i) ? canvas.GetData() : null, frame.DurationMs);
 		}
 
-		if (placed == 0)
-			return null;
-		width = canvasWidth;
-		height = canvasHeight * placed;
-		frames = placed;
-		double averageMs = totalMs / list.Count * step;
-		fps = averageMs > 0 ? (float)System.Math.Clamp(1000.0 / averageMs, 1.0, 50.0) : 10f;
-		return strip.GetData();
+		return sheet.Finish();
 	}
 
 	private static byte[]? DecodeImageWithGodot(byte[] encoded, out int width, out int height)
@@ -256,13 +236,17 @@ public partial class LumoraEngineRunner : Node
 		return image.GetData();
 	}
 
+	// A pushed warning carries a backtrace the platform builds by walking the managed stack with file and line
+	// lookups, on the thread that logged it. A guest arriving logged hundreds of them from the hooks in a few
+	// frames, and the backtraces were most of what those frames cost. Warnings print as plain lines; an error
+	// still pushes, backtrace and all. -xlinka
 	private void LogCallback(LumoraLogger.LogLevel level,String message){
 		switch(level){
 			case LumoraLogger.LogLevel.ERROR:
 				GD.PushError(message);
 				break;
 			case LumoraLogger.LogLevel.WARN:
-				GD.PushWarning(message);
+				GD.Print("WARNING: " + message);
 				break;
 			default:
 				GD.Print(message);
@@ -304,6 +288,7 @@ public partial class LumoraEngineRunner : Node
 			LumoraLogger.Log($"LumoraEngineRunner: local services, accounts at {services.ApiBase}, assets at {services.ContentBase}");
 		}
 		Lumora.Core.Assets.TextureVariantStore.PlatformDecoder = DecodeImageWithGodot;
+		Lumora.Core.Assets.TextureVariantStore.LosslessWebpEncoder = Lumora.Godot.Hooks.RenderTextureHook.EncodeLosslessWebp;
 		Lumora.Core.Assets.TextureVariantStore.AnimatedDecoder = DecodeAnimatedWithGodot;
 		Lumora.Core.Assets.TextureVariantStore.PlatformHdrDecoder = DecodeHdrImageWithGodot;
 		Lumora.Core.Networking.AssetFetcher.ResourcePackReader = Lumora.Godot.Helpers.ResourcePackReader.Read;
@@ -325,6 +310,8 @@ public partial class LumoraEngineRunner : Node
 			GetTree().Quit();
 			return;
 		}
+		// Before the settings load: a Deck starts from its own defaults, and Steam's word on it is the best one.
+		SteamDeckBridge.Initialize();
 #endif
 
 		if (HasCommandLineFlag(DebugConsoleFlag))
@@ -764,6 +751,7 @@ public partial class LumoraEngineRunner : Node
 	{
 		LumoraLogger.Log("[Phase 2/6] XR Detection");
 		_loadingScreen?.UpdatePhase(1);
+		_ = Task.Run(OpenXRActionMapCheck.Run);
 
 		if (_xrLaunchMode == XrLaunchMode.Desktop)
 		{
@@ -800,7 +788,13 @@ public partial class LumoraEngineRunner : Node
 		if (!xrInterface.IsInitialized())
 		{
 			LumoraLogger.Log("XR: OpenXR interface found but not initialized. Attempting Initialize()...");
-			if (!xrInterface.Initialize())
+			bool started = xrInterface.Initialize();
+			if (!started && OpenXRRuntimeReport.SteerToRunningSteamVR())
+			{
+				LumoraLogger.Log($"XR: {OpenXRRuntimeReport.Describe(OpenXRRuntimeReport.ActivePath)} has no headset but SteamVR is running (Steam Link streams through it); asking SteamVR instead");
+				started = xrInterface.Initialize();
+			}
+			if (!started)
 			{
 				if (OS.HasFeature("android"))
 				{
@@ -1087,6 +1081,7 @@ public partial class LumoraEngineRunner : Node
 		var xrCamera = GetNodeOrNull<Camera3D>("%XRCamera3D");
 		if (xrCamera != null)
 			xrCamera.CullMask &= ~hiddenAndOverlay;
+		_xrEyeCamera = xrCamera;
 
 		_headOutput = new HeadOutput();
 		AddChild(_headOutput);
@@ -1099,6 +1094,9 @@ public partial class LumoraEngineRunner : Node
 		// decides on its own frame by frame whether to show, and hides itself outright in VR.
 		_dashOverlay = new Lumora.Source.Godot.UI.DashScreenOverlay { Name = "DashScreenOverlay" };
 		AddChild(_dashOverlay);
+		// The world's chat box goes over the window the same way, in the bottom left corner.
+		_chatOverlay = new Lumora.Source.Godot.UI.ChatBoxOverlay { Name = "ChatBoxOverlay" };
+		AddChild(_chatOverlay);
 
 
 		await Task.Delay(180); // Artificial delay to show phase message
@@ -1157,7 +1155,7 @@ public partial class LumoraEngineRunner : Node
 				LumoraLogger.Log($"LumoraEngineRunner: no on-disk resource root on this platform; using '{resourceRoot}' as the res:// prefix");
 			}
 			_engine.ResourceRoot = resourceRoot;
-			LoadBundledLocales();
+			Lumora.Core.Localization.LocaleManager.Reload();
 			_engine.QuitRequested += OnQuitRequested;
 			if (VerboseInit)
 			{
@@ -1332,6 +1330,10 @@ public partial class LumoraEngineRunner : Node
 			_sranipalDriver = new SRanipalDriver();
 			_inputInterface.RegisterInputDriver(_sranipalDriver);
 		}
+		// Eyelids and face from a headset streamed through Steam Link. It opens its ports only once VR is
+		// on, so a flat session never holds them. -xlinka
+		if (SteamLinkFaceDriver.ShouldRegister())
+			_inputInterface.RegisterInputDriver(new SteamLinkFaceDriver());
 		LumoraLogger.Log($"Input drivers: keyboard={_keyboardDriver.GetType().Name}, mouse={_mouseDriver.GetType().Name}, gamepad={_gamepadDriver.ConnectedPadCount} pad(s), vr={_vrDriver.VRSystemName}, active={_vrDriver.IsVRActive}");
 
 		_localDB = new LocalDB();
@@ -1346,6 +1348,8 @@ public partial class LumoraEngineRunner : Node
 		// Clipboard TEXT, for the text fields. Separate service from the ClipboardImporter below, which
 		// handles the FILE/IMAGE side of the same clipboard and feeds the asset pipeline.
 		_inputInterface.ClipboardText = new GodotClipboardText();
+		if (GodotFileDialogs.Available)
+			_inputInterface.FileDialogs = new GodotFileDialogs();
 
 		// What the view is showing at a world point, for the color picker's eyedropper.
 		_inputInterface.ViewColorSampler = new GodotViewColorSampler(() => GetViewport()?.GetCamera3D() ?? _mainCamera);
@@ -1594,10 +1598,6 @@ public partial class LumoraEngineRunner : Node
 		// world browsers show something other than a placeholder. Idle unless we are the authority.
 		AddChild(new Lumora.Source.Godot.Services.SessionThumbnailService { Name = "SessionThumbnails" });
 
-		// Instantiate the shared loading indicator now the scene tree exists. EnsureCreated was defined but never
-		// called, so neither the world-join overlay nor the new import progress ever showed. Idempotent. -xlinka
-		Lumora.Source.Godot.UI.WorldLoadingIndicator.EnsureCreated();
-
 		// Discord rich presence (fails soft if no app ID / Discord not running). _Process refreshes it.
 		// Keep invites pending through startup and other world loads. A repeat invite to an open world
 		// focuses that world instead of creating a second connection to the same session.
@@ -1613,7 +1613,17 @@ public partial class LumoraEngineRunner : Node
 					return true;
 				}
 			}
-			_engine.JoinThroughLoader("Discord invite", uri);
+			// The invite carries one address; the live listing has the rest (TCP through the node among them).
+			var addresses = DiscordJoinLink.Addresses(uri, LookUpSession);
+			if (addresses == null)
+				return false;
+			if (_engine.WorldLoadingService is { } loader)
+			{
+				if (loader.JoinSessionAsync("Discord invite", addresses, focusWhenReady: true) == null)
+					LumoraLogger.Warn($"Discord invite: join of {uri} not started, another join is still in progress");
+			}
+			else
+				_engine.JoinThroughLoader("Discord invite", uri);
 			return true;
 		};
 		DiscordManager.Initialize();
@@ -1741,6 +1751,7 @@ public partial class LumoraEngineRunner : Node
 		_engine?.Update(engineDelta);
 		_engine?.LateUpdate(engineDelta);
 		_hostEngineMs = (System.Diagnostics.Stopwatch.GetTimestamp() - _engineTs) * _hostMspt;
+		KeepEyesOffFilmedAlone();
 
 		long _tailTs = System.Diagnostics.Stopwatch.GetTimestamp();
 		UpdateGodotMetrics(delta);
@@ -1752,12 +1763,32 @@ public partial class LumoraEngineRunner : Node
 
 		_headOutput?.UpdatePositioning(_engine);
 		_dashOverlay?.Tick(_engine);
+		_chatOverlay?.Tick(_engine);
+#if GODOT_PC
+		if (ShouldUseSteam())
+			SteamDeckBridge.Tick(_inputInterface, GetViewport());
+#endif
 		Lumora.Source.Godot.Rendering.CameraSanity.Check(GetViewport(), _xrViewport);
 		Lumora.Source.Godot.Rendering.PipelineMsaa.Follow(_xrViewport != null && GodotObject.IsInstanceValid(_xrViewport) && _xrViewport.UseXR ? _xrViewport : GetViewport());
 		// Includes the telemetry send itself, so the profiler is honest about its own cost.
 		_hostTailMs = (System.Diagnostics.Stopwatch.GetTimestamp() - _tailTs) * _hostMspt;
 
 		_frameLog?.Record(this, delta, _hostNetworkMs, _hostEngineMs, _hostTailMs);
+	}
+
+	// A camera filming some objects alone draws them on a lent bit no other view draws, the eyes included: the
+	// objects keep their own bands for everyone, and one on the hidden band (a label staged for a camera) stays
+	// out of sight. The lent bits change as such cameras come and go, so the two eye masks follow them.
+	private void KeepEyesOffFilmedAlone()
+	{
+		uint alone = Lumora.Godot.Helpers.RenderHelper.FilmedAloneBits;
+		if (alone == _eyesSkipFilmedAlone)
+			return;
+		if (_mainCamera != null && GodotObject.IsInstanceValid(_mainCamera))
+			_mainCamera.CullMask = (_mainCamera.CullMask | _eyesSkipFilmedAlone) & ~alone;
+		if (_xrEyeCamera != null && GodotObject.IsInstanceValid(_xrEyeCamera))
+			_xrEyeCamera.CullMask = (_xrEyeCamera.CullMask | _eyesSkipFilmedAlone) & ~alone;
+		_eyesSkipFilmedAlone = alone;
 	}
 
 	private double _hostNetworkMs;
@@ -1805,66 +1836,6 @@ public partial class LumoraEngineRunner : Node
 		GodotHookRegistry.RegisterAll();
 
 		LumoraLogger.Log("Hook registration complete");
-	}
-
-	// Locale tables ship as Assets/Locale/<code>.json. In the editor they are real files and the locale
-	// manager's own scan finds them through ResourceRoot; in an export there is no such file on disk, so
-	// the bytes have to come out of the resource pack through Godot's VFS - the same split the font hook
-	// deals with. Both paths are run: the manager is additive and first-wins, so loading a table twice
-	// is a no-op rather than a duplicate. -xlinka
-	private static void LoadBundledLocales()
-	{
-		Lumora.Core.Localization.LocaleManager.Reload();
-
-		const string localeDir = "res://Assets/Locale";
-		string[] names;
-		try
-		{
-			names = DirAccess.GetFilesAt(localeDir);
-		}
-		catch (Exception ex)
-		{
-			LumoraLogger.Warn($"Locales: could not list {localeDir}: {ex.Message}");
-			return;
-		}
-		if (names == null)
-			return;
-
-		var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-		foreach (var raw in names)
-		{
-			// Imported and remapped resources are listed under their sidecar name in an export.
-			var name = raw;
-			if (name.EndsWith(".import", StringComparison.OrdinalIgnoreCase))
-				name = name.Substring(0, name.Length - 7);
-			else if (name.EndsWith(".remap", StringComparison.OrdinalIgnoreCase))
-				name = name.Substring(0, name.Length - 6);
-			if (!name.EndsWith(".json", StringComparison.OrdinalIgnoreCase) || !seen.Add(name))
-				continue;
-
-			var path = localeDir + "/" + name;
-			var json = FileAccess.FileExists(path) ? FileAccess.GetFileAsString(path) : LoadImportedJson(path);
-			if (string.IsNullOrWhiteSpace(json))
-				continue;
-			Lumora.Core.Localization.LocaleManager.LoadJson(json, System.IO.Path.GetFileNameWithoutExtension(name));
-		}
-	}
-
-	// A .json under res:// gets picked up by the JSON importer, and an export then ships the imported
-	// resource with the raw file replaced by a remap - so FileAccess on the original path finds nothing.
-	// Pull the parsed data back out and re-serialize it; the locale loader wants text either way.
-	private static string? LoadImportedJson(string path)
-	{
-		try
-		{
-			var resource = ResourceLoader.Load<Json>(path);
-			return resource == null ? null : Json.Stringify(resource.Data);
-		}
-		catch (Exception ex)
-		{
-			LumoraLogger.Warn($"Locales: could not read {path}: {ex.Message}");
-			return null;
-		}
 	}
 
 	private void UpdateGodotMetrics(double delta)
@@ -2469,6 +2440,7 @@ public partial class LumoraEngineRunner : Node
 			return;
 		}
 		Lumora.Godot.Hooks.GpuTextureVariants.Shutdown();
+		Lumora.Godot.Hooks.ComputePhysics.Shutdown();
 		LumoraLogger.Log("LumoraEngineRunner: Shutting down...");
 		DisconnectOpenXREvents();
 
@@ -2532,6 +2504,13 @@ public partial class LumoraEngineRunner : Node
 		return !LaunchArgs.HasFlag("--no-steam");
 	}
 
+	private static async Task<IEnumerable<string>?> LookUpSession(string sessionId, System.Threading.CancellationToken cancellationToken)
+	{
+		using var query = new Lumora.Nexus.Cloud.BackendSessionDirectoryQuery(Lumora.Core.Networking.Session.Session.BackendSessionDirectoryUrl);
+		var listing = await query.GetSessionAsync(sessionId, Lumora.Core.Networking.Session.Session.BackendAuthTokenProvider?.Invoke(), cancellationToken);
+		return listing?.SessionUrls;
+	}
+
 	// Runs once after the engine is initialized so transports can publish
 	// session URIs the moment a host opens a listener. LNL is always
 	// registered; Steam is registered only when SteamAPI initialised
@@ -2540,6 +2519,10 @@ public partial class LumoraEngineRunner : Node
 	{
 		var lnl = new LNLNetworkManager();
 		NetworkManagerRegistry.Register(lnl);
+		// TCP everywhere, for joiners whose network lets no UDP through; QUIC only where msquic is.
+		NetworkManagerRegistry.Register(new Lumora.Nexus.Transport.LNT.LNTNetworkManager());
+		if (Lumora.Nexus.Transport.LNQ.LNQSupport.IsAvailable)
+			NetworkManagerRegistry.Register(new Lumora.Nexus.Transport.LNQ.LNQNetworkManager());
 
 #if GODOT_PC
 		if (ShouldUseSteam() && SteamManager.Initialized)

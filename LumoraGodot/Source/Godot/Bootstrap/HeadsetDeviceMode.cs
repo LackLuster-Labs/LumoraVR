@@ -33,8 +33,16 @@ public static class HeadsetDeviceMode
             catch (IOException) { }
             catch (UnauthorizedAccessException) { }
         }
-        return false;
+        // The board files above can be hidden inside Steam's runtime container, and Steam itself calls the Frame a
+        // Deck. Seen on a Frame 10-30: model GenericDevice, no Frame string in any of them, renderer "Turnip Adreno
+        // (TM) 750". A Deck is AMD, and the Frame is the only Steam machine that runs this Linux build on a
+        // Qualcomm GPU (through FEX), so the GPU answers when the board will not. -xlinka
+        return IsFrameGpu(RenderingServer.GetVideoAdapterVendor()) || IsFrameGpu(RenderingServer.GetVideoAdapterName());
     }
+
+    private static bool IsFrameGpu(string? gpu)
+        => gpu?.Contains("Adreno", StringComparison.OrdinalIgnoreCase) == true
+            || gpu?.Contains("Qualcomm", StringComparison.OrdinalIgnoreCase) == true;
 
     internal static bool IsFrameModel(string? model)
         => model?.Contains("Steam Frame", StringComparison.OrdinalIgnoreCase) == true

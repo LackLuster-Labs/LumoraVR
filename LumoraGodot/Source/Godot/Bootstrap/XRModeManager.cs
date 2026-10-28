@@ -252,6 +252,15 @@ public partial class XRModeManager : Node
         try { ok = xrInterface.Initialize(); }
         catch { ok = false; }
 
+        // SteamVR started after the game (a person who put the headset on and connected Steam Link
+        // later) while another runtime is active: ask SteamVR, as the launch does.
+        if (!ok && OpenXRRuntimeReport.SteerToRunningSteamVR())
+        {
+            LumoraLogger.Log("XRModeManager: the active OpenXR runtime has no headset but SteamVR is running; asking SteamVR instead");
+            try { ok = xrInterface.Initialize(); }
+            catch { ok = false; }
+        }
+
         if (!ok)
         {
             if (!_autoVrFailureLogged)
@@ -666,7 +675,12 @@ public partial class XRModeManager : Node
     // Keep the desktop window on its own viewport. OpenXR owns the eye swapchains and may draw only
     // part of them; attaching those directly exposed stale edge pixels and fought window resize updates.
     // The existing desktop camera follows the head. A director feed is composited over it normally.
+    // On a desktop the feed fills the window too, except while the dash is open: that is where you work the
+    // camera from, and the pointer only means anything over your own view. -xlinka
     private MonitorPresentation? _monitorPresentation;
+
+    // The window shows a camera's feed instead of the view, this frame.
+    public static bool FeedOnWindow { get; private set; }
 
     private void UpdateMonitorView(bool vrActive)
     {
@@ -677,8 +691,12 @@ public partial class XRModeManager : Node
             return;
 
         bool separate = _xrViewport is SubViewport && GodotObject.IsInstanceValid(_xrViewport) && !CamerasShareViewport();
-        var feed = vrActive && separate && !EyedropperArmed()
-            ? (Lumora.Core.Photos.DesktopFeed.Shown?.Hook as Lumora.Godot.Hooks.RenderTextureHook)?.FilmViewport
+        bool room = vrActive ? separate : Lumora.Core.Engine.Current?.InputInterface?.IsDashboardOpen != true;
+        // Only once the feed holds a picture drawn since it started filming: a camera that was off still shows its
+        // last one, and the window flashed that old shot for a few frames before the new one came. -xlinka
+        var feed = room && !EyedropperArmed()
+            && Lumora.Core.Photos.DesktopFeed.Shown?.Hook is Lumora.Godot.Hooks.RenderTextureHook { PictureCurrent: true } hook
+            ? hook.FilmViewport
             : null;
         bool showFeed = feed != null && GodotObject.IsInstanceValid(feed);
         if (showFeed && _monitorPresentation == null)
@@ -687,6 +705,7 @@ public partial class XRModeManager : Node
             AddChild(_monitorPresentation);
         }
         _monitorPresentation?.ShowFeed(showFeed ? feed!.GetTexture() : null);
+        FeedOnWindow = showFeed;
         // Drawing the feed only needs the canvas. Otherwise keep the spectator camera rendering the
         // entire window every frame, including after F8, feed removal, resize and eyedropper use.
         if (root.Disable3D != showFeed)
