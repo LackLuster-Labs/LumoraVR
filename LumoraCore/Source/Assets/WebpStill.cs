@@ -9,8 +9,8 @@ namespace Lumora.Core.Assets;
 
 // The renderer's WebP decoder reads still images only; an animated one (chat emotes above all) is
 // refused outright. The first frame of an animated file is a complete still bitstream sitting in
-// its own chunk, so it is cut out and re-wrapped as a plain file before decoding. No frames are
-// played; the picture is the first one, which is what the sender chose to show. -xlinka
+// its own chunk, so it is cut out and re-wrapped as a plain file before decoding. Where a single picture is
+// wanted that is the first frame; the platform layer composites all of them into a FrameSheet. -xlinka
 public static class WebpStill
 {
     // One frame of an animated file: its own still bytes, where it lands on the canvas, how long it
@@ -97,6 +97,25 @@ public static class WebpStill
             position += 8 + (int)size + (int)(size & 1);
         }
         return false;
+    }
+
+    // ANMF chunks of an animated file, stopping at stopAt; 0 for anything else.
+    public static int CountFrames(ReadOnlySpan<byte> data, int stopAt = int.MaxValue)
+    {
+        if (!IsAnimated(data))
+            return 0;
+        int count = 0;
+        int position = 12;
+        while (position + 8 <= data.Length && count < stopAt)
+        {
+            uint size = ReadUInt32(data, position + 4);
+            if ((long)position + 8 + size > data.Length)
+                break;
+            if (Matches(data, position, "ANMF"))
+                count++;
+            position = (int)((long)position + 8 + size + (size & 1));
+        }
+        return count;
     }
 
     public static bool TryExtractFirstFrame(ReadOnlySpan<byte> data, out byte[] still)

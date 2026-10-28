@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Threading;
 
 namespace Lumora.Core.Assets;
 
@@ -85,10 +86,24 @@ public abstract class DynamicAssetProvider<A> : AssetProvider<A>, IProceduralAss
             // Sync field changes fire on the SyncLoop thread.
             // Defer UpdateAsset() so Godot resources are only touched on the main thread.
             var world = World;
-            if (world != null)
-                world.RunSynchronously(UpdateAsset);
-            else
+            if (world == null)
+            {
                 UpdateAsset();
+                return;
+            }
+            // One update waits at a time and reads the provider as it is when it runs: changes landing together
+            // queued an update each. -xlinka
+            if (Interlocked.Exchange(ref _updateQueued, 1) == 0)
+                world.RunSynchronously(_queuedUpdate ??= RunQueuedUpdate);
         }
+    }
+
+    private int _updateQueued;
+    private Action? _queuedUpdate;
+
+    private void RunQueuedUpdate()
+    {
+        Volatile.Write(ref _updateQueued, 0);
+        UpdateAsset();
     }
 }

@@ -82,13 +82,27 @@ public static class PoiyomiShaderSource
     };
 
     // KeywordEnum properties: the value picks the define by index.
-    private static readonly (string Property, string? Requires, string[] Defines)[] Enums =
+    private static readonly (string Property, string Requires, string[] Defines)[] Enums =
     {
         ("_LightingMode", "_ShadingEnabled", new[] { "POI_LIGHTING_TEXTURERAMP", "POI_LIGHTING_MULTILAYER_MATH", "POI_LIGHTING_WRAPPED", "POI_LIGHTING_SKIN", "POI_LIGHTING_SHADEMAP", "POI_LIGHTING_FLAT", "POI_LIGHTING_REALISTIC", "POI_LIGHTING_CLOTH", "POI_LIGHTING_SDF" }),
         ("_RimStyle", "_EnableRimLighting", new[] { "POI_RIM_0_POIYOMI", "POI_RIM_0_UTS2", "POI_RIM_0_LILTOON" }),
         ("_Rim2Style", "_EnableRim2Lighting", new[] { "POI_RIM_1_POIYOMI", "POI_RIM_1_UTS2", "POI_RIM_1_LILTOON" }),
         ("_StylizedReflectionMode", "_StylizedSpecular", new[] { "POI_STYLIZED_SPECULAR_UTS", "POI_STYLIZED_SPECULAR_LILTOON" }),
-        ("_StochasticMode", null, new[] { "POI_STOCHASTIC_DELIOT_HEITZ", "POI_STOCHASTIC_HEXTILE", "POI_STOCHASTIC_NONE" }),
+    };
+
+    private static readonly string[] StochasticModes = { "POI_STOCHASTIC_DELIOT_HEITZ", "POI_STOCHASTIC_HEXTILE", "POI_STOCHASTIC_NONE" };
+
+    // The mode compiles in only when a texture samples stochastically. With a mode in, every fetch that can be
+    // stochastic carries the three-fetch path behind a uniform switch, all of them off or not. -xlinka
+    private static readonly string[] StochasticToggles =
+    {
+        "_MainTexStochastic", "_BumpMapStochastic", "_Bump2ndMapStochastic", "_BentNormalMapStochastic",
+        "_DetailMaskStochastic", "_DetailTexStochastic", "_DetailNormalMapStochastic",
+        "_RGBAMetallicMapsStochastic", "_RGBASmoothnessMapsStochastic",
+        "_RedTextureStochastic", "_GreenTextureStochastic", "_BlueTextureStochastic", "_AlphaTextureStochastic",
+        "_RgbNormalRStochastic", "_RgbNormalGStochastic", "_RgbNormalBStochastic", "_RgbNormalAStochastic",
+        "_RGBARedPBRSplitMaskStochastic", "_RGBAGreenPBRSplitMaskStochastic", "_RGBABluePBRSplitMaskStochastic", "_RGBAAlphaPBRSplitMaskStochastic",
+        "_MochieMetallicMapsStochastic", "_PBRSplitMaskStochastic", "_ClearCoatMapsStochastic", "_PBRMapsStochastic",
     };
 
     // value: a property's value (its x component), or Poiyomi's default when the material leaves it alone.
@@ -102,12 +116,21 @@ public static class PoiyomiShaderSource
                 Define(defines, define);
         foreach (var (property, requires, names) in Enums)
         {
-            if (requires != null && value(requires) == 0f)
+            if (value(requires) == 0f)
                 continue;
             int index = (int)MathF.Round(value(property));
             if (index >= 0 && index < names.Length)
                 Define(defines, names[index]);
         }
+        if (Array.Exists(StochasticToggles, toggle => value(toggle) != 0f))
+        {
+            int mode = (int)MathF.Round(value("_StochasticMode"));
+            if (mode >= 0 && mode < StochasticModes.Length)
+                Define(defines, StochasticModes[mode]);
+        }
+        if (PicksDerivedUv(value))
+            Define(defines, "POI_NEEDS_DERIVED_UVS");
+        DefineLightHooks(defines, value);
         var props = new List<string>();
         foreach (var texture in textures)
             props.Add("PROP_" + texture.TrimStart('_').ToUpperInvariant());
@@ -127,6 +150,70 @@ public static class PoiyomiShaderSource
     }
 
     private static void Define(StringBuilder sb, string name) => sb.Append("#define ").Append(name).Append('\n');
+
+    // UV selectors pick 0-3 for the mesh UVs and 4 and up for the sets the shader works out per pixel
+    // (panosphere, world, polar, distorted, local, view normal, screen), which compile in only when a selector
+    // picks one. Every float or int property with "uv" in its name is checked: a superset of the selectors.
+    // -xlinka
+    private static string[]? _uvSelectors;
+
+    private static bool PicksDerivedUv(Func<string, float> value)
+    {
+        var selectors = _uvSelectors;
+        if (selectors == null)
+        {
+            var names = new List<string>();
+            foreach (var property in PoiyomiProperties.All)
+                if ((property.Type == ShaderUniformType.Float || property.Type == ShaderUniformType.Int)
+                    && property.Name.Contains("uv", StringComparison.OrdinalIgnoreCase))
+                    names.Add(property.Name);
+            _uvSelectors = selectors = names.ToArray();
+        }
+        foreach (var name in selectors)
+            if (value(name) >= 4f)
+                return true;
+        return false;
+    }
+
+    // Emission, rim, matcap, cubemap and glitter run again per light in light(), each returning at once unless
+    // the material's values make it read the light. The hook compiles in only when they do: one compiled in and
+    // skipped still costs every pixel, since the GPU sizes the shader for its heaviest path. The conditions are
+    // the hooks' own early-outs. -xlinka
+    private static readonly string[] EmissionSlots = { "", "1", "2", "3" };
+    private static readonly string[] MatcapSlots = { "", "2", "3", "4" };
+
+    private static void DefineLightHooks(StringBuilder defines, Func<string, float> value)
+    {
+        string text = defines.ToString();
+        bool Has(string define) => text.Contains("#define " + define + "\n", StringComparison.Ordinal);
+        bool On(string property) => value(property) != 0f;
+
+        bool emission = false, rim = false, matcap = false;
+        for (int i = 0; i < 4; i++)
+        {
+            string e = EmissionSlots[i];
+            emission |= Has("POI_EMISSION_" + i) && (On("_EnableGITDEmission" + e) || On("_EmissionFluorescence" + e));
+            string m = "_Matcap" + MatcapSlots[i];
+            matcap |= Has("POI_MATCAP_" + i) && (On(m + "LightColorMix") || On(m + "LightMask") || value(m + "UVMode") == 4f || On(m + "AddToLight"));
+        }
+        for (int i = 0; i < 2; i++)
+        {
+            string r = i == 0 ? "" : "2";
+            rim |= Has($"POI_RIM_{i}_POIYOMI") && On($"_Rim{r}ShadowToggle");
+            rim |= Has($"POI_RIM_{i}_UTS2") && (On($"_Is_LightColor_Rim{r}Light") || On($"_LightDirection_MaskOn{r}") || On($"_Add_Antipodean_Rim{r}Light"));
+            rim |= Has($"POI_RIM_{i}_LILTOON") && (On($"_Rim{r}DirStrength") || On($"_Rim{r}ShadowMask"));
+        }
+        float glitterMode = value("_GlitterMode");
+        bool glitter = Has("POI_GLITTER") && (glitterMode == 2f || On("_GlitterHideInShadow") || On("_GlitterScaleWithLighting")
+            || (glitterMode == 1f && On("_GlitterLinearLightDirection")));
+        bool cubemap = Has("POI_CUBEMAP") && On("_CubeMapLightMask");
+
+        if (emission) Define(defines, "POI_EMISSION_READS_LIGHT");
+        if (rim) Define(defines, "POI_RIM_READS_LIGHT");
+        if (matcap) Define(defines, "POI_MATCAP_READS_LIGHT");
+        if (cubemap) Define(defines, "POI_CUBEMAP_READS_LIGHT");
+        if (glitter) Define(defines, "POI_GLITTER_READS_LIGHT");
+    }
 
     private static string Pass(string defines, string include, Func<string, float> value,
         string cullProp, string zWriteProp, string zTestProp, string srcProp, string dstProp,

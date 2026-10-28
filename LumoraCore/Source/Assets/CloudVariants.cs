@@ -30,6 +30,9 @@ public static class CloudVariants
 {
     private static readonly Dictionary<string, Task<IReadOnlyDictionary<string, VariantInfo>?>> _listed = new(StringComparer.Ordinal);
     private static readonly Dictionary<string, Task> _running = new(StringComparer.Ordinal);
+
+    // What a source answers for a blob it does not have, as against one it could not be asked about.
+    public const string NotThere = "not there";
     private static readonly IReadOnlyDictionary<string, VariantInfo> Nothing = new Dictionary<string, VariantInfo>();
     private static readonly ICloudVariantSource EngineService = new ServiceSource(null);
     private static ICloudVariantSource? _source;
@@ -112,6 +115,16 @@ public static class CloudVariants
         }
     }
 
+    // An older upload can still serve its existing mip chain without transferring the full source.
+    // Keep its actual identifier so a later save can generate the smaller current encoding. -xlinka
+    public static TextureVariantId ReadableVariant(string hash, TextureVariantId id)
+    {
+        if (id.IsOriginal || id.Version != TextureVariantId.CurrentVersion || IsRegistered(hash, id))
+            return id;
+        var legacy = new TextureVariantId(id.MaxSize, id.Mipmaps, id.Compression, version: 1);
+        return IsRegistered(hash, legacy) ? legacy : id;
+    }
+
     // The sidecar of a cloud texture, fetched and filed under its derived address when this machine has
     // no metadata for it and the uploader registered one. True when the metadata is here after.
     public static async Task<bool> EnsureMetadataAsync(LocalDB db, string baseUri, string hash, ICloudVariantSource? source = null)
@@ -138,14 +151,35 @@ public static class CloudVariants
             () => FetchCheckedAsync(from, info.ResultHash, $"{id.Storage.Identifier} of {Short(hash)}")).ConfigureAwait(false);
     }
 
+    // Whether the service said it does not have this blob and it is not yet time to ask again. The download
+    // cache keeps the one schedule per blob (ContentCache), whichever way the blob was asked for.
+    public static bool IsMissing(string hash) => Engine.Current?.ContentCache?.IsMissing(hash) ?? false;
+
+    // Lets the next load of a cloud address ask the service again, for its variants and its original.
+    public static void Forget(Uri? url)
+    {
+        var hash = HashOf(url) ?? (url != null && (url.Scheme == Uri.UriSchemeHttp || url.Scheme == Uri.UriSchemeHttps)
+            ? HashOf(new Uri(Persistence.CloudAssetPacker.CloudScheme + ":///" + System.IO.Path.GetFileName(url.AbsolutePath))) : null);
+        if (hash == null)
+            return;
+        lock (_listed)
+            _listed.Remove(hash);
+        Engine.Current?.ContentCache?.ForgetMissing(hash);
+    }
+
     // The original, kept in the database once it is here, so the next load reads it from disk the way a
-    // prefetched save's would.
+    // prefetched save's would. A blob the download cache already holds (a part that arrived late was fetched
+    // there by LateCloudParts) is not downloaded a second time.
     public static Task<byte[]?> FetchOriginalAsync(LocalDB? db, string hash, ICloudVariantSource? source = null)
     {
+        if (IsMissing(hash))
+            return Task.FromResult<byte[]?>(null);
         var from = source ?? Current;
         return OnceAsync("original:" + hash, async () =>
         {
-            var bytes = await FetchCheckedAsync(from, hash, Short(hash)).ConfigureAwait(false);
+            var bytes = source == null && Engine.Current?.ContentCache is { } cache
+                ? await cache.GetCached(hash).ConfigureAwait(false) : null;
+            bytes ??= await FetchCheckedAsync(from, hash, Short(hash)).ConfigureAwait(false);
             if (bytes != null && db != null)
                 await db.SaveAssetAsync(bytes, ExtensionOf(bytes), received: true).ConfigureAwait(false);
             return bytes;
@@ -165,7 +199,7 @@ public static class CloudVariants
             return false;
         foreach (int size in TextureLoadChain.LadderSizes)
         {
-            var id = new TextureVariantId(size, true, TextureCompressionKind.Block);
+            var id = ReadableVariant(hash, new TextureVariantId(size, true, TextureCompressionKind.Block));
             if (!listed.TryGetValue(id.Identifier, out var rung))
                 continue;
             return await KeepAsync(db, baseUri, hash, TextureVariantStore.MetadataSuffix, sidecar, source).ConfigureAwait(false)
@@ -261,6 +295,13 @@ public static class CloudVariants
         }
         if (fetched.Bytes == null || fetched.Bytes.Length == 0)
         {
+            if (fetched.Error == NotThere)
+            {
+                int answers = Engine.Current?.ContentCache?.NoteMissing(hash) ?? 1;
+                if (answers == 1)
+                    Logger.Warn($"CloudVariants: {what} is not on the service; next ask in {ContentCache.WaitAfter(1).TotalSeconds:0} s, then less often");
+                return null;
+            }
             Logger.Warn($"CloudVariants: {what} did not come down: {fetched.Error ?? "no answer"}");
             return null;
         }
@@ -303,6 +344,9 @@ public static class CloudVariants
             if (client == null)
                 return null;
             var listed = await client.ListVariants(hash).ConfigureAwait(false);
+            // Nothing registered under a hash the service does not know is an answer, kept like any other.
+            if (listed.Failed && listed.Status is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Gone)
+                return new List<VariantInfo>();
             return listed.Failed ? null : listed.Data ?? new List<VariantInfo>();
         }
 
@@ -312,6 +356,8 @@ public static class CloudVariants
             if (client == null)
                 return (null, "there is no content service to ask");
             var fetched = await client.FetchContent(hash).ConfigureAwait(false);
+            if (fetched.Failed && fetched.Status is System.Net.HttpStatusCode.NotFound or System.Net.HttpStatusCode.Gone)
+                return (null, NotThere);
             return fetched.Failed || fetched.Data == null ? (null, fetched.Message ?? "no answer") : (fetched.Data, null);
         }
     }

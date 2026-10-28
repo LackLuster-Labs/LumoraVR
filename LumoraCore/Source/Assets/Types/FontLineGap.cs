@@ -5,6 +5,7 @@ using System;
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Runtime.CompilerServices;
 
 namespace Lumora.Core.Assets;
 
@@ -23,11 +24,54 @@ public static class FontLineGap
         return Known.GetOrAdd(path, Read);
     }
 
+    private static readonly ConditionalWeakTable<Uri, StrongBox<float>> ByAddress = new();
+
+    // The same answer kept against the font's address itself. Text asks for it per run of glyphs on every
+    // line each time it measures, and writing the path out of the address was a new string every time. -xlinka
+    public static float PerEm(Uri? address)
+    {
+        if (address == null)
+            return 0f;
+        bool local = address.IsAbsoluteUri && address.Scheme == "local";
+        if (!address.IsFile && !local)
+            return 0f;
+        if (ByAddress.TryGetValue(address, out var known))
+            return known.Value;
+        // A font in the asset database is sealed on disk and read through it; a failed open is not cached,
+        // since the file may only be on its way.
+        float gap;
+        if (local)
+        {
+            if (Engine.Current?.LocalDB?.OpenRead(address.OriginalString) is not { } stream)
+                return 0f;
+            gap = Known.GetOrAdd(address.OriginalString, _ => Read(stream));
+            stream.Dispose();
+        }
+        else
+        {
+            gap = PerEm(address.LocalPath);
+        }
+        ByAddress.AddOrUpdate(address, new StrongBox<float>(gap));
+        return gap;
+    }
+
     private static float Read(string path)
     {
         try
         {
-            using var file = File.OpenRead(path);
+            return Read(File.OpenRead(path));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return 0f;
+        }
+    }
+
+    private static float Read(Stream source)
+    {
+        try
+        {
+            using var file = source;
             Span<byte> header = stackalloc byte[12];
             if (file.Read(header) != 12)
                 return 0f;

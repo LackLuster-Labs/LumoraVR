@@ -237,14 +237,16 @@ public static class MeshDecoder
     {
         if (extension.Equals(".fbx", StringComparison.OrdinalIgnoreCase))
             fileData = FbxImportLayers.Prepare(fileData);
-        using var stream = new MemoryStream(fileData, writable: false);
+        // Only the bytes: a model decoded here has no folder to fetch companions from, and must not reach for any.
+        using var access = new ModelFileAccess(fileData, "model" + (extension.Equals(".vrm", StringComparison.OrdinalIgnoreCase) ? ".glb" : extension), folder: null);
         using var context = new AssimpContext();
+        context.SetIOSystem(access);
 
         // meshIndex >= 0 = a single mesh for a skinned/per-mesh import: DON'T pre-transform (that flattens the
         // node hierarchy + bakes world transforms into verts, which breaks skinning). meshIndex -1 = legacy
         // whole-file concatenation, keep pre-transform so a standalone static mesh still lands in place. -xlinka
         bool perMesh = meshIndex >= 0;
-        var scene = context.ImportFileFromStream(stream, GetAssimpPostProcessSteps(perMesh, extension), extension);
+        var scene = context.ImportFile(access.MainName, GetAssimpPostProcessSteps(perMesh, extension));
         if (scene == null || !scene.HasMeshes || scene.MeshCount == 0)
             throw new InvalidOperationException($"Assimp could not decode mesh data for '{extension}'");
 

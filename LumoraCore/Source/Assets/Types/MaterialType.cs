@@ -137,6 +137,15 @@ public enum MaterialType
 
     // The glowing stand-in a viewer sees while somebody's avatar is still on its way (AvatarArrival).
     AvatarArrival,
+
+    // A material that names its own shader on every update, a res:// file or source generated over a shared
+    // body (the PBS surfaces in PBSSurfaceSource, the filters and the rest of that set). The hook adds no
+    // variant logic of its own. A chained next pass, the front faces of a blended two-sided surface, takes
+    // every property the main pass does.
+    NamedShader,
+
+    // PBS_SpecularDualSided; PBS_DualSided above is PBS_MetallicDualSided.
+    PBS_DualSidedSpecular,
 }
 
 // What the alpha channel of a toon surface means. Opaque throws it away, cutout tests it against the

@@ -6,11 +6,8 @@ using Lumora.Core.Math;
 
 namespace Lumora.Core.Assets;
 
-/// <summary>
-/// A font loaded from a URL. Self-loads its file (via the hook) on request and is shared across
-/// every requester for the same font file. Glyph rasterization and the shared atlas live in the
-/// hook. Always a URL (static) asset - fonts are not created procedurally.
-/// </summary>
+// Always loaded from its URL and shared by every requester of the same file. Rasterizing and the shared atlas
+// live in the hook.
 public class FontAsset : ImplementableAsset<IFontAssetHook>
 {
     public bool IsValid => Hook?.IsValid ?? false;
@@ -21,21 +18,37 @@ public class FontAsset : ImplementableAsset<IFontAssetHook>
     // Changes whenever the atlas gains a glyph. Text shaping caches against it. - xlinka
     public int CacheGeneration => Hook?.CacheGeneration ?? 0;
 
-    /// <summary>
-    /// Load the font from its resolved file path through the hook. The provider resolves the URL
-    /// to a local file before requesting, so this expects a file URL (fonts are local resources).
-    /// </summary>
-    protected override Task LoadSelf()
+    // A font the build ships (or one the user points at on disk) loads from its file. One in the asset
+    // database is sealed there, so its bytes are read through the database and handed over in memory.
+    protected override async Task LoadSelf()
     {
-        if (AssetURL == null || !AssetURL.IsFile)
+        if (AssetURL == null)
         {
-            FailLoad($"FontAsset requires a resolved file path, got {AssetURL?.Scheme}");
-            return Task.CompletedTask;
+            FailLoad("FontAsset has no address");
+            return;
         }
 
-        Hook?.LoadFromFile(AssetURL.LocalPath);
+        if (AssetURL.IsFile)
+        {
+            Hook?.LoadFromFile(AssetURL.LocalPath);
+            Version++;
+            return;
+        }
+
+        if (AssetURL.Scheme != "local")
+        {
+            FailLoad($"FontAsset cannot load a {AssetURL.Scheme} address");
+            return;
+        }
+
+        var bytes = await AssetManager.RequestGather(AssetURL).ConfigureAwait(false);
+        if (bytes == null || bytes.Length == 0)
+        {
+            FailLoad($"No font data gathered for {AssetURL}");
+            return;
+        }
+        Hook?.LoadFromData(bytes, AssetURL.OriginalString);
         Version++;
-        return Task.CompletedTask;
     }
 
     public virtual bool TryGetGlyph(int codepoint, float size, out GlyphMetrics metrics, out Rect uvRect)

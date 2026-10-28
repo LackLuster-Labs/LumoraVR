@@ -135,6 +135,30 @@ public sealed class TextureMetadata
     // Null for the base asset.
     public string? VariantId { get; init; }
 
+    // Pictures in the source: 1 for a still, more for an animated one, 0 when the record predates the count. An
+    // animated source has no ladder (every rung is one still picture) and always loads from its own file into a
+    // FrameSheet; Width and Height are then its frame size. -xlinka
+    public int Frames { get; init; } = 1;
+
+    public bool IsAnimated => Frames > 1;
+
+    public TextureMetadata WithFrames(int frames) => new()
+    {
+        Width = Width,
+        Height = Height,
+        ContentFormat = ContentFormat,
+        GpuFormat = GpuFormat,
+        HasAlpha = HasAlpha,
+        MipCount = MipCount,
+        SourceBytes = SourceBytes,
+        DecodedBytes = DecodedBytes,
+        SRgb = SRgb,
+        IsNormalMap = IsNormalMap,
+        IsHdr = IsHdr,
+        VariantId = VariantId,
+        Frames = frames,
+    };
+
     // Computed from the reported GPU format and the real dimensions/mip count. Null while GpuFormat
     // is unknown.
     public long? GpuBytes =>
@@ -405,6 +429,8 @@ public sealed class TextureMetadata
         bag[KeyPrefix + "decodedBytes"] = DecodedBytes.ToString(CultureInfo.InvariantCulture);
         bag[KeyPrefix + "normalMap"] = IsNormalMap ? "1" : "0";
         bag[KeyPrefix + "hdr"] = IsHdr ? "1" : "0";
+        if (Frames > 0)
+            bag[KeyPrefix + "frames"] = Frames.ToString(CultureInfo.InvariantCulture);
         if (SRgb.HasValue)
             bag[KeyPrefix + "srgb"] = SRgb.Value ? "1" : "0";
         else
@@ -452,6 +478,7 @@ public sealed class TextureMetadata
             IsNormalMap = ReadBool("normalMap"),
             IsHdr = ReadBool("hdr"),
             VariantId = bag.TryGetValue(KeyPrefix + "variant", out var variant) ? variant : null,
+            Frames = System.Math.Max(0, ReadInt("frames", 0)),
         };
     }
 

@@ -26,6 +26,8 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
 {
     private byte[] _pixelData = null!;
     private byte[][] _mipLevels = Array.Empty<byte[]>();
+    // The bytes behind an address that does not name its content, as a token: part of the GPU cache key.
+    private string? _sourceToken;
     private int _width;
     private int _height;
     private bool _hasMipmaps;
@@ -39,6 +41,13 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
     // Set when the address is a lumora one: the hash its variants are registered and filed under.
     private string? _cloudHash;
 
+    // Cancelled when this asset unloads, taking with it any ladder it queued that has not been made yet: nothing
+    // shows this picture any more, and its next load asks again.
+    private System.Threading.CancellationTokenSource? _ladderCancel;
+
+    private System.Threading.CancellationToken LadderToken =>
+        System.Threading.LazyInitializer.EnsureInitialized(ref _ladderCancel, () => new System.Threading.CancellationTokenSource()).Token;
+
     // Where a read decodes the pixels again once the CPU copy is gone: the delivered rung's address, or
     // the source when the original was delivered, with what that decode must give back.
     private sealed record ReadbackSource(string? BaseUri, string? VariantUri, TextureVariantId? Variant, bool Hdr,
@@ -49,12 +58,36 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
 
     public int Width => _width;
 
-    // For a frame strip: how many frames are stacked down the image and how fast they play. One
-    // frame and no rate for an ordinary picture.
+    // For a frame sheet (FrameSheet): how many frames it holds, how many sit side by side in a row, how long
+    // each shows, and the average rate for whatever plays it at one speed. One frame and no rate for an
+    // ordinary picture.
     public int AnimationFrames { get; private set; } = 1;
+    public int AnimationColumns { get; private set; } = 1;
     public float AnimationFps { get; private set; }
+    public int[]? AnimationDurationsMs { get; private set; }
+
+    // The size of one frame in the file, whatever this machine's cap made of the sheet: the picture's shape, the
+    // same on every peer. Width and Height for a still.
+    public int FrameWidth => AnimationFrames > 1 && _frameWidth > 0 ? _frameWidth : _width;
+    public int FrameHeight => AnimationFrames > 1 && _frameHeight > 0 ? _frameHeight : _height;
+    private int _frameWidth;
+    private int _frameHeight;
+
+    // The frame that shows this many seconds into a loop counted from zero.
+    public int AnimationFrameAt(double seconds) => AnimationFrames > 1 ? FrameSheet.FrameAt(AnimationDurationsMs, seconds) : 0;
+
+    // Where a frame sits on the sheet, in UV; the whole picture for a still.
+    public Math.Rect AnimationFrameRect(int frame) => FrameSheet.FrameRect(frame, AnimationFrames, AnimationColumns);
 
     public int Height => _height;
+
+    public TextureProfile Profile => (TargetVariant as TextureVariantDescriptor)?.Profile ?? TextureProfile.Slot;
+
+    // The filtering and wrapping a material slot gives this picture in place of its own. Null wrap leaves it
+    // to the slot.
+    public TextureFilter Filter => (TargetVariant as TextureVariantDescriptor)?.Filter ?? TextureFilter.Slot;
+    public (TextureWrapMode U, TextureWrapMode V)? SlotWrap => TargetVariant is TextureVariantDescriptor { UseWrapModes: true } d
+        ? (d.WrapU, d.WrapV) : null;
 
     // The asset still holds its decoded pixels: a procedural texture always, a loaded picture only until
     // the renderer has its copy. Readers go through TryGetPixels either way.
@@ -157,7 +190,21 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
 
     protected override async Task LoadSelf()
     {
+        Loading(1);
+        try
+        {
+            await LoadPictureAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            Loading(-1);
+        }
+    }
+
+    private async Task LoadPictureAsync()
+    {
         TraceLoad("enter");
+        TextureLoadTrace.Mark(this, "enter", AssetURL?.OriginalString);
         var descriptor = TargetVariant as TextureVariantDescriptor ?? TextureVariantDescriptor.Default;
         int cap = HardCap(descriptor);
         if (cap != descriptor.MaxSize)
@@ -184,7 +231,13 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
             sourceMeta = await TextureVariantStore.TryLoadMetadataAsync(db, baseUri, AssetManager).ConfigureAwait(false);
             if (Logger.EnableDebug)
                 TraceLoad($"metadata {(sourceMeta == null ? "none" : sourceMeta.Width + "x" + sourceMeta.Height)}");
-            if (sourceMeta == null || sourceMeta.Width <= 0)
+            if (sourceMeta != null && TextureVariantStore.MayBeAnimated(db, baseUri, sourceMeta))
+            {
+                // Recorded before frames were counted, on a kind of file that animates: read the file this once,
+                // and the decode records the count.
+                sourceMeta = null;
+            }
+            else if (sourceMeta == null || sourceMeta.Width <= 0)
             {
                 // Never analyzed. Generating on the spot would put a full decode plus a stack of mip
                 // chains in front of the user, so queue it instead and load the source this time: the
@@ -192,24 +245,50 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
                 // textures that never went through the image importer (a model's embedded maps,
                 // anything restored from a save) their variants.
                 if (!cloudOnly)
-                    TextureVariantStore.EnsureGeneratedInBackground(db, baseUri, descriptor.IsNormalMap, descriptor.GenerateMipmaps);
+                    TextureVariantStore.EnsureGeneratedInBackground(db, baseUri, descriptor.IsNormalMap, descriptor.GenerateMipmaps, LadderToken);
                 sourceMeta = null;
             }
         }
 
         Task<byte[]>? prefetch = null;
 
-        // The ladder is RGBA8. An HDR source has no rung in it and loads from its own bytes only.
-        if (db != null && baseUri != null && sourceMeta != null && !sourceMeta.IsHdr)
+        // The ladder is RGBA8 stills. An HDR or animated source has no rung in it and loads from its own bytes only.
+        if (db != null && baseUri != null && sourceMeta != null && !sourceMeta.IsHdr && !sourceMeta.IsAnimated)
         {
             var chain = TextureLoadChain.Build(sourceMeta.Width, sourceMeta.Height, descriptor);
             // A rung of a cloud texture this machine lacks is asked for by name, so ask once which ones
             // its uploader registered.
             if (_cloudHash != null && !chain.TrueForAll(id => id.IsOriginal || db.Exists(TextureVariantStore.GetVariantUri(baseUri, id.Storage)!)))
                 await CloudVariants.ListAsync(_cloudHash).ConfigureAwait(false);
+            for (int i = 0; i < chain.Count; i++)
+            {
+                var id = chain[i];
+                if (id.IsOriginal || db.Exists(TextureVariantStore.GetVariantUri(baseUri, id.Storage)!))
+                    continue;
+                if (_cloudHash != null)
+                {
+                    chain[i] = CloudVariants.ReadableVariant(_cloudHash, id);
+                    if (CloudVariants.IsRegistered(_cloudHash, chain[i])) continue;
+                }
+                var legacy = new TextureVariantId(id.MaxSize, id.Mipmaps, id.Compression, version: 1);
+                if (db.Exists(TextureVariantStore.GetVariantUri(baseUri, legacy.Storage)!))
+                    chain[i] = legacy;
+            }
             var target = chain[chain.Count - 1];
             var targetUri = ResolveReachableVariantUri(db, baseUri, target);
-            bool previews = chain.Count > 1 && !SkipPreviewRungs(db, baseUri, target, sourceMeta, descriptor);
+            bool cached = SkipPreviewRungs(db, baseUri, target, sourceMeta, descriptor);
+
+            // The exact rung already compressed on this machine goes from that copy straight to the GPU.
+            // Decoding the picture first only for the renderer to swap in its cached copy was the whole
+            // cost of a second visit. A rung needs its own file here, for a later read of its pixels.
+            if (cached && (target.IsOriginal || (targetUri != null && db.Exists(targetUri)))
+                && await InTurn(release => TryDeliverCachedAsync(db, baseUri, target, targetUri, sourceMeta, descriptor, release)).ConfigureAwait(false))
+            {
+                TraceLoad("exit: delivered from the GPU cache");
+                return;
+            }
+
+            bool previews = chain.Count > 1 && !cached;
 
             // Peer-owned, or a cloud texture whose original is not here: strictly one gather at a time,
             // small rung first. The whole point of the preview on a remote asset is to get pixels up
@@ -231,7 +310,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
                 // cheap rung existed looks like. Queue a fill so the next load has something to show
                 // while it waits. Generation is deduplicated internally, so spamming this is free.
                 if (!delivered && !remote)
-                    TextureVariantStore.EnsureGeneratedInBackground(db, baseUri, descriptor.IsNormalMap, descriptor.GenerateMipmaps);
+                    TextureVariantStore.EnsureGeneratedInBackground(db, baseUri, descriptor.IsNormalMap, descriptor.GenerateMipmaps, LadderToken);
             }
 
             if (Logger.EnableDebug)
@@ -256,6 +335,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         var bytes = await (prefetch ?? GatherSource(db, baseUri)).ConfigureAwait(false);
         if (Logger.EnableDebug)
             TraceLoad($"gathered {(bytes?.Length ?? -1)} bytes");
+        TextureLoadTrace.Mark(this, "gathered", "source " + (bytes?.Length ?? -1));
         if (bytes == null || bytes.Length == 0)
         {
             // A delivered preview is a usable texture. Failing the whole asset here would tear that
@@ -270,11 +350,14 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
             return;
         }
 
-        await InTurn(() => DeliverSourceAsync(bytes, descriptor, sourceMeta, baseUri)).ConfigureAwait(false);
+        TextureLoadTrace.Mark(this, "turn-wait");
+        await InTurn(release => DeliverSourceAsync(bytes, descriptor, sourceMeta, baseUri, release)).ConfigureAwait(false);
     }
 
-    private async Task DeliverSourceAsync(byte[] bytes, TextureVariantDescriptor descriptor, TextureMetadata? sourceMeta, string? baseUri)
+    private async Task DeliverSourceAsync(byte[] bytes, TextureVariantDescriptor descriptor, TextureMetadata? sourceMeta, string? baseUri,
+        Action release)
     {
+        TextureLoadTrace.Mark(this, "turn", "source");
         bool normalMap = descriptor.IsNormalMap || (sourceMeta?.IsNormalMap ?? false);
 
         if (TextureMetadata.DetectHdr(bytes))
@@ -284,8 +367,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         }
 
         int width, height;
-        int animationFrames = 1;
-        float animationFps = 0f;
+        FrameSheet? sheet;
         bool reduced = false;
         byte[]? rgba;
         try
@@ -298,8 +380,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
             rgba = decoded.Pixels;
             width = decoded.Width;
             height = decoded.Height;
-            animationFrames = decoded.Frames;
-            animationFps = decoded.Fps;
+            sheet = decoded.Sheet;
         }
         catch (Exception ex)
         {
@@ -312,6 +393,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
             return;
         }
 
+        TextureLoadTrace.Mark(this, "decoded", width + "x" + height);
         if (rgba == null || width <= 0 || height <= 0)
         {
             if (_deliveredRank >= 0)
@@ -329,17 +411,36 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
                 : (long)width * height * 4,
             TextureMetadata.DetectSRgb(bytes),
             normalMap);
+        if (sheet != null)
+            metadata = metadata.WithFrames(TextureVariantStore.SourceFrames(bytes));
+
+        // Never analyzed before: what this load just measured is filed for the next one. An animated source is
+        // filed at its frame size.
+        var db = Engine?.LocalDB;
+        if (sourceMeta == null && db != null && baseUri != null && TextureVariantStore.IsOwnedLocally(db, baseUri))
+        {
+            int sourceWidth = width, sourceHeight = height;
+            if (sheet != null)
+                (sourceWidth, sourceHeight) = (sheet.FrameWidth, sheet.FrameHeight);
+            if (sheet != null || !reduced || ImageHeader.TryProbe(bytes, out _, out sourceWidth, out sourceHeight))
+                _ = TextureVariantStore.RecordAnalysisAsync(db, baseUri, metadata, sourceWidth, sourceHeight);
+        }
+
+        // Nothing on screen yet: a small copy of what was just decoded goes up first, so the picture shows
+        // while the full one is filtered and compressed.
+        var preview = _deliveredRank < 0 && sheet == null ? SubmitPreview(rgba, width, height, metadata) : null;
 
         // Reduced under the cap, it is the rung of that size, decoded from the source.
         var original = new TextureVariantId(reduced ? descriptor.MaxSize : 0, descriptor.GenerateMipmaps, descriptor.Compression);
         if (!TryClaimRank(System.Math.Max(width, height)))
             return;
 
+        _sourceToken = TextureGpuCache.NamesItsContent(AssetURL?.OriginalString) ? null : TextureGpuCache.SourceToken(bytes);
         Metadata = metadata;
         LoadedVariant = original;
 
-        AnimationFrames = System.Math.Max(1, animationFrames);
-        AnimationFps = animationFps;
+        SetAnimation(sheet);
+        var prepared = NextPrepared();
         SetImageData(rgba, width, height, descriptor.GenerateMipmaps);
         int version = Version;
         _readback = new ReadbackSource(baseUri, null, null, false, width, height, 1, version, descriptor.MaxSize);
@@ -353,39 +454,48 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         if (Logger.EnableDebug)
             TraceLoad($"decoded {width}x{height}, awaiting GPU upload (hook={Hook != null})");
         if (Hook != null)
-            await Hook.WaitForUploadAsync().ConfigureAwait(false);
+        {
+            var landed = Hook.WaitForUploadAsync();
+            if (preview != null)
+            {
+                await Task.WhenAny(preview, landed).ConfigureAwait(false);
+                if (preview.IsCompleted && !landed.IsCompleted)
+                    ReportPartiallyLoaded();
+            }
+            await LetGoAsync(prepared, landed, version, release).ConfigureAwait(false);
+            await landed.ConfigureAwait(false);
+        }
+        TextureLoadTrace.Mark(this, "uploaded", "source " + width + "x" + height);
         ReleaseCpuCopy(version);
         TraceLoad("exit: uploaded");
     }
 
-    // Nothing comes out with an edge above cap (see CappedImageDecoder). A frame strip is cut to fewer
-    // frames before it grows past the cap, and a strip whose frames are wider than it is shrunk whole.
-    private static (byte[]? Pixels, int Width, int Height, int Frames, float Fps, bool Reduced) DecodePicture(byte[] bytes, int cap)
+    // Nothing comes out with an edge above cap (see CappedImageDecoder). An animated source becomes a FrameSheet
+    // under the same cap: fewer pixels a frame, never fewer frames. One that holds a single picture is a still,
+    // decoded the way every still is. Sheet is null for a still.
+    private static (byte[]? Pixels, int Width, int Height, FrameSheet? Sheet, bool Reduced) DecodePicture(byte[] bytes, int cap)
     {
-        int frames = 1;
-        float fps = 0f;
-        byte[]? pixels = null;
-        int w = 0, h = 0;
+        FrameSheet? sheet = null;
         var animated = TextureVariantStore.AnimatedDecoder;
-        if (GifDecoder.IsGif(bytes))
-        {
-            // As many frames as still fit under the cap once the strip is shrunk to the cap's width.
-            int stripHeight = cap > 0 && ImageHeader.TryProbe(bytes, out _, out int gifWidth, out _)
-                ? System.Math.Min(4096, System.Math.Max(cap, gifWidth))
-                : 4096;
-            pixels = GifDecoder.DecodeStrip(bytes, out w, out h, out frames, out fps, maxStripHeight: stripHeight);
-        }
-        else if (animated != null && WebpStill.IsAnimated(bytes))
-            pixels = animated(bytes, out w, out h, out frames, out fps);
-        if (pixels != null)
-        {
-            if (cap <= 0 || System.Math.Max(w, h) <= cap)
-                return (pixels, w, h, frames, fps, false);
-            var (fitWidth, fitHeight) = BoxReducer.Fit(w, h, cap);
-            return (BoxReducer.Reduce(pixels, w, h, fitWidth, fitHeight), fitWidth, fitHeight, frames, fps, true);
-        }
-        pixels = CappedImageDecoder.DecodeRgba(bytes, cap, out w, out h, out int sourceWidth, out int sourceHeight);
-        return (pixels, w, h, 1, 0f, w != sourceWidth || h != sourceHeight);
+        if (GifDecoder.IsGif(bytes) && GifDecoder.CountFrames(bytes, 2) > 1)
+            sheet = GifDecoder.DecodeSheet(bytes, cap);
+        else if (animated != null && WebpStill.CountFrames(bytes, 2) > 1)
+            sheet = animated(bytes, cap);
+        if (sheet != null && sheet.Frames > 1)
+            return (sheet.Pixels, sheet.Width, sheet.Height, sheet, sheet.Reduced);
+        var pixels = CappedImageDecoder.DecodeRgba(bytes, cap, out int w, out int h, out int sourceWidth, out int sourceHeight);
+        return (pixels, w, h, null, w != sourceWidth || h != sourceHeight);
+    }
+
+    private void SetAnimation(FrameSheet? sheet)
+    {
+        bool animated = sheet != null && sheet.Frames > 1;
+        _frameWidth = animated ? sheet!.FrameWidth : 0;
+        _frameHeight = animated ? sheet!.FrameHeight : 0;
+        AnimationColumns = animated ? sheet!.Columns : 1;
+        AnimationDurationsMs = animated ? sheet!.DurationsMs : null;
+        AnimationFps = animated ? sheet!.Fps : 0f;
+        AnimationFrames = animated ? sheet!.Frames : 1;
     }
 
     // The provider's cap, and never above this machine's: the setting is a memory ceiling, so nothing
@@ -441,6 +551,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         if (!TryClaimRank(System.Math.Max(width, height)))
             return;
 
+        _sourceToken = TextureGpuCache.NamesItsContent(AssetURL?.OriginalString) ? null : TextureGpuCache.SourceToken(bytes);
         Metadata = metadata;
         LoadedVariant = new TextureVariantId(reduced ? descriptor.MaxSize : 0, descriptor.GenerateMipmaps, descriptor.Compression);
 
@@ -518,9 +629,15 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         int mipCount = descriptor.GenerateMipmaps ? TextureMetadata.FullMipCount(width, height) : 1;
         string intent = TextureGpuCache.Intent(
             sourceMeta.HasAlpha, descriptor.IsNormalMap || sourceMeta.IsNormalMap, sourceMeta.IsHdr);
-        // Keyed the way Upload stores it, by the address this texture was asked for.
-        return TextureGpuCache.IsCached(db, AssetURL?.OriginalString ?? baseUri, target, width, height, mipCount, intent);
+        // Keyed the way Upload stores it, by the address this texture was asked for. An address that does not
+        // name its content cannot vouch for a cached blob before its bytes are read.
+        string uri = AssetURL?.OriginalString ?? baseUri;
+        if (!TextureGpuCache.NamesItsContent(uri) && _sourceToken == null)
+            return false;
+        return TextureGpuCache.IsCached(db, CacheIdentity(uri), target, width, height, mipCount, intent);
     }
+
+    private string CacheIdentity(string uri) => _sourceToken == null ? uri : uri + "#" + _sourceToken;
 
     // Fetch one rung and put it on screen. gather is a transfer already in flight for this rung's
     // address, or null to start one here.
@@ -554,14 +671,18 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
             return false;
         }
 
-        return await InTurn(() => DeliverVariantAsync(db, baseUri, id, sourceMeta, descriptor, blob, variantUri, local, rank, final))
+        TextureLoadTrace.Mark(this, "gathered", id.Identifier + " " + (blob?.Length ?? -1));
+        TextureLoadTrace.Mark(this, "turn-wait");
+        return await InTurn(release => DeliverVariantAsync(db, baseUri, id, sourceMeta, descriptor, blob, variantUri, local, rank, final, release))
             .ConfigureAwait(false);
     }
 
     private async Task<bool> DeliverVariantAsync(LocalDB db, string baseUri, TextureVariantId id, TextureMetadata sourceMeta,
-        TextureVariantDescriptor descriptor, byte[]? blob, string variantUri, bool local, int rank, bool final)
+        TextureVariantDescriptor descriptor, byte[]? blob, string variantUri, bool local, int rank, bool final, Action release)
     {
+        TextureLoadTrace.Mark(this, "turn", id.Identifier);
         var data = await DecodeOffThread(() => TextureVariantStore.Decode(blob)).ConfigureAwait(false);
+        TextureLoadTrace.Mark(this, "decoded", data == null ? "none" : data.Width + "x" + data.Height);
         if (data == null)
         {
             if (blob != null && final)
@@ -596,13 +717,19 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         };
         LoadedVariant = id;
 
+        var prepared = NextPrepared();
         SetMipData(data.Levels, data.Width, data.Height);
         int version = Version;
         _readback = new ReadbackSource(baseUri, variantUri, id, false, data.Width, data.Height, data.Levels.Length, version, 0);
         Hook?.SetWrapMode(descriptor.WrapU, descriptor.WrapV);
 
         if (Hook != null)
-            await Hook.WaitForUploadAsync().ConfigureAwait(false);
+        {
+            var landed = Hook.WaitForUploadAsync();
+            await LetGoAsync(prepared, landed, version, release).ConfigureAwait(false);
+            await landed.ConfigureAwait(false);
+        }
+        TextureLoadTrace.Mark(this, "uploaded", (final ? "final " : "rung ") + data.Width + "x" + data.Height);
         ReleaseCpuCopy(version);
 
         // Only after the GPU texture exists, for the same reason the final rung waits: a requester
@@ -613,43 +740,215 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         return true;
     }
 
+    // A cold load's first picture: the source cut to the preview rung's size, uncompressed and with its mips,
+    // which is a few kilobytes and well under a millisecond on the main thread. Null when the source is small
+    // enough to go up whole as quickly. The renderer applies uploads in the order they were asked for, so
+    // this can never land over the full picture.
+    private Task? SubmitPreview(byte[] rgba, int width, int height, TextureMetadata metadata)
+    {
+        var hook = Hook;
+        if (hook == null || System.Math.Max(width, height) <= TextureVariantId.PreviewSize * 2)
+            return null;
+        var (previewWidth, previewHeight) = BoxReducer.Fit(width, height, TextureVariantId.PreviewSize);
+        var small = BoxReducer.Reduce(rgba, width, height, previewWidth, previewHeight);
+        if (!TryClaimRank(System.Math.Max(previewWidth, previewHeight)))
+            return null;
+        hook.UploadTexture(new TextureUploadRequest
+        {
+            MipLevels = new[] { small },
+            Width = previewWidth,
+            Height = previewHeight,
+            GenerateMipmaps = true,
+            AllowBlockCompression = false,
+            HasAlpha = metadata.HasAlpha,
+            IsNormalMap = metadata.IsNormalMap,
+            SRgb = metadata.SRgb,
+        });
+        TextureLoadTrace.Mark(this, "preview", previewWidth + "x" + previewHeight);
+        return hook.WaitForUploadAsync();
+    }
+
+    // The target rung from the renderer's compressed copy, no pixels decoded. False, with nothing changed,
+    // when that copy turned out to be missing or unreadable; the caller then delivers pixels as usual.
+    private async Task<bool> TryDeliverCachedAsync(LocalDB db, string baseUri, TextureVariantId target, string? targetUri,
+        TextureMetadata sourceMeta, TextureVariantDescriptor descriptor, Action release)
+    {
+        var hook = Hook;
+        int rank = TextureLoadChain.Rank(target, System.Math.Max(sourceMeta.Width, sourceMeta.Height));
+        if (hook == null || rank <= _deliveredRank)
+            return false;
+
+        var (width, height) = target.ResolveSize(sourceMeta.Width, sourceMeta.Height);
+        int mipCount = descriptor.GenerateMipmaps ? TextureMetadata.FullMipCount(width, height) : 1;
+        bool normalMap = descriptor.IsNormalMap || sourceMeta.IsNormalMap;
+        var metadata = new TextureMetadata
+        {
+            Width = width,
+            Height = height,
+            ContentFormat = sourceMeta.ContentFormat,
+            HasAlpha = sourceMeta.HasAlpha,
+            MipCount = mipCount,
+            SourceBytes = sourceMeta.SourceBytes,
+            DecodedBytes = TextureMetadata.ComputeGpuBytes(TextureFormatKind.RGBA8, width, height, mipCount),
+            SRgb = sourceMeta.SRgb,
+            IsNormalMap = normalMap,
+            VariantId = target.IsOriginal ? null : target.Identifier,
+        };
+        var request = new TextureUploadRequest
+        {
+            Width = width,
+            Height = height,
+            GenerateMipmaps = descriptor.GenerateMipmaps,
+            AllowBlockCompression = true,
+            HasAlpha = metadata.HasAlpha,
+            IsNormalMap = normalMap,
+            SRgb = metadata.SRgb,
+            CacheKey = TextureGpuCache.BuildKey(CacheIdentity(AssetURL?.OriginalString ?? baseUri), target, width, height, mipCount,
+                TextureGpuCache.Intent(metadata.HasAlpha, normalMap, false)),
+            CacheDirectory = db.GetGpuCachePath(),
+            Report = ReportUploaded,
+        };
+
+        // Set before the upload is queued: the renderer reports the format it built into these.
+        var hadMetadata = Metadata;
+        var hadVariant = LoadedVariant;
+        Metadata = metadata;
+        LoadedVariant = target;
+        TextureLoadTrace.Mark(this, "turn", "cached");
+        if (!await hook.UploadCachedAsync(request).ConfigureAwait(false))
+        {
+            Metadata = hadMetadata;
+            LoadedVariant = hadVariant;
+            return false;
+        }
+
+        TryClaimRank(rank);
+        int version;
+        lock (_deliveryLock)
+        {
+            _width = width;
+            _height = height;
+            _hasMipmaps = mipCount > 1;
+            PixelFormat = TextureFormatKind.RGBA8;
+            version = ++Version;
+        }
+        _readback = target.IsOriginal
+            ? new ReadbackSource(baseUri, null, null, false, width, height, 1, version, descriptor.MaxSize)
+            : new ReadbackSource(baseUri, targetUri, target, false, width, height, mipCount, version, 0);
+        hook.SetWrapMode(descriptor.WrapU, descriptor.WrapV);
+        var landed = hook.WaitForUploadAsync();
+        release();
+        await landed.ConfigureAwait(false);
+        TextureLoadTrace.Mark(this, "uploaded", "cached " + width + "x" + height);
+        return true;
+    }
+
     // DECODED PICTURES IN FLIGHT.
     //
     // A world asks for all of its textures at once, and a decoded picture is held until its upload lands.
     // Without a limit the decodes ran far ahead of the uploads, so for the whole of a load the process held
     // nearly every texture of the world decoded at the same time, gigabytes for a big world, on top of the
-    // renderer's copies being prepared. A delivery takes a turn from its decode until its upload lands and
-    // its copy is let go. The gather before it takes none, so a slow transfer never holds a turn. -xlinka
+    // renderer's copies being prepared. A delivery takes a turn from its decode until the renderer holds its
+    // own copy (compressed, if it compresses) and the decoded one is let go. The gather before it takes none,
+    // so a slow transfer never holds a turn. -xlinka
     private static System.Threading.SemaphoreSlim? _deliveryTurns;
 
     private static System.Threading.SemaphoreSlim DeliveryTurns => System.Threading.LazyInitializer.EnsureInitialized(ref _deliveryTurns,
         () => new System.Threading.SemaphoreSlim(Lumora.Core.Engine.UseConstrainedResources ? 2 : System.Math.Clamp(Environment.ProcessorCount / 2, 2, 6)));
 
-    private static async Task InTurn(Func<Task> delivery)
+    // The wait for the main thread to put a picture on the GPU holds no turn: a delivery hands its turn back
+    // through release before that. Held through it, six pictures stuck behind an import's mesh builds kept
+    // every other picture from even decoding, for minutes. -xlinka
+    private static async Task InTurn(Func<Action, Task> delivery)
     {
         var turns = DeliveryTurns;
         await turns.WaitAsync().ConfigureAwait(false);
+        int released = 0;
+        void Release()
+        {
+            if (System.Threading.Interlocked.Exchange(ref released, 1) == 0)
+                turns.Release();
+        }
         try
         {
-            await delivery().ConfigureAwait(false);
+            await delivery(Release).ConfigureAwait(false);
         }
         finally
         {
-            turns.Release();
+            Release();
         }
     }
 
-    private static async Task<T> InTurn<T>(Func<Task<T>> delivery)
+    private static async Task<T> InTurn<T>(Func<Action, Task<T>> delivery)
     {
         var turns = DeliveryTurns;
         await turns.WaitAsync().ConfigureAwait(false);
+        int released = 0;
+        void Release()
+        {
+            if (System.Threading.Interlocked.Exchange(ref released, 1) == 0)
+                turns.Release();
+        }
         try
         {
-            return await delivery().ConfigureAwait(false);
+            return await delivery(Release).ConfigureAwait(false);
         }
         finally
         {
-            turns.Release();
+            Release();
+        }
+    }
+
+    // The renderer's signal for the next upload that it holds its own copy and the CPU side is done.
+    private Action? _prepared;
+
+    private Task NextPrepared()
+    {
+        var prepared = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        _prepared = () => prepared.TrySetResult(true);
+        return prepared.Task;
+    }
+
+    // A renderer that never signals is covered by the landing, which implies it.
+    private async Task LetGoAsync(Task prepared, Task landed, int version, Action release)
+    {
+        await Task.WhenAny(prepared, landed).ConfigureAwait(false);
+        ReleaseCpuCopy(version);
+        release();
+    }
+
+    // Completes whenever no picture is loading. Background work that only helps a later load (the variant
+    // ladder) waits for it, so it never takes a core from a picture someone is waiting to see.
+    internal static Task LoadsIdle
+    {
+        get
+        {
+            lock (_idleLock)
+                return _idle.Task;
+        }
+    }
+
+    private static readonly object _idleLock = new();
+    private static int _loading;
+    private static TaskCompletionSource<bool> _idle = Idle();
+
+    private static TaskCompletionSource<bool> Idle()
+    {
+        var idle = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        idle.SetResult(true);
+        return idle;
+    }
+
+    private static void Loading(int change)
+    {
+        lock (_idleLock)
+        {
+            int was = _loading;
+            _loading += change;
+            if (was == 0 && _loading > 0)
+                _idle = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            else if (was > 0 && _loading == 0)
+                _idle.TrySetResult(true);
         }
     }
 
@@ -687,7 +986,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         var bytes = await gather.ConfigureAwait(false);
         if (bytes == null || bytes.Length == 0)
             return null;
-        return await InTurn(() => DecodeOffThread(() => DecodeForRead(bytes, source))).ConfigureAwait(false);
+        return await InTurn(_ => DecodeOffThread(() => DecodeForRead(bytes, source))).ConfigureAwait(false);
     }
 
     private static TexturePixels? DecodeForRead(byte[] bytes, ReadbackSource source)
@@ -821,7 +1120,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
             if (db != null)
             {
                 cacheKey = TextureGpuCache.BuildKey(
-                    AssetURL.OriginalString, LoadedVariant,
+                    CacheIdentity(AssetURL.OriginalString), LoadedVariant,
                     metadata.Width, metadata.Height, metadata.MipCount,
                     TextureGpuCache.Intent(metadata.HasAlpha, metadata.IsNormalMap, metadata.IsHdr));
                 cacheDirectory = db.GetGpuCachePath();
@@ -842,6 +1141,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
             CacheKey = cacheKey,
             CacheDirectory = cacheDirectory,
             Report = ReportUploaded,
+            Prepared = System.Threading.Interlocked.Exchange(ref _prepared, null),
         });
     }
 
@@ -866,6 +1166,7 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
 
     public override void Unload()
     {
+        SetAnimation(null);
         _pixelData = null!;
         _mipLevels = Array.Empty<byte[]>();
         _width = 0;
@@ -873,10 +1174,12 @@ public class TextureAsset : ImplementableAsset<ITextureAssetHook>
         _hasMipmaps = false;
         PixelFormat = TextureFormatKind.RGBA8;
         Metadata = null;
+        _sourceToken = null;
         LoadedVariant = null;
         _readback = null;
         _heldSnapshot = null;
         TexturePixelCache.Forget(this);
+        System.Threading.Interlocked.Exchange(ref _ladderCancel, null)?.Cancel();
         lock (_deliveryLock)
             _deliveredRank = -1;
         base.Unload();

@@ -54,6 +54,11 @@ public class ModelImportSettings
     // measured, so an avatar's height comes out in metres too. Ignored when Rescale is on.
     public bool UseFileUnits { get; set; }
 
+    // The caller already scaled the target by a unit it assumed (Scale). When the file states its own unit, that
+    // unit wins and the model lands at its real size whatever was assumed; a file that states none keeps Scale.
+    // Ignored when Rescale is on.
+    public bool PreferFileUnits { get; set; }
+
     // --- Options driven by the import dialog (ModelImportRequest). Only those the
     // importer can actually honor in its own scope are wired through; geometry-level
     // toggles (normals/tangents/flat-shaded) would have to change the shared decode
@@ -82,6 +87,40 @@ public class ModelImportSettings
     // The creator's own humanoid mapping, rig node -> bone name, when the source ships one.
     // Null lets a loose model read its Unity .meta sidecar; an explicit map takes precedence.
     public IReadOnlyDictionary<BodyNode, string>? HumanBones { get; set; }
+
+    // --- The dialog's advanced answers. Every default is the import as it was before they existed.
+
+    // A fitted primitive or convex hull per static part. Needs GenerateColliders. -xlinka
+    public bool FitColliders { get; set; }
+
+    public bool ImportLights { get; set; }
+
+    public bool ImportCameras { get; set; }
+
+    // Only the assets, each on a slot of its own: meshes, materials, textures and clips, with nothing
+    // drawing them, no bones, no colliders and no grab. For swapping one into something already built.
+    public bool AssetsOnly { get; set; }
+
+    // A material the file gives no texture for takes the image files beside the model named after it.
+    public bool MatchTexturesByName { get; set; }
+
+    // Open the avatar studio over the model once it is in, its markers already on the rig.
+    public bool OpenAvatarStudio { get; set; }
+
+    public ModelAssetPlacement AssetPlacement { get; set; } = ModelAssetPlacement.WithParts;
+
+    // Identical meshes, materials and textures become one asset that every user of them shares.
+    public bool ShareAssets { get; set; }
+
+    // Material kind per material, by the file's name for it. Anything not named takes Material.
+    public IReadOnlyDictionary<string, ModelMaterialType>? MaterialTypes { get; set; }
+
+    // The look comes from the mesh's own colours: a material whose meshes carry them becomes the vertex colour form
+    // of its kind, and the colours come in as linear light. Off keeps them exactly as the file wrote them, unused.
+    public bool VertexColors { get; set; }
+
+    public ModelMaterialType MaterialTypeFor(string? sourceName)
+        => sourceName != null && MaterialTypes != null && MaterialTypes.TryGetValue(sourceName, out var type) ? type : Material;
 }
 
 // One surface asking for its material: the model file's own name for that material, the model's root
@@ -111,7 +150,7 @@ public class ModelImportResult
     public Slot? NodeRoot { get; set; }
 }
 
-public static class ModelImporter
+public static partial class ModelImporter
 {
     public static readonly string[] SupportedExtensions = new[]
     {
@@ -253,9 +292,15 @@ public static class ModelImporter
                 // Read inside the gate, so queued imports do not retain whole-file buffers.
                 var bytes = File.ReadAllBytes(filePath);
                 if (ext == ".fbx") bytes = FbxImportLayers.Prepare(bytes);
+                // The model from these bytes, its companions (an OBJ's .mtl, a .gltf's buffers) from its own folder
+                // and nowhere else. See ModelFileAccess.
+                using var access = new ModelFileAccess(bytes, Path.GetFileNameWithoutExtension(filePath) + hint, modelDir);
                 using var actx = new Assimp.AssimpContext();
-                using var ms = new MemoryStream(bytes, writable: false);
-                return actx.ImportFileFromStream(ms, MeshDecoder.GetAssimpPostProcessSteps(perMesh: true, hint), hint);
+                actx.SetIOSystem(access);
+                var parsed = actx.ImportFile(access.MainName, MeshDecoder.GetAssimpPostProcessSteps(perMesh: true, hint));
+                if (settings.VertexColors)
+                    PrepareVertexColors(parsed, hint);
+                return parsed;
             }).ConfigureAwait(false);
 
             if (scene == null || !scene.HasMeshes || scene.MeshCount == 0)
@@ -278,8 +323,15 @@ public static class ModelImporter
             var parts = MeshGrouping.Capture(scene);
             var boneNames = CollectBoneNames(scene);
             var nodeTree = CaptureNode(scene.RootNode);
-            result.FileUnitScale = FileUnitScale(scene);
+            var extras = settings.AssetsOnly ? null : SceneExtras.Capture(scene, settings, hint);
+            float? declaredUnit = FileUnitScale(scene);
+            result.FileUnitScale = declaredUnit ?? 1f;
             float baseScale = settings.UseFileUnits && !settings.Rescale ? result.FileUnitScale * settings.Scale : 1f;
+            // The dialog has already scaled the target by the unit it was told (Scale). A file that says its own
+            // unit lands at that size instead: the two would otherwise multiply, and "Meters" on a centimetre FBX,
+            // which is what the common modelling tools write, made the model a hundred times too big. -xlinka
+            if (settings.PreferFileUnits && !settings.Rescale && declaredUnit is float unit && settings.Scale > 0f)
+                baseScale = unit / settings.Scale;
 
             // ONE RENDERER PER NODE AND KIND, NOT PER SCENE MESH. A source object with several materials
             // reaches us as one mesh per material on the same node, and a renderer each turned one object
@@ -304,6 +356,7 @@ public static class ModelImporter
             // eleven 4K maps is exactly the import that feels like a hang without it. -xlinka
             int textureCount = CountTextureSlots(scene);
             int texturesDone = 0;
+            var namedTextures = settings.MatchTexturesByName ? new TexturesByName(modelDir) : null;
             progress?.Report(new ImportProgress(ImportStage.Textures, 0.14f, 0, textureCount));
             foreach (var amesh in scene.Meshes)
             {
@@ -311,12 +364,17 @@ public static class ModelImporter
                 if (amesh.MaterialIndex >= 0 && amesh.MaterialIndex < scene.MaterialCount)
                     materialNames[amesh.MaterialIndex] = scene.Materials[amesh.MaterialIndex]?.Name ?? "";
                 var resolved = await ResolveMaterialAsync(scene, amesh.MaterialIndex, modelDir, localDB).ConfigureAwait(false);
+                if (namedTextures != null && resolved != null)
+                    await namedTextures.FillAsync(resolved, materialNames.GetValueOrDefault(amesh.MaterialIndex), localDB).ConfigureAwait(false);
                 resolvedMaterials[amesh.MaterialIndex] = resolved;
                 texturesDone += CountResolvedTextures(resolved);
+                textureCount = System.Math.Max(textureCount, texturesDone);
                 progress?.Report(new ImportProgress(ImportStage.Textures,
                     0.14f + 0.16f * (textureCount > 0 ? System.Math.Min(1f, (float)texturesDone / textureCount) : 1f),
                     texturesDone, textureCount));
             }
+            if (settings.VertexColors)
+                MarkVertexColored(scene, resolvedMaterials, filePath);
 
             // OFF-THREAD, animation clips: extraction is pure CPU over the already-parsed scene and
             // the serialize + local-DB write is file IO, so both belong out here rather than on the world
@@ -478,10 +536,14 @@ public static class ModelImporter
             Slot modelSlot = null!;
             var nameToSlot = new Dictionary<string, Slot>();
             var meshNodeSlots = new List<(int[] units, Slot slot)>();
+            AssetHome home = null!;
             await OnWorldAsync(world, () =>
             {
                 modelSlot = targetSlot.AddSlot(Path.GetFileNameWithoutExtension(filePath));
                 result.RootSlot = modelSlot;
+                home = new AssetHome(settings, modelSlot);
+                if (settings.AssetsOnly)
+                    return;
                 if (settings.Grabbable)
                 {
                     var grab = targetSlot.GetComponent<Grabbable>() ?? targetSlot.AttachComponent<Grabbable>();
@@ -494,6 +556,19 @@ public static class ModelImporter
                 result.NodeRoot = BuildNodeSlots(nodeTree, modelSlot, nameToSlot, meshNodeSlots);
             });
 
+            // The sourceUri is only reachable when nothing could be baked: the source model, decoded per mesh
+            // by index, which is the old shape and its old cost.
+            var sourceUri = !string.IsNullOrEmpty(result.LocalUri) ? new Uri(result.LocalUri) : new Uri(filePath);
+
+            if (settings.AssetsOnly)
+            {
+                var bake = new BakedMeshes(units, parts, unitUris, unitSubmeshParts, partUris, meshUsable, sourceUri);
+                await BuildAssetsOnlyAsync(world, home, nodeTree, bake, resolvedMaterials, materialNames, animations, settings, result, progress).ConfigureAwait(false);
+                result.Success = true;
+                Logger.Debug($"ModelImporter: '{Path.GetFileNameWithoutExtension(filePath)}' as assets only - {home.Describe()}");
+                return result;
+            }
+
             // Chunk 2: skeleton (union of mesh bone names) + avatar rig/IK if it classifies as a biped.
             progress?.Report(new ImportProgress(ImportStage.Skeleton, 0.68f));
             SkeletonBuilder? skelBuilder = null;
@@ -505,13 +580,13 @@ public static class ModelImporter
             // rather than a model parse. MeshIndex stays live on MeshProvider for content saved before the bake -
             // this path just has no reason to set it any more. -xlinka
             progress?.Report(new ImportProgress(ImportStage.Meshes, 0.70f, 0, meshNodeSlots.Count));
-            // Only reachable when nothing could be baked (no local DB, or the write failed): the source model,
-            // decoded per mesh by index, which is the old shape and its old cost.
-            var sourceUri = !string.IsNullOrEmpty(result.LocalUri) ? new Uri(result.LocalUri) : new Uri(filePath);
             int totalMeshNodes = meshNodeSlots.Count;
             int meshNodeDone = 0;
             int renderers = 0;
             var measured = new List<(List<float3> Points, Slot Slot)>();
+            var unitFits = new ShapeFit?[units.Count];
+            var partFits = new ShapeFit?[meshCount];
+            bool fitShapes = settings.GenerateColliders && settings.FitColliders;
             foreach (var (nodeUnits, slot) in meshNodeSlots)
             {
                 var unitIndices = nodeUnits;
@@ -545,9 +620,11 @@ public static class ModelImporter
                         if (mi >= 0)
                         {
                             bool baked = partUris.TryGetValue(mi, out var partUri);
+                            if (fitShapes && partFits[mi] == null && partPoints[mi] is { Count: > 0 } fitPoints)
+                                partFits[mi] = ShapeFit.Of(fitPoints);
                             AttachRenderer(meshSlot, unit.Kind, baked ? partUri! : sourceUri, baked ? -1 : mi,
                                 new[] { parts[mi].MaterialIndex }, resolvedMaterials, settings, skelBuilder, result,
-                                new SurfaceContext(modelSlot, capturedSlot, nodeSurface, materialNames));
+                                new SurfaceContext(modelSlot, capturedSlot, nodeSurface, materialNames), home, partFits[mi]);
                             nodeSurface++;
                             if (partPoints[mi] is { } points)
                                 measured.Add((points, meshSlot));
@@ -558,9 +635,11 @@ public static class ModelImporter
                             var materialIndices = new int[submeshParts.Length];
                             for (int k = 0; k < submeshParts.Length; k++)
                                 materialIndices[k] = parts[submeshParts[k]].MaterialIndex;
+                            if (fitShapes && unitFits[u] == null && unitPoints[u] is { Count: > 0 } fitPoints)
+                                unitFits[u] = ShapeFit.Of(fitPoints);
                             AttachRenderer(meshSlot, unit.Kind, unitUris[u]!, -1,
                                 materialIndices, resolvedMaterials, settings, skelBuilder, result,
-                                new SurfaceContext(modelSlot, capturedSlot, nodeSurface, materialNames));
+                                new SurfaceContext(modelSlot, capturedSlot, nodeSurface, materialNames), home, unitFits[u]);
                             nodeSurface += materialIndices.Length;
                             if (unitPoints[u] is { } points)
                                 measured.Add((points, meshSlot));
@@ -614,8 +693,16 @@ public static class ModelImporter
                 await OnWorldAsync(world, () => ApplyModelTransform(measured, modelSlot, settings, baseScale));
             }
 
+            // After the rescale, because a light's range and a lens's clip planes are distances in the world,
+            // not in the file, and the model's final size is only known now.
+            if (extras is { IsEmpty: false })
+                await OnWorldAsync(world, () => extras.Build(modelSlot, nameToSlot, result.FileUnitScale));
+
             if (settings.AfterBuild != null)
                 await OnWorldAsync(world, () => settings.AfterBuild(result));
+
+            if (settings.OpenAvatarStudio)
+                await OnWorldAsync(world, () => OpenStudioFor(modelSlot));
 
             progress?.Report(new ImportProgress(ImportStage.Complete, 1f));
             result.Success = true;
@@ -625,7 +712,7 @@ public static class ModelImporter
                 if (unitUri != null)
                     bakedMeshes++;
             }
-            Logger.Debug($"ModelImporter(Phos/Assimp): '{Path.GetFileNameWithoutExtension(filePath)}' - {meshCount} meshes as {renderers} renderer(s) ({bakedMeshes} baked), {result.SkinnedMeshes.Count} skinned");
+            Logger.Debug($"ModelImporter(Phos/Assimp): '{Path.GetFileNameWithoutExtension(filePath)}' - {meshCount} meshes as {renderers} renderer(s) ({bakedMeshes} baked), {result.SkinnedMeshes.Count} skinned; {home.Describe()}");
         }
         catch (Exception ex)
         {
@@ -1018,9 +1105,9 @@ public static class ModelImporter
     // a mesh whose node carries a scale of its own measured at the wrong size: a fur shell on a node scaled
     // 21.86 next to an armature at 100 read several times taller than it draws, and the dog wearing it
     // imported a few centimetres long. -xlinka
-    // Metres per unit, as the file states it. An FBX carries its unit factor in centimetres and Assimp hands
-    // it through as scene metadata with the geometry left in file units.
-    private static float FileUnitScale(Assimp.Scene scene)
+    // Metres per unit, as the file states it, or null when it states none. An FBX carries its unit factor in
+    // centimetres and Assimp hands it through as scene metadata with the geometry left in file units.
+    private static float? FileUnitScale(Assimp.Scene scene)
     {
         try
         {
@@ -1034,7 +1121,7 @@ public static class ModelImporter
         catch (Exception ex) when (ex is InvalidCastException or FormatException)
         {
         }
-        return 1f;
+        return null;
     }
 
     private static void ApplyModelTransform(IReadOnlyList<(List<float3> Points, Slot Slot)> measured, Slot modelSlot, ModelImportSettings settings, float baseScale)
@@ -1190,6 +1277,8 @@ public static class ModelImporter
         public Uri? EmissiveUri;
         public Uri? MetallicUri;
         public Uri? OcclusionUri;
+        // A mesh with colours of its own draws with this material, and the import shows them.
+        public bool VertexColored;
     }
 
     // How many texture slots this scene's USED materials actually name. Counts the same slots
@@ -1268,33 +1357,33 @@ public static class ModelImporter
 
     // Attach a material + its texture providers from a pre-resolved material (WORLD thread - call from inside
     // OnWorldAsync). No IO, no awaits - just data-model writes. The dialog options drive material type (Unlit, PBS,
-    // or a kind converted from the PBS build), double-sidedness, albedo/emissive gating, and texture mipmaps. Returns null when there's nothing to
-    // build. -xlinka
-    private static MaterialProvider? BuildMaterialSync(Slot parentSlot, ResolvedMaterial? rm, ModelImportSettings settings)
+    // or a kind converted from the PBS build), double-sidedness, albedo/emissive gating, texture mipmaps, and the
+    // vertex colour form of the kind when its meshes carry colours (WithVertexColors). It is built ON matSlot, which the caller picked: the part's own "Material" child, or a slot in the import's
+    // Assets. type is this material's kind, the dialog's choice or its per-material answer. -xlinka
+    private static MaterialProvider BuildMaterialSync(Slot matSlot, ResolvedMaterial rm, ModelImportSettings settings,
+        ModelMaterialType type, AssetHome home)
     {
-        if (rm == null)
-            return null;
-        var matSlot = parentSlot.AddSlot("Material");
-
         // Diagnostic: which maps did this material actually resolve? A stylized model with ONLY albedo should NOT
         // get metallic/occlusion maps - if it does (Assimp handing back a spurious slot), they drive bogus
         // roughness/AO and show as soft specular/occlusion blobs on the surface. -xlinka
-        Logger.Debug($"BuildMaterialSync[maps] on '{parentSlot.SlotName.Value}': type={settings.Material} albedo={rm.AlbedoUri} normal={rm.NormalUri != null} emissive={rm.EmissiveUri != null} metallic={rm.MetallicUri != null} occlusion={rm.OcclusionUri != null}");
+        Logger.Debug($"BuildMaterialSync[maps] on '{matSlot.Parent?.SlotName.Value}': type={type} albedo={rm.AlbedoUri} normal={rm.NormalUri != null} emissive={rm.EmissiveUri != null} metallic={rm.MetallicUri != null} occlusion={rm.OcclusionUri != null}");
 
         var cull = settings.MakeDualSided ? Culling.None : Culling.Back;
         bool noMips = settings.ForceNoMipMaps;
 
         // Unlit is opt-in. It carries only albedo (tint + base texture); normal/emissive/metallic/
         // occlusion maps have no slot on it, so we deliberately drop them for this material type. -xlinka
-        if (settings.Material == ModelMaterialType.Unlit)
+        if (type == ModelMaterialType.Unlit)
         {
             var unlit = matSlot.AttachComponent<UnlitMaterial>();
             unlit.Culling.Value = cull;
+            if (rm.VertexColored)
+                unlit.UseVertexColor.Value = true;
             if (settings.ImportAlbedoColor && rm.HasAlbedoColor)
                 unlit.TintColor.Value = rm.AlbedoColor;
             if (rm.AlbedoUri != null)
             {
-                var tex = AttachTexture(matSlot, rm.AlbedoUri, isNormal: false, noMips);
+                var tex = home.Texture(matSlot, rm.AlbedoUri, isNormal: false, noMips);
                 unlit.Texture.Target = tex;
                 var ac = unlit.TintColor.Value;
                 if (ac.r <= 0.001f && ac.g <= 0.001f && ac.b <= 0.001f)
@@ -1311,7 +1400,7 @@ public static class ModelImporter
 
         if (rm.AlbedoUri != null)
         {
-            pbs.AlbedoTexture.Target = AttachTexture(matSlot, rm.AlbedoUri, isNormal: false, noMips);
+            pbs.AlbedoTexture.Target = home.Texture(matSlot, rm.AlbedoUri, isNormal: false, noMips);
             // A base-color FACTOR of ~0 alongside a base-color TEXTURE is legal in glTF, but the shader multiplies
             // texture * factor -> a fully black mesh. Force the tint to white so the texture actually shows. -xlinka
             var ac = pbs.AlbedoColor.Value;
@@ -1320,11 +1409,11 @@ public static class ModelImporter
         }
 
         if (rm.NormalUri != null)
-            pbs.NormalMap.Target = AttachTexture(matSlot, rm.NormalUri, isNormal: true, noMips);
+            pbs.NormalMap.Target = home.Texture(matSlot, rm.NormalUri, isNormal: true, noMips);
 
         if (settings.ImportEmissive && rm.EmissiveUri != null)
         {
-            pbs.EmissiveMap.Target = AttachTexture(matSlot, rm.EmissiveUri, isNormal: false, noMips);
+            pbs.EmissiveMap.Target = home.Texture(matSlot, rm.EmissiveUri, isNormal: false, noMips);
             // Same trap as albedo: an emissive map with a ~0 emissive factor multiplies to nothing. Force white. -xlinka
             var ec = pbs.EmissiveColor.Value;
             if (ec.r <= 0.001f && ec.g <= 0.001f && ec.b <= 0.001f)
@@ -1332,12 +1421,14 @@ public static class ModelImporter
         }
 
         if (rm.MetallicUri != null)
-            pbs.MetallicMap.Target = AttachTexture(matSlot, rm.MetallicUri, isNormal: false, noMips);
+            pbs.MetallicMap.Target = home.Texture(matSlot, rm.MetallicUri, isNormal: false, noMips);
 
         if (rm.OcclusionUri != null)
-            pbs.OcclusionMap.Target = AttachTexture(matSlot, rm.OcclusionUri, isNormal: false, noMips);
+            pbs.OcclusionMap.Target = home.Texture(matSlot, rm.OcclusionUri, isNormal: false, noMips);
 
-        return ConvertMaterial(pbs, settings.Material);
+        if (rm.VertexColored && WithVertexColors(pbs, type) is { } colored)
+            return colored;
+        return ConvertMaterial(pbs, type);
     }
 
     // The kinds past PBS Metallic and Unlit: the full PBS build hands its colour, textures, normal and emission
@@ -1350,7 +1441,7 @@ public static class ModelImporter
         MaterialProvider? target = type switch
         {
             ModelMaterialType.Specular => slot.AttachComponent<PBS_Specular>(),
-            ModelMaterialType.DualSided => slot.AttachComponent<PBS_DualSided>(),
+            ModelMaterialType.DualSided => slot.AttachComponent<PBS_MetallicDualSided>(),
             ModelMaterialType.Triplanar => slot.AttachComponent<PBS_Triplanar>(),
             ModelMaterialType.Toon or ModelMaterialType.ToonOutline => slot.AttachComponent<XiexeToonMaterial>(),
             ModelMaterialType.Wireframe => slot.AttachComponent<WireframeMaterial>(),
@@ -1378,14 +1469,11 @@ public static class ModelImporter
 
     private static void AttachRenderer(Slot meshSlot, MeshGrouping.Kind kind, Uri meshUrl, int meshIndex,
         int[] materialIndices, Dictionary<int, ResolvedMaterial?> resolvedMaterials, ModelImportSettings settings,
-        SkeletonBuilder? skelBuilder, ModelImportResult result, SurfaceContext surfaces)
+        SkeletonBuilder? skelBuilder, ModelImportResult result, SurfaceContext surfaces, AssetHome home, ShapeFit? fit)
     {
-        var provider = meshSlot.AttachComponent<MeshProvider>();
-        provider.URL.Value = meshUrl;
-        if (meshIndex >= 0)
-            provider.MeshIndex.Value = meshIndex;
+        var provider = home.Mesh(meshSlot, meshUrl, meshIndex, meshSlot.SlotName.Value);
 
-        var built = new Dictionary<int, MaterialProvider?>();
+        home.BeginPart();
         var materials = new MaterialProvider?[materialIndices.Length];
         for (int k = 0; k < materialIndices.Length; k++)
         {
@@ -1400,13 +1488,9 @@ public static class ModelImporter
                     continue;
                 }
             }
-            if (!built.TryGetValue(materialIndices[k], out var material))
-            {
-                resolvedMaterials.TryGetValue(materialIndices[k], out var rmat);
-                material = BuildMaterialSync(meshSlot, rmat, settings);
-                built[materialIndices[k]] = material;
-            }
-            materials[k] = material;
+            resolvedMaterials.TryGetValue(materialIndices[k], out var rmat);
+            surfaces.MaterialNames.TryGetValue(materialIndices[k], out var materialName);
+            materials[k] = home.Material(meshSlot, materialIndices[k], rmat, materialName);
         }
         var firstMaterial = materials.Length > 0 ? materials[0] : null;
 
@@ -1449,20 +1533,15 @@ public static class ModelImporter
         // it to make an imported mesh part of the floor plan. -xlinka
         if (settings.GenerateColliders)
         {
+            if (settings.FitColliders && fit != null)
+            {
+                fit.Attach(meshSlot, provider, settings.SolidToPeople);
+                return;
+            }
             var collider = meshSlot.AttachComponent<MeshCollider>();
             collider.Mesh.Target = provider;
             collider.CharacterCollider.Value = settings.SolidToPeople;
         }
-    }
-
-    // Attach an ImageProvider for a resolved texture URI, honoring the import's mipmap toggle. -xlinka
-    private static ImageProvider AttachTexture(Slot matSlot, Uri uri, bool isNormal, bool noMips)
-    {
-        var tex = matSlot.AttachComponent<ImageProvider>();
-        tex.URL.Value = uri;
-        if (isNormal) tex.IsNormalMap.Value = true;
-        if (noMips) tex.GenerateMipmaps.Value = false;
-        return tex;
     }
 
     // Resolve a material texture slot to a loadable URI. Embedded textures (path "*N") are saved into the local DB
@@ -1508,14 +1587,16 @@ public static class ModelImporter
                 if (localDB != null)
                 {
                     var uri = await localDB.SaveAssetAsync(bytes, fmt).ConfigureAwait(false);
-                    if (!string.IsNullOrEmpty(uri)) return new Uri(uri);
+                    if (!string.IsNullOrEmpty(uri)) return new Uri(await TextureStorage.ForTransferAsync(localDB, uri).ConfigureAwait(false));
                 }
-                // No local DB - fall back to a temp file so the texture at least loads on this machine.
+                // No local DB - fall back to a temp file so the texture at least loads on this machine. Sealed
+                // under a name that says nothing, like every cache file; the gather opens it by its header.
                 string dir = Lumora.Core.Persistence.PathResolver.Resolve("tmp", "textures");
                 Directory.CreateDirectory(dir);
-                string tmp = Path.Combine(dir, $"tex_{(uint)path.GetHashCode():x8}.{fmt}");
+                Persistence.LocalEncryption.WireSealedStorage();
+                string tmp = Path.Combine(dir, Lumora.Nexus.Storage.SealedKeys.NameFor("tmptex", $"{(uint)path.GetHashCode():x8}.{fmt}"));
                 if (!File.Exists(tmp))
-                    File.WriteAllBytes(tmp, bytes);
+                    Lumora.Nexus.Storage.SealedFile.WriteAllBytes(tmp, bytes);
                 return new Uri(tmp);
             }
             catch (Exception ex)
@@ -1534,7 +1615,7 @@ public static class ModelImporter
         if (localDB != null)
         {
             var uri = await localDB.ImportLocalAssetAsync(full, LocalDB.ImportLocation.Copy).ConfigureAwait(false);
-            if (!string.IsNullOrEmpty(uri)) return new Uri(uri);
+            if (!string.IsNullOrEmpty(uri)) return new Uri(await TextureStorage.ForTransferAsync(localDB, uri).ConfigureAwait(false));
         }
         return new Uri(full);
     }
@@ -1559,18 +1640,27 @@ public static class ModelImporter
         if (string.IsNullOrWhiteSpace(path))
             return null;
 
-        // As written, for the case where the model really did ship beside its textures.
-        string asGiven = Path.IsPathRooted(path) ? path : Path.Combine(modelDir, path);
-        if (File.Exists(asGiven))
-            return asGiven;
-
         if (string.IsNullOrEmpty(modelDir) || !Directory.Exists(modelDir))
             return null;
 
+        // As written, for the case where the model really did ship beside its textures - but only while that
+        // stays inside the model's folder. An absolute path, or one climbing out with "..", is read for its name
+        // alone, below: a texture is copied into the world for everyone in it, so a model must not be able to name
+        // any picture on this disk and have it shared. -xlinka
+        string normalized = path.Replace('\\', '/');
+        bool staysInside = !Path.IsPathRooted(path) && !normalized.Contains(':')
+            && Array.IndexOf(normalized.Split('/'), "..") < 0;
+        if (staysInside)
+        {
+            string asGiven = Path.Combine(modelDir, path);
+            if (File.Exists(asGiven))
+                return asGiven;
+        }
+
         // The tail of an absolute author path is usually still the right SHAPE - "Textures/foo.png" -
         // so try progressively shorter tails against the model's own folder.
-        string normalized = path.Replace('\\', '/');
-        var parts = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var parts = Array.FindAll(normalized.Split('/', StringSplitOptions.RemoveEmptyEntries),
+            p => p != "." && p != ".." && !p.Contains(':'));
         for (int start = parts.Length - 1; start >= 0 && parts.Length - start <= 3; start--)
         {
             string tail = string.Join(Path.DirectorySeparatorChar, parts, start, parts.Length - start);
@@ -1579,7 +1669,9 @@ public static class ModelImporter
                 return candidate;
         }
 
-        string file = parts.Length > 0 ? parts[^1] : path;
+        if (parts.Length == 0)
+            return null;
+        string file = parts[^1];
         foreach (var folder in TextureSubfolders)
         {
             string candidate = Path.Combine(modelDir, folder, file);
@@ -1598,9 +1690,18 @@ public static class ModelImporter
         if (found != null)
             return found;
 
-        // One level up too, for the "Model/" and "Textures/" siblings layout that exporters produce.
+        // One level up too, for the "Model/" and "Textures/" siblings layout that exporters produce: only into the
+        // parent's texture folders, by name, never through the parent's whole tree.
         var parent = Directory.GetParent(modelDir)?.FullName;
-        return parent != null ? FindAtDepth(parent, file, 2) : null;
+        if (parent == null)
+            return null;
+        foreach (var folder in TextureSubfolders)
+        {
+            var sibling = Path.Combine(parent, folder);
+            if (Directory.Exists(sibling) && FindAtDepth(sibling, file, 1) is { } hit)
+                return hit;
+        }
+        return null;
     }
 
     private static string? FindAtDepth(string root, string file, int depth)

@@ -77,6 +77,12 @@ public class MaterialAsset : DynamicImplementableAsset<IMaterialAssetHook>
         Version++;
     }
 
+    // A property already set since the last ApplyChanges, pushed to the live material now and nothing else with it.
+    public void ApplyStagedNow(string property)
+    {
+        Hook?.ApplyStagedNow(property);
+    }
+
     public void SetFloat3(string property, float3 value)
     {
         Hook?.SetFloat3(property, value);

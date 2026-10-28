@@ -223,11 +223,30 @@ public sealed class TextShaper
                 continue;
             }
 
+            // A word wider than a whole line breaks where it reaches the edge: a link, or one letter held down,
+            // ran straight out of its box. A no-break run stays whole. -xlinka
+            if (_wrap && maxWidth > 0f && word.Glyphs.Count > 0 && !IsNoBreak(start)
+                && word.Width + AdvanceOf(font, cp, start) > maxWidth)
+            {
+                FlushWord(ref line, ref word, ref pendingWhitespace, maxWidth);
+                prevWordCodepoint = 0;
+                prevWordFont = null;
+            }
+
             AppendCodepoint(font, word, cp, start, ref prevWordCodepoint, ref prevWordFont);
         }
 
         FlushWord(ref line, ref word, ref pendingWhitespace, maxWidth);
         _lines.Add(line);
+    }
+
+    private float AdvanceOf(FontSet font, int codepoint, int sourceIndex)
+    {
+        float scale = _sizeScales != null && (uint)sourceIndex < (uint)_sizeScales.Count ? _sizeScales[sourceIndex] : 1f;
+        float gsize = _size * scale;
+        if (codepoint == SpriteGlyph)
+            return gsize;
+        return ResolveFont(sourceIndex, font).TryGetGlyph(codepoint, gsize, out var metrics, out _, out _) ? metrics.Advance : 0f;
     }
 
     private void FlushWord(ref Line line, ref Line word, ref float pendingWhitespace, float maxWidth)

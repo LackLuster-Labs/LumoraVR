@@ -8,11 +8,8 @@ using Lumora.Core.Logging;
 
 namespace Lumora.Core.Assets;
 
-/// <summary>
-/// Tracks the shared asset instances for one (URL, type) pair. Each distinct variant descriptor
-/// gets its own instance; requesters with equal descriptors share one. Variants are matched
-/// exactly (no cloud/compression variant generation).
-/// </summary>
+// One per (URL, type). Each distinct variant descriptor gets its own instance and equal descriptors share
+// one. Matching is exact; nothing here generates variants.
 public abstract class AssetVariantManager
 {
     public readonly Uri AssetURL;
@@ -37,10 +34,13 @@ public abstract class AssetVariantManager
 
     internal abstract void OnAssetUnloaded(LoadableAsset asset);
 
-    /// <summary>
-    /// Unload the asset after a delay, but only if it is still unreferenced when the delay
-    /// elapses. <see cref="Asset.UnloadKey"/> guards against a request that arrives in between.
-    /// </summary>
+    internal abstract bool Forget(IAssetVariantDescriptor? descriptor);
+
+    // Whoever still asks for an instance whose load failed, across every variant.
+    internal abstract void CollectFailed(List<IAssetRequester> into);
+
+    // Unloads only if nothing references the asset when the delay ends. A later schedule bumps UnloadKey
+    // and supersedes this one, so a request and release in between can't cut the delay short.
     internal void ScheduleUnload(LoadableAsset asset, float seconds)
     {
         asset.UnloadKey++;
@@ -119,6 +119,39 @@ public sealed class AssetVariantManager<A> : AssetVariantManager where A : Loada
                 asset.RemoveRequest(requester);
                 if (asset.ActiveRequestCount <= 0)
                     ScheduleUnload(asset, asset.UnloadDelay);
+            }
+        }
+    }
+
+    // Takes this variant's instance out of the share while nothing asks for it, so the next request makes a
+    // new one and loads it from scratch. The old one goes the usual way, unloaded when its delay runs out, so
+    // whatever still draws it this frame is not left holding a freed resource. False while something holds it.
+    internal override bool Forget(IAssetVariantDescriptor? descriptor)
+    {
+        object key = descriptor ?? DefaultKey;
+        bool emptied;
+        lock (VariantLock)
+        {
+            if (!_variants.TryGetValue(key, out var asset))
+                return true;
+            if (asset.ActiveRequestCount > 0)
+                return false;
+            _variants.Remove(key);
+            emptied = _variants.Count == 0;
+        }
+        if (emptied)
+            AssetManager.ScheduleVariantManagerRemoval(new AssetID(AssetURL, typeof(A)));
+        return true;
+    }
+
+    internal override void CollectFailed(List<IAssetRequester> into)
+    {
+        lock (VariantLock)
+        {
+            foreach (var variant in _variants.Values)
+            {
+                if (variant.LoadState == AssetLoadState.Failed)
+                    variant.CollectRequesters(into);
             }
         }
     }

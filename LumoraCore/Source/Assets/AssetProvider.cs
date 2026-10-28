@@ -72,15 +72,21 @@ public abstract class AssetProvider<A> : Component, IAssetProvider<A> where A : 
         }
         if (_refreshQueued)
             return;
-        if (world.IsOnWorldThread && AssetRefreshQueue.TryRunNow(world, RefreshAssetState))
+        if (world.IsOnWorldThread && AssetRefreshQueue.TryRunNow(world, _refreshNow ??= RefreshAssetState))
             return;
         _refreshQueued = true;
-        AssetRefreshQueue.Enqueue(world, () =>
-        {
-            _refreshQueued = false;
-            if (!IsDestroyed)
-                RefreshAssetState();
-        });
+        AssetRefreshQueue.Enqueue(world, _refreshQueuedRun ??= RunQueuedRefresh);
+    }
+
+    // Made once: a material changing every frame refreshed through here every frame.
+    private Action? _refreshNow;
+    private Action? _refreshQueuedRun;
+
+    private void RunQueuedRefresh()
+    {
+        _refreshQueued = false;
+        if (!IsDestroyed)
+            RefreshAssetState();
     }
 
     public void RegisterUpdateListener(IAssetRef reference)
@@ -293,9 +299,11 @@ public abstract class AssetProvider<A> : Component, IAssetProvider<A> where A : 
                     assetURL = new Uri($"lumora:///{filename}");
                 return assetURL;
             }
-            var cached = Engine.Current?.LocalDB?.GetFilePath($"local://cloud/{hash}");
-            if (!string.IsNullOrEmpty(cached) && File.Exists(cached))
-                return new Uri(cached);
+            // Held, it is read through the database by its address (the file on disk is sealed), so the
+            // address is what goes on, never the file.
+            var held = $"local://cloud/{hash}";
+            if (Engine.Current?.LocalDB?.Exists(held) == true)
+                return new Uri(held);
             // A hash this build shipped as one of its own files is served from the build, never fetched.
             var builtin = BuiltinAssetRegistry.ResUriFor(hash);
             if (builtin != null)
@@ -335,22 +343,9 @@ public abstract class AssetProvider<A> : Component, IAssetProvider<A> where A : 
 
         if (assetURL.Scheme == "local")
         {
-            var localDB = Engine.Current?.LocalDB;
-            LumoraLogger.Debug($"AssetProvider.ProcessURL: LocalDB is {(localDB != null ? "available" : "NULL")}");
-            if (localDB != null)
-            {
-                var filePath = localDB.GetFilePath(assetURL.ToString());
-                LumoraLogger.Debug($"AssetProvider.ProcessURL: GetFilePath returned '{filePath}'");
-                // A record whose file is gone is worth no more than no record at all, and both heal the
-                // same way, so treat them alike rather than handing back a path that cannot be read.
-                if (!string.IsNullOrEmpty(filePath) && File.Exists(filePath))
-                {
-                    var resolvedUri = new Uri(filePath);
-                    LumoraLogger.Debug($"AssetProvider.ProcessURL: Resolved to {resolvedUri}");
-                    return resolvedUri;
-                }
-            }
-
+            // Never resolved to its file: the database keeps it sealed, and the gather reads it through the
+            // database by this address, decrypting as it reads. -xlinka
+            //
             // Having no record for a local:// hash is the NORMAL state of a machine that just joined:
             // every such URI in the world it received names content another machine imported. Returning
             // null here ended the story - the provider reported the asset removed, nobody ever asked for
@@ -360,7 +355,6 @@ public abstract class AssetProvider<A> : Component, IAssetProvider<A> where A : 
             // Hand the local:// URI straight through instead. The gather path checks our own cache first
             // and falls through to the session transferer, so the load fails only once the transfer has
             // actually failed. -xlinka
-            LumoraLogger.Debug($"AssetProvider.ProcessURL: no local record for {assetURL}; deferring to the gather path");
             return assetURL;
         }
 

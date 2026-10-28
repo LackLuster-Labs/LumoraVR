@@ -2,8 +2,10 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Buffers.Binary;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Threading;
 using System.Threading.Tasks;
 using K4os.Compression.LZ4;
@@ -55,16 +57,16 @@ public sealed class TextureVariantData
 // construct the address of any variant it wants and ask for it by name. No variant manifest has to
 // be replicated. -xlinka
 //
-// Payload is a small container: RGBA8 mip levels back to back, LZ4-compressed only when that
-// actually shrinks them (measured per blob, not assumed - LZ4 on photographic RGBA frequently
-// does not, and storing a "compressed" blob that grew would be a lie in both directions).
+// Pixel prediction and Brotli keep cloud copies small without changing pixels or mip levels.
+// LZ4 and raw payloads remain readable, and are kept when they are smaller. -xlinka
 public static class TextureVariantStore
 {
     public static ITextureVariantAccelerator? Accelerator { get; set; }
     private const uint Magic = 0x5854564C; // "LVTX" little-endian
-    // 2: rows are stored top-down; version 1 variants were built from flipped rows and must not be reused.
-    private const ushort ContainerVersion = 2;
+    // 2 keeps top-down rows; 3 adds filtered compression. Both decode to the same pixels. -xlinka
+    private const ushort ContainerVersion = 3;
     private const ushort FlagLz4 = 1 << 0;
+    private const ushort FlagFilteredBrotli = 1 << 1;
 
     public const string VariantExtension = ".lvtex";
 
@@ -96,13 +98,16 @@ public static class TextureVariantStore
     // carry WebP. -xlinka
     public delegate byte[]? PlatformImageDecoder(byte[] encoded, out int width, out int height);
 
-    // For an animated source: every frame composited and stacked into one vertical strip, with how
-    // many frames it holds and how fast they play. height is the strip's height.
-    public delegate byte[]? PlatformAnimatedDecoder(byte[] encoded, out int width, out int height, out int frames, out float fps);
+    // For an animated source the platform composites but cannot hand over frame by frame (animated WebP): every
+    // frame on one FrameSheet, cap as FrameSheet.Builder.Begin takes it.
+    public delegate FrameSheet? PlatformAnimatedDecoder(byte[] encoded, int cap);
 
     public static PlatformAnimatedDecoder? AnimatedDecoder { get; set; }
 
     public static PlatformImageDecoder? PlatformDecoder { get; set; }
+
+    // Optional lossless file encoder; the upload path verifies its decoded pixels before using it. -xlinka
+    public static Func<byte[], int, int, byte[]?>? LosslessWebpEncoder { get; set; }
 
     // Same shape for floating-point sources, returning RGBA half floats (8 bytes per texel). Only
     // EXR needs it: Radiance is decoded here. Null means EXR is not readable on this build. -xlinka
@@ -170,6 +175,19 @@ public static class TextureVariantStore
         if (TiffDecoder.IsTiff(encoded))
             return TiffDecoder.Decode(encoded, out width, out height);
 
+        // PNG and JPEG go to the platform's native readers first when it has them: the 215 PNGs of a big world
+        // package decode in 2.6 s there against 4.4 s in the built-in decoder, one thread each, to the same
+        // bytes. Only a PNG the two are known to read the same: up to eight bits a channel, and no gamma but the
+        // usual sRGB one and no colour profile, which the native reader would convert where the built-in one
+        // keeps the stored values. -xlinka
+        var native = PlatformDecoder;
+        if (native != null && (IsJpeg(encoded) || IsPlainPng(encoded)))
+        {
+            var read = native(encoded, out width, out height);
+            if (read != null && width > 0 && height > 0)
+                return read;
+        }
+
         try
         {
             using var stream = new MemoryStream(encoded);
@@ -194,6 +212,31 @@ public static class TextureVariantStore
         return pixels != null && width > 0 && height > 0 ? pixels : null;
     }
 
+    private static bool IsJpeg(byte[] data) => data.Length >= 4 && data[0] == 0xFF && data[1] == 0xD8 && data[2] == 0xFF;
+
+    private static bool IsPlainPng(byte[] data)
+    {
+        if (data.Length < 33 || data[0] != 0x89 || data[1] != 0x50 || data[2] != 0x4E || data[3] != 0x47 || data[24] > 8)
+            return false;
+        long offset = 8;
+        while (offset + 8 <= data.Length)
+        {
+            long length = (long)data[offset] << 24 | (long)data[offset + 1] << 16 | (long)data[offset + 2] << 8 | data[offset + 3];
+            int a = data[offset + 4], b = data[offset + 5], c = data[offset + 6], e = data[offset + 7];
+            // 45455 is the stored form of 1/2.2, the gamma every sRGB picture carries.
+            bool gamma = a == 'g' && b == 'A' && c == 'M' && e == 'A'
+                && (offset + 12 > data.Length || (data[offset + 8] << 24 | data[offset + 9] << 16 | data[offset + 10] << 8 | data[offset + 11]) != 45455);
+            bool primaries = a == 'c' && b == 'H' && c == 'R' && e == 'M';
+            bool profile = a == 'i' && b == 'C' && c == 'C' && e == 'P';
+            if (gamma || primaries || profile)
+                return false;
+            if (a == 'I' && b == 'D' && c == 'A' && e == 'T')
+                return true;
+            offset += 12 + length;
+        }
+        return false;
+    }
+
     // RESAMPLING
 
     // Every destination pixel averages the full source rectangle it covers, so a large reduction keeps detail
@@ -205,6 +248,13 @@ public static class TextureVariantStore
             return source;
 
         var dst = new byte[(long)dstWidth * dstHeight * 4];
+        DownscaleInto(source, srcWidth, srcHeight, dst, dstWidth, dstHeight);
+        return dst;
+    }
+
+    // The same filter into a buffer the caller owns.
+    public static void DownscaleInto(ReadOnlySpan<byte> source, int srcWidth, int srcHeight, Span<byte> dst, int dstWidth, int dstHeight)
+    {
         double xRatio = (double)srcWidth / dstWidth;
         double yRatio = (double)srcHeight / dstHeight;
 
@@ -243,8 +293,6 @@ public static class TextureVariantStore
                 dst[d + 3] = (byte)(a / count);
             }
         }
-
-        return dst;
     }
 
     // Each level is filtered from the one above it, which is both cheaper and smoother than resampling the base
@@ -276,7 +324,7 @@ public static class TextureVariantStore
         if (payloadLength > int.MaxValue)
             throw new InvalidOperationException($"Texture variant payload too large: {payloadLength} bytes");
 
-        var payload = new byte[payloadLength];
+        var payload = VariantWorkers.Scratch(0, (int)payloadLength);
         int offset = 0;
         foreach (var level in data.Levels)
         {
@@ -285,38 +333,61 @@ public static class TextureVariantStore
             Buffer.BlockCopy(level, 0, payload, offset, level.Length);
             offset += level.Length;
         }
+        return EncodePayload(payload.AsSpan(0, (int)payloadLength), data.Width, data.Height, data.ContentFormat, data.Levels.Length, data.HasAlpha);
+    }
 
+    // payload is the levels back to back. On a variant worker the payload and the compressor's output live in
+    // the worker's own buffers, so the finished blob is the only new array a rung costs: three of them the size
+    // of the rung each, megabytes for a big one, were what the collector stopped the frame for. -xlinka
+    private static byte[] EncodePayload(ReadOnlySpan<byte> payload, int width, int height, TextureFormatKind format, int levelCount, bool hasAlpha)
+    {
         // Try LZ4 and keep it only if it genuinely shrank. Blobs that don't compress stay raw and
         // say so in the flags, so the reader never pays a decompress that buys nothing.
-        byte[] stored = payload;
-        ushort flags = 0;
-        var scratch = new byte[LZ4Codec.MaximumOutputSize(payload.Length)];
-        int written = LZ4Codec.Encode(payload, scratch, LZ4Level.L00_FAST);
-        if (written > 0 && written < payload.Length)
+        int bound = LZ4Codec.MaximumOutputSize(payload.Length);
+        var scratch = VariantWorkers.Scratch(1, bound);
+        int written = LZ4Codec.Encode(payload, scratch.AsSpan(0, bound), LZ4Level.L00_FAST);
+        bool lz4 = written > 0 && written < payload.Length;
+        ReadOnlySpan<byte> stored = lz4 ? scratch.AsSpan(0, written) : payload;
+        ushort flags = lz4 ? FlagLz4 : (ushort)0;
+
+        using var filtered = new MemoryStream();
+        int offset = 0, w = width, h = height;
+        for (int level = 0; level < levelCount; level++)
         {
-            stored = new byte[written];
-            Buffer.BlockCopy(scratch, 0, stored, 0, written);
-            flags |= FlagLz4;
+            int size = checked(w * h * 4);
+            TextureRowFilter.Write(filtered, payload.Slice(offset, size), w, h);
+            offset += size;
+            w = System.Math.Max(1, w >> 1);
+            h = System.Math.Max(1, h >> 1);
+        }
+        var predicted = filtered.GetBuffer().AsSpan(0, (int)filtered.Length);
+        var packed = new byte[BrotliEncoder.GetMaxCompressedLength(predicted.Length)];
+        if (BrotliEncoder.TryCompress(predicted, packed, out int packedLength, quality: 5, window: 22)
+            && packedLength < stored.Length)
+        {
+            stored = packed.AsSpan(0, packedLength);
+            flags = FlagFilteredBrotli;
         }
 
-        using var ms = new MemoryStream();
-        using (var w = new BinaryWriter(ms, System.Text.Encoding.UTF8, leaveOpen: true))
-        {
-            w.Write(Magic);
-            w.Write(ContainerVersion);
-            w.Write(flags);
-            w.Write(data.Width);
-            w.Write(data.Height);
-            w.Write((byte)data.ContentFormat);
-            w.Write((byte)System.Math.Min(byte.MaxValue, data.Levels.Length));
-            w.Write((byte)(data.HasAlpha ? 1 : 0));
-            w.Write((byte)0); // reserved
-            w.Write(payload.Length);
-            w.Write(stored.Length);
-            w.Write(stored);
-        }
-        return ms.ToArray();
+        // Written straight into a blob of its final size, the layout a little-endian BinaryWriter gave.
+        var blob = new byte[HeaderBytes + stored.Length];
+        var header = blob.AsSpan();
+        BinaryPrimitives.WriteUInt32LittleEndian(header, Magic);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(4), ContainerVersion);
+        BinaryPrimitives.WriteUInt16LittleEndian(header.Slice(6), flags);
+        BinaryPrimitives.WriteInt32LittleEndian(header.Slice(8), width);
+        BinaryPrimitives.WriteInt32LittleEndian(header.Slice(12), height);
+        header[16] = (byte)format;
+        header[17] = (byte)System.Math.Min(byte.MaxValue, levelCount);
+        header[18] = (byte)(hasAlpha ? 1 : 0);
+        header[19] = 0; // reserved
+        BinaryPrimitives.WriteInt32LittleEndian(header.Slice(20), payload.Length);
+        BinaryPrimitives.WriteInt32LittleEndian(header.Slice(24), stored.Length);
+        stored.CopyTo(blob.AsSpan(HeaderBytes));
+        return blob;
     }
+
+    private const int HeaderBytes = 28;
 
     // Null on a truncated or foreign blob.
     public static TextureVariantData? Decode(byte[]? blob)
@@ -332,7 +403,7 @@ public static class TextureVariantStore
             if (r.ReadUInt32() != Magic)
                 return null;
             ushort version = r.ReadUInt16();
-            if (version != ContainerVersion)
+            if (version != 2 && version != ContainerVersion)
                 return null;
 
             ushort flags = r.ReadUInt16();
@@ -345,25 +416,68 @@ public static class TextureVariantStore
             int plainLength = r.ReadInt32();
             int storedLength = r.ReadInt32();
 
-            if (width <= 0 || height <= 0 || levelCount <= 0 || plainLength <= 0 || storedLength <= 0)
+            if (width <= 0 || height <= 0 || width > 16384 || height > 16384
+                || levelCount <= 0 || plainLength <= 0 || storedLength <= 0)
                 return null;
             if (storedLength > ms.Length - ms.Position)
                 return null;
+            if ((flags & ~(FlagLz4 | FlagFilteredBrotli)) != 0
+                || flags == (FlagLz4 | FlagFilteredBrotli) || (version == 2 && (flags & FlagFilteredBrotli) != 0)
+                || levelCount > TextureMetadata.FullMipCount(width, height))
+                return null;
+            long expected = 0, rows = 0;
+            int mw = width, mh = height;
+            for (int level = 0; level < levelCount; level++)
+            {
+                expected += (long)mw * mh * 4;
+                rows += mh;
+                mw = System.Math.Max(1, mw >> 1);
+                mh = System.Math.Max(1, mh >> 1);
+            }
+            if (expected != plainLength || expected + rows > 256 * 1024 * 1024)
+                return null;
 
-            var stored = r.ReadBytes(storedLength);
+            // Read in place: a copy of the stored bytes first was one more array the size of the rung.
+            int storedAt = (int)ms.Position;
             byte[] payload;
-            if ((flags & FlagLz4) != 0)
+            int payloadAt;
+            if ((flags & FlagFilteredBrotli) != 0)
+            {
+                var filtered = new byte[checked(plainLength + (int)rows)];
+                if (!BrotliDecoder.TryDecompress(blob.AsSpan(storedAt, storedLength), filtered, out int decoded)
+                    || decoded != filtered.Length)
+                    return null;
+                payload = new byte[plainLength];
+                int from = 0, into = 0;
+                mw = width;
+                mh = height;
+                for (int level = 0; level < levelCount; level++)
+                {
+                    int size = checked(mw * mh * 4);
+                    int filteredSize = size + mh;
+                    if (!TextureRowFilter.Read(filtered.AsSpan(from, filteredSize), payload.AsSpan(into, size), mw, mh))
+                        return null;
+                    from += filteredSize;
+                    into += size;
+                    mw = System.Math.Max(1, mw >> 1);
+                    mh = System.Math.Max(1, mh >> 1);
+                }
+                payloadAt = 0;
+            }
+            else if ((flags & FlagLz4) != 0)
             {
                 payload = new byte[plainLength];
-                int decoded = LZ4Codec.Decode(stored, payload);
+                int decoded = LZ4Codec.Decode(blob.AsSpan(storedAt, storedLength), payload);
                 if (decoded != plainLength)
                     return null;
+                payloadAt = 0;
             }
             else
             {
-                if (stored.Length != plainLength)
+                if (storedLength != plainLength)
                     return null;
-                payload = stored;
+                payload = blob;
+                payloadAt = storedAt;
             }
 
             var levels = new byte[levelCount][];
@@ -372,10 +486,10 @@ public static class TextureVariantStore
             for (int level = 0; level < levelCount; level++)
             {
                 int size = w * h * 4;
-                if (offset + size > payload.Length)
+                if (offset + size > plainLength)
                     return null;
                 var data = new byte[size];
-                Buffer.BlockCopy(payload, offset, data, 0, size);
+                Buffer.BlockCopy(payload, payloadAt + offset, data, 0, size);
                 levels[level] = data;
                 offset += size;
                 w = System.Math.Max(1, w >> 1);
@@ -420,28 +534,41 @@ public static class TextureVariantStore
         };
     }
 
-    public static async Task<TextureVariantData> BuildVariantAsync(byte[] rgba, int sourceWidth, int sourceHeight,
-        TextureVariantId id, bool hasAlpha, TextureFormatKind format, CancellationToken ct = default)
+    // One rung, filtered and packed on the calling worker: the levels the renderer's accelerator made when it
+    // has one, BuildVariant's own filter straight into the payload when not. Same bytes either way.
+    private static byte[] BuildRung(byte[] rgba, int sourceWidth, int sourceHeight, TextureVariantId id, bool hasAlpha, TextureFormatKind format,
+        CancellationToken ct, out int width, out int height, out int levelCount, out long decodedBytes)
     {
-        ct.ThrowIfCancellationRequested();
-        var (width, height) = id.ResolveSize(sourceWidth, sourceHeight);
+        (width, height) = id.ResolveSize(sourceWidth, sourceHeight);
+        levelCount = id.Mipmaps ? TextureMetadata.FullMipCount(width, height) : 1;
         if (Accelerator is { } accelerator)
         {
             try
             {
-                var levels = await accelerator.BuildAsync(rgba, sourceWidth, sourceHeight, width, height, id.Mipmaps, ct).ConfigureAwait(false);
+                var levels = accelerator.BuildAsync(rgba, sourceWidth, sourceHeight, width, height, id.Mipmaps, ct).GetAwaiter().GetResult();
                 ct.ThrowIfCancellationRequested();
-                int expected = id.Mipmaps ? TextureMetadata.FullMipCount(width, height) : 1;
-                bool valid = levels?.Length == expected;
+                bool valid = levels?.Length == levelCount;
+                long total = 0;
                 int w = width, h = height;
-                for (int i = 0; valid && i < expected; i++)
+                for (int i = 0; valid && i < levelCount; i++)
                 {
                     valid = levels![i]?.LongLength == (long)w * h * 4;
+                    total += (long)w * h * 4;
                     w = System.Math.Max(1, w >> 1);
                     h = System.Math.Max(1, h >> 1);
                 }
                 if (valid)
-                    return new TextureVariantData { Levels = levels!, Width = width, Height = height, HasAlpha = hasAlpha, ContentFormat = format };
+                {
+                    decodedBytes = total;
+                    var payload = VariantWorkers.Scratch(0, (int)total);
+                    int at = 0;
+                    foreach (var level in levels!)
+                    {
+                        Buffer.BlockCopy(level, 0, payload, at, level.Length);
+                        at += level.Length;
+                    }
+                    return EncodePayload(payload.AsSpan(0, at), width, height, format, levelCount, hasAlpha);
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
             catch (Exception ex)
@@ -449,7 +576,41 @@ public static class TextureVariantStore
                 Logger.Warn($"TextureVariantStore: accelerator unavailable, using CPU ({ex.Message})");
             }
         }
-        return await Task.Run(() => BuildVariant(rgba, sourceWidth, sourceHeight, id, hasAlpha, format), ct).ConfigureAwait(false);
+
+        // Level 0 from the source, each level after it from the one before, back to back in the payload: the
+        // container's own layout, so no level is ever an array of its own.
+        bool same = width == sourceWidth && height == sourceHeight;
+        int size = same ? rgba.Length : width * height * 4;
+        long length = size;
+        int lw = width, lh = height;
+        for (int level = 1; level < levelCount; level++)
+        {
+            lw = System.Math.Max(1, lw >> 1);
+            lh = System.Math.Max(1, lh >> 1);
+            length += (long)lw * lh * 4;
+        }
+        if (length > int.MaxValue)
+            throw new InvalidOperationException($"Texture variant payload too large: {length} bytes");
+        decodedBytes = length;
+        var chain = VariantWorkers.Scratch(0, (int)length);
+        if (same)
+            Buffer.BlockCopy(rgba, 0, chain, 0, size);
+        else
+            DownscaleInto(rgba, sourceWidth, sourceHeight, chain.AsSpan(0, size), width, height);
+        int offset = 0, cw = width, ch = height;
+        for (int level = 1; level < levelCount; level++)
+        {
+            ct.ThrowIfCancellationRequested();
+            int nw = System.Math.Max(1, cw >> 1);
+            int nh = System.Math.Max(1, ch >> 1);
+            int next = nw * nh * 4;
+            DownscaleInto(chain.AsSpan(offset, cw * ch * 4), cw, ch, chain.AsSpan(offset + size, next), nw, nh);
+            offset += size;
+            size = next;
+            cw = nw;
+            ch = nh;
+        }
+        return EncodePayload(chain.AsSpan(0, (int)length), width, height, format, levelCount, hasAlpha);
     }
 
     // Decodes the source exactly once and reuses that buffer for every bucket. Safe to call more than once for
@@ -457,17 +618,19 @@ public static class TextureVariantStore
     // nothing.
     //
     // Returns the metadata for the BASE asset, which the caller can hand straight to a loaded
-    // texture without a second decode.
+    // texture without a second decode. Cancelling ct drops the ladder before or between its rungs and throws;
+    // the rungs already made stay. Shutdown answers null.
     public static Task<TextureMetadata?> GenerateAsync(
         LocalDB db,
         string baseLocalUri,
         bool isNormalMap = false,
         bool mipmaps = true,
-        TextureCompressionKind compression = TextureCompressionKind.Block)
+        TextureCompressionKind compression = TextureCompressionKind.Block,
+        CancellationToken ct = default)
     {
         if (db == null || string.IsNullOrEmpty(baseLocalUri))
             return Task.FromResult<TextureMetadata?>(null);
-        return OneAtATimeAsync(baseLocalUri, () => GenerateNowAsync(db, baseLocalUri, isNormalMap, mipmaps, compression));
+        return OneAtATimeAsync(baseLocalUri, () => GenerateNowAsync(db, baseLocalUri, isNormalMap, mipmaps, compression, ct), ct);
     }
 
     // The sidecar and every rung a save uploads, made only where one is missing: when all of them are
@@ -482,7 +645,7 @@ public static class TextureVariantStore
             var known = await TryLoadMetadataAsync(db, baseLocalUri).ConfigureAwait(false);
             if (known != null && known.Width > 0 && HasLadder(db, baseLocalUri, known))
                 return known;
-            return await GenerateNowAsync(db, baseLocalUri, known?.IsNormalMap ?? false).ConfigureAwait(false) ?? known;
+            return await GenerateNowAsync(db, baseLocalUri, known?.IsNormalMap ?? false, ct: ct).ConfigureAwait(false) ?? known;
         }, ct);
     }
 
@@ -490,7 +653,7 @@ public static class TextureVariantStore
     // every load reads, and none for an HDR source.
     public static List<TextureVariantId> UploadPlan(TextureMetadata metadata)
     {
-        if (metadata.IsHdr || metadata.Width <= 0)
+        if (metadata.IsHdr || metadata.IsAnimated || metadata.Width <= 0)
             return new List<TextureVariantId>();
         var plan = TextureVariantId.PlanFor(metadata.Width, metadata.Height, true, TextureCompressionKind.Block);
         int cap = EngineSettings.MaxTextureSize;
@@ -557,52 +720,65 @@ public static class TextureVariantStore
     //
     // Every texture a world loads for the first time queues its ladder, and each one decodes its source
     // whole and downscales it into every rung. Run all at once they took every core and held every source
-    // decoded together while the world was still coming up. Two at a time on a desktop, one on a phone or
-    // a headset: the ladder is background work, it helps the next load, and it finishes when it finishes.
-    // -xlinka
-    private static SemaphoreSlim? _generationWorkers;
-
-    private static SemaphoreSlim GenerationWorkers => LazyInitializer.EnsureInitialized(ref _generationWorkers,
-        () => new SemaphoreSlim(Engine.UseConstrainedResources ? 1 : 2));
-
+    // decoded together while the world was still coming up. They go through VariantWorkers: a couple of
+    // threads below the frame's priority, one on a phone or a headset. The ladder is background work, it helps
+    // the next load, and it finishes when it finishes. -xlinka
     private static async Task<TextureMetadata?> GenerateNowAsync(
         LocalDB db,
         string baseLocalUri,
         bool isNormalMap = false,
         bool mipmaps = true,
-        TextureCompressionKind compression = TextureCompressionKind.Block)
+        TextureCompressionKind compression = TextureCompressionKind.Block,
+        CancellationToken ct = default)
     {
         if (db == null || string.IsNullOrEmpty(baseLocalUri))
             return null;
 
-        var workers = GenerationWorkers;
-        await workers.WaitAsync().ConfigureAwait(false);
+        object? traced = TextureLoadTrace.Enabled ? string.Intern(baseLocalUri) : null;
         try
         {
-            return await GenerateInTurnAsync(db, baseLocalUri, isNormalMap, mipmaps, compression).ConfigureAwait(false);
+            return await VariantWorkers.Run("ladder of " + baseLocalUri, token =>
+            {
+                TextureLoadTrace.Mark(traced, "gen-start", baseLocalUri);
+                try
+                {
+                    return GenerateOnWorker(db, baseLocalUri, isNormalMap, mipmaps, compression, token);
+                }
+                finally
+                {
+                    TextureLoadTrace.Mark(traced, "gen-done", baseLocalUri);
+                }
+            }, urgent: false, ct).ConfigureAwait(false);
         }
-        finally
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            workers.Release();
+            // The workers stopped (the engine is going away); nothing is missing that the next run cannot make.
+            return null;
         }
     }
 
-    private static async Task<TextureMetadata?> GenerateInTurnAsync(
+    // One texture's ladder, start to finish on a variant worker. Every file goes down whole (LocalDB writes beside
+    // and moves into place) and the index is written once at the end rather than twice a rung: on a store a few
+    // avatars old each index write is tens of milliseconds and megabytes of garbage, and a ladder of five rungs
+    // asked for twelve of them. -xlinka
+    private static TextureMetadata? GenerateOnWorker(
         LocalDB db,
         string baseLocalUri,
         bool isNormalMap,
         bool mipmaps,
-        TextureCompressionKind compression)
+        TextureCompressionKind compression,
+        CancellationToken ct)
     {
-
+        bool changed = false;
         try
         {
-            var sourceBytes = await db.ReadAssetBytesAsync(baseLocalUri).ConfigureAwait(false);
+            var sourceBytes = db.ReadAssetBytesAsync(baseLocalUri).GetAwaiter().GetResult();
             if (sourceBytes == null || sourceBytes.Length == 0)
             {
                 Logger.Warn($"TextureVariantStore: no source bytes for '{baseLocalUri}'");
                 return null;
             }
+            ct.ThrowIfCancellationRequested();
 
             byte[]? rgba;
             int width, height, sourceWidth, sourceHeight;
@@ -634,12 +810,14 @@ public static class TextureVariantStore
                     sourceBytes.LongLength,
                     TextureMetadata.ComputeGpuBytes(TextureFormatKind.RGBA16F, sourceWidth, sourceHeight, hdrMips),
                     isNormalMap), sourceWidth, sourceHeight);
-                await db.SetAssetMetadataAsync(baseLocalUri, bag => hdrMeta.WriteTo(bag)).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                changed = true;
+                db.SetAssetMetadataAsync(baseLocalUri, bag => hdrMeta.WriteTo(bag), writeIndex: false).GetAwaiter().GetResult();
                 var hdrSidecar = GetMetadataUri(baseLocalUri);
                 if (hdrSidecar != null && !db.Exists(hdrSidecar))
                 {
-                    await db.SaveDerivedAssetAsync(baseLocalUri, MetadataSuffix, hdrMeta.ToSidecarBytes(), MetadataExtension)
-                        .ConfigureAwait(false);
+                    db.SaveDerivedAssetAsync(baseLocalUri, MetadataSuffix, hdrMeta.ToSidecarBytes(), MetadataExtension, writeIndex: false)
+                        .GetAwaiter().GetResult();
                 }
                 return hdrMeta;
             }
@@ -656,6 +834,24 @@ public static class TextureVariantStore
 
             if (rgba == null || width <= 0 || height <= 0)
                 return null;
+            ct.ThrowIfCancellationRequested();
+
+            // An animated source gets a sidecar that says so and nothing else: every rung would be its first frame
+            // alone, and a load that found one showed a still for good. The sidecar is written over an older one,
+            // which is exactly what a GIF imported before frames were counted carries. -xlinka
+            int frames = SourceFrames(sourceBytes);
+            if (frames > 1)
+            {
+                var animated = AsSource(TextureMetadata.Analyze(
+                    rgba, width, height, 1,
+                    sourceBytes.LongLength, (long)sourceWidth * sourceHeight * 4,
+                    TextureMetadata.DetectSRgb(sourceBytes), isNormalMap), sourceWidth, sourceHeight).WithFrames(frames);
+                changed = true;
+                db.SetAssetMetadataAsync(baseLocalUri, bag => animated.WriteTo(bag), writeIndex: false).GetAwaiter().GetResult();
+                db.SaveDerivedAssetAsync(baseLocalUri, MetadataSuffix, animated.ToSidecarBytes(), MetadataExtension, writeIndex: false)
+                    .GetAwaiter().GetResult();
+                return animated;
+            }
 
             // Base metadata describes the SOURCE as it will actually be uploaded: source resolution,
             // the mip count the renderer will hold, and the measured channel usage.
@@ -669,13 +865,14 @@ public static class TextureVariantStore
                 sourceBytes.LongLength, baseDecoded,
                 TextureMetadata.DetectSRgb(sourceBytes), isNormalMap), sourceWidth, sourceHeight);
 
-            await db.SetAssetMetadataAsync(baseLocalUri, bag => metadata.WriteTo(bag)).ConfigureAwait(false);
+            changed = true;
+            db.SetAssetMetadataAsync(baseLocalUri, bag => metadata.WriteTo(bag), writeIndex: false).GetAwaiter().GetResult();
 
             var sidecarUri = GetMetadataUri(baseLocalUri);
             if (sidecarUri != null && !db.Exists(sidecarUri))
             {
-                await db.SaveDerivedAssetAsync(baseLocalUri, MetadataSuffix, metadata.ToSidecarBytes(), MetadataExtension)
-                    .ConfigureAwait(false);
+                db.SaveDerivedAssetAsync(baseLocalUri, MetadataSuffix, metadata.ToSidecarBytes(), MetadataExtension, writeIndex: false)
+                    .GetAwaiter().GetResult();
             }
 
             var plan = TextureVariantId.PlanFor(sourceWidth, sourceHeight, mipmaps, compression);
@@ -685,36 +882,85 @@ public static class TextureVariantStore
                 var uri = GetVariantUri(baseLocalUri, id);
                 if (uri == null || db.Exists(uri) || id.MaxSize > heldEdge)
                     continue;
+                ct.ThrowIfCancellationRequested();
 
-                var variant = await BuildVariantAsync(rgba, width, height, id, metadata.HasAlpha, metadata.ContentFormat).ConfigureAwait(false);
-                var blob = Encode(variant);
-                await db.SaveDerivedAssetAsync(baseLocalUri, id.Identifier, blob, VariantExtension).ConfigureAwait(false);
+                var blob = BuildRung(rgba, width, height, id, metadata.HasAlpha, metadata.ContentFormat, ct,
+                    out int rungWidth, out int rungHeight, out int rungLevels, out long rungDecoded);
+                ct.ThrowIfCancellationRequested();
+                if (db.SaveDerivedAssetAsync(baseLocalUri, id.Identifier, blob, VariantExtension, writeIndex: false).GetAwaiter().GetResult() == null)
+                    continue;
 
                 var variantMeta = new TextureMetadata
                 {
-                    Width = variant.Width,
-                    Height = variant.Height,
-                    ContentFormat = variant.ContentFormat,
-                    HasAlpha = variant.HasAlpha,
-                    MipCount = variant.MipCount,
+                    Width = rungWidth,
+                    Height = rungHeight,
+                    ContentFormat = metadata.ContentFormat,
+                    HasAlpha = metadata.HasAlpha,
+                    MipCount = System.Math.Max(1, rungLevels),
                     SourceBytes = blob.LongLength,
-                    DecodedBytes = variant.DecodedBytes,
+                    DecodedBytes = rungDecoded,
                     SRgb = metadata.SRgb,
                     IsNormalMap = isNormalMap,
                     VariantId = id.Identifier,
                 };
-                await db.SetAssetMetadataAsync(uri, bag => variantMeta.WriteTo(bag)).ConfigureAwait(false);
+                db.SetAssetMetadataAsync(uri, bag => variantMeta.WriteTo(bag), writeIndex: false).GetAwaiter().GetResult();
 
                 Logger.Debug($"TextureVariantStore: {baseLocalUri} -> {id.Identifier} " +
-                           $"({variant.Width}x{variant.Height}, {variant.MipCount} mips, {blob.Length / 1024} KB on disk)");
+                           $"({rungWidth}x{rungHeight}, {rungLevels} mips, {blob.Length / 1024} KB on disk)");
             }
 
             return metadata;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
             Logger.Error($"TextureVariantStore: variant generation failed for '{baseLocalUri}': {ex.Message}");
             return null;
+        }
+        finally
+        {
+            if (changed)
+                _ = db.SaveRecordsAsync();
+        }
+    }
+
+    // A first load's own scan of the source, filed as the base's metadata and sidecar so the next load knows
+    // the picture without decoding it, and can go straight to the renderer's compressed copy. The ladder still
+    // comes from the background pass, which leaves both alone. Same per-texture turn as generation. -xlinka
+    public static async Task RecordAnalysisAsync(LocalDB db, string baseLocalUri, TextureMetadata analyzed, int sourceWidth, int sourceHeight)
+    {
+        try
+        {
+            await OneAtATimeAsync(baseLocalUri, async () =>
+            {
+                var metadata = AsSource(analyzed, sourceWidth, sourceHeight);
+                bool changed = false;
+                // A record from before frames were counted (only a GIF or WebP is read again for it) is replaced.
+                var known = TextureMetadata.ReadFrom(db.GetAssetMetadata(baseLocalUri));
+                bool stale = known is { Frames: 0 } && metadata.Frames > 0;
+                if (known is not { Width: > 0 } || stale)
+                {
+                    await db.SetAssetMetadataAsync(baseLocalUri, bag => metadata.WriteTo(bag), writeIndex: false).ConfigureAwait(false);
+                    changed = true;
+                }
+                var sidecarUri = GetMetadataUri(baseLocalUri);
+                if (sidecarUri != null && (stale || !db.Exists(sidecarUri)))
+                {
+                    await db.SaveDerivedAssetAsync(baseLocalUri, MetadataSuffix, metadata.ToSidecarBytes(), MetadataExtension, writeIndex: false)
+                        .ConfigureAwait(false);
+                    changed = true;
+                }
+                if (changed)
+                    await db.SaveRecordsAsync().ConfigureAwait(false);
+                return true;
+            }).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            Logger.Warn($"TextureVariantStore: could not record the analysis of '{baseLocalUri}': {ex.Message}");
         }
     }
 
@@ -735,7 +981,26 @@ public static class TextureVariantStore
             IsNormalMap = analyzed.IsNormalMap,
             IsHdr = analyzed.IsHdr,
             VariantId = analyzed.VariantId,
+            Frames = analyzed.Frames,
         };
+    }
+
+    // Pictures in an encoded source: more than one only for an animated GIF or WebP.
+    public static int SourceFrames(ReadOnlySpan<byte> encoded)
+    {
+        int frames = GifDecoder.IsGif(encoded) ? GifDecoder.CountFrames(encoded) : WebpStill.CountFrames(encoded);
+        return System.Math.Max(1, frames);
+    }
+
+    // A record from before frames were counted, on a file of a kind that can animate: its ladder may be the first
+    // frame of an animation, so the load goes to the file instead and records the count.
+    public static bool MayBeAnimated(LocalDB db, string baseLocalUri, TextureMetadata metadata)
+    {
+        if (metadata.Frames != 0)
+            return false;
+        var extension = db.GetExtension(baseLocalUri);
+        return string.Equals(extension, ".gif", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(extension, ".webp", StringComparison.OrdinalIgnoreCase);
     }
 
     // Read straight off the URI, the same way the peer transferer resolves an owner.
@@ -803,6 +1068,8 @@ public static class TextureVariantStore
     // one generation pass and not twenty.
     private static readonly HashSet<string> _generating = new(StringComparer.Ordinal);
 
+    private const int LadderPatienceMs = 30000;
+
     // Queue variant generation for an asset that does not have any yet, without blocking the
     // caller. This is the catch-all: the import path generates eagerly, but textures reach the
     // engine by other routes too (a model's embedded textures, an asset received from a peer, a
@@ -810,10 +1077,14 @@ public static class TextureVariantStore
     // generating the variants that every load after it will use.
     //
     // Only for assets this machine owns. A texture a peer owns is theirs to generate; we ask them
-    // for the variant and get the original if they have not made one yet. -xlinka
-    public static void EnsureGeneratedInBackground(LocalDB? db, string? baseLocalUri, bool isNormalMap = false, bool mipmaps = true)
+    // for the variant and get the original if they have not made one yet.
+    //
+    // ct belongs to whoever asked (a texture asset: cancelled when it unloads, so a deleted import or a closed
+    // world takes its queued ladders with it). The next load of the picture asks again. -xlinka
+    public static void EnsureGeneratedInBackground(LocalDB? db, string? baseLocalUri, bool isNormalMap = false, bool mipmaps = true,
+        CancellationToken ct = default)
     {
-        if (db == null || string.IsNullOrEmpty(baseLocalUri) || !IsOwnedLocally(db, baseLocalUri))
+        if (db == null || string.IsNullOrEmpty(baseLocalUri) || !IsOwnedLocally(db, baseLocalUri) || ct.IsCancellationRequested)
             return;
 
         lock (_generating)
@@ -826,7 +1097,15 @@ public static class TextureVariantStore
         {
             try
             {
-                await GenerateAsync(db, baseLocalUri!, isNormalMap, mipmaps).ConfigureAwait(false);
+                // A world arriving asks for its pictures and their ladders together. The ladder only helps
+                // the next load, so it starts once the pictures being waited for are delivered, or after half
+                // a minute of a stream that never stops. -xlinka
+                await Task.WhenAny(TextureAsset.LoadsIdle, Task.Delay(LadderPatienceMs, ct)).ConfigureAwait(false);
+                ct.ThrowIfCancellationRequested();
+                await GenerateAsync(db, baseLocalUri!, isNormalMap, mipmaps, ct: ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
             }
             catch (Exception ex)
             {

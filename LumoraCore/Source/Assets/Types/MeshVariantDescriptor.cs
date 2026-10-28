@@ -3,16 +3,15 @@
 
 namespace Lumora.Core.Assets;
 
-/// <summary>
-/// The load options that distinguish one shared <see cref="MeshDataAsset"/> instance from another
-/// for the same URL: import scale (changes geometry), whether the mesh data is kept readable after
-/// upload, and which glTF mesh to decode (-1 = the whole file concatenated; >= 0 = only that mesh,
-/// so a multi-mesh model becomes one Phos asset per mesh). Requests with equal descriptors share a mesh.
-/// </summary>
+// Every option splits a URL into its own MeshDataAsset instance; requests with equal descriptors share
+// a mesh. MeshIndex -1 is the whole file concatenated, 0 and up only that mesh.
 public sealed record MeshVariantDescriptor(
     float ImportScale,
     bool KeepReadable,
-    int MeshIndex = -1) : IAssetVariantDescriptor
+    int MeshIndex = -1,
+    // Unwelded, with each triangle's corners in the vertex colours, for the wireframe material
+    // (PhosBarycentrics); a separate variant, so the same file can be worn plain and as wires side by side.
+    bool WireframeBarycentrics = false) : IAssetVariantDescriptor
 {
     public static readonly MeshVariantDescriptor Default = new(ImportScale: 1.0f, KeepReadable: false);
 }

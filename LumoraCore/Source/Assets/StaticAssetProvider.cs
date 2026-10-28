@@ -9,12 +9,14 @@ namespace Lumora.Core.Assets;
 // Component base for providers backed by a shared, URL-loaded asset. The provider is a thin
 // IAssetRequester: it resolves its URL and asks the AssetManager for the asset, which loads itself and
 // is shared across every requester for the same URL.
-public abstract class StaticAssetProvider<A> : AssetProvider<A>, IAssetRequester, IUrlAssetProvider
+public abstract class StaticAssetProvider<A> : AssetProvider<A>, IAssetRequester, IUrlAssetProvider, IAssetReload
     where A : LoadableAsset, new()
 {
     public readonly Sync<Uri> URL;
 
     private A? _asset;
+    private Uri? _letGoUrl;
+    private IAssetVariantDescriptor? _letGoVariant;
     private Uri? _requestedSourceUrl;                  // URL.Value the current request was issued for
     private Uri? _resolvedUrl;                          // ProcessURL result, the RequestAsset key
     private IAssetVariantDescriptor? _requestedVariant; // descriptor the current request was issued for
@@ -146,6 +148,43 @@ public abstract class StaticAssetProvider<A> : AssetProvider<A>, IAssetRequester
         _requestedVariant = null;
     }
 
+    Uri? IAssetReload.Held
+    {
+        get
+        {
+            lock (_lock)
+                return _resolvedUrl;
+        }
+    }
+
+    Uri? IAssetReload.LetGo()
+    {
+        lock (_lock)
+        {
+            _letGoUrl = _resolvedUrl;
+            _letGoVariant = _requestedVariant;
+            if (_letGoUrl == null)
+                return null;
+            ReleaseCurrent();
+        }
+        AssetRemoved();
+        return _letGoUrl;
+    }
+
+    bool IAssetReload.Drop()
+    {
+        var url = _letGoUrl;
+        return url == null || (Engine.Current?.AssetManager?.Forget<A>(url, _letGoVariant) ?? true);
+    }
+
+    void IAssetReload.AskAgain()
+    {
+        _letGoUrl = null;
+        _letGoVariant = null;
+        if (!IsDestroyed && AssetReferenceCount > 0)
+            UpdateAsset();
+    }
+
     // IAssetRequester. Called by the asset's variant manager.
 
     void IAssetRequester.AssignAsset(Asset asset) => _asset = (A)asset;
@@ -170,8 +209,10 @@ public abstract class StaticAssetProvider<A> : AssetProvider<A>, IAssetRequester
                 AssetRemoved();
                 break;
             case AssetLoadState.Failed:
-                // Nothing more is coming: whoever holds this has to hear it, to say why.
+                // Nothing more is coming: whoever holds this has to hear it, to say why. A cloud part that was
+                // only late is waited for (LateCloudParts) and loads again when it lands.
                 AssetUpdated();
+                LateCloudParts.Failed((LoadableAsset)asset);
                 break;
         }
     }

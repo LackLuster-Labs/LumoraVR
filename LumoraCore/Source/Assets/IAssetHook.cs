@@ -47,6 +47,11 @@ public interface ITextureAssetHook : IAssetHook
             return;
         UploadData(levels[0], request.Width, request.Height, request.GenerateMipmaps || levels.Length > 1);
     }
+
+    // The copy the renderer compressed and kept under the request's CacheKey, put on the GPU with no pixels at
+    // all. True once it is queued, after which WaitForUploadAsync answers for it. False, with nothing queued,
+    // when there is no such copy or this renderer keeps none; the caller then hands over pixels as usual.
+    System.Threading.Tasks.Task<bool> UploadCachedAsync(TextureUploadRequest request) => System.Threading.Tasks.Task.FromResult(false);
 }
 
 public sealed class TextureUploadRequest
@@ -82,6 +87,10 @@ public sealed class TextureUploadRequest
     // The renderer reports the format it actually built, the mip count it holds and the resident
     // bytes. Never a guess.
     public System.Action<TextureFormatKind, int, long>? Report { get; init; }
+
+    // Called once the renderer holds its own copy and the CPU side is done (compression included), before
+    // the upload waits for the main thread. The caller's pixels are free from then on.
+    public System.Action? Prepared { get; init; }
 }
 
 public interface IRenderTextureAssetHook : ITextureAssetHook
@@ -143,6 +152,7 @@ public readonly struct RenderCameraParameters
     public bool PostProcessing { get; init; }
 
     public bool WearerView { get; init; }
+    public bool StudioLight { get; init; }
 }
 
 public interface IMeshAssetHook : IAssetHook
@@ -181,6 +191,9 @@ public interface IMaterialAssetHook : IAssetHook
     // Set a float2 property AND flush just that one to the live material immediately (no full ApplyChanges,
     // which re-pushes every property). For per-frame hot paths like scroll clip_offset. -xlinka
     void ApplyFloat2Now(string property, Math.float2 value);
+
+    // Push one property set since the last ApplyChanges to the live material now, leaving everything else as it is.
+    void ApplyStagedNow(string property);
 
     void SetFloat3(string property, Math.float3 value);
 
@@ -223,6 +236,9 @@ public interface IFontAssetHook : IAssetHook
     // load a font from a file path. format detected from extension (.ttf/.otf/.woff). - xlinka
     void LoadFromFile(string path);
 
+    // load a font from its bytes, for one the asset database keeps sealed. name keys its glyph cache. - xlinka
+    void LoadFromData(byte[] data, string name);
+
     // return false if the codepoint isn't rasterized at this size (caller may request and retry) - xlinka
     bool TryGetGlyph(int codepoint, float size, out GlyphMetrics metrics, out Math.Rect uvRect);
 
@@ -264,5 +280,7 @@ public enum TextureWrapMode
     Repeat,
     Clamp,
     Mirror,
-    ClampToBorder
+    ClampToBorder,
+    // Mirrored once about each edge, clamped past that.
+    MirrorOnce
 }

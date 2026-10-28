@@ -110,6 +110,9 @@ public sealed class AudioClip : LoadableAsset
     {
         if (url == null)
             return null;
+        if (url.IsAbsoluteUri && url.Scheme == "local"
+            && Engine.Current?.LocalDB?.GetExtension(url.OriginalString) is { Length: > 0 } filed)
+            return filed;
         try
         {
             string path = url.IsAbsoluteUri && url.IsFile ? url.LocalPath

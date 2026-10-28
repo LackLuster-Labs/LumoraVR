@@ -33,7 +33,7 @@ public readonly struct TextureVariantId : IEquatable<TextureVariantId>
     // Bumped when the generator's output changes in a way that makes old blobs wrong (different
     // downscale filter, different container layout). Old blobs keep their old identifier and are
     // simply never requested again.
-    public const int CurrentVersion = 1;
+    public const int CurrentVersion = 2;
 
     // Descending. 128 is not a quality setting anyone picks; it exists so a progressive load always
     // has one rung that costs almost nothing to fetch and upload. Adding it is additive - the

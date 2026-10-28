@@ -6,28 +6,85 @@ using System.Collections.Generic;
 
 namespace Lumora.Core.Assets;
 
-// GIF, the one animated format nothing in the renderer reads, decoded here into the same vertical
-// frame strip an animated WebP becomes: every frame composited the way the file says (keep, clear,
-// or restore), every Nth kept so the strip stays under the texture cap. Chat emotes are the whole
-// reason this exists, so it is small and forgiving rather than complete. -xlinka
+// GIF, the one animated format nothing in the renderer reads, decoded here into the frame sheet an animated WebP
+// becomes too (FrameSheet): every frame composited the way the file says (keep, clear, or restore), every Nth kept
+// once there are more than the sheet holds. The file is walked once to count its pictures, so only the frames the
+// sheet keeps are ever copied out. Small and forgiving rather than complete. -xlinka
 public static class GifDecoder
 {
-    private const int DefaultMaxFrames = 48;
-    private const int DefaultMaxStripHeight = 4096;
-
     public static bool IsGif(ReadOnlySpan<byte> data)
         => data.Length > 13 && data[0] == 'G' && data[1] == 'I' && data[2] == 'F' && data[3] == '8' && (data[4] == '7' || data[4] == '9') && data[5] == 'a';
 
-    public static byte[]? DecodeStrip(byte[] data, out int width, out int height, out int frames, out float fps,
-        int maxFrames = DefaultMaxFrames, int maxStripHeight = DefaultMaxStripHeight)
+    // Pictures in the file, by walking its blocks without decoding any; stops counting at stopAt. A file that
+    // breaks off counts what came before the break.
+    public static int CountFrames(ReadOnlySpan<byte> data, int stopAt = int.MaxValue)
     {
-        width = 0;
-        height = 0;
-        frames = 1;
-        fps = 0f;
+        if (!IsGif(data))
+            return 0;
+        int position = 13;
+        byte packed = data[10];
+        if ((packed & 0x80) != 0)
+            position += 3 << ((packed & 0x07) + 1);
+
+        int count = 0;
+        while (position < data.Length && count < stopAt)
+        {
+            byte block = data[position++];
+            if (block == 0x3B)
+                break;
+            if (block == 0x21)
+            {
+                if (position >= data.Length)
+                    break;
+                position++;
+                if (!SkipSubBlocks(data, ref position))
+                    break;
+                continue;
+            }
+            if (block != 0x2C || position + 9 > data.Length)
+                break;
+            byte framePacked = data[position + 8];
+            position += 9;
+            if ((framePacked & 0x80) != 0)
+                position += 3 << ((framePacked & 0x07) + 1);
+            // The LZW minimum code size, then the image's sub-blocks.
+            position++;
+            if (position > data.Length || !SkipSubBlocks(data, ref position))
+                break;
+            count++;
+        }
+        return count;
+    }
+
+    private static bool SkipSubBlocks(ReadOnlySpan<byte> data, ref int position)
+    {
+        while (position < data.Length)
+        {
+            int length = data[position++];
+            if (length == 0)
+                return true;
+            position += length;
+        }
+        return false;
+    }
+
+    // The first picture alone, as a still: what a material slot takes from a GIF.
+    public static byte[]? DecodeFirstFrame(byte[] data, out int width, out int height)
+    {
+        var sheet = DecodeSheet(data, 0, 1);
+        width = sheet?.Width ?? 0;
+        height = sheet?.Height ?? 0;
+        return sheet?.Pixels;
+    }
+
+    // Null when the file is not a GIF, holds no picture, or its canvas is beyond the sheet. cap: the texture's
+    // size cap, 0 for none. limit: decode no further than this many pictures.
+    public static FrameSheet? DecodeSheet(byte[] data, int cap, int limit = int.MaxValue)
+    {
         if (!IsGif(data))
             return null;
 
+        FrameSheet.Builder? sheet = null;
         try
         {
             var reader = new Reader(data);
@@ -37,7 +94,12 @@ public static class GifDecoder
             byte packed = reader.ReadByte();
             reader.ReadByte();
             reader.ReadByte();
-            if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > 4096 || canvasHeight > 4096)
+            if (canvasWidth <= 0 || canvasHeight <= 0 || canvasWidth > FrameSheet.MaxEdge || canvasHeight > FrameSheet.MaxEdge)
+                return null;
+
+            int total = System.Math.Min(CountFrames(data), limit);
+            sheet = FrameSheet.Builder.Begin(canvasWidth, canvasHeight, System.Math.Max(1, total), cap);
+            if (sheet == null)
                 return null;
 
             byte[]? globalPalette = null;
@@ -47,14 +109,14 @@ public static class GifDecoder
                 globalPalette = reader.ReadBytes(size);
             }
 
-            var frameList = new List<(byte[] Rgba, int Delay)>();
             var canvas = new byte[canvasWidth * canvasHeight * 4];
             byte[]? restore = null;
             int delay = 0;
             int transparentIndex = -1;
             int disposal = 0;
+            int index = 0;
 
-            while (!reader.End)
+            while (!reader.End && index < sheet.Count)
             {
                 byte block = reader.ReadByte();
                 if (block == 0x3B)
@@ -83,7 +145,7 @@ public static class GifDecoder
                 }
 
                 if (block != 0x2C)
-                    return frameList.Count > 0 ? Finish(frameList, canvasWidth, canvasHeight, maxFrames, maxStripHeight, out width, out height, out frames, out fps) : null;
+                    break;
 
                 int left = reader.ReadUInt16();
                 int top = reader.ReadUInt16();
@@ -98,7 +160,7 @@ public static class GifDecoder
                     palette = reader.ReadBytes(size);
                 }
                 if (palette == null)
-                    return null;
+                    break;
 
                 int minCodeSize = reader.ReadByte();
                 byte[] compressed = reader.ReadSubBlocks();
@@ -112,9 +174,9 @@ public static class GifDecoder
 
                 Draw(canvas, canvasWidth, canvasHeight, indices, palette, transparentIndex, left, top, frameWidth, frameHeight, interlaced);
 
-                var snapshot = new byte[canvas.Length];
-                Buffer.BlockCopy(canvas, 0, snapshot, 0, canvas.Length);
-                frameList.Add((snapshot, delay));
+                // The delay is in hundredths of a second.
+                sheet.Add(index, sheet.Wants(index) ? canvas : null, delay * 10);
+                index++;
 
                 // What the next frame starts from: this one, this area cleared, or the one before.
                 if (disposal == 2)
@@ -127,44 +189,13 @@ public static class GifDecoder
                 disposal = 0;
             }
 
-            return frameList.Count > 0 ? Finish(frameList, canvasWidth, canvasHeight, maxFrames, maxStripHeight, out width, out height, out frames, out fps) : null;
+            return sheet.Finish();
         }
         catch (Exception)
         {
-            return null;
+            // A file that breaks off keeps the frames it had.
+            return sheet?.Finish();
         }
-    }
-
-    private static byte[] Finish(List<(byte[] Rgba, int Delay)> frameList, int canvasWidth, int canvasHeight, int maxFrames, int maxStripHeight,
-        out int width, out int height, out int frames, out float fps)
-    {
-        int limit = System.Math.Max(1, System.Math.Min(maxFrames, maxStripHeight / canvasHeight));
-        int step = System.Math.Max(1, (int)System.Math.Ceiling(frameList.Count / (double)limit));
-        int selected = 0;
-        for (int i = 0; i < frameList.Count; i += step) selected++;
-
-        int frameBytes = canvasWidth * canvasHeight * 4;
-        var strip = new byte[frameBytes * selected];
-        double totalDelay = 0;
-        int placed = 0;
-        for (int i = 0; i < frameList.Count; i++)
-        {
-            // A zero delay is drawn at the same ten frames a second every viewer uses for it.
-            int delay = frameList[i].Delay <= 1 ? 10 : frameList[i].Delay;
-            totalDelay += delay;
-            if (i % step == 0 && placed < selected)
-            {
-                Buffer.BlockCopy(frameList[i].Rgba, 0, strip, placed * frameBytes, frameBytes);
-                placed++;
-            }
-        }
-
-        width = canvasWidth;
-        height = canvasHeight * placed;
-        frames = placed;
-        double averageMs = totalDelay / frameList.Count * 10.0 * step;
-        fps = averageMs > 0 ? (float)System.Math.Clamp(1000.0 / averageMs, 1.0, 50.0) : 10f;
-        return strip;
     }
 
     private static void Draw(byte[] canvas, int canvasWidth, int canvasHeight, byte[] indices, byte[] palette, int transparentIndex,

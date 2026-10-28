@@ -98,6 +98,29 @@ public class AssetManager : IDisposable
         manager?.RemoveRequest(requester, descriptor);
     }
 
+    // Drops the shared instance of one variant of an address once nothing asks for it, for a reload that has to
+    // decode again rather than land on the instance already loaded. False while something still holds it.
+    internal bool Forget<A>(Uri assetURL, IAssetVariantDescriptor? descriptor) where A : LoadableAsset, new()
+    {
+        AssetVariantManager? manager;
+        lock (_managerLock)
+        {
+            _variantManagers.TryGetValue(new AssetID(assetURL, typeof(A)), out manager);
+        }
+        return manager == null || manager.Forget(descriptor);
+    }
+
+    // Whoever still asks for a failed instance of one address, for a part that may arrive after all.
+    internal void CollectFailed(AssetID id, List<IAssetRequester> into)
+    {
+        AssetVariantManager? manager;
+        lock (_managerLock)
+        {
+            _variantManagers.TryGetValue(id, out manager);
+        }
+        manager?.CollectFailed(into);
+    }
+
     // Called by a variant manager once its asset unloads. Removal is deferred to Update so we
     // don't mutate the dictionary from an unload task thread mid-iteration.
     internal void ScheduleVariantManagerRemoval(AssetID id)
@@ -113,6 +136,7 @@ public class AssetManager : IDisposable
     public void Update(float deltaTime)
     {
         TexturePixelCache.Tick();
+        LateCloudParts.Tick(this);
 
         lock (_managerLock)
         {
@@ -134,6 +158,7 @@ public class AssetManager : IDisposable
             return;
 
         _disposing = true;
+        VariantWorkers.Shutdown();
         Logger.Log("AssetManager: Disposed");
     }
 }

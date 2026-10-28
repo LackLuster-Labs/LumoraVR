@@ -158,6 +158,8 @@ public sealed class CurveAnimationTrack<T> : AnimationTrackBase, IAnimationTrack
             return true;
         }
 
+        if (mode.IsEased())
+            u = mode.Ease(u);
         value = Codec.Lerp(_values[i], _values[i + 1], u);
         return true;
     }

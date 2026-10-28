@@ -25,7 +25,17 @@ public enum KeyframeInterpolation : byte
     Linear = 1,
 
     // Cubic Hermite through this key's out tangent and the next key's in tangent.
-    Cubic = 2
+    Cubic = 2,
+
+    // Eased blends to the next key, no tangents needed. The anticipating and overshooting ones run past
+    // the keys (a little back before leaving, a little beyond before settling), which is what makes a
+    // gesture read as weight instead of a tween; rotations overshoot the same way.
+    EaseIn = 3,
+    EaseOut = 4,
+    EaseInOut = 5,
+    Anticipate = 6,
+    Overshoot = 7,
+    AnticipateOvershoot = 8
 }
 
 // Value type tag written into the binary stream. These numbers are FILE FORMAT: never renumber an
@@ -54,4 +64,45 @@ public static class KeyframeInterpolationExtensions
 {
     public static bool RequiresTangents(this KeyframeInterpolation interpolation)
         => interpolation == KeyframeInterpolation.Cubic;
+
+    // Whether the blend runs through a shaped ease rather than straight or by tangents.
+    public static bool IsEased(this KeyframeInterpolation interpolation)
+        => interpolation >= KeyframeInterpolation.EaseIn && interpolation <= KeyframeInterpolation.AnticipateOvershoot;
+
+    // How the 0..1 progress between two keys is reshaped. Cubic ease curves; the back curves use the usual
+    // 1.70158 swing (about 10 % past the key), the in-out one scaled by 1.525 so each half swings the same.
+    public static float Ease(this KeyframeInterpolation interpolation, float u)
+    {
+        const float back = 1.70158f;
+        const float backInOut = back * 1.525f;
+        switch (interpolation)
+        {
+            case KeyframeInterpolation.EaseIn:
+                return u * u * u;
+            case KeyframeInterpolation.EaseOut:
+            {
+                float v = 1f - u;
+                return 1f - v * v * v;
+            }
+            case KeyframeInterpolation.EaseInOut:
+                return u < 0.5f ? 4f * u * u * u : 1f - 4f * (1f - u) * (1f - u) * (1f - u);
+            case KeyframeInterpolation.Anticipate:
+                return u * u * ((back + 1f) * u - back);
+            case KeyframeInterpolation.Overshoot:
+            {
+                float v = u - 1f;
+                return 1f + v * v * ((back + 1f) * v + back);
+            }
+            case KeyframeInterpolation.AnticipateOvershoot:
+            {
+                float v = u * 2f;
+                if (v < 1f)
+                    return 0.5f * (v * v * ((backInOut + 1f) * v - backInOut));
+                v -= 2f;
+                return 0.5f * (v * v * ((backInOut + 1f) * v + backInOut) + 2f);
+            }
+            default:
+                return u;
+        }
+    }
 }

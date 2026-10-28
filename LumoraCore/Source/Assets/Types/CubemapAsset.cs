@@ -3,6 +3,7 @@
 
 using System;
 using System.Threading.Tasks;
+using Lumora.Core.Math;
 
 namespace Lumora.Core.Assets;
 
@@ -101,6 +102,10 @@ public class CubemapAsset : ImplementableAsset<ICubemapAssetHook>
     // Null for procedural data.
     public (int Width, int Height)? SourcePanoramaSize { get; private set; }
 
+    // The light the faces hold as nine coefficients, worked out when they arrive, since the faces themselves
+    // are let go once the renderer has them. What an ambient light fed from a sky or a probe reads.
+    public SphericalHarmonicsL2? Radiance { get; private set; }
+
     // Gather and decode this cubemap from its URL. The source is a single equirectangular image; six separate
     // face images go through the assembler component instead, which reuses the ordinary texture pipeline per
     // face rather than growing a second one here.
@@ -178,6 +183,14 @@ public class CubemapAsset : ImplementableAsset<ICubemapAssetHook>
         _faceSize = faceSize;
         _hasMipmaps = mipmaps;
         _hdr = hdr;
+        try
+        {
+            Radiance = CubemapHarmonics.Project(faces, faceSize, hdr);
+        }
+        catch (Exception)
+        {
+            Radiance = null;
+        }
         Version++;
 
         var hook = Hook;
@@ -226,6 +239,7 @@ public class CubemapAsset : ImplementableAsset<ICubemapAssetHook>
         _hdr = false;
         GpuBytes = null;
         SourcePanoramaSize = null;
+        Radiance = null;
         base.Unload();
     }
 }

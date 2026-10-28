@@ -4,6 +4,7 @@
 using System;
 using System.Buffers.Binary;
 using System.IO;
+using System.IO.Compression;
 using System.Text;
 using K4os.Compression.LZ4;
 using Lumora.Core.Math;
@@ -26,6 +27,8 @@ namespace Lumora.Core.Assets;
 //   v2: container flags (1) + uncompressed body length (4), then the body, LZ4 block compressed when
 //       that actually shrinks it. Inside, blend shape frames are SPARSE (moved-vertex indices plus
 //       deltas for only those vertices) and UV channels carry a presence bitmask.
+//   v3: the same sparse body, optionally Brotli compressed. Repeated morph channels can be hundreds
+//       of kilobytes apart, beyond a short block compressor's history. -xlinka
 //
 // Sparse frames are the whole point of v2. A real avatar moves almost nothing: 7,209,317 vertex-shapes
 // across 756 attachments, of which 490,228 move. Dense costs 139 MB of deltas that are 93% zeros; the
@@ -36,13 +39,15 @@ public static class PhosMeshSerializer
 {
     private static readonly byte[] Magic = { (byte)'L', (byte)'M', (byte)'S', (byte)'H' };
 
-    private const int CurrentVersion = 2;
+    private const int CurrentVersion = 3;
+    private const int SparseVersion = 2;
     private const int LegacyDenseVersion = 1;
 
     // magic(4) + version(4) + container flags(1) + uncompressed body length(4)
     private const int HeaderBytes = 13;
 
     private const byte ContainerCompressed = 1 << 0;
+    private const byte ContainerBrotli = 1 << 1;
 
     // Sanity caps so a hostile/garbage header can't make us allocate or loop unbounded. -xlinka
     private const int MaxVertices = 8_000_000;
@@ -153,6 +158,19 @@ public static class PhosMeshSerializer
 
         var scratch = new byte[HeaderBytes + LZ4Codec.MaximumOutputSize(bodyLength)];
         int written = LZ4Codec.Encode(raw.AsSpan(HeaderBytes, bodyLength), scratch.AsSpan(HeaderBytes), LZ4Level.L09_HC);
+        int bestLength = written > 0 ? System.Math.Min(written, bodyLength) : bodyLength;
+        // Reuse the destination so trying a larger history does not hold a third mesh-sized buffer.
+        // A cached avatar's repeated normal channels reduced from 235 MB to 11 MB this way. -xlinka
+        if (BrotliEncoder.TryCompress(raw.AsSpan(HeaderBytes, bodyLength), scratch.AsSpan(HeaderBytes),
+            out int packed, quality: 5, window: 24) && packed < bestLength)
+        {
+            raw = null!;
+            Array.Resize(ref scratch, HeaderBytes + packed);
+            WriteHeader(scratch, ContainerBrotli, bodyLength);
+            return scratch;
+        }
+        if (written > 0 && written < bodyLength)
+            written = LZ4Codec.Encode(raw.AsSpan(HeaderBytes, bodyLength), scratch.AsSpan(HeaderBytes), LZ4Level.L09_HC);
         if (written > 0 && written < bodyLength)
         {
             // Release the uncompressed body before the trim copy so only one large allocation is
@@ -189,21 +207,31 @@ public static class PhosMeshSerializer
                 return ReadBody(lr, version);
             }
 
-            if (version != CurrentVersion)
-                throw new InvalidDataException($"Unsupported .lmesh version {version} (expected {LegacyDenseVersion} or {CurrentVersion}).");
+            if (version != SparseVersion && version != CurrentVersion)
+                throw new InvalidDataException($"Unsupported .lmesh version {version} (expected {LegacyDenseVersion}, {SparseVersion} or {CurrentVersion}).");
 
             if (data.Length < HeaderBytes)
                 throw new InvalidDataException("Truncated .lmesh blob.");
 
             byte container = data[8];
+            if (container != 0 && container != ContainerCompressed && container != ContainerBrotli
+                || version == SparseVersion && container == ContainerBrotli)
+                throw new InvalidDataException($"Unsupported .lmesh compression {container}.");
             int bodyLength = BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(9));
             if (bodyLength < 0 || bodyLength > MaxBodyBytes)
                 throw new InvalidDataException($"Body length {bodyLength} out of range.");
 
-            if ((container & ContainerCompressed) != 0)
+            if (container != 0)
             {
                 var body = new byte[bodyLength];
-                int decoded = LZ4Codec.Decode(data.AsSpan(HeaderBytes), body.AsSpan());
+                int decoded;
+                if (container == ContainerBrotli)
+                {
+                    if (!BrotliDecoder.TryDecompress(data.AsSpan(HeaderBytes), body.AsSpan(), out decoded))
+                        throw new InvalidDataException("Invalid compressed .lmesh body.");
+                }
+                else
+                    decoded = LZ4Codec.Decode(data.AsSpan(HeaderBytes), body.AsSpan());
                 if (decoded != bodyLength)
                     throw new InvalidDataException($"Compressed body decoded to {decoded} bytes, expected {bodyLength}.");
 
@@ -569,7 +597,7 @@ public static class PhosMeshSerializer
         buffer[1] = Magic[1];
         buffer[2] = Magic[2];
         buffer[3] = Magic[3];
-        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(4), CurrentVersion);
+        BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(4), containerFlags == ContainerBrotli ? CurrentVersion : SparseVersion);
         buffer[8] = containerFlags;
         BinaryPrimitives.WriteInt32LittleEndian(buffer.AsSpan(9), bodyLength);
     }

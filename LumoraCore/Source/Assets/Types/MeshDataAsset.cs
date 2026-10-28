@@ -10,60 +10,39 @@ using Lumora.Core.Phos;
 
 namespace Lumora.Core.Assets;
 
-/// <summary>
-/// Asset containing mesh geometry data. URL instances gather and decode their file in
-/// <see cref="LoadSelf"/>; procedural instances are created via <c>InitializeDynamic</c> and fed
-/// geometry through <see cref="SetMeshData"/>.
-/// </summary>
+// URL instances gather and decode their file in LoadSelf. Procedural ones come from InitializeDynamic
+// and get their geometry through SetMeshData.
 public class MeshDataAsset : ImplementableAsset<IMeshAssetHook>
 {
     private PhosMesh _meshData = null!;
     private BoundingBox _bounds;
     private bool _keepReadable;
 
-    /// <summary>
-    /// The mesh geometry data.
-    /// </summary>
     public PhosMesh MeshData => _meshData;
 
-    /// <summary>
-    /// Bounding box of the mesh.
-    /// </summary>
     public BoundingBox Bounds => _bounds;
 
-    /// <summary>
-    /// Number of vertices in the mesh.
-    /// </summary>
     public int VertexCount => _meshData?.VertexCount ?? 0;
 
     // Skinning surface - lets a skinned renderer rebind off the asset's own bone table + blendshape
     // names instead of carrying that data as per-element synced lists. Returns empties until the decoder
     // populates them (the bake/glTF-skinning producer is the next step). -xlinka
 
-    /// <summary>Number of bones in the mesh's skeleton table.</summary>
     public int BoneCount => _meshData?.BoneCount ?? 0;
 
-    /// <summary>Bone name at the given index, or null if out of range.</summary>
     public string? GetBoneName(int index) =>
         (_meshData != null && index >= 0 && index < _meshData.BoneCount) ? _meshData.GetBoneName(index) : null;
 
-    /// <summary>Bone bind pose at the given index (identity if out of range).</summary>
     public Lumora.Core.Math.float4x4 GetBoneBindPose(int index) =>
         (_meshData != null && index >= 0 && index < _meshData.BoneCount) ? _meshData.GetBoneBindPose(index) : Lumora.Core.Math.float4x4.Identity;
 
-    /// <summary>Number of blend shapes on the mesh.</summary>
     public int BlendShapeCount => _meshData?.BlendShapeCount ?? 0;
 
-    /// <summary>Blend shape name at the given index, or null if out of range.</summary>
     public string? GetBlendShapeName(int index) =>
         (_meshData != null && index >= 0 && index < _meshData.BlendShapeCount) ? _meshData.BlendShapes[index].Name : null;
 
-    /// <summary>Index of the named blend shape, or -1 if absent.</summary>
     public int BlendShapeIndex(string name) => _meshData?.BlendShapeIndex(name) ?? -1;
 
-    /// <summary>
-    /// Number of triangles in the mesh.
-    /// </summary>
     public int TriangleCount
     {
         get
@@ -78,19 +57,12 @@ public class MeshDataAsset : ImplementableAsset<IMeshAssetHook>
         }
     }
 
-    /// <summary>
-    /// Whether to keep mesh data readable after upload to GPU.
-    /// </summary>
     public bool KeepReadable
     {
         get => _keepReadable;
         set => _keepReadable = value;
     }
 
-    /// <summary>
-    /// Gather and decode this mesh from its URL. Only runs for URL (static) instances;
-    /// procedural instances set their data directly via <see cref="SetMeshData"/>.
-    /// </summary>
     // The formats that build a full Assimp scene. Everything else decodes as a buffer and runs free.
     private static readonly string[] SceneFormats =
     {
@@ -163,21 +135,23 @@ public class MeshDataAsset : ImplementableAsset<IMeshAssetHook>
             MeshDecoder.ScaleMesh(mesh, descriptor.ImportScale);
         }
 
+        if (descriptor.WireframeBarycentrics)
+            PhosBarycentrics.Bake(mesh);
+
         _keepReadable = descriptor.KeepReadable;
         SetMeshData(mesh);
     }
 
     // local:// URIs are content-hashed and carry no extension in their path, so the decoder can't tell the
-    // format from the URL alone. Resolve the cached file (which keeps its original extension) via LocalDB,
-    // the same way AssetProvider.ProcessURL does, and read the extension off that. Falls back to the URL's
-    // own extension for file://, cdn://, etc. -xlinka
+    // format from the URL alone. The record the asset is filed under keeps the format it came in as. Falls
+    // back to the URL's own extension for file://, cdn://, etc. -xlinka
     private static string ResolveExtension(Uri url)
     {
         if (url.Scheme == "local")
         {
-            var path = Engine.Current?.LocalDB?.GetFilePath(url.ToString());
-            if (!string.IsNullOrEmpty(path))
-                return Path.GetExtension(path) ?? "";
+            var extension = Engine.Current?.LocalDB?.GetExtension(url.OriginalString);
+            if (!string.IsNullOrEmpty(extension))
+                return extension!;
         }
         return Path.GetExtension(url.IsFile ? url.LocalPath : url.AbsolutePath) ?? "";
     }
@@ -203,10 +177,6 @@ public class MeshDataAsset : ImplementableAsset<IMeshAssetHook>
         return ext;
     }
 
-    /// <summary>
-    /// Set the mesh data.
-    /// </summary>
-    /// <param name="mesh">The PhosMesh containing geometry data</param>
     public void SetMeshData(PhosMesh mesh)
     {
         _meshData = mesh;
@@ -220,17 +190,11 @@ public class MeshDataAsset : ImplementableAsset<IMeshAssetHook>
         }
     }
 
-    /// <summary>
-    /// Set a custom bounding box override.
-    /// </summary>
     public void SetBounds(BoundingBox bounds)
     {
         _bounds = bounds;
     }
 
-    /// <summary>
-    /// Recalculate bounding box from mesh data.
-    /// </summary>
     public void RecalculateBounds()
     {
         if (_meshData != null)
@@ -239,9 +203,6 @@ public class MeshDataAsset : ImplementableAsset<IMeshAssetHook>
         }
     }
 
-    /// <summary>
-    /// Create a MeshDataAsset from a PhosMesh.
-    /// </summary>
     public static MeshDataAsset FromPhosMesh(PhosMesh mesh)
     {
         var asset = new MeshDataAsset();

@@ -9,14 +9,9 @@ using Lumora.Core.Logging;
 
 namespace Lumora.Core.Assets;
 
-/// <summary>
-/// Base for assets that can be loaded from a URL. The same class also supports procedural
-/// (dynamic) instances: initialized via <see cref="Asset.InitializeStatic"/> it gathers and
-/// decodes itself from its URL (<see cref="LoadSelf"/>), tracks the requesters keeping it alive,
-/// and is shared across every requester for the same (URL, type); initialized via
-/// <see cref="Asset.InitializeDynamic"/> it is procedural, has no requesters, and is loaded
-/// immediately.
-/// </summary>
+// After InitializeStatic it gathers and decodes itself from its URL in LoadSelf, tracks the requesters
+// keeping it alive, and is shared by every requester of the same (URL, type). After InitializeDynamic it
+// is procedural: no requesters, loaded immediately.
 public abstract class LoadableAsset : Asset
 {
     private readonly HashSet<IAssetRequester> _requests = new();
@@ -24,13 +19,10 @@ public abstract class LoadableAsset : Asset
     private bool _runningUpdate;
     private bool _unload;
 
-    /// <summary>The variant manager tracking this asset; set when the manager creates it.</summary>
     internal AssetVariantManager? VariantManager { get; set; }
 
-    /// <summary>
-    /// The descriptor this instance was loaded for (wrap/mipmap options, etc.), or null for the
-    /// default variant. Set when the manager creates the asset; read by <see cref="LoadSelf"/>.
-    /// </summary>
+    // Null for the default variant. The variant manager sets it when it creates the asset, before
+    // LoadSelf reads it.
     public IAssetVariantDescriptor? TargetVariant { get; internal set; }
 
     public override int ActiveRequestCount
@@ -65,6 +57,14 @@ public abstract class LoadableAsset : Asset
         lock (_stateLock)
         {
             _requests.Remove(requester);
+        }
+    }
+
+    internal void CollectRequesters(List<IAssetRequester> into)
+    {
+        lock (_stateLock)
+        {
+            into.AddRange(_requests);
         }
     }
 
@@ -184,11 +184,8 @@ public abstract class LoadableAsset : Asset
         }
     }
 
-    /// <summary>
-    /// Load this asset's contents from <see cref="Asset.AssetURL"/>. Implementations gather the
-    /// raw bytes via <c>AssetManager.RequestGather</c> and decode them. Runs off the main thread.
-    /// Only invoked for URL (static) instances; procedural instances never call this.
-    /// </summary>
+    // Static instances only. Gather the bytes with AssetManager.RequestGather and decode them; it starts
+    // off the main thread, but see DecodeOffThread for where the decode has to run.
     protected abstract Task LoadSelf();
 
     // Run the CPU half of a load somewhere a stall is harmless. ProcessUpdate starts on the pool, but

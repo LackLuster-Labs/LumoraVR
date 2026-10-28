@@ -61,9 +61,15 @@ public class AssetRef<A> : SyncRef<IAssetProvider<A>>, IAssetRef where A : Asset
         base.ValueChanged();
     }
 
+    // A list element pointed somewhere else is a change to the list as far as a renderer is concerned, the
+    // same as one finishing its load. Pointed at a material that was already loaded and already in use
+    // (every nametag's shared plate material), nothing else ever said so: the provider only refreshes for
+    // its first reference, so the surface kept drawing the old material until something unrelated dirtied
+    // the renderer. -xlinka
     protected override void RunReferenceChanged()
     {
         SyncElementChanged();
+        (Parent as SyncAssetList<A>)?.ElementAssetUpdated();
         base.RunReferenceChanged();
     }
 
@@ -71,6 +77,7 @@ public class AssetRef<A> : SyncRef<IAssetProvider<A>>, IAssetRef where A : Asset
     {
         Target?.ReferenceSet(this);
         SyncElementChanged(); // Target just resolved - re-trigger ApplyChanges so material gets applied
+        (Parent as SyncAssetList<A>)?.ElementAssetUpdated();
         base.RunObjectAvailable();
     }
 
