@@ -19,6 +19,7 @@ public class GodotKeyboardDriver : IKeyboardDriver, IInputDriver
         { EngineKey.Backspace, global::Godot.Key.Backspace },
         { EngineKey.Tab, global::Godot.Key.Tab },
         { EngineKey.Return, global::Godot.Key.Enter },
+        { EngineKey.KeypadEnter, global::Godot.Key.KpEnter },
         { EngineKey.Escape, global::Godot.Key.Escape },
         { EngineKey.Space, global::Godot.Key.Space },
         { EngineKey.Alpha0, global::Godot.Key.Key0 },

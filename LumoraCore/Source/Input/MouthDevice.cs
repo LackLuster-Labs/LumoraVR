@@ -6,12 +6,8 @@ using System.Collections.Generic;
 
 namespace Lumora.Core.Input;
 
-/// <summary>
-/// A compact set of mouth/lip expression weights produced by a face tracker. A hardware hook fills these
-/// each frame; <see cref="MouthStreamManager"/> replicates them and <c>MouthExpressionDriver</c> maps
-/// them onto avatar blendshapes. Kept small and device-agnostic - a hook normalizes its own richer shape
-/// set down to these.
-/// </summary>
+// Device-agnostic: each frame a hook folds its tracker's own shape set down to these. MouthStreamManager
+// replicates them and MouthExpressionDriver maps them onto avatar blendshapes.
 public enum MouthShape
 {
     JawOpen,
@@ -27,23 +23,50 @@ public enum MouthShape
     UpperUp,
     LowerDown,
     CheekPuff,
-    TongueOut
+    TongueOut,
+
+    // The rest of what a lip tracker measures, kept apart where the set above averages a pair or has no channel.
+    // A tracker that has no reading for one leaves it at 0. Indexed by ordinal in the mouth stream: append only.
+    UpperUpLeft,
+    UpperUpRight,
+    LowerDownLeft,
+    LowerDownRight,
+    CheekPuffLeft,
+    CheekPuffRight,
+    CheekSuck,
+    // The upper or lower lip shifted toward the wearer's left or right.
+    UpperLipLeft,
+    UpperLipRight,
+    LowerLipLeft,
+    LowerLipRight,
+    UpperLipOverturn,
+    LowerLipOverturn,
+    UpperLipInside,
+    LowerLipInside,
+    LowerLipOverlay,
+    // TongueOut is the first step out, this the rest of the way.
+    TongueExtend,
+    TongueUp,
+    TongueDown,
+    TongueLeft,
+    TongueRight,
+    TongueRoll,
+    TongueUpLeft,
+    TongueUpRight,
+    TongueDownLeft,
+    TongueDownRight
 }
 
-/// <summary>
-/// Face/lip tracking device. A hardware hook sets <see cref="IsTracking"/> and the per-shape weights;
-/// everything is 0 and untracked by default, so the avatar's mouth simply rests until a tracker feeds it.
-/// </summary>
+// The hardware hook sets IsTracking and the weights. Until one does it is untracked and all zero, so the
+// mouth rests.
 public class MouthDevice : InputDevice
 {
     public static readonly int ShapeCount = Enum.GetValues(typeof(MouthShape)).Length;
 
     private readonly float[] _weights = new float[ShapeCount];
 
-    /// <summary>True while a face tracker is providing live mouth data.</summary>
     public bool IsTracking { get; set; }
 
-    /// <summary>True while the headset/tracker is worn.</summary>
     public bool IsWorn { get; set; } = true;
 
     public float TrackingConfidence { get; set; } = 1f;

@@ -223,6 +223,8 @@ internal static class SRanipalNative
     public const int LipMouthUpperLeft = 6;
     public const int LipMouthLowerRight = 7;
     public const int LipMouthLowerLeft = 8;
+    public const int LipMouthUpperOverturn = 9;
+    public const int LipMouthLowerOverturn = 10;
     public const int LipMouthPout = 11;
     public const int LipMouthSmileRight = 12;
     public const int LipMouthSmileLeft = 13;
@@ -235,7 +237,20 @@ internal static class SRanipalNative
     public const int LipMouthUpperUpLeft = 20;
     public const int LipMouthLowerDownRight = 21;
     public const int LipMouthLowerDownLeft = 22;
+    public const int LipMouthUpperInside = 23;
+    public const int LipMouthLowerInside = 24;
+    public const int LipMouthLowerOverlay = 25;
     public const int LipTongueLongStep1 = 26;
+    public const int LipTongueLongStep2 = 27;
+    public const int LipTongueDown = 28;
+    public const int LipTongueUp = 29;
+    public const int LipTongueRight = 30;
+    public const int LipTongueLeft = 31;
+    public const int LipTongueRoll = 32;
+    public const int LipTongueUpLeft = 33;
+    public const int LipTongueUpRight = 34;
+    public const int LipTongueDownLeft = 35;
+    public const int LipTongueDownRight = 36;
 
     [DllImport(Library, EntryPoint = "Initial", ExactSpelling = true)]
     public static extern SRError Initial(int anipalType, IntPtr config);

@@ -631,10 +631,10 @@ public sealed class SRanipalDriver : IInputDriver
 
     // THE MOUTH
     //
-    // SRanipal's 37 lip shapes folded onto the 14 device-agnostic ones MouthDevice carries. The
-    // paired left/right shapes that our set has no separate channel for are averaged; the ones with
-    // no counterpart at all are left alone rather than approximated out of something that means
-    // something else.
+    // SRanipal's 37 lip shapes onto the device-agnostic ones MouthDevice carries. The first fourteen
+    // average the left/right pairs they have one channel for; the rest carry each pair side by side and
+    // the shapes those fourteen had no channel for. The ape shape (jaw open behind closed lips) has no
+    // counterpart and is left alone rather than approximated out of something that means something else.
     private void ApplyLips(in SR.LipDataV2 data, SR.SRError result)
     {
         var mouth = _input?.MouthDevice;
@@ -668,10 +668,39 @@ public sealed class SRanipalDriver : IInputDriver
         mouth.SetWeight(MouthShape.CheekPuff, Clamp01((w[SR.LipCheekPuffLeft] + w[SR.LipCheekPuffRight]) * 0.5f));
         mouth.SetWeight(MouthShape.TongueOut, Clamp01(w[SR.LipTongueLongStep1]));
 
+        // The same shapes again where the set above folds a pair, and the ones it had no channel for, so an avatar
+        // that names a shape for each of them gets the tracker's own reading.
+        mouth.SetWeight(MouthShape.UpperUpLeft, Clamp01(w[SR.LipMouthUpperUpLeft]));
+        mouth.SetWeight(MouthShape.UpperUpRight, Clamp01(w[SR.LipMouthUpperUpRight]));
+        mouth.SetWeight(MouthShape.LowerDownLeft, Clamp01(w[SR.LipMouthLowerDownLeft]));
+        mouth.SetWeight(MouthShape.LowerDownRight, Clamp01(w[SR.LipMouthLowerDownRight]));
+        mouth.SetWeight(MouthShape.CheekPuffLeft, Clamp01(w[SR.LipCheekPuffLeft]));
+        mouth.SetWeight(MouthShape.CheekPuffRight, Clamp01(w[SR.LipCheekPuffRight]));
+        mouth.SetWeight(MouthShape.CheekSuck, Clamp01(w[SR.LipCheekSuck]));
+        mouth.SetWeight(MouthShape.UpperLipLeft, Clamp01(w[SR.LipMouthUpperLeft]));
+        mouth.SetWeight(MouthShape.UpperLipRight, Clamp01(w[SR.LipMouthUpperRight]));
+        mouth.SetWeight(MouthShape.LowerLipLeft, Clamp01(w[SR.LipMouthLowerLeft]));
+        mouth.SetWeight(MouthShape.LowerLipRight, Clamp01(w[SR.LipMouthLowerRight]));
+        mouth.SetWeight(MouthShape.UpperLipOverturn, Clamp01(w[SR.LipMouthUpperOverturn]));
+        mouth.SetWeight(MouthShape.LowerLipOverturn, Clamp01(w[SR.LipMouthLowerOverturn]));
+        mouth.SetWeight(MouthShape.UpperLipInside, Clamp01(w[SR.LipMouthUpperInside]));
+        mouth.SetWeight(MouthShape.LowerLipInside, Clamp01(w[SR.LipMouthLowerInside]));
+        mouth.SetWeight(MouthShape.LowerLipOverlay, Clamp01(w[SR.LipMouthLowerOverlay]));
+        mouth.SetWeight(MouthShape.TongueExtend, Clamp01(w[SR.LipTongueLongStep2]));
+        mouth.SetWeight(MouthShape.TongueUp, Clamp01(w[SR.LipTongueUp]));
+        mouth.SetWeight(MouthShape.TongueDown, Clamp01(w[SR.LipTongueDown]));
+        mouth.SetWeight(MouthShape.TongueLeft, Clamp01(w[SR.LipTongueLeft]));
+        mouth.SetWeight(MouthShape.TongueRight, Clamp01(w[SR.LipTongueRight]));
+        mouth.SetWeight(MouthShape.TongueRoll, Clamp01(w[SR.LipTongueRoll]));
+        mouth.SetWeight(MouthShape.TongueUpLeft, Clamp01(w[SR.LipTongueUpLeft]));
+        mouth.SetWeight(MouthShape.TongueUpRight, Clamp01(w[SR.LipTongueUpRight]));
+        mouth.SetWeight(MouthShape.TongueDownLeft, Clamp01(w[SR.LipTongueDownLeft]));
+        mouth.SetWeight(MouthShape.TongueDownRight, Clamp01(w[SR.LipTongueDownRight]));
+
         // MouthWide is a lip-corner STRETCH, and SRanipal has no shape that means that. Filling it
         // from the smile pair would double-count a smile that is already going to SmileLeft and
-        // SmileRight, so it stays at rest until a tracker that measures it shows up. Cheek suck has
-        // the same problem in reverse: CheekPuff cannot go negative, so a suck reads as no puff.
+        // SmileRight, so it stays at rest until a tracker that measures it shows up. A cheek suck has
+        // its own channel; CheekPuff cannot go negative, so it reads as no puff there.
 
         mouth.IsTracking = true;
         mouth.IsWorn = true;

@@ -41,9 +41,11 @@ public sealed class LocomotionActions : InputActionGroup
 {
     public readonly Analog2DAction Move;
     public readonly AnalogAction Turn;
+    public readonly Analog2DAction Look;
     public readonly AnalogAction Fly;
     public readonly DigitalAction Jump;
     public readonly DigitalAction Sprint;
+    public readonly DigitalAction SprintToggle;
     public readonly DigitalAction Crouch;
     public readonly DigitalAction SlowWalk;
     public readonly DigitalAction ToggleMouseCapture;
@@ -52,14 +54,17 @@ public sealed class LocomotionActions : InputActionGroup
     public readonly Analog2DAction RightStick;
     public readonly DigitalAction BlinkAim;
     public readonly DigitalAction BlinkBackstep;
+    public readonly DigitalAction Respawn;
 
     public LocomotionActions(InputActionSet set) : base(set)
     {
         Move = Analog2D("Move", "Move", "Walk and strafe.");
-        Turn = Analog("Turn", "Turn", "Snap or smooth turn. Desktop turns with the mouse instead.");
+        Turn = Analog("Turn", "Turn", "Snap or smooth turn in a headset. A screen turns with the mouse or Look.");
+        Look = Analog2D("Look", "Look", "Turns and tilts the view on a screen, like the mouse does.");
         Fly = Analog("Fly", "Fly Up / Down", "Vertical axis for noclip flight.");
         Jump = Digital("Jump", "Jump");
         Sprint = Digital("Sprint", "Sprint");
+        SprintToggle = Digital("SprintToggle", "Sprint (Click)", "Runs until you stop moving or crouch.");
         Crouch = Digital("Crouch", "Crouch");
         SlowWalk = Digital("SlowWalk", "Slow Walk", "Toggles walking at a quarter of the pace. Sprint turns it off.");
         ToggleMouseCapture = Digital("ToggleMouseCapture", "Release Mouse", "Frees the cursor from mouse look.");
@@ -72,6 +77,11 @@ public sealed class LocomotionActions : InputActionGroup
 
         BlinkAim = Digital("BlinkAim", "Blink Aim", "Hold to aim the blink arc (desktop and pad).");
         BlinkBackstep = Digital("BlinkBackstep", "Blink Backstep", "Short hop backwards.");
+        Respawn = Digital("Respawn", "Respawn", "A fresh body at a spawn point in the world in focus.");
+
+        // The pad's thumbsticks wear and rest a little off centre; the driver's floor takes the worst of it and
+        // this is the look's own ring past it, cut radially so a diagonal keeps its angle.
+        Look.Deadzone = 0.05f;
     }
 }
 
@@ -92,6 +102,8 @@ public sealed class InteractionActions : InputActionGroup
     public readonly Analog2DAction HoldAxis;
     public readonly Analog2DAction Pointer;
     public readonly Analog2DAction Stick;
+    public readonly DigitalAction NextTool;
+    public readonly DigitalAction PreviousTool;
 
     public InteractionActions(InputActionSet set) : base(set)
     {
@@ -107,6 +119,8 @@ public sealed class InteractionActions : InputActionGroup
         HoldAxis = Analog2D("HoldAxis", "Held Axis", "Stick axis for distance (Y) and twist (X).");
         Pointer = Analog2D("Pointer", "Pointer Scroll", "Scrolls whatever the laser is pointing at.");
         Stick = Analog2D("Stick", "Menu Flick", "Deflect toward a context menu action, release to take it.");
+        NextTool = Digital("NextTool", "Next Tool", "Takes out the next of the number-key tools, and puts it away after the last.");
+        PreviousTool = Digital("PreviousTool", "Previous Tool", "Takes out the number-key tool before this one.");
 
         // Distance/rotation on the same hand read the same wheel and the same stick on purpose - what
         // they mean depends on the modifier - so a radial cut is wrong here.
@@ -118,14 +132,29 @@ public sealed class InteractionActions : InputActionGroup
     }
 }
 
-// The dashboard. Live above locomotion, so opening it stops the body dead.
+// The dashboard and the world's chat. Live above locomotion, so opening the dash stops the body dead.
 public sealed class MenuActions : InputActionGroup
 {
     public readonly DigitalAction ToggleDashboard;
+    public readonly DigitalAction OpenChat;
+    public readonly DigitalAction Click;
+    public readonly DigitalAction Back;
+    public readonly Analog2DAction Point;
+    public readonly Analog2DAction Scroll;
 
     public MenuActions(InputActionSet set) : base(set)
     {
         ToggleDashboard = Digital("ToggleDashboard", "Dashboard", "Open or close the dashboard.");
+        OpenChat = Digital("OpenChat", "Open Chat", "Type into the world's chat on a screen. Enter sends, Escape closes.");
+
+        // A pad on the dash: the cursor, a click, a way back, and a scroll. The mouse and keyboard already
+        // have all four, so these are the pad's column only.
+        Click = Digital("Click", "Dash Click", "Clicks what the dash cursor is on. In a text field, brings the on-screen keyboard back.");
+        Back = Digital("Back", "Back", "Backs out of a dash screen, then closes the dash; closes a text field or the radial menu.");
+        Point = Analog2D("Point", "Dash Cursor", "Moves the cursor over the dash.");
+        Scroll = Analog2D("Scroll", "Dash Scroll", "Scrolls the dash under the cursor.");
+        Point.Deadzone = 0.05f;
+        Scroll.Deadzone = 0.15f;
     }
 }
 
@@ -140,6 +169,12 @@ public sealed class CameraActions : InputActionGroup
     public readonly AnalogAction OrbitZoom;
     public readonly DigitalAction TakePhoto;
     public readonly DigitalAction TimedPhoto;
+    public readonly DigitalAction Focus;
+    public readonly DigitalAction Unfocus;
+    public readonly DigitalAction FocusPanel;
+    public readonly DigitalAction Drag;
+    public readonly DigitalAction Orbit;
+    public readonly AnalogAction Zoom;
 
     public CameraActions(InputActionSet set) : base(set)
     {
@@ -151,6 +186,12 @@ public sealed class CameraActions : InputActionGroup
         OrbitZoom = Analog("OrbitZoom", "Orbit Zoom", "Third-person camera distance.");
         TakePhoto = Digital("TakePhoto", "Photo", "Hold to frame a photo of what the screen shows, let go to take it.");
         TimedPhoto = Digital("TimedPhoto", "Timed Photo", "Hold to frame a photo, let go to start its timer.");
+        Focus = Digital("Focus", "Focus", "Fly the free camera to the object under the pointer and keep it in frame.");
+        Unfocus = Digital("Unfocus", "Unfocus", "Let the framed object go, and leave the free camera if Focus opened it.");
+        FocusPanel = Digital("FocusPanel", "Focus Panel", "Square the view on the panel under the pointer. Anywhere else to leave.");
+        Drag = Digital("Drag", "Camera Drag", "Hold to look with the free camera, pan a focused panel, or move the third-person shoulder.");
+        Orbit = Digital("Orbit", "Camera Orbit", "Hold to swing the free camera round what it is focused on.");
+        Zoom = Analog("Zoom", "Camera Zoom", "Nearer to or further from a focused panel, or the free camera's focus.");
     }
 }
 

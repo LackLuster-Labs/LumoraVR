@@ -257,6 +257,9 @@ public static class InputControlCatalog
                     _ => control.Control
                 };
             case InputDeviceKind.Gamepad:
+                // A Deck's buttons are printed on the Deck; its controls screen reads them, not two pads' letterings.
+                if (SteamDeckPlatform.IsSteamDeck)
+                    return InputHints.PadName(control.Control, PadFamily.SteamDeck);
                 return control.Control switch
                 {
                     PadFaceDown => "A / Cross",

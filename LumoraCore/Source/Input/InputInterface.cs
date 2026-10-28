@@ -61,6 +61,11 @@ public class InputInterface : IDisposable
     // user setting, not a fact about the code.
     public InputBindingMap Actions { get; private set; } = null!;
 
+    // The pad's look stick as view turn for this step, and the cursor a pad moves over the dash. Both are
+    // stepped right after the action pass and both stand still in a headset.
+    public StickLook StickLook { get; } = new StickLook();
+    public PadCursor PadCursor { get; } = new PadCursor();
+
     // VR devices (legacy compatibility)
     public VRController LeftController { get; private set; } = null!;
     public VRController RightController { get; private set; } = null!;
@@ -88,6 +93,9 @@ public class InputInterface : IDisposable
     // every caller has to cope with that rather than assume - the VR keyboard greys its Paste key out
     // on exactly this check. -xlinka
     public IClipboardText? ClipboardText { get; set; }
+
+    // Null on a platform with no native file dialogs; see IFileDialogs.
+    public IFileDialogs? FileDialogs { get; set; }
 
     // The platform's "what colour is the view showing there" service, assigned by the runner alongside
     // the other platform services. Null on a platform with no view (headless), which is why the
@@ -145,6 +153,36 @@ public class InputInterface : IDisposable
         DesktopCursorRayValid = valid;
         DesktopCursorRayOrigin = origin;
         DesktopCursorRayDirection = direction;
+    }
+
+    // Whatever wants the desktop cursor loose over the view instead of locked to its middle: an open context
+    // menu, a camera that points with the cursor. Each owner puts itself in and takes itself out, and the cursor
+    // is free while any is in. The platform shows the OS cursor and pushes the ray through it, and the lasers
+    // cast along that ray. Owners write from their own world's thread, hence the lock. -xlinka
+    private readonly HashSet<object> _cursorFreeOwners = new();
+
+    public bool CursorFree
+    {
+        get
+        {
+            lock (_cursorFreeOwners)
+            {
+                if (_cursorFreeOwners.Count == 0)
+                    return false;
+            }
+            return !IsVRActive;
+        }
+    }
+
+    public void SetCursorFree(object owner, bool free)
+    {
+        lock (_cursorFreeOwners)
+        {
+            if (free)
+                _cursorFreeOwners.Add(owner);
+            else
+                _cursorFreeOwners.Remove(owner);
+        }
     }
 
     // Userspace-laser ownership, per controller side. The userspace dash pointer lives in the overlay
@@ -263,6 +301,13 @@ public class InputInterface : IDisposable
     // to come off the CAMERA in that state: the head is the avatar's simulated head there, which follows the
     // orbit only under neck rules and holds still in free cam. -xlinka
     public bool DesktopExternalCameraAim => !IsVRActive && DesktopCameraHasOverride && DesktopCameraPoseValid;
+
+    // The desktop view is squared on a panel and points with the free cursor, as the dash does: the arrow is the
+    // pointer there, and a beam drawn from the hand behind the view would only cut across the panel.
+    public bool DesktopViewOnPanel { get; set; }
+
+    // The free camera measures a carry from its lens instead of from the avatar's hand. -xlinka
+    public bool DesktopFreeCamera { get; set; }
 
     // World-space aim ray through a point on the desktop view, built from the camera pose + projection the
     // platform pushes each frame - so it follows whichever camera is actually rendering.
@@ -807,11 +852,26 @@ public class InputInterface : IDisposable
         // them, so a receiver and a component update in the same frame agree on what was pressed.
         UpdateActionGates();
         Actions?.Evaluate(deltaTime);
+        Lumora.Core.Components.Interaction.DesktopAutoscroll.Step(this, deltaTime);
+        StepPadLook(deltaTime);
+        RespawnOnKey();
 
         // Call BeforeInputUpdate on all receivers (TrackedDevicePositioner updates slots here)
         DispatchInputReceivers(before: true);
 
         DispatchInputReceivers(before: false);
+    }
+
+    // The respawn key asks for the same fresh body the session screen's button does, in the world in focus. It
+    // lives here and not on the body because a broken body is exactly when it is wanted. -xlinka
+    private void RespawnOnKey()
+    {
+        if (Actions?.Locomotion.Respawn.Pressed != true)
+            return;
+        var world = Engine.Current?.WorldManager?.FocusedWorld;
+        if (world == null || world.IsDestroyed || world.IsUserspace || world.LocalUser == null)
+            return;
+        world.RunSynchronously(world.RequestLocalRespawn);
     }
 
     // Decide which action sets are live this frame.
@@ -837,16 +897,50 @@ public class InputInterface : IDisposable
         actions.Menu.Set.Asserting = IsDashboardOpen;
     }
 
+    private void StepPadLook(float deltaTime)
+    {
+        var actions = Actions;
+        if (actions == null)
+            return;
+        bool screen = !IsVRActive;
+        StickLook.Step(screen ? actions.Locomotion.Look.Value : float2.Zero, deltaTime, EngineSettings.StickLookSpeed, EngineSettings.InvertStickLook);
+
+        var mouse = Mouse;
+        bool moved = mouse != null && mouse.Position.Delta != float2.Zero;
+        var at = new float2(0.5f, 0.5f);
+        if (mouse != null && Display.Known)
+        {
+            var window = Display.Window;
+            var origin = Display.WindowPosition;
+            at = new float2((mouse.Position.Value.x - origin.x) / window.x, (mouse.Position.Value.y - origin.y) / window.y);
+        }
+        PadCursor.Step(screen && IsDashboardOpen, actions.Menu.Point.Value, deltaTime, DesktopViewportAspect, moved, at);
+    }
+
     private void LoadBindingOverrides()
     {
         try
         {
-            InputBindingStore.Apply(Actions, Settings.ReadValue<string>(InputBindingStore.SettingsKey, string.Empty));
+            // A saved override moved on to this map's keys goes back to the store at once, so the old one
+            // is read once and never again.
+            if (InputBindingStore.Apply(Actions, Settings.ReadValue<string>(InputBindingStore.SettingsKey, string.Empty)))
+                SaveBindingOverrides();
         }
         catch (Exception ex)
         {
             Logger.Warn($"InputInterface: failed to load control bindings, using defaults: {ex.Message}");
         }
+    }
+
+    // The store's bindings again from scratch, for when the stored overrides were replaced underneath the
+    // map (a settings file brought back in). Stock first, so an action the new set leaves alone is not left
+    // holding the old override.
+    public void ReloadBindingOverrides()
+    {
+        if (Actions == null)
+            return;
+        Actions.ResetAllToDefaults();
+        LoadBindingOverrides();
     }
 
     // Write the current bindings to disk now.
@@ -1216,6 +1310,7 @@ public class InputInterface : IDisposable
         _mouseDriver = null!;
         _gamepadDriver = null!;
         ClipboardText = null;
+        FileDialogs = null;
         ViewColorSampler = null;
         ViewCapture = null;
         Actions = null!;

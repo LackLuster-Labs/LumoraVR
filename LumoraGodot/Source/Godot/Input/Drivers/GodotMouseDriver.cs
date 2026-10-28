@@ -48,9 +48,24 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
     // Now an unfocused window never holds the mouse, and once focus has been away (or at startup) the game
     // waits for a click inside its own view before taking it again. That click is swallowed so it does not
     // grab or press whatever the cursor was over. -xlinka
-    private bool _waitForClick = true;
+    //
+    // Under gamescope (a Deck's game mode) none of that applies: the window is the whole screen, there is no title
+    // bar, nothing else to click on, and Steam's right trackpad is the mouse. Waiting there left the trackpad dead
+    // until it was clicked, so a gamescope window takes the mouse at once and counts as focused while it is up.
+    // A pad pressed in a focused window is somebody playing too, and takes it the same way. -xlinka
+    private bool _waitForClick = !Lumora.Core.SteamDeckPlatform.IsGamescope;
     private bool _swallowClick;
     private bool _anyButtonBefore;
+
+    // A finger on a Deck's screen arrives as the pointer jumping to the touch and the button going down in the
+    // same frame, and the dash ray the press is resolved along is the one the platform pushed last frame, at the
+    // old spot. Over the dash a press that lands away from where the pointer was is held back one frame so the
+    // ray gets there first; one released inside that frame still clicks. -xlinka
+    private const float TouchJumpPixels = 16f;
+    private Vector2 _pointerAt;
+    private Vector2 _pointerAtFrameStart;
+    private bool _deferPress;
+    private int _deferredPressFrames;
 
     // Reject impossible deltas from recapture/focus glitches while preserving normal fast flicks.
     // Threshold is in pixels (before normalization).
@@ -73,7 +88,7 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
         if (mouse == null)
             return;
 
-        bool focused = DisplayServer.WindowIsFocused();
+        bool focused = DisplayServer.WindowIsFocused() || Lumora.Core.SteamDeckPlatform.IsGamescope;
         bool anyButton = global::Godot.Input.IsMouseButtonPressed(MouseButton.Left)
             || global::Godot.Input.IsMouseButtonPressed(MouseButton.Right)
             || global::Godot.Input.IsMouseButtonPressed(MouseButton.Middle);
@@ -81,8 +96,11 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
         _anyButtonBefore = anyButton;
         if (!focused)
             _waitForClick = true;
+        else if (_waitForClick && PadInUse())
+            _waitForClick = false;
 
         bool captureWanted = Lumora.Core.Components.UserInputState.FocusedMouseCaptureRequested;
+        bool cursorFree = Lumora.Core.Engine.Current?.InputInterface?.CursorFree == true;
         var desiredMouseMode = global::Godot.Input.MouseModeEnum.Visible;
         if (!focused || TouchEnabled)
         {
@@ -94,6 +112,13 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
             desiredMouseMode = global::Godot.Input.MouseModeEnum.Hidden;
             // Someone using the open dash in a focused window is already here, so closing it is the way back
             // in and takes the mouse at once, with no extra click.
+            _waitForClick = false;
+        }
+        // Something points with the cursor (an open context menu, a camera that points with it): the arrow is
+        // shown and stays where it is put, and a click with it is meant for the view, as on the dash.
+        else if (cursorFree)
+        {
+            desiredMouseMode = global::Godot.Input.MouseModeEnum.Visible;
             _waitForClick = false;
         }
         else if (captureWanted)
@@ -128,7 +153,24 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
         float deltaTime = _lastFrameTime > 0 ? (float)(currentTime - _lastFrameTime) : 0.016f;
         _lastFrameTime = currentTime;
 
-        mouse.LeftButton.UpdateState(!_swallowClick && (global::Godot.Input.IsMouseButtonPressed(MouseButton.Left) || (TouchEnabled && _touchPrimary)));
+        bool left = global::Godot.Input.IsMouseButtonPressed(MouseButton.Left) || (TouchEnabled && _touchPrimary);
+        if (_deferPress)
+        {
+            _deferPress = false;
+            _deferredPressFrames = 2;
+        }
+        if (_deferredPressFrames == 2)
+        {
+            left = false;
+            _deferredPressFrames = 1;
+        }
+        else if (_deferredPressFrames == 1)
+        {
+            left = true;
+            _deferredPressFrames = 0;
+        }
+        _pointerAtFrameStart = _pointerAt;
+        mouse.LeftButton.UpdateState(!_swallowClick && left);
         mouse.RightButton.UpdateState(!_swallowClick && global::Godot.Input.IsMouseButtonPressed(MouseButton.Right));
         mouse.MiddleButton.UpdateState(!_swallowClick && global::Godot.Input.IsMouseButtonPressed(MouseButton.Middle));
         mouse.MouseButton4.UpdateState(global::Godot.Input.IsMouseButtonPressed(MouseButton.Xbutton1));
@@ -187,10 +229,18 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
         if (@event is InputEventMouseMotion mouseMotion)
         {
             _pendingMotion += mouseMotion.Relative;
+            _pointerAt = mouseMotion.Position;
         }
         else if (@event is InputEventMouseButton mouseButton)
         {
-            if (mouseButton.ButtonIndex == MouseButton.WheelUp)
+            if (mouseButton.ButtonIndex == MouseButton.Left)
+            {
+                if (mouseButton.Pressed && DashboardToggle.IsDashboardVisible
+                    && (mouseButton.Position - _pointerAtFrameStart).Length() > TouchJumpPixels)
+                    _deferPress = true;
+                _pointerAt = mouseButton.Position;
+            }
+            else if (mouseButton.ButtonIndex == MouseButton.WheelUp)
             {
                 _pendingScrollDelta += 1f;
             }
@@ -207,6 +257,22 @@ public class GodotMouseDriver : IMouseDriver, IInputDriver
                 _pendingHorizontalScrollDelta -= 1f;
             }
         }
+    }
+
+    // Any button down or a stick pushed on the pad, last frame's reading (the pad driver runs after this one).
+    private static bool PadInUse()
+    {
+        var pad = Lumora.Core.Engine.Current?.InputInterface?.Gamepad;
+        if (pad == null || !pad.IsConnected)
+            return false;
+        if (pad.LeftStick.Value.Length > 0.5f || pad.RightStick.Value.Length > 0.5f)
+            return true;
+        foreach (var id in Lumora.Core.Input.Actions.InputControlCatalog.ControlsFor(Lumora.Core.Input.Actions.InputDeviceKind.Gamepad))
+        {
+            if (pad.GetButton(id)?.Held == true)
+                return true;
+        }
+        return false;
     }
 
     public void RegisterInputs(InputInterface inputInterface)

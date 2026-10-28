@@ -95,8 +95,9 @@ public partial class DesktopInput : Node3D
     }
 
     // Push the free-cursor ray and camera projection info to the engine while
-    // the OS cursor is unlocked (dash open). The interaction laser casts along
-    // this ray so the in-world cursor follows the mouse exactly.
+    // the OS cursor is unlocked (dash open, or something asked for it free). The
+    // interaction laser casts along this ray so the in-world cursor follows the
+    // mouse exactly.
     private void UpdateCursorRay()
     {
         var input = Lumora.Core.Engine.Current?.InputInterface;
@@ -120,13 +121,14 @@ public partial class DesktopInput : Node3D
         }
 
         var camera = _camera;
-        if ((!DashboardToggle.IsDashboardVisible && TouchControls.Instance?.PointerActive != true) || input.IsVRActive || camera == null || viewport == null)
+        if ((!DashboardToggle.IsDashboardVisible && TouchControls.Instance?.PointerActive != true && !input.CursorFree)
+            || input.IsVRActive || camera == null || viewport == null)
         {
             input.SetDesktopCursorRay(false, default, default);
             return;
         }
 
-        var mousePos = TouchControls.Instance is { PointerActive: true } touch ? touch.PointerPosition : viewport.GetMousePosition();
+        var mousePos = TouchControls.Instance is { PointerActive: true } touch ? touch.PointerPosition : PointerPosition(viewport, input);
         var origin = camera.ProjectRayOrigin(mousePos);
         var direction = camera.ProjectRayNormal(mousePos);
         input.SetDesktopCursorRay(
@@ -152,10 +154,21 @@ public partial class DesktopInput : Node3D
         // not: the overlay draws above the 3D cursor and the OS cursor is not reliably shown while
         // the game window owns the mouse, so the screen reticle takes over there. Its layer (101)
         // sits one above the dash overlay (100). -xlinka
-        bool overDash = Lumora.Core.Engine.Current?.InputInterface is { IsVRActive: false, IsDashboardOpen: true };
+        var input = Lumora.Core.Engine.Current?.InputInterface;
+        bool overDash = input is { IsVRActive: false, IsDashboardOpen: true };
         _cursorDot.Visible = overDash && TouchControls.Instance == null;
         if (overDash)
-            _cursorDot.Position = _cursorDot.GetViewport().GetMousePosition() - _cursorDot.Size / 2f;
+            _cursorDot.Position = PointerPosition(_cursorDot.GetViewport(), input!) - _cursorDot.Size / 2f;
+    }
+
+    // Where the window's pointer is: the pad's dash cursor while a pad is steering it, the mouse otherwise.
+    private static Vector2 PointerPosition(Viewport viewport, Lumora.Core.Input.InputInterface input)
+    {
+        var pad = input.PadCursor;
+        if (!pad.Active)
+            return viewport.GetMousePosition();
+        var size = viewport.GetVisibleRect().Size;
+        return new Vector2(pad.Position.x * size.X, pad.Position.y * size.Y);
     }
 
     public void SetCamera(Camera3D camera)

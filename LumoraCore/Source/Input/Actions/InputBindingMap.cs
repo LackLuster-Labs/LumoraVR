@@ -18,7 +18,10 @@ namespace Lumora.Core.Input.Actions;
 public sealed class InputBindingMap
 {
     // Bumped when the shipped defaults change shape enough that stored overrides are stale.
-    public const int MapVersion = 1;
+    // 2: G opens the chat, and the backstep's keyboard key moved to B.
+    // 3: the pad column laid out for a pad alone on a screen (Look on the right stick, triggers are the hand).
+    // 4: ctrl and alt became the camera's chord keys, and the free camera sinks on C instead of ctrl.
+    public const int MapVersion = 4;
 
     // Interaction sits ABOVE the menu: the dash is aimed at with the same laser the world is, so
     // blocking interaction while the menu is up would leave the menu unclickable.
@@ -37,6 +40,9 @@ public sealed class InputBindingMap
     // scrolls, which keeps turning and walking off that stick there. -xlinka
     private readonly Dictionary<ControlRef, (int Priority, long Pass)> _holds = new();
     private long _pass;
+
+    // Controls a chord is using this pass: its modifiers are down and so is its own control.
+    private readonly HashSet<ControlRef> _chordControls = new();
 
     // Carrying hands reserve controls before locomotion actions are evaluated. World updates may
     // run less often than input, so a live grab cannot rely on last update's one-pass hold.
@@ -67,6 +73,15 @@ public sealed class InputBindingMap
     // For the controls screen's sanity readout.
     public ControlRef LastActivatedControl { get; private set; }
     public InputBinding? LastActivatedBinding { get; private set; }
+
+    // Whose names a hint on screen uses: the keyboard's or the pad's. It follows the last control pressed,
+    // with two exceptions on a Deck, where Steam turns the right trackpad into a mouse and its on-screen
+    // keyboard into key presses: a mouse button there never counts, and neither does a key that does not type
+    // (a back grip sending F5) or anything typed while Steam's keyboard is up. -xlinka
+    public InputDeviceKind HintDevice { get; private set; } = SteamDeckPlatform.IsSteamDeck ? InputDeviceKind.Gamepad : InputDeviceKind.Keyboard;
+
+    // Raised by the platform while Steam's on-screen keyboard is showing.
+    public bool SteamKeyboardShown { get; set; }
 
     // False in headless or before init.
     public bool HasEvaluated { get; private set; }
@@ -122,6 +137,23 @@ public sealed class InputBindingMap
         }
     }
 
+    private readonly DigitalAction _heldProbe = new("HeldProbe", "Held Probe");
+
+    // Existing carries can outlive a modal input gate. Sample their bound controls without advancing
+    // the real action or allowing a new press through that gate. -xlinka
+    internal bool ReadHeldIgnoringGates(DigitalAction action)
+    {
+        _heldProbe.PressPoint = action.PressPoint;
+        _heldProbe.Begin();
+        foreach (var binding in action.Bindings)
+        {
+            if (ModifiersHeld(binding) && Resolve(binding.Control) is { IsAvailable: true } source)
+                _heldProbe.Accumulate(binding, source);
+        }
+        _heldProbe.Finish(0f);
+        return _heldProbe.Held;
+    }
+
     // Null when that hardware is not present.
     public IInputSource? Resolve(in ControlRef control) => control.Device switch
     {
@@ -160,13 +192,29 @@ public sealed class InputBindingMap
         _pass++;
         BeforeEvaluate?.Invoke();
 
-        // A shortcut such as Ctrl+C owns its letter; it must not also crouch the player.
-        if (Editing.Set.IsLive)
-            foreach (var action in Editing.Set.Actions)
-                foreach (var binding in action.Bindings)
+        // A chord owns its control while it is made, in every set: Ctrl+C must not also crouch, ctrl + click
+        // focusing a panel must not also press the button under the pointer, ctrl + wheel must not also
+        // scroll. A plain binding of that control reads it as untouched for the pass. -xlinka
+        // Indexed, not foreach: these are read-only list interfaces, and every action's enumerator was a box a frame.
+        _chordControls.Clear();
+        foreach (var set in _sets)
+        {
+            if (!set.IsLive)
+                continue;
+            var setActions = set.Actions;
+            for (int a = 0; a < setActions.Count; a++)
+            {
+                var actionBindings = setActions[a].Bindings;
+                for (int b = 0; b < actionBindings.Count; b++)
+                {
+                    var binding = actionBindings[b];
                     if (binding.Modifiers.Count > 0 && ModifiersHeld(binding)
-                        && Resolve(binding.Control) is { IsAvailable: true } source && source.ReadDigital(binding.Control))
-                        HoldControl(Editing.Set, binding.Control);
+                        && Resolve(binding.Control) is { IsAvailable: true } source
+                        && (source.ReadDigital(binding.Control) || source.ReadAnalog(binding.Control) != 0f))
+                        _chordControls.Add(binding.Control);
+                }
+            }
+        }
 
         // A set that asserts itself shuts out everything below it. That is the whole of "the menu
         // blocks locomotion" - no flags passed down, no module checking whether a panel is up.
@@ -178,6 +226,7 @@ public sealed class InputBindingMap
         }
 
         bool capturing = UpdateCapture(deltaTime);
+        HoldMenuButtonsWhileTyping();
 
         foreach (var set in _sets)
         {
@@ -193,9 +242,56 @@ public sealed class InputBindingMap
                 }
                 EvaluateAction(action, deltaTime);
             }
+            if (ReferenceEquals(set, Menu.Set))
+                RelayDashClick();
         }
 
         TrackLastActivated();
+    }
+
+    // The pad's click on the dash is the desktop hand's primary, the same press the mouse makes there, so the
+    // dash's own rule about where a press may begin applies to it unchanged. The menu set evaluates before the
+    // hands, so the press lands this pass. Only while the dash is up: A is jump everywhere else.
+    private void RelayDashClick()
+    {
+        if (Menu.Set.Asserting && Menu.Set.IsLive && Menu.Click.Held)
+            Right.Primary.ExternalInput = true;
+    }
+
+    // A text field on a screen takes the pad's click and back for itself (bring Steam's keyboard back, close
+    // the field), so walking a set below does not jump or crouch on the same press. Kept past the field
+    // closing until the buttons come up, or the B that closed it would crouch the moment it did.
+    private bool _typingHold;
+
+    private void HoldMenuButtonsWhileTyping()
+    {
+        if (TextFocusHeld)
+            _typingHold = true;
+        else if (_typingHold && !AnyPadControlHeld(Menu.Click) && !AnyPadControlHeld(Menu.Back))
+            _typingHold = false;
+        if (!_typingHold)
+            return;
+        HoldPadControls(Menu.Click);
+        HoldPadControls(Menu.Back);
+    }
+
+    private bool AnyPadControlHeld(InputAction action)
+    {
+        foreach (var binding in action.Bindings)
+        {
+            if (binding.Control.Device == InputDeviceKind.Gamepad && _gamepad.ReadDigital(binding.Control))
+                return true;
+        }
+        return false;
+    }
+
+    private void HoldPadControls(InputAction action)
+    {
+        foreach (var binding in action.Bindings)
+        {
+            if (binding.Control.Device == InputDeviceKind.Gamepad)
+                HoldControl(action.Set, binding.Control);
+        }
     }
 
     private void EvaluateAction(InputAction action, float deltaTime)
@@ -210,11 +306,36 @@ public sealed class InputBindingMap
                 continue;
             if (!ModifiersHeld(binding))
                 continue;
+            if (binding.Modifiers.Count == 0 && _chordControls.Count > 0 && _chordControls.Contains(binding.Control))
+                continue;
             if (HeldAbove(binding.Control, action.Set.Priority))
                 continue;
             action.Accumulate(binding, source);
         }
         action.Finish(deltaTime);
+    }
+
+    // Something outside the map took this press for itself after the pass already read it: every action bound
+    // to the control reads released from here on, and stays released until the control comes up. Chords that
+    // use it count too, so a modifier held with it cannot leak the press through.
+    public void Swallow(in ControlRef control, float deltaTime)
+    {
+        foreach (var set in _sets)
+        {
+            var actions = set.Actions;
+            for (int a = 0; a < actions.Count; a++)
+            {
+                var bindings = actions[a].Bindings;
+                for (int b = 0; b < bindings.Count; b++)
+                {
+                    if (bindings[b].Control == control)
+                    {
+                        actions[a].Release(deltaTime);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
     public void HoldControl(InputActionSet owner, in ControlRef control)
@@ -262,7 +383,37 @@ public sealed class InputBindingMap
         {
             LastActivatedBinding = _keyboard.CaptureChord(control);
             LastActivatedControl = LastActivatedBinding.Control;
+            NoteHintDevice(control);
         }
+    }
+
+    private void NoteHintDevice(in ControlRef control)
+    {
+        switch (control.Device)
+        {
+            case InputDeviceKind.Gamepad:
+            case InputDeviceKind.VRController:
+                HintDevice = control.Device;
+                break;
+            case InputDeviceKind.Mouse:
+                if (!SteamDeckPlatform.IsSteamDeck)
+                    HintDevice = InputDeviceKind.Keyboard;
+                break;
+            case InputDeviceKind.Keyboard:
+                if (SteamKeyboardShown)
+                    break;
+                if (SteamDeckPlatform.IsSteamDeck && !TypesText(control))
+                    break;
+                HintDevice = InputDeviceKind.Keyboard;
+                break;
+        }
+    }
+
+    private static bool TypesText(in ControlRef control)
+    {
+        if (!InputControlCatalog.TryParseKey(control.Control, out var key))
+            return false;
+        return key is >= Key.A and <= Key.Z or >= Key.Alpha0 and <= Key.Alpha9 or Key.Space or Key.Return;
     }
 
     // REBIND LISTENING

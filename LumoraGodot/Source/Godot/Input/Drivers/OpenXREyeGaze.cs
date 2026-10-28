@@ -73,6 +73,30 @@ public static class OpenXREyeGaze
     private static long _lastMoveMs;
     private static bool _staleLogged;
 
+    // BLINKS FROM A GAZE-ONLY TRACKER.
+    //
+    // This extension carries no eyelids, yet the blink driver hands the lids to whatever source reports live
+    // eyes and stops its own blinking, so a headset that only sends a gaze ray (the Frame, and any runtime on
+    // the standard extension) left every avatar staring without ever blinking. Two things put the blinks
+    // back, both written as openness so they travel to other people like measured lids do:
+    //  - the cameras lose the pupil while the lid is down, so a gaze that drops out for a moment IS a blink:
+    //    the lids close on the drop and open when the gaze comes back, in step with the real eye;
+    //  - a runtime that predicts the gaze straight through a blink never drops it, so when no blink has been
+    //    seen for a natural interval one is played the usual way.
+    // A drop longer than a blink is someone looking away or the headset coming off, and lets go as before.
+    // -xlinka
+    private const long BlinkDropMaxMs = 450;
+    private const float CloseSeconds = 0.06f;
+    private const float OpenSeconds = 0.11f;
+    private const float SyntheticHoldSeconds = 0.04f;
+    private static long _dropStartMs = -1;
+    private static long _lastBlinkMs;
+    private static long _nextBlinkGapMs = 4000;
+    private static float _openness = 1f;
+    private static float _syntheticElapsed = -1f;
+    private static long _lastUpdateMs;
+    private static readonly System.Random _blinkRandom = new();
+
     public static bool IsSupported => _supported;
 
     public static void Reset()
@@ -85,6 +109,9 @@ public static class OpenXREyeGaze
         _haveLocalForward = false;
         _localForwardMoved = false;
         _staleLogged = false;
+        _dropStartMs = -1;
+        _openness = 1f;
+        _syntheticElapsed = -1f;
     }
 
     // Fill the head device's eye fields. Called once a frame from the VR driver, after the head pose
@@ -97,7 +124,7 @@ public static class OpenXREyeGaze
         // Real per-eye hardware beats a combined ray. When the vendor path is feeding this device,
         // stand down entirely rather than write the same fields twice a frame and have the later
         // writer win by accident.
-        if (SRanipalDriver.EyesLive)
+        if (SRanipalDriver.EyesLive || SteamLinkFaceDriver.EyesLive)
             return;
 
         if (!Resolve())
@@ -118,11 +145,35 @@ public static class OpenXREyeGaze
         // gaze. Its own tracking confidence decides whether it is worth anything this frame - a
         // blink, a person looking away from the cameras, or a headset lifted off the face all land
         // here as an untracked pose rather than as a stale direction that keeps staring.
+        long now = System.Environment.TickCount64;
+        float dt = _lastUpdateMs == 0 ? 0f : System.Math.Clamp((now - _lastUpdateMs) / 1000f, 0f, 0.1f);
+        _lastUpdateMs = now;
+
         var pose = tracker.GetPose("default");
         if (pose == null || !pose.HasTrackingData)
         {
+            // A live gaze that drops out for a moment is a blink: keep the last gaze, close the lids, and
+            // only let go once the drop is too long to be one.
+            if (headDevice.HasEyeTracking)
+            {
+                if (_dropStartMs < 0)
+                    _dropStartMs = now;
+                if (now - _dropStartMs <= BlinkDropMaxMs)
+                {
+                    _syntheticElapsed = -1f;
+                    _openness = System.Math.Max(0f, _openness - dt / CloseSeconds);
+                    WriteOpenness(headDevice);
+                    return;
+                }
+            }
             Clear(headDevice);
             return;
+        }
+        if (_dropStartMs >= 0)
+        {
+            _dropStartMs = -1;
+            _lastBlinkMs = now;
+            _nextBlinkGapMs = NextBlinkGap();
         }
 
         var transform = pose.Transform;
@@ -161,7 +212,6 @@ public static class OpenXREyeGaze
 
         // Live means the gaze is still turning relative to the head, not just that the runtime
         // stamped the pose as tracked.
-        long now = System.Environment.TickCount64;
         if (!_haveLocalForward)
         {
             _haveLocalForward = true;
@@ -189,9 +239,10 @@ public static class OpenXREyeGaze
         headDevice.LeftEyeGazeDirection = ToHeadLocal(leftDir, headInverse);
         headDevice.RightEyeGazeDirection = ToHeadLocal(rightDir, headInverse);
 
-        // Openness, widen, squeeze, frown and pupil diameter are NOT in this extension. They are left
-        // exactly as they were rather than written as 1, so the blink driver keeps its own eyelids and
-        // a vendor path that does provide them can fill them without fighting this one.
+        // Widen, squeeze, frown and pupil diameter are NOT in this extension and are left as they were.
+        // Openness is not either, but leaving it at 1 meant no blinks at all (see the blink notes above).
+        UpdateBlink(now, dt);
+        WriteOpenness(headDevice);
 
         if (!_announced)
         {
@@ -205,7 +256,7 @@ public static class OpenXREyeGaze
     // driver; the vendor path owns the fields while it is live and is left alone. -xlinka
     public static void Release(HeadDevice headDevice)
     {
-        if (headDevice == null || SRanipalDriver.EyesLive)
+        if (headDevice == null || SRanipalDriver.EyesLive || SteamLinkFaceDriver.EyesLive)
             return;
         Clear(headDevice);
         _haveLocalForward = false;
@@ -214,13 +265,65 @@ public static class OpenXREyeGaze
 
     private static void Clear(HeadDevice headDevice)
     {
+        _dropStartMs = -1;
+        _syntheticElapsed = -1f;
         if (!headDevice.HasEyeTracking)
             return;
         headDevice.HasEyeTracking = false;
         headDevice.CombinedEyeGazeDirection = System.Numerics.Vector3.Zero;
         headDevice.LeftEyeGazeDirection = System.Numerics.Vector3.Zero;
         headDevice.RightEyeGazeDirection = System.Numerics.Vector3.Zero;
+        // Back to open, so the procedural blink takes over from open lids rather than from a half blink.
+        _openness = 1f;
+        WriteOpenness(headDevice);
         _announced = false;
+    }
+
+    // Lids reopen after a dropped-out blink ends, and a blink is played when the gaze has gone a natural
+    // interval without one.
+    private static void UpdateBlink(long now, float dt)
+    {
+        if (_syntheticElapsed >= 0f)
+        {
+            _syntheticElapsed += dt;
+            float t = _syntheticElapsed;
+            if (t < CloseSeconds)
+                _openness = 1f - t / CloseSeconds;
+            else if (t < CloseSeconds + SyntheticHoldSeconds)
+                _openness = 0f;
+            else if (t < CloseSeconds + SyntheticHoldSeconds + OpenSeconds)
+                _openness = (t - CloseSeconds - SyntheticHoldSeconds) / OpenSeconds;
+            else
+            {
+                _openness = 1f;
+                _syntheticElapsed = -1f;
+            }
+            return;
+        }
+
+        if (_openness < 1f)
+        {
+            _openness = System.Math.Min(1f, _openness + dt / OpenSeconds);
+            return;
+        }
+
+        if (_lastBlinkMs == 0)
+            _lastBlinkMs = now;
+        if (now - _lastBlinkMs >= _nextBlinkGapMs)
+        {
+            _syntheticElapsed = 0f;
+            _lastBlinkMs = now;
+            _nextBlinkGapMs = NextBlinkGap();
+        }
+    }
+
+    // People blink about every 2.5 to 6 seconds, not on a clock.
+    private static long NextBlinkGap() => 2500 + _blinkRandom.Next(3500);
+
+    private static void WriteOpenness(HeadDevice headDevice)
+    {
+        headDevice.LeftEyeOpenness = _openness;
+        headDevice.RightEyeOpenness = _openness;
     }
 
     private static bool Resolve()

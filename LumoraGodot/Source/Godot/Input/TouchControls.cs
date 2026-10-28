@@ -129,7 +129,7 @@ public partial class TouchControls : Control, IInputDriver
         var state = UserInputState.ForFocusedLocalUser;
         // A focused field keeps a phone's screen a pointer: touches go to the panel being typed on, not
         // to the view.
-        bool pointer = dashboard || state?.DesktopInputSuppressed == true
+        bool pointer = dashboard || state?.DesktopInputSuppressed == true || state?.ViewHeld == true
             || Helio.UI.TextInput.Focused is { IsDestroyed: false }
             || (state?.MouseLookSuppressed == true && !state.ExternalCameraActive);
         if (pointer != _pointerMode || dashboard != _dashboard)
