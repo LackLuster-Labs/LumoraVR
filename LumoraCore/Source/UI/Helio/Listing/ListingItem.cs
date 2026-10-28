@@ -200,6 +200,21 @@ public class ListingAction : ListingItem
     }
 }
 
+// A line of text typed in place. Write gets what was typed when the edit is kept (Enter, or a click away);
+// Read is what the row shows the rest of the time, so a refused or trimmed write shows what really stuck.
+public class ListingTextField : ListingItem
+{
+    public required Func<string> Read;
+    public required Action<string> Write;
+    public string Placeholder = string.Empty;
+    public int MaxLength;
+
+    public ListingTextField(string key, LocaleText label) : base(key)
+    {
+        LabelText = label;
+    }
+}
+
 // Escape hatch for a row the built-in templates cannot express (a rebind grid, a segmented module
 // strip). Route it with Kind and read Tag inside your own template.
 public class ListingCustom : ListingItem

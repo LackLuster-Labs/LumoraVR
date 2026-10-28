@@ -21,7 +21,6 @@ public sealed class GraphicsChunk
         private const int OverlayCanvasBandLow = 112;
 
         private readonly Dictionary<MaterialKey, List<PhosTriangleSubmesh>> _requestedMaterials = new();
-        private readonly Dictionary<MaterialKey, AssignedMaterial> _assignedMaterials = new();
         // Captured on the main thread (prepare walk), drained on the worker (EmitQueued). The worker
         // never traverses the live slot tree - it only iterates this queue and calls ComputeGraphic,
         // which reads each graphic's already-snapshotted state + stable LocalComputeRect. Bounds is the
@@ -44,9 +43,23 @@ public sealed class GraphicsChunk
         private bool _graphicTrims;
         // Latch so the render-priority band-exhaustion warning fires once per RenderData, not every submit. -xlinka
         private bool _loggedBandExhaustion;
+        // The last submit drew a sheet wall as surface 0, with this material.
+        private bool _hasWall;
+        private MaterialMap _wallMap;
 
         public PhosMesh Mesh { get; } = new();
         public Rect? ClipRect => _clipRect;
+
+        // The fastest animated picture this chunk drew playing (its frames a second), 0 for none. The material
+        // moves its frames on the GPU clock; a host that captures the canvas only on change has to capture again
+        // for each frame, and the canvas reads this to know how often.
+        public float PlayingFps { get; private set; }
+
+        public void NotePlaying(float fps)
+        {
+            if (fps > PlayingFps)
+                PlayingFps = fps;
+        }
 
         // Scroll content is baked ONCE and moved by the clip_offset uniform, so items off-screen at bake time
         // still have to be in the mesh (they scroll into view later) and on-screen items must NOT be trimmed to
@@ -69,8 +82,6 @@ public sealed class GraphicsChunk
             PrepareMesh();
         }
 
-        public IReadOnlyDictionary<MaterialKey, AssignedMaterial> AssignedMaterials => _assignedMaterials;
-
         public void SetClipRect(Rect? clipRect, Rect? ridingClipRect = null)
         {
             _clipRect = clipRect;
@@ -79,6 +90,7 @@ public sealed class GraphicsChunk
 
         public void PrepareCompute()
         {
+            PlayingFps = 0f;
             Mesh.Clear();
             _requestedMaterials.Clear();
             _emitQueue.Clear();
@@ -273,6 +285,17 @@ public sealed class GraphicsChunk
                     : new MaterialMap(baseMaterial, rd.GetSharedImageBlock(texture));
             };
 
+        // The same for an animated picture shown still: its first frame, from a material that does not play it.
+        public static readonly MaterialMapper ImageTextureStill =
+            (rd, baseMaterial, key, usingDefault) =>
+            {
+                if (key is not IAssetProvider<TextureAsset> texture || texture.IsDestroyed)
+                    return new MaterialMap(baseMaterial);
+                return usingDefault
+                    ? new MaterialMap(rd.GetSharedImageMaterial(texture, still: true))
+                    : new MaterialMap(baseMaterial, rd.GetSharedImageBlock(texture));
+            };
+
         public static readonly MaterialMapper TextAtlas =
             (rd, baseMaterial, key, usingDefault) =>
                 key is TextureAsset atlas ? new MaterialMap(rd.GetSharedTextMaterial(atlas)) : new MaterialMap(baseMaterial);
@@ -281,7 +304,7 @@ public sealed class GraphicsChunk
 
         public MainTexturePropertyBlock GetSharedImageBlock(IAssetProvider<TextureAsset> texture) => _chunk.GetSharedImageBlock(texture);
 
-        public UIUnlitMaterial GetSharedImageMaterial(IAssetProvider<TextureAsset> texture) => _chunk.GetSharedImageMaterial(texture);
+        public UIUnlitMaterial GetSharedImageMaterial(IAssetProvider<TextureAsset> texture, bool still = false) => _chunk.GetSharedImageMaterial(texture, still);
 
         internal void SubmitChanges(int sortingOrder)
         {
@@ -293,6 +316,7 @@ public sealed class GraphicsChunk
             // Opt-in unbounded ordering: tell the hook to split this chunk's surfaces into per-surface
             // instances ordered by SortingOffset instead of the render_priority bands. Default false. -xlinka
             _chunk.MeshRenderer.PerSurfaceOrdering = Canvas.UnboundedRenderOrder;
+            ApplyWallLead();
             _chunk.MeshRenderer.Enabled.Value = Mesh.VertexCount > 0;
             _chunk.MeshProvider!.SetMesh(Mesh);
 
@@ -305,7 +329,8 @@ public sealed class GraphicsChunk
         private void AssignMaterials()
         {
             var requests = BuildMaterialRequests(out var submeshQueues);
-            SortSubmeshesByRenderQueue(submeshQueues);
+            var wall = FindWall(requests);
+            SortSubmeshesByRenderQueue(submeshQueues, wall);
 
             var surfaceIndexes = BuildSurfaceIndexes();
             int materialCount = surfaceIndexes.Count;
@@ -320,47 +345,80 @@ public sealed class GraphicsChunk
             // their priorities would collapse to whichever value was written last.
             // Coplanar UI quads then fall back to Godot's distance sort, which
             // flips with camera angle and produces the "wash" artifact. - xlinka
+            _hasWall = wall != null && surfaceIndexes.TryGetValue(wall, out int wallIndex) && wallIndex == 0;
             var perSurfacePriorities = BuildPerSurfacePriorities(materialCount, _chunk.RenderOnTop, _chunk.OverlayLevel,
-                _chunk.Canvas?.DrawsOverlay == true, _chunk.ContainsChunks);
-            var activeMaterials = new HashSet<MaterialKey>();
+                _chunk.Canvas?.DrawsOverlay == true, _chunk.ContainsChunks, _hasWall);
+            // Every surface takes its clone on every submit, including the second and later surfaces of one key
+            // (a material split by a stencil mark or text between them). Skipping one leaves it wearing the clone
+            // of an older clip window, which cuts its geometry away once the window moves (a resized window).
+            // SetMaterialTargets only writes a changed reference. -xlinka
             foreach (var request in requests)
             {
-                var indexes = new List<int>(request.Submeshes.Count);
                 foreach (var submesh in request.Submeshes)
                 {
-                    if (surfaceIndexes.TryGetValue(submesh, out int surfaceIndex))
+                    if (!surfaceIndexes.TryGetValue(submesh, out int surfaceIndex))
                     {
-                        indexes.Add(surfaceIndex);
+                        continue;
                     }
-                }
 
-                if (indexes.Count == 0)
-                {
-                    continue;
-                }
-
-                activeMaterials.Add(request.Key);
-                var singleIndex = new List<int>(1);
-                foreach (int surfaceIndex in indexes)
-                {
                     int priority = perSurfacePriorities[surfaceIndex];
                     _chunk.MeshRenderer.SetSurfaceRenderPriority(surfaceIndex, priority);
                     var clonedMaterial = _chunk.GetRenderPriorityMaterial(request.Map.FilteredMaterial, surfaceIndex, priority);
-                    var clonedMap = new MaterialMap(clonedMaterial, request.Map.FilteredPropertyBlock);
-                    singleIndex.Clear();
-                    singleIndex.Add(surfaceIndex);
-                    UpdateMaterial(request.Key, singleIndex, in clonedMap);
+                    SetMaterialTargets(surfaceIndex, new MaterialMap(clonedMaterial, request.Map.FilteredPropertyBlock));
+                    if (_hasWall && ReferenceEquals(submesh, wall))
+                        _wallMap = request.Map;
                 }
             }
+        }
 
-            RemoveUnusedMaterials(activeMaterials);
+        // A sheet's wall is what its root draws first, when that writes depth: the backing of a window. It has
+        // to be the first surface opened, before any stencil or clip came into play, or it is not the root's.
+        private PhosTriangleSubmesh? FindWall(List<MaterialRequest> requests)
+        {
+            if (!_chunk.IsSheet || Mesh.Submeshes.Count == 0 || Mesh.Submeshes[0] is not PhosTriangleSubmesh first || first.IndexCount <= 0)
+                return null;
+            foreach (var request in requests)
+            {
+                if (!request.Submeshes.Contains(first))
+                    continue;
+                bool writesDepth = request.Map.FilteredMaterial is UIUnlitMaterial material && material.ZWrite.Value == ZWrite.On;
+                return writesDepth && request.Key.Stencil == StencilRole.None ? first : null;
+            }
+            return null;
+        }
+
+        // The canvas moved this sheet's wall among the walls: only that surface's priority and clone change.
+        internal void ApplyWallPriority()
+        {
+            var renderer = _chunk.MeshRenderer;
+            if (!_hasWall || renderer == null || renderer.IsDestroyed || renderer.Materials.Count == 0)
+                return;
+            int priority = _chunk.WallPriority;
+            renderer.SetSurfaceRenderPriority(0, priority);
+            var clonedMaterial = _chunk.GetRenderPriorityMaterial(_wallMap.FilteredMaterial, 0, priority);
+            SetMaterialTargets(0, new MaterialMap(clonedMaterial, _wallMap.FilteredPropertyBlock));
+            ApplyWallLead();
+        }
+
+        // In the per-surface order there are no bands: the wall goes down by its key, which the canvas put
+        // ahead of every sheet's own surfaces, nearest sheet first.
+        private void ApplyWallLead()
+        {
+            var renderer = _chunk.MeshRenderer;
+            if (renderer == null || renderer.IsDestroyed)
+                return;
+            float? lead = Canvas.UnboundedRenderOrder && _hasWall ? _chunk.WallSortKey : null;
+            if (renderer.LeadSurfaceSortingOffset != lead)
+                renderer.LeadSurfaceSortingOffset = lead;
         }
 
         // Godot caps per-surface render_priority at [-128..127] and sorts transparent surfaces by it
         // first, so coplanar UI quads need DISTINCT priorities or they fall back to distance sort (the
         // angle "wash"). We partition the range into bands so chunks layer deterministically even when
         // they overlap:
-        //   root chunk        -> [-128 .. -1]   (below everything)
+        //   root chunk        -> [-128 .. -W-1] (below everything)
+        //   sheet walls       -> [  -W ..  -1]  (the backing of each StackLayer sheet, nearest sheet first; W is
+        //                                        one slot a visible sheet, 16 at least, see Canvas.WallSlots)
         //   normal nested     -> [   0 ..  63]   (above root; chunks don't overlap each other)
         //   overlay level 1   -> [  64 ..  71]   (e.g. a modal's dim/blur backdrop)
         //   overlay level 2   -> [  72 ..  87]   (e.g. the modal panel background)
@@ -373,15 +431,32 @@ public sealed class GraphicsChunk
         // root packs from the bottom of its band and its nested chunks from the top, so the two only meet
         // past sixteen surfaces. Its depth test is off; without a band of its own a world panel's lifted
         // header still drew over the menu from a metre behind it. - xlinka
-        private int[] BuildPerSurfacePriorities(int materialCount, bool renderOnTop, int overlayLevel, bool overlayCanvas, bool containsChunks)
+        //
+        // A sheet's wall takes the place the canvas ranked it at and the rest of its chunk packs as usual. Every
+        // wall is down before anything else of any sheet, the nearest first, so the depth it lays down cuts away
+        // everything of a lower sheet under it, that sheet's own backing included. Shared bands left whatever a
+        // lower window drew at or below the upper backing's priority in the colour buffer before that backing,
+        // and the glass showed it: a button of the window behind seen through the one in front, a whole window
+        // behind as a darker block. -xlinka
+        private int[] BuildPerSurfacePriorities(int materialCount, bool renderOnTop, int overlayLevel, bool overlayCanvas, bool containsChunks,
+            bool hasWall)
         {
             var result = new int[materialCount];
             if (materialCount == 0) return result;
 
+            int first = 0;
+            if (hasWall)
+            {
+                result[0] = _chunk.WallPriority;
+                first = 1;
+            }
+            int count = materialCount - first;
+            if (count == 0) return result;
+
             if (overlayCanvas && !renderOnTop)
             {
-                for (int i = 0; i < materialCount; i++)
-                    result[i] = System.Math.Min(GodotRenderPriorityMax, OverlayCanvasBandLow + i);
+                for (int i = 0; i < count; i++)
+                    result[first + i] = System.Math.Min(GodotRenderPriorityMax, OverlayCanvasBandLow + i);
                 return result;
             }
 
@@ -392,7 +467,7 @@ public sealed class GraphicsChunk
             }
             else if (!renderOnTop)
             {
-                lo = GodotRenderPriorityMin; hi = -1;          // root chunk
+                lo = GodotRenderPriorityMin; hi = -(_chunk.Canvas?.WallSlots ?? WallSlotsMin) - 1;  // root chunk
             }
             else if (overlayLevel <= 0)
             {
@@ -416,29 +491,29 @@ public sealed class GraphicsChunk
             // distance sort (the angle "wash"). Surface that latent z-order bug in dev instead of shipping it
             // as a mystery visual glitch. Warn once per RenderData; near-exhaustion is debug-only. -xlinka
             int bandWidth = hi - lo + 1;
-            if (materialCount > bandWidth)
+            if (count > bandWidth)
             {
                 if (!_loggedBandExhaustion)
                 {
                     _loggedBandExhaustion = true;
                     Logger.Warn($"[Helio] Render-priority band exhausted on chunk #{_chunk.OrderIndex} of canvas " +
                         $"'{_chunk.Canvas?.Slot?.Name?.Value ?? "?"}' " +
-                        $"(renderOnTop={renderOnTop}, overlayLevel={overlayLevel}): {materialCount} surfaces > band width " +
-                        $"{bandWidth} [{lo}..{hi}]. {materialCount - bandWidth} surface(s) saturate at {hi}, so coplanar " +
+                        $"(renderOnTop={renderOnTop}, overlayLevel={overlayLevel}): {count} surfaces > band width " +
+                        $"{bandWidth} [{lo}..{hi}]. {count - bandWidth} surface(s) saturate at {hi}, so coplanar " +
                         $"z-order goes ambiguous. Reduce overlay nesting / material count, or move this canvas to unbounded render order.");
                 }
             }
-            else if (materialCount > bandWidth - 2 && Logger.EnableDebug)
+            else if (count > bandWidth - 2 && Logger.EnableDebug)
             {
                 Logger.Debug($"[Helio] Render-priority band near exhaustion on chunk #{_chunk.OrderIndex}: " +
-                    $"{materialCount}/{bandWidth} in [{lo}..{hi}].");
+                    $"{count}/{bandWidth} in [{lo}..{hi}].");
             }
 
-            int start = renderOnTop && !overlayCanvas && overlayLevel <= 0 && containsChunks ? lo : hi - materialCount + 1;
+            int start = renderOnTop && !overlayCanvas && overlayLevel <= 0 && containsChunks ? lo : hi - count + 1;
             if (start < lo) start = lo;
-            for (int i = 0; i < materialCount; i++)
+            for (int i = 0; i < count; i++)
             {
-                result[i] = System.Math.Min(hi, start + i);
+                result[first + i] = System.Math.Min(hi, start + i);
             }
             return result;
         }
@@ -468,7 +543,9 @@ public sealed class GraphicsChunk
             return requests;
         }
 
-        private void SortSubmeshesByRenderQueue(Dictionary<PhosTriangleSubmesh, int> submeshQueues)
+        // A sheet's wall goes first of all: it is drawn in a band of its own, and the hook reads the chunk's sort
+        // offset off its first surface.
+        private void SortSubmeshesByRenderQueue(Dictionary<PhosTriangleSubmesh, int> submeshQueues, PhosTriangleSubmesh? wall)
         {
             // Stencil-WRITE submeshes must draw before any stencil-tested content (which compares against the
             // stencil they stamp), regardless of logical render queue. Without this, content with a custom low
@@ -501,6 +578,11 @@ public sealed class GraphicsChunk
 
             Mesh.Submeshes.Sort((left, right) =>
             {
+                if (wall != null && !ReferenceEquals(left, right) && (ReferenceEquals(left, wall) || ReferenceEquals(right, wall)))
+                {
+                    return ReferenceEquals(left, wall) ? -1 : 1;
+                }
+
                 // Writers first, always.
                 bool leftWrite = writeSubmeshes != null && left is PhosTriangleSubmesh lw && writeSubmeshes.Contains(lw);
                 bool rightWrite = writeSubmeshes != null && right is PhosTriangleSubmesh rw && writeSubmeshes.Contains(rw);
@@ -553,97 +635,6 @@ public sealed class GraphicsChunk
             }
 
             return indexes;
-        }
-
-        private void UpdateMaterial(in MaterialKey key, List<int> indexes, in MaterialMap map)
-        {
-            if (_assignedMaterials.TryGetValue(key, out var assigned))
-            {
-                bool indexChanged = !SameIndexes(assigned.Indexes, indexes);
-                bool mapChanged = assigned.Map != map;
-                if (!indexChanged && !mapChanged)
-                {
-                    SetMaterialTargets(indexes, in map);
-                    return;
-                }
-
-                assigned.Indexes.Clear();
-                assigned.Indexes.AddRange(indexes);
-                SetMaterialTargets(assigned.Indexes, in map);
-                _assignedMaterials[key] = new AssignedMaterial(assigned.Indexes, in map);
-                return;
-            }
-
-            SetMaterialTargets(indexes, in map);
-            _assignedMaterials.Add(key, new AssignedMaterial(indexes, in map));
-        }
-
-        private static bool SameIndexes(IReadOnlyList<int> left, IReadOnlyList<int> right)
-        {
-            if (left.Count != right.Count)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < left.Count; i++)
-            {
-                if (left[i] != right[i])
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private void RemoveUnusedMaterials(HashSet<MaterialKey> activeMaterials)
-        {
-            if (_assignedMaterials.Count == activeMaterials.Count)
-            {
-                bool allFound = true;
-                foreach (var key in _assignedMaterials.Keys)
-                {
-                    if (!activeMaterials.Contains(key))
-                    {
-                        allFound = false;
-                        break;
-                    }
-                }
-                if (allFound)
-                {
-                    return;
-                }
-            }
-
-            List<MaterialKey>? remove = null;
-            foreach (var pair in _assignedMaterials)
-            {
-                if (activeMaterials.Contains(pair.Key))
-                {
-                    continue;
-                }
-
-                remove ??= new List<MaterialKey>();
-                remove.Add(pair.Key);
-            }
-
-            if (remove == null)
-            {
-                return;
-            }
-
-            foreach (var key in remove)
-            {
-                _assignedMaterials.Remove(key);
-            }
-        }
-
-        private void SetMaterialTargets(IReadOnlyList<int> indexes, in MaterialMap map)
-        {
-            for (int i = 0; i < indexes.Count; i++)
-            {
-                SetMaterialTargets(indexes[i], in map);
-            }
         }
 
         private void SetMaterialTargets(int index, in MaterialMap map)
@@ -763,6 +754,30 @@ public sealed class GraphicsChunk
     // Other chunks sit inside this one (a scroll pane and its row chunks), so it is their background.
     public bool ContainsChunks { get; set; }
 
+    // Render priorities kept for sheet walls, one a visible sheet, the nearest sheet lowest: [-W .. -1]. The band
+    // takes one slot a sheet, never fewer than the minimum, and gives the root chunk back what it does not use.
+    // The root keeps at least 32, so past the maximum the farthest sheets share a slot: they cannot show through
+    // each other's content, only through each other's glass.
+    internal const int WallSlotsMin = 16;
+    internal const int WallSlotsMax = 96;
+
+    // The root carries a StackLayer: a depth-writing backing it draws first is the sheet's wall.
+    public bool IsSheet { get; set; }
+
+    // This sheet's place among the walls of the canvas, ranked by Canvas.ApplyPlacements: its band priority, and
+    // its key for the per-surface order.
+    public int WallPriority { get; private set; } = -1;
+    public float WallSortKey { get; private set; }
+
+    internal void SetWallPriority(int priority, float sortKey)
+    {
+        if (WallPriority == priority && WallSortKey == sortKey)
+            return;
+        WallPriority = priority;
+        WallSortKey = sortKey;
+        ContentRenderData.ApplyWallPriority();
+    }
+
     // Render-space translation of this chunk's whole mesh, applied on the chunk slot. ScrollRect uses it to
     // slide scrolled content without touching its rect; the canvas counter-translates the clip to keep the
     // viewport window fixed. Canvas pixels, in the chunk's (canvas-local) frame. -xlinka
@@ -875,7 +890,7 @@ public sealed class GraphicsChunk
 
     public MainTexturePropertyBlock GetSharedImageBlock(IAssetProvider<TextureAsset> texture) => Canvas.GetSharedImageBlock(texture);
 
-    public UIUnlitMaterial GetSharedImageMaterial(IAssetProvider<TextureAsset> texture) => Canvas.GetSharedImageMaterial(texture);
+    public UIUnlitMaterial GetSharedImageMaterial(IAssetProvider<TextureAsset> texture, bool still = false) => Canvas.GetSharedImageMaterial(texture, still);
 
     public IAssetProvider<MaterialAsset> GetDefaultUIMaterial()
     {

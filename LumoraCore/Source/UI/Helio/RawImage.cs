@@ -16,10 +16,17 @@ public sealed class RawImage : Graphic
     public readonly Sync<color> Tint;
     public readonly Sync<Rect> UVRect;
     public readonly Sync<bool> PreserveAspect;
+    // The other way round from PreserveAspect: the picture fills the rect and what overflows is cut evenly
+    // from both ends of UVRect. Worked out from the rect at every build, so a resize never leaves a picture
+    // cropped for the shape it used to have. -xlinka
+    public readonly Sync<bool> Cover;
     public readonly Sync<bool> FlipHorizontal;
     public readonly Sync<bool> FlipVertical;
     // Off: never hit-tested, so a press on it passes through to whatever lies under it.
     public readonly Sync<bool> InteractionTarget;
+    // An animated picture (a frame sheet) plays when this is on and shows its first frame when off. UVRect, the
+    // crop and the aspect are always about one frame. Off by default: a picture moves only where it is asked to.
+    public readonly Sync<bool> Animate;
 
     private IAssetProvider<TextureAsset>? _textureProvider;
     private IAssetProvider<MaterialAsset>? _material;
@@ -27,8 +34,10 @@ public sealed class RawImage : Graphic
     private color _tint;
     private Rect _uvRect;
     private bool _preserveAspect;
+    private bool _cover;
     private bool _flipH;
     private bool _flipV;
+    private bool _animate;
 
     public RawImage()
     {
@@ -37,9 +46,11 @@ public sealed class RawImage : Graphic
         Tint = new Sync<color>(this, color.White);
         UVRect = new Sync<Rect>(this, Rect.UnitRect);
         PreserveAspect = new Sync<bool>(this, false);
+        Cover = new Sync<bool>(this, false);
         FlipHorizontal = new Sync<bool>(this, false);
         FlipVertical = new Sync<bool>(this, false);
         InteractionTarget = new Sync<bool>(this, true);
+        Animate = new Sync<bool>(this, false);
     }
 
     public override bool RequiresPreGraphicsCompute => false;
@@ -63,8 +74,10 @@ public sealed class RawImage : Graphic
         _tint = Tint.Value;
         _uvRect = UVRect.Value;
         _preserveAspect = PreserveAspect.Value;
+        _cover = Cover.Value;
         _flipH = FlipHorizontal.Value;
         _flipV = FlipVertical.Value;
+        _animate = Animate.Value;
     }
 
     public override void ComputeGraphic(GraphicsChunk.RenderData renderData)
@@ -87,9 +100,39 @@ public sealed class RawImage : Graphic
             return;
         }
 
-        // Key by texture identity; the shared image block is created at submit (main).
-        var submesh = renderData.GetSubmesh(_material, _textureProvider, GraphicsChunk.RenderData.ImageTexture);
-        GenerateImage(submesh.Mesh, submesh, rect, _uvRect, _texture, _preserveAspect, in _tint, clipRect, _flipH, _flipV);
+        // Key by texture identity; the shared image block is created at submit (main). A frame sheet draws its
+        // first frame; the material moves the window along the sheet when it plays.
+        var texture = _texture;
+        bool sheet = texture != null && texture.AnimationFrames > 1;
+        var submesh = renderData.GetSubmesh(_material, _textureProvider,
+            sheet && !_animate ? GraphicsChunk.RenderData.ImageTextureStill : GraphicsChunk.RenderData.ImageTexture);
+        var frameUv = sheet ? FirstFrame(_uvRect, texture!) : _uvRect;
+        if (sheet && _animate)
+            renderData.NotePlaying(texture!.AnimationFps);
+        var uv = _cover ? CoverWindow(rect, frameUv, texture) : frameUv;
+        GenerateImage(submesh.Mesh, submesh, rect, uv, _texture, _preserveAspect && !_cover, in _tint, clipRect, _flipH, _flipV);
+    }
+
+    private static Rect FirstFrame(in Rect uvRect, TextureAsset texture)
+    {
+        var cell = texture.AnimationFrameRect(0);
+        return new Rect(cell.x + uvRect.x * cell.width, cell.y + uvRect.y * cell.height, uvRect.width * cell.width, uvRect.height * cell.height);
+    }
+
+    private static Rect CoverWindow(in Rect rect, in Rect uvRect, TextureAsset? texture)
+    {
+        if (texture == null || texture.Width <= 0 || texture.Height <= 0 || rect.width <= 0f || rect.height <= 0f
+            || uvRect.width <= 0f || uvRect.height <= 0f)
+            return uvRect;
+        float source = texture.Width * uvRect.width / (texture.Height * uvRect.height);
+        float target = rect.width / rect.height;
+        if (source > target)
+        {
+            float width = uvRect.width * target / source;
+            return new Rect(uvRect.x + (uvRect.width - width) * 0.5f, uvRect.y, width, uvRect.height);
+        }
+        float height = uvRect.height * source / target;
+        return new Rect(uvRect.x, uvRect.y + (uvRect.height - height) * 0.5f, uvRect.width, height);
     }
 
     public override bool IsPointInside(in float2 point)

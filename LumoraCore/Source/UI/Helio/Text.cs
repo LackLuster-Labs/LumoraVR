@@ -80,6 +80,10 @@ public class Text : Graphic, ILayoutElement
     private bool _wrap;
     private bool _richText;
     private int _caretPos;
+    private float _caretElapsed;
+    private bool _caretVisible = true;
+    private bool _drawCaret = true;
+
     private int _selStart;
     private color _caretColor;
     private color _selColor;
@@ -157,6 +161,8 @@ public class Text : Graphic, ILayoutElement
         RichText = new Sync<bool>(this, false);
         CaretPosition = new Sync<int>(this, -1);
         SelectionStart = new Sync<int>(this, -1);
+        CaretPosition.MarkUiState();
+        SelectionStart.MarkUiState();
         CaretColor = new Sync<color>(this, Lumora.Core.Math.color.White);
         SelectionColor = new Sync<color>(this, new Lumora.Core.Math.color(0.25f, 0.5f, 1f, 0.4f));
         AutoSizeHorizontal = new Sync<bool>(this, false);
@@ -170,6 +176,32 @@ public class Text : Graphic, ILayoutElement
         BlockMeasure = new Sync<TextBlockMeasure>(this, TextBlockMeasure.LineBoxes);
         Justification = new Sync<TextJustification>(this, TextJustification.WordGaps);
         Ellipsis = new Sync<bool>(this, false);
+    }
+
+    // Blink locally without changing the selection, layout, or sending a field write each half second. -xlinka
+    internal void ResetCaretBlink()
+    {
+        _caretElapsed = 0f;
+        if (_caretVisible)
+            return;
+        _caretVisible = true;
+        RectTransform?.MarkGraphicDirty();
+    }
+
+    public override void OnUpdate(float delta)
+    {
+        base.OnUpdate(delta);
+        if (CaretPosition.Value < 0)
+        {
+            ResetCaretBlink();
+            return;
+        }
+        _caretElapsed = (_caretElapsed + delta) % 1f;
+        bool visible = _caretElapsed < 0.5f;
+        if (visible == _caretVisible)
+            return;
+        _caretVisible = visible;
+        RectTransform?.MarkGraphicDirty();
     }
 
     public override bool RequiresPreGraphicsCompute => true;
@@ -398,6 +430,7 @@ public class Text : Graphic, ILayoutElement
         _wrap = WordWrap.Value;
         _richText = RichText.Value;
         _caretPos = CaretPosition.Value;
+        _drawCaret = _caretVisible;
         _selStart = SelectionStart.Value;
         _caretColor = CaretColor.Value;
         _selColor = SelectionColor.Value;
@@ -1054,8 +1087,7 @@ public class Text : Graphic, ILayoutElement
 
     private static float FullHeight(FontAsset font, float size)
     {
-        var url = font.AssetURL;
-        float gap = url != null && url.IsFile ? FontLineGap.PerEm(url.LocalPath) * size : 0f;
+        float gap = FontLineGap.PerEm(font.AssetURL) * size;
         return font.GetLineHeight(size) + gap;
     }
 
@@ -1244,7 +1276,7 @@ public class Text : Graphic, ILayoutElement
     }
 
     // Selection rects + caret, emitted into a solid (untextured) submesh requested
-    // BEFORE the glyph submeshes so they render behind the glyphs. Steady caret.
+    // BEFORE the glyph submeshes so they render behind the glyphs. -xlinka
     // Draw a highlight quad behind each run of same-colored <mark> glyphs, per line, before the glyphs. -xlinka
     private void EmitMarkBackgrounds(GraphicsChunk.RenderData renderData,
         in Rect rect, System.Collections.Generic.IReadOnlyList<TextShaper.Line> lines, float blockTop)
@@ -1318,6 +1350,8 @@ public class Text : Graphic, ILayoutElement
             }
         }
 
+        if (!_drawCaret)
+            return;
         TryGetCaretPos(lines, _caretPos, out int caretLine, out float caretX);
         float caretTop = blockTop;
         for (int li = 0; li < caretLine; li++)
@@ -1384,10 +1418,13 @@ public class Text : Graphic, ILayoutElement
             if (sprite != null && tex != null)
             {
                 var uv = sprite.UVRect.Value;
-                // A frame strip shows one frame at a time; the material moves the window along it.
-                int frames = tex.Asset?.AnimationFrames ?? 1;
-                if (frames > 1)
-                    uv = new Rect(uv.x, uv.y, uv.width, uv.height / frames);
+                // A frame sheet shows one frame at a time; the material moves the window along it.
+                var asset = tex.Asset;
+                if (asset != null && asset.AnimationFrames > 1)
+                {
+                    var cell = asset.AnimationFrameRect(0);
+                    uv = new Rect(cell.x + uv.x * cell.width, cell.y + uv.y * cell.height, uv.width * cell.width, uv.height * cell.height);
+                }
                 _resolvedSprites[name] = (tex, uv, sprite.Material.Target);
             }
         }
@@ -1439,6 +1476,8 @@ public class Text : Graphic, ILayoutElement
         var rect = Rect.FromMinMax(new float2(x0, y0), new float2(x0 + m.Size.x, y0 + m.Size.y));
         var submesh = renderData.GetSubmesh(resolved.material, resolved.texture, GraphicsChunk.RenderData.ImageTexture);
         RawImage.GenerateImage(submesh.Mesh, submesh, rect, resolved.uv, null, false, in SpriteTint, clip);
+        if (resolved.texture.Asset is { AnimationFrames: > 1 } sheet)
+            renderData.NotePlaying(sheet.AnimationFps);
     }
 
     private static void EmitSolidQuad(GraphicsChunk.RenderData renderData, float x0, float y0, float x1, float y1, in color c, Rect? clip)

@@ -15,6 +15,11 @@ public sealed class Checkbox : InteractionElement
     // so a loaded or remote checkbox already knows what it drives. -xlinka
     public readonly FieldDrive<bool> CheckVisual = new();
 
+    // A field the box shows and flips instead of its own IsChecked: a setting somewhere else, ticked from here.
+    public readonly SyncRef<IField<bool>> StateField = new();
+
+    public bool Checked => StateField.Target is { } field ? field.Value : IsChecked.Value;
+
     // Duplicable change action - see Button.Pressed.
     public readonly SyncDelegate<Action<Checkbox, bool>> ChangeAction;
 
@@ -76,17 +81,28 @@ public sealed class Checkbox : InteractionElement
 
     protected override void OnSubmit(in UIInteractionContext context)
     {
-        IsChecked.Value = !IsChecked.Value;
+        if (StateField.Target is { } field)
+            field.Value = !field.Value;
+        else
+            IsChecked.Value = !IsChecked.Value;
         UpdateCheckVisual();
-        ValueChanged?.Invoke(this, IsChecked.Value);
-        ChangeAction.Target?.Invoke(this, IsChecked.Value);
+        ValueChanged?.Invoke(this, Checked);
+        ChangeAction.Target?.Invoke(this, Checked);
+    }
+
+    // The field somewhere else can change under the box; the tick follows it.
+    public override void OnUpdate(float delta)
+    {
+        base.OnUpdate(delta);
+        if (StateField.Target != null)
+            UpdateCheckVisual();
     }
 
     private void UpdateCheckVisual()
     {
-        if (CheckVisual.IsLinkValid)
+        if (CheckVisual.IsLinkValid && CheckVisual.Target!.Value != Checked)
         {
-            CheckVisual.SetValue(IsChecked.Value);
+            CheckVisual.SetValue(Checked);
         }
     }
 }

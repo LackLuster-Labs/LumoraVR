@@ -8,7 +8,10 @@ namespace Helio.UI;
 
 // A subtree drawn and hit as one sheet that slides and stacks without being laid out again. Offset moves
 // every chunk under it across the canvas and takes its hit area along; Lift raises those chunks toward the
-// reader, so a sheet whose backing writes depth covers a lower one wherever their render bands interleave.
+// reader. A layer on a chunk root whose first graphic writes depth makes that graphic the sheet's wall: the
+// canvas draws every wall before anything else of any sheet, the highest first, so a sheet covers whatever
+// of a lower one lies under it, that one's own wall included. A lift step has to clear the push such a wall
+// gives its depth (4 mm in view space) at the canvas's scale.
 // Neither touches a rect: dragging or raising a whole window is a transform write per chunk, not a relayout
 // and a re-mesh of everything in it. Layers nest by adding up. Scale grows or shrinks the drawn sheet about
 // Pivot for the moment a window opens, closes or goes to the dock; the hit area does not follow it, so it is

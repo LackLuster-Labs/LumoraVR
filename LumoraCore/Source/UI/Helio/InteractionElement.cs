@@ -43,6 +43,8 @@ public class InteractionElement : UIComponent, IUIInteractable
         BaseColor = new Sync<color>(this, color.White);
         IsHovering = new Sync<bool>(this, false);
         IsPressed = new Sync<bool>(this, false);
+        IsHovering.MarkUiState();
+        IsPressed.MarkUiState();
         HitOutset = new Sync<float>(this, 0f);
         Tip = new Sync<string>(this, string.Empty);
     }

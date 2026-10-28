@@ -313,6 +313,10 @@ public sealed class MaterialCloneCache
         changed |= Set(clone.MaskMode, source.MaskMode.Value);
         changed |= Set(clone.OffsetFactor, source.OffsetFactor.Value);
         changed |= Set(clone.OffsetUnits, source.OffsetUnits.Value);
+        changed |= Set(clone.TintHidden, source.TintHidden.Value);
+        changed |= Set(clone.HiddenTint, source.HiddenTint.Value);
+        changed |= Set(clone.TextureMode, source.TextureMode.Value);
+        changed |= Set(clone.PlayFrames, source.PlayFrames.Value);
 
         if (changed)
         {

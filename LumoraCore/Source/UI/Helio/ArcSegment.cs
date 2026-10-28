@@ -35,6 +35,9 @@ public sealed class ArcSegment : Graphic
     // Width of the soft band outside the edge, in canvas units: the edge fades out over it instead of
     // stair-stepping, which is most of what reads as clean at a distance.
     public readonly Sync<float> EdgeSoftness;
+    // The radii as shares of half the rect's shorter side rather than canvas units, so the ring grows and
+    // shrinks with the rect it is laid out into.
+    public readonly Sync<bool> RadiiFromRect;
 
     private const float MaxChordError = 0.05f;
 
@@ -47,6 +50,9 @@ public sealed class ArcSegment : Graphic
     private float _outlineThickness;
     private float _cornerRadius;
     private float _edgeSoftness;
+    private float _innerSetting;
+    private float _outerSetting;
+    private bool _radiiFromRect;
 
     [ThreadStatic] private static List<float2>? _outerChain;
     [ThreadStatic] private static List<float2>? _outerNormals;
@@ -64,6 +70,7 @@ public sealed class ArcSegment : Graphic
         OutlineThickness = new Sync<float>(this, 3f);
         CornerRadius = new Sync<float>(this, 0f);
         EdgeSoftness = new Sync<float>(this, 0.75f);
+        RadiiFromRect = new Sync<bool>(this, false);
     }
 
     public override bool RequiresPreGraphicsCompute => false;
@@ -77,8 +84,11 @@ public sealed class ArcSegment : Graphic
     {
         _angleStart = AngleStart.Value;
         _arcLength = ArcLength.Value;
-        _innerRadius = InnerRadius.Value;
-        _outerRadius = OuterRadius.Value;
+        _innerSetting = InnerRadius.Value;
+        _outerSetting = OuterRadius.Value;
+        _radiiFromRect = RadiiFromRect.Value;
+        _innerRadius = _innerSetting;
+        _outerRadius = _outerSetting;
         _tint = Tint.Value;
         _outlineColor = OutlineColor.Value;
         _outlineThickness = OutlineThickness.Value;
@@ -89,10 +99,13 @@ public sealed class ArcSegment : Graphic
     public override void ComputeGraphic(GraphicsChunk.RenderData renderData)
     {
         var rectTransform = RectTransform;
-        if (rectTransform == null || _arcLength <= 0f || _outerRadius <= _innerRadius)
+        if (rectTransform == null || _arcLength <= 0f)
             return;
 
         var rect = rectTransform.LocalComputeRect;
+        ResolveRadii(in rect);
+        if (_outerRadius <= _innerRadius)
+            return;
         float2 center = new float2(rect.xMin + rect.width * 0.5f, rect.yMin + rect.height * 0.5f);
 
         var mesh = renderData.Mesh;
@@ -381,6 +394,19 @@ public sealed class ArcSegment : Graphic
             submesh.AddTriangle(a, c, b);
     }
 
+    private void ResolveRadii(in Rect rect)
+    {
+        if (!_radiiFromRect)
+        {
+            _innerRadius = _innerSetting;
+            _outerRadius = _outerSetting;
+            return;
+        }
+        float half = MathF.Min(rect.width, rect.height) * 0.5f;
+        _innerRadius = _innerSetting * half;
+        _outerRadius = _outerSetting * half;
+    }
+
     public override bool IsPointInside(in float2 point)
     {
         var rectTransform = RectTransform;
@@ -388,6 +414,7 @@ public sealed class ArcSegment : Graphic
             return false;
 
         var rect = rectTransform.LocalComputeRect;
+        ResolveRadii(in rect);
         float dx = point.x - (rect.xMin + rect.width * 0.5f);
         float dy = point.y - (rect.yMin + rect.height * 0.5f);
 

@@ -75,6 +75,7 @@ public sealed class ScrollRect : InteractionElement, IUIAxisActionReceiver
     {
         Content = new SyncRef<RectTransform>(this);
         Scroll = new Sync<float2>(this, float2.Zero);
+        Scroll.MarkUiState();
         ScrollSensitivity = new Sync<float2>(this, float2.One);
         WheelScrollsHorizontal = new Sync<bool>(this, false);
         RowsActOnRelease = new Sync<bool>(this, false);

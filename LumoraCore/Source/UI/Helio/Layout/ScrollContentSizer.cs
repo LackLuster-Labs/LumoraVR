@@ -67,12 +67,14 @@ public class ScrollContentSizer : Component
         _lastPinned = target;
         // Sync fields have no equality gate, so an unchanged write still dirties the rect and re-meshes
         // the content chunk. Compare first, or a reprobe window costs a re-mesh per frame for nothing.
+        // Every peer measures the same rows; on a panel in somebody else's hand the pin is theirs to write,
+        // and asking first keeps a refusal from reaching the host when it races the pickup. -xlinka
         var offsetMin = rect.OffsetMin.Value;
         float drift = offsetMin.y + target;
-        if (drift > 0.01f || drift < -0.01f)
+        if ((drift > 0.01f || drift < -0.01f) && rect.OffsetMin.IsWriteAllowedQuietly())
             rect.OffsetMin.Value = new float2(offsetMin.x, -target);
         var offsetMax = rect.OffsetMax.Value;
-        if (offsetMax.y != 0f)
+        if (offsetMax.y != 0f && rect.OffsetMax.IsWriteAllowedQuietly())
             rect.OffsetMax.Value = new float2(offsetMax.x, 0f);
     }
 

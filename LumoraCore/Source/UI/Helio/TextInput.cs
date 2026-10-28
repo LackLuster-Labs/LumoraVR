@@ -3,6 +3,10 @@
 
 using System;
 using System.Globalization;
+using System.Collections.Generic;
+using Lumora.Core.Components;
+using Lumora.Core.Components.Interaction;
+using Lumora.Core.Math;
 using Lumora.Core;
 using Lumora.Core.Input;
 
@@ -12,7 +16,7 @@ namespace Helio.UI;
 // the caret, shift+move selects, typing replaces a selection, enter submits (or inserts a newline
 // when Multiline), escape cancels. drives a child "Text" component's content and its
 // caret/selection visuals; shows Placeholder when empty and unfocused.
-// The caret + selection are REAL geometry rendered by the child Text (steady caret).
+// The child Text draws the caret and selection; only the caret blinks. -xlinka
 // Only the clicked instance edits (single static focus), reading the LOCAL keyboard;
 // the value replicates through the synced Text field. Mouse-drag selection is future work.
 //
@@ -21,7 +25,7 @@ namespace Helio.UI;
 // that way: a second copy of the caret and selection rules is how the two input paths end up
 // disagreeing about where the caret is. -xlinka
 [ComponentCategory("UI/Helio/Interaction")]
-public sealed class TextInput : InteractionElement
+public sealed class TextInput : InteractionElement, IProxySource, IProxyReceiver
 {
     public readonly Sync<string> Text;
     public readonly Sync<string> Placeholder;
@@ -75,6 +79,8 @@ public sealed class TextInput : InteractionElement
     public TextInput()
     {
         Text = new Sync<string>(this, string.Empty);
+        // Typing into a field is the field's own state; what it commits to is judged as an edit of that.
+        Text.MarkUiState();
         Placeholder = new Sync<string>(this, string.Empty);
         Multiline = new Sync<bool>(this, false);
         MaxLength = new Sync<int>(this, 0);
@@ -104,6 +110,20 @@ public sealed class TextInput : InteractionElement
     {
         base.OnStart();
         RebindVisuals();
+        if (Slot != null)
+        {
+            Slot.ActiveChanged -= OnSlotActiveChanged;
+            Slot.ActiveChanged += OnSlotActiveChanged;
+        }
+    }
+
+    // A hidden field stops updating, so the check in OnUpdate never runs and the focus would outlive it:
+    // the keyboard stays taken and every hotkey stays down with nothing on screen to type into. A dialog
+    // closed or a screen switched mid-edit lets go here instead, the way a click away does. -xlinka
+    private void OnSlotActiveChanged(Slot slot)
+    {
+        if (IsFocused && (slot == null || !slot.IsActive))
+            Unfocus();
     }
 
     public override void OnChanges()
@@ -114,6 +134,8 @@ public sealed class TextInput : InteractionElement
 
     public override void OnDestroy()
     {
+        if (Slot != null)
+            Slot.ActiveChanged -= OnSlotActiveChanged;
         if (ReferenceEquals(_focused, this))
         {
             _focused = null;
@@ -127,10 +149,15 @@ public sealed class TextInput : InteractionElement
     private void RebindVisuals()
     {
         // _text is a per-peer handle for the caret/selection fields; the CONTENT link is a real member,
-        // so only default it when nothing named a target.
+        // so only default it when nothing named a target, on the machine that made the field (the others get
+        // the link with it). The authority builds the rows of a panel somebody holds, and this is that field
+        // wiring itself up. -xlinka
         _text = Slot?.FindChild("Text", recursive: false)?.GetComponent<Helio.UI.Text>();
-        if (_text != null && ContentDrive.ShouldApplyDefault)
+        if (_text != null && ContentDrive.ShouldApplyDefault && IsMintedHere)
+        {
+            using var keep = World?.DataModelPermissions?.EnterUiUpkeep(this);
             ContentDrive.DriveTarget(_text.Content);
+        }
         UpdateDisplay();
     }
 
@@ -193,8 +220,9 @@ public sealed class TextInput : InteractionElement
         if (!string.IsNullOrEmpty(typed))
             changed |= InsertText(ref value, typed);
 
-        int backs = DeletionCount(kb, Key.Backspace, ref _backspaceRepeat, delta);
-        int deletes = DeletionCount(kb, Key.Delete, ref _deleteRepeat, delta);
+        double now = World?.Time?.TotalTime ?? 0.0;
+        int backs = DeletionCount(kb, Key.Backspace, ref _backspaceRepeat, now);
+        int deletes = DeletionCount(kb, Key.Delete, ref _deleteRepeat, now);
         for (int i = 0; i < backs; i++) changed |= DeleteBack(ref value);
         for (int i = 0; i < deletes; i++) changed |= DeleteForward(ref value);
 
@@ -230,10 +258,10 @@ public sealed class TextInput : InteractionElement
         if (escape) { Cancel(); return; }
     }
 
-    private static int DeletionCount(Keyboard keyboard, Key key, ref KeyRepeat repeat, float delta)
+    private static int DeletionCount(Keyboard keyboard, Key key, ref KeyRepeat repeat, double now)
     {
-        if (keyboard.IsKeyJustPressed(key)) { repeat.Begin(); return 1; }
-        return repeat.Advance(keyboard.IsKeyPressed(key), delta);
+        if (keyboard.IsKeyJustPressed(key)) { repeat.Begin(now); return 1; }
+        return repeat.Advance(keyboard.IsKeyPressed(key), now);
     }
 
     // Index of the first char on the caret's line (just after the previous '\n', or 0).
@@ -516,7 +544,7 @@ public sealed class TextInput : InteractionElement
     // The platform clipboard is a runner-injected service, so there is nothing to reach on a headless
     // build and every method here degrades to a no-op instead of throwing. -xlinka
 
-    // Test seam. A headless harness has no Engine, so there is no InputInterface to hang a clipboard
+    // Test seam. A headless test has no Engine, so there is no InputInterface to hang a clipboard
     // off and no way to exercise copy/paste at all without this. Null in every real session; the
     // platform's clipboard goes on InputInterface where the rest of the platform services live.
     public static IClipboardText? ClipboardOverride { get; set; }
@@ -581,10 +609,16 @@ public sealed class TextInput : InteractionElement
         if (text.Length == 0)
             return false;
 
+        PasteText(text);
+        return true;
+    }
+
+    private void PasteText(string text)
+    {
         if (!Multiline.Value)
         {
             TypeString(text);
-            return true;
+            return;
         }
 
         string[] lines = text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n');
@@ -600,11 +634,10 @@ public sealed class TextInput : InteractionElement
             }
             TypeString(lines[i]);
         }
-        return true;
     }
 
     // Take focus without a click. The pointer path goes through OnPress; anything else that needs to
-    // start a typing session (a harness, a panel handing off to a field) calls this.
+    // start a typing session (a test, a panel handing off to a field) calls this.
     //
     // Typing takes the keyboard and nothing else. While a field holds focus the action map's keyboard
     // source reads as released (InputInterface raises TextFocusHeld off Focused), so walking, crouch and the
@@ -712,6 +745,41 @@ public sealed class TextInput : InteractionElement
         SubmitAction.Target?.Invoke(this, value);
     }
 
+    public IGrabbable? TryCreateProxy(Grabber grabber, in float3 spawnPoint)
+    {
+        if (Mask.Value || World == null || !CanInteract)
+            return null;
+        var editor = Slot?.GetComponentInParents<MemberEditor>();
+        return editor != null
+            ? editor.CopyValue(this, spawnPoint)
+            : ValueProxy.Spawn(World, Text, spawnPoint);
+    }
+
+    public bool TryReceiveProxy(IReadOnlyList<IGrabbable> held, Grabber grabber)
+    {
+        if (!CanInteract || ReadOnly.Value)
+            return false;
+        if (Slot?.GetComponentInParents<MemberEditor>() is { } editor)
+            return editor.ReceiveValue(held, grabber, this);
+        foreach (var item in held)
+        {
+            if (item is not Component { Slot: { } slot } || slot.GetComponent<ValueProxy>() is not { } card
+                || !card.TryGetValue(out var value, out _))
+                continue;
+            Focus();
+            _selStart = 0;
+            _caret = (Text.Value ?? string.Empty).Length;
+            string copied = Text.Value ?? string.Empty;
+            DeleteSelection(ref copied);
+            ApplyValue(copied);
+            PasteText(ValueCardConversion.Display(value));
+            Submit();
+            card.Consume(item, grabber);
+            return true;
+        }
+        return false;
+    }
+
     private void UpdateDisplay()
     {
         string? raw = Text.Value;
@@ -740,6 +808,7 @@ public sealed class TextInput : InteractionElement
             int length = content?.Length ?? 0;
             if (IsFocused)
             {
+                _text.ResetCaretBlink();
                 _text.CaretPosition.Value = System.Math.Clamp(_caret, 0, length);
                 _text.SelectionStart.Value = HasSelection() ? System.Math.Clamp(_selStart, 0, length) : -1;
             }

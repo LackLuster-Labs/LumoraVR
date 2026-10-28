@@ -42,9 +42,14 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
         // The world update a deep edge was last taken on, so a second pass in the same update cannot
         // take it twice.
         public ulong DeepUpdate = ulong.MaxValue;
+        // The hover areas this pointer is over, whatever under them took it.
+        public List<HoverArea>? Areas;
     }
 
     private readonly Dictionary<int, PointerState> _pointers = new();
+    // Filled by the scan of a pointer update, null for every other scan.
+    private List<HoverArea>? _areaScan;
+    private readonly List<HoverArea> _areaScratch = new();
     private RectTransform? _rootRect;
     private GraphicChunkRoot? _chunkRoot;
     private GraphicsChunk? _rootChunk;
@@ -106,6 +111,11 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
     // Opt-in: size a BoxCollider on the canvas slot to the aggregated UI bounds, for physical/grab
     // interaction against the surface. Off by default - leaves hit-testing on the existing raycast path. -xlinka
     public readonly Sync<bool> SizeCollider = new();
+
+    // Width and height in canvas units, centred on the slot. An axis of zero leaves the root rect as it is
+    // there; one above zero sizes the root rect, and the box collider on the slot, to it. For a canvas whose
+    // size is driven, a mirror that changes shape for each viewer, say. -xlinka
+    public readonly Sync<float2> Size = new();
 
     // A fingertip pushed through the face presses whatever it lands on (CanvasTouchSource). Off for a
     // panel that only wants the laser: one standing where hands pass through it, or one whose buttons are
@@ -199,6 +209,7 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
     private readonly Dictionary<TextureAsset, UITextMaterial> _sharedTextMaterials = new();
     private readonly Dictionary<IAssetProvider<TextureAsset>, MainTexturePropertyBlock> _sharedImageBlocks = new();
     private readonly Dictionary<IAssetProvider<TextureAsset>, UIUnlitMaterial> _sharedImageMaterials = new();
+    private readonly Dictionary<IAssetProvider<TextureAsset>, UIUnlitMaterial> _sharedStillImageMaterials = new();
 
     // A canvas whose content never scrolls can draw from the world's shared UI materials (SharedUIMaterials)
     // instead of minting its own: its text, image and plain materials and their per-surface priority clones
@@ -288,28 +299,31 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
     // (like GetSharedTextMaterial) rather than a property block. The per-surface clone then samples the
     // texture directly, so live uniform writes - the scroll clip_offset - reach it. A property-block variant
     // is cloned once and cached, so it silently misses those writes and the image freezes while text scrolls. -xlinka
-    internal UIUnlitMaterial GetSharedImageMaterial(IAssetProvider<TextureAsset> texture)
+    // still: an animated picture held on its first frame, a material of its own beside the one that plays it.
+    internal UIUnlitMaterial GetSharedImageMaterial(IAssetProvider<TextureAsset> texture, bool still = false)
     {
         if (SharesMaterials && World is { } world)
-            return SharedUIMaterials.Of(world).Image(texture, DrawsOverlay, Culling.Value);
-        if (_sharedImageMaterials.TryGetValue(texture, out var material) && !material.IsDestroyed
+            return SharedUIMaterials.Of(world).Image(texture, DrawsOverlay, Culling.Value, still);
+        var shared = still ? _sharedStillImageMaterials : _sharedImageMaterials;
+        if (shared.TryGetValue(texture, out var material) && !material.IsDestroyed
             && material.Culling.Value != Culling.Value)
         {
             material.Culling.Value = Culling.Value;
             material.ForceUpdate();
         }
-        if (!_sharedImageMaterials.TryGetValue(texture, out material) || material.IsDestroyed)
+        if (!shared.TryGetValue(texture, out material) || material.IsDestroyed)
         {
-            ForgetDestroyedTextures(_sharedImageMaterials);
+            ForgetDestroyedTextures(shared);
             material = Slot.AddLocalSlot("ImageMaterial").AttachComponent<UIUnlitMaterial>();
             material.Texture.Target = texture;
+            material.PlayFrames.Value = !still;
             material.Culling.Value = Culling.Value;
             material.ZWrite.Value = ZWrite.Off;
             material.RenderQueue.Value = 3000;
             if (DrawsOverlay)
                 material.ZTest.Value = ZTest.Always;
             material.ForceUpdate();
-            _sharedImageMaterials[texture] = material;
+            shared[texture] = material;
         }
         return material;
     }
@@ -347,6 +361,10 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
     // for it. Consumed by the host (dashboard). This is what lets the UI render on change instead of every
     // single frame. -xlinka
     private bool _renderRequested;
+    // An animated picture plays on this canvas (the fastest one's frames a second, 0 for none), and when the host
+    // last captured for it. Worked out after each submit from what the chunks drew.
+    private float _playingFps;
+    private double _playedAt;
     // The chunk being rendered rides a scroll offset (it IS scroll content or sits under some). Two effects:
     // clip elision is off (an item fully inside the viewport at bake time scrolls OUT later, and an elided
     // clip would let it spill past the viewport), and a mask INSIDE the chunk clips as a geometry trim
@@ -405,7 +423,7 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
     }
 
     // Scoped visibility change: a free-anchored leaf (e.g. a checkbox dot, a hover overlay) inside a BUILT
-    // chunk toggled active. Re-mesh just that chunk - it re-walks its subtree and picks up the new active
+    // chunk toggled active. Lay out and re-mesh just that chunk - it re-walks its subtree and picks up the new active
     // state - with NO full-canvas relayout, no root rebuild, and no chunk reconcile (which is what used to
     // disable a panel's nested row chunks and make the content vanish). Falls back to the safe full path if
     // the rect isn't inside a built chunk. Only the caller's layout-participation check decides which to use.
@@ -426,6 +444,9 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
             _layoutDirty = true;
             return;
         }
+        // Layout passes skip a slot while it is off, so one shown again still holds the rect it had when its
+        // parent was somewhere else. Its chunk is laid out again (scoped) before it meshes.
+        _layoutDirtyChunks.Add(root);
         _dirtyChunks.Add(root);
     }
 
@@ -942,9 +963,18 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
         // driving its pressed element below, so this must fall through with hovered = null rather than
         // clearing the pointer outright. Out of bounds the scan could only have returned null anyway. -xlinka
         var candidate = default(HitCandidate);
+        _areaScratch.Clear();
         if (PointCouldHit(context.LocalPoint))
         {
-            ScanHitSlot(Slot, in context, ref candidate, null, float2.Zero);
+            _areaScan = _areaScratch;
+            try
+            {
+                ScanHitSlot(Slot, in context, ref candidate, null, float2.Zero);
+            }
+            finally
+            {
+                _areaScan = null;
+            }
         }
         var hovered = candidate.Interactable;
         int key = PointerKey(source, pointerId);
@@ -996,6 +1026,7 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
                 state.Hovered?.NotifyHoverEnter(in context);
         }
         state.Hovered?.NotifyHoverMove(in context);
+        UpdateAreas(state, key, _areaScratch);
 
         bool deepPress = isPressed && state.IsPressed && pressBegan == null && StepDeepTrigger(state, source, hovered, in context);
 
@@ -1179,6 +1210,36 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
         return false;
     }
 
+    // The scroll an axis from this pointer would move, for something that drives it by itself.
+    public ScrollRect? ScrollUnder(UIInteractionSource source, int pointerId)
+    {
+        if (!_pointers.TryGetValue(PointerKey(source, pointerId), out var state) || state.Hovered == null)
+            return null;
+        foreach (var receiver in GetInteractionReceivers<IUIAxisActionReceiver>(state.Hovered))
+        {
+            if (receiver is ScrollRect scroll && scroll.WantsAxis(in state.LastContext))
+                return scroll;
+        }
+        return null;
+    }
+
+    public ScrollRect? ScrollUnderLaser(InteractionLaser laser, int pointerId)
+        => ScrollUnder(GetInteractionSource(laser), pointerId);
+
+    // The same answer from a plain hit test that leaves every pointer's state alone, for a pointer that hovers
+    // nothing right now (a desktop crosshair resting idle).
+    public ScrollRect? ScrollUnderRay(in float3 rayOrigin, in float3 rayDirection)
+    {
+        if (!TryHitTest(rayOrigin, rayDirection, out var hit) || hit.Interactable == null)
+            return null;
+        foreach (var receiver in GetInteractionReceivers<IUIAxisActionReceiver>(hit.Interactable))
+        {
+            if (receiver is ScrollRect scroll && scroll.WantsAxis(in hit.Context))
+                return scroll;
+        }
+        return null;
+    }
+
     public bool TriggerSecondary(UIInteractionSource source, int pointerId)
     {
         int key = PointerKey(source, pointerId);
@@ -1251,7 +1312,34 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
             : new UIInteractionContext(this, source, pointerId, float2.Zero, float3.Zero, float3.Zero, float3.Zero, 0f, actor);
         state.Hovered?.NotifyHoverExit(in context);
         state.Pressed?.NotifyRelease(in context);
+        UpdateAreas(state, key, null);
         _pointers.Remove(key);
+    }
+
+    // The areas this pointer left say so, the ones it came over say so; null leaves them all.
+    private static void UpdateAreas(PointerState state, int key, List<HoverArea>? over)
+    {
+        var areas = state.Areas;
+        if (areas != null)
+        {
+            for (int i = areas.Count - 1; i >= 0; i--)
+            {
+                if (over != null && over.Contains(areas[i]))
+                    continue;
+                areas[i].PointerLeft(key);
+                areas.RemoveAt(i);
+            }
+        }
+        if (over == null || over.Count == 0)
+            return;
+        areas = state.Areas ??= new List<HoverArea>();
+        for (int i = 0; i < over.Count; i++)
+        {
+            if (areas.Contains(over[i]))
+                continue;
+            areas.Add(over[i]);
+            over[i].PointerEntered(key);
+        }
     }
 
     // A subtree taken off one canvas and hung under another: an app popped out of the dash onto a panel of
@@ -1310,6 +1398,7 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
                 : new UIInteractionContext(this, UIInteractionSource.Unknown, pointer.Key, float2.Zero, float3.Zero, float3.Zero, float3.Zero, 0f);
             pointer.Value.Hovered?.NotifyHoverExit(in context);
             pointer.Value.Pressed?.NotifyRelease(in context);
+            UpdateAreas(pointer.Value, pointer.Key, null);
         }
         _pointers.Clear();
     }
@@ -1530,6 +1619,49 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
     // arrive: a canvas built in the middle of an update is sent as that update ends, a frame before its maker
     // starts it and adds them, and a viewer adding its own put a second chunk root on somebody else's slot
     // in an open world and was refused in a frozen one. -xlinka
+    public override void OnChanges()
+    {
+        base.OnChanges();
+        ApplySize();
+    }
+
+    private void ApplySize()
+    {
+        var size = Size.Value;
+        if (!(size.x > 0f) && !(size.y > 0f))
+            return;
+        EnsureRoot();
+        if (_rootRect == null)
+            return;
+        var min = _rootRect.OffsetMin.Value;
+        var max = _rootRect.OffsetMax.Value;
+        var anchorMin = _rootRect.AnchorMin.Value;
+        var anchorMax = _rootRect.AnchorMax.Value;
+        if (size.x > 0f)
+        {
+            anchorMin.x = anchorMax.x = 0.5f;
+            min.x = -size.x * 0.5f;
+            max.x = size.x * 0.5f;
+        }
+        if (size.y > 0f)
+        {
+            anchorMin.y = anchorMax.y = 0.5f;
+            min.y = -size.y * 0.5f;
+            max.y = size.y * 0.5f;
+        }
+        SetDerived(_rootRect.AnchorMin, anchorMin);
+        SetDerived(_rootRect.AnchorMax, anchorMax);
+        SetDerived(_rootRect.OffsetMin, min);
+        SetDerived(_rootRect.OffsetMax, max);
+
+        if (SizeCollider.Value || Slot.GetComponent<BoxCollider>() is not { } collider)
+            return;
+        var box = collider.Size.Value;
+        var sized = new float3(size.x > 0f ? size.x : box.x, size.y > 0f ? size.y : box.y, box.z);
+        if (box != sized)
+            SetDerived(collider.Size, sized);
+    }
+
     public void EnsureRoot()
     {
         if (_rootRect == null || _chunkRoot == null)
@@ -1558,6 +1690,7 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
         Text.PollFonts(World);
         if (_placementDirty)
             ApplyPlacements();
+        RequestPlayingFrames();
         bool dirty = _rootDirty || _fullDirty || _layoutDirty || _dirtyChunks.Count > 0 || _layoutDirtyChunks.Count > 0;
         if (!dirty)
             return;
@@ -1903,7 +2036,39 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
         // A change that arrived during the cycle left its dirty flag set, so the next
         // OnCommonUpdate starts a fresh cycle.
         _updateRunning = false;
+        _playingFps = MeasurePlayingFps();
         // The captured mesh just changed on the main thread - ask the host for one offscreen render. -xlinka
+        _renderRequested = true;
+    }
+
+    // ANIMATED PICTURES ON A CAPTURED CANVAS
+    //
+    // A playing frame sheet changes its pixels on the GPU clock with no mesh change, so a host that captures the
+    // canvas only when it changes (the dash, popped-out panels) froze it on whichever frame was up at the last
+    // capture. While one is drawn, the canvas asks for a capture at twice its rate, never more than 30 a second;
+    // a canvas drawn straight into the world renders every frame anyway and only sets a flag. -xlinka
+    private const float MaxPlayingCaptures = 30f;
+
+    private float MeasurePlayingFps()
+    {
+        float fps = _rootChunk?.ContentRenderData.PlayingFps ?? 0f;
+        foreach (var pair in _chunkMap)
+        {
+            var chunk = pair.Value;
+            if (chunk.ContentRenderData.PlayingFps > fps && !pair.Key.IsDestroyed && chunk.ChunkSlot is { IsDestroyed: false } slot && slot.IsActive)
+                fps = chunk.ContentRenderData.PlayingFps;
+        }
+        return fps;
+    }
+
+    private void RequestPlayingFrames()
+    {
+        if (_playingFps <= 0f || _updateRunning || World == null)
+            return;
+        double now = World.Time.TotalTime;
+        if (now - _playedAt < 1.0 / System.Math.Min(_playingFps * 2f, MaxPlayingCaptures))
+            return;
+        _playedAt = now;
         _renderRequested = true;
     }
 
@@ -1971,31 +2136,76 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
             DisposeDeadChunks();
     }
 
+    private readonly List<GraphicsChunk> _sheets = new();
+
     private void ApplyPlacements()
     {
         _placementDirty = false;
         bool moved = false;
         if (_rootChunk != null)
-            moved |= _rootChunk.SetPlacement(PlacementOf(Slot, 0, out float rootScale), rootScale);
+            moved |= _rootChunk.SetPlacement(PlacementOf(Slot, 0, out float rootScale, out _), rootScale);
+        _sheets.Clear();
         foreach (var pair in _chunkMap)
         {
             if (pair.Key.IsDestroyed || pair.Key.Slot == null)
                 continue;
-            moved |= pair.Value.SetPlacement(PlacementOf(pair.Key.Slot, pair.Key.OverlayLevel, out float scale), scale);
+            var chunk = pair.Value;
+            moved |= chunk.SetPlacement(PlacementOf(pair.Key.Slot, pair.Key.OverlayLevel, out float scale, out bool sheet), scale);
+            // A layer put on or taken off a chunk root changes what its first surface is; that takes a re-mesh.
+            if (sheet != chunk.IsSheet)
+                _dirtyChunks.Add(pair.Key);
+            if (chunk.IsSheet && chunk.ChunkSlot != null && !chunk.ChunkSlot.IsDestroyed && chunk.ChunkSlot.ActiveSelf.Value)
+                _sheets.Add(chunk);
         }
+        RankWalls();
         if (moved)
             _renderRequested = true;
     }
 
+    // Sheet walls draw before everything else of every sheet, the highest lift first, so each lays its depth
+    // where nothing of a lower sheet has drawn yet and the lower sheet is cut away under it, backing and all.
+    // At equal lift tree order holds. A raise re-ranks the few sheets there are and touches only a wall whose
+    // place changed: a priority and a material clone, no mesh.
+    //
+    // The band holds one slot a visible sheet, so it widens when more windows are up than the minimum and gives
+    // the root chunk its slots back after; the root re-meshes into its new band only when the width moves. In
+    // the per-surface order the walls take the last keys of the root chunk's stride instead, so they still go
+    // down after the root and before every sheet. -xlinka
+    public int WallSlots { get; private set; } = GraphicsChunk.WallSlotsMin;
+
+    private void RankWalls()
+    {
+        int slots = System.Math.Clamp(_sheets.Count, GraphicsChunk.WallSlotsMin, GraphicsChunk.WallSlotsMax);
+        if (slots != WallSlots)
+        {
+            WallSlots = slots;
+            MarkDirty();
+        }
+        if (_sheets.Count == 0)
+            return;
+        _sheets.Sort(NearestSheetFirst);
+        int rootOrder = _rootChunk?.MeshRenderer?.SortingOrder.Value ?? 0;
+        float leadBase = (rootOrder + 1) * MeshRenderer.PerSurfaceSortStride - _sheets.Count;
+        for (int i = 0; i < _sheets.Count; i++)
+            _sheets[i].SetWallPriority(System.Math.Min(-1, -slots + i), leadBase + i);
+    }
+
+    private static readonly Comparison<GraphicsChunk> NearestSheetFirst = (a, b) =>
+    {
+        int lift = b.Placement.z.CompareTo(a.Placement.z);
+        return lift != 0 ? lift : a.OrderIndex.CompareTo(b.OrderIndex);
+    };
+
     // Every enabled StackLayer from the chunk's root up to the canvas, composed inner to outer: each scales
     // what is under it about its pivot, then slides it. A chunk no layer carries is flat, unless it is an
-    // overlay level, which takes OverlayLift.
-    private float3 PlacementOf(Slot? slot, int overlayLevel, out float scale)
+    // overlay level, which takes OverlayLift. sheet: the root itself carries one.
+    private float3 PlacementOf(Slot? slot, int overlayLevel, out float scale, out bool sheet)
     {
         float2 offset = float2.Zero;
         float lift = 0f;
         bool layered = false;
         scale = 1f;
+        sheet = false;
         for (var s = slot; s != null; s = s.Parent)
         {
             var layer = s.GetComponent<StackLayer>();
@@ -2007,6 +2217,7 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
                 scale *= k;
                 lift += layer.Lift.Value;
                 layered = true;
+                sheet |= ReferenceEquals(s, slot);
             }
             if (ReferenceEquals(s, Slot))
                 break;
@@ -2197,7 +2408,8 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
         // chunk transform. So the chunk slot stays at the origin; the scroll offset rides on the material's
         // clip_offset via SetClipOffset (after submit, and on each live scroll). The clip rect stays fixed in
         // canvas space, so it isn't in the material key and doesn't re-clone every step. -xlinka
-        chunk.SetPlacement(PlacementOf(root.Slot, root.OverlayLevel, out float placedScale), placedScale);
+        chunk.SetPlacement(PlacementOf(root.Slot, root.OverlayLevel, out float placedScale, out bool sheet), placedScale);
+        chunk.IsSheet = sheet;
         chunk.SetComputeOffset(float2.Zero);
 
         chunk.PrepareCompute();
@@ -2849,8 +3061,17 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
         var b = _rootRect.BoundingRect;
         if (b.IsEmpty) return;
         // Flat slab in canvas-local space; tiny z keeps the Godot box shape from being degenerate.
-        _uiCollider.Size.Value = new float3(b.width, b.height, 0.001f);
-        _uiCollider.Offset.Value = CanvasToLocal(b.Center);
+        SetDerived(_uiCollider.Size, new float3(b.width, b.height, 0.001f));
+        SetDerived(_uiCollider.Offset, CanvasToLocal(b.Center));
+    }
+
+    // Every peer lays the canvas out the same way and arrives at the same box, so a box that already matches is
+    // left alone, and one this machine may not write (a panel in somebody else's hand) is left to whoever may:
+    // the write would only be refused, and racing a pickup it was refused at the host and counted. -xlinka
+    private static void SetDerived<T>(Sync<T> field, T value)
+    {
+        if (!EqualityComparer<T>.Default.Equals(field.Value, value) && field.IsWriteAllowedQuietly())
+            field.Value = value;
     }
 
     private static Rect ComputeRect(RectTransform rect, RectTransform? parent)
@@ -3002,6 +3223,9 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
                 case IUIInteractable interactable when interactable.CanInteract && interactable.IsPointInside(point):
                     candidate = new HitCandidate(interactable);
                     break;
+                case HoverArea area when _areaScan != null && area.Covers(point):
+                    _areaScan.Add(area);
+                    break;
             }
         }
 
@@ -3140,6 +3364,11 @@ public class Canvas : Component, ILaserPointerTarget, ILaserAxisTarget, ILaserSe
             // children recurse, and render_priority follows submission order, so the writer draws first and
             // the tested content draws after - even though the mask itself is invisible. -xlinka
             EmitGraphics(rd, slot, clipRect, ridingClip, StencilRole.Write);
+            // The writer draws nothing, and writers sort ahead of everything else in the chunk, so a writer
+            // made visible would sit under the backgrounds before it. A mask that shows its graphic draws it
+            // a second time as an ordinary graphic, in its own place in the tree. -xlinka
+            if (showOwnGraphics)
+                EmitGraphics(rd, slot, clipRect, ridingClip, stencil);
         }
         else if (showOwnGraphics)
         {

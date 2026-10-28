@@ -24,7 +24,7 @@ internal sealed class SharedUIMaterials
 
     private readonly Slot _holder;
     private readonly Dictionary<TextKey, UITextMaterial> _text = new();
-    private readonly Dictionary<(IAssetProvider<TextureAsset> Texture, bool Overlay, Culling Culling), UIUnlitMaterial> _images = new();
+    private readonly Dictionary<(IAssetProvider<TextureAsset> Texture, bool Overlay, Culling Culling, bool Still), UIUnlitMaterial> _images = new();
     private readonly Dictionary<IAssetProvider<TextureAsset>, MainTexturePropertyBlock> _blocks = new();
     private readonly Dictionary<(bool Overlay, Culling Culling), UIUnlitMaterial> _plain = new();
     private readonly MaterialCloneCache _clones;
@@ -61,20 +61,21 @@ internal sealed class SharedUIMaterials
         return material;
     }
 
-    public UIUnlitMaterial Image(IAssetProvider<TextureAsset> texture, bool overlay, Culling culling)
+    public UIUnlitMaterial Image(IAssetProvider<TextureAsset> texture, bool overlay, Culling culling, bool still = false)
     {
-        if (!_images.TryGetValue((texture, overlay, culling), out var material) || material.IsDestroyed)
+        if (!_images.TryGetValue((texture, overlay, culling, still), out var material) || material.IsDestroyed)
         {
             Sweep();
             material = _holder.AddLocalSlot("ImageMaterial").AttachComponent<UIUnlitMaterial>();
             material.Texture.Target = texture;
+            material.PlayFrames.Value = !still;
             material.Culling.Value = culling;
             material.ZWrite.Value = ZWrite.Off;
             material.RenderQueue.Value = 3000;
             if (overlay)
                 material.ZTest.Value = ZTest.Always;
             material.ForceUpdate();
-            _images[(texture, overlay, culling)] = material;
+            _images[(texture, overlay, culling, still)] = material;
         }
         return material;
     }
@@ -115,7 +116,7 @@ internal sealed class SharedUIMaterials
     // A texture that is gone takes its material and block with it, so these stay the size of what is shown.
     private void Sweep()
     {
-        List<(IAssetProvider<TextureAsset>, bool, Culling)>? goneImages = null;
+        List<(IAssetProvider<TextureAsset>, bool, Culling, bool)>? goneImages = null;
         foreach (var pair in _images)
         {
             if (pair.Key.Texture.IsDestroyed)

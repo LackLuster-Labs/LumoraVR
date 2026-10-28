@@ -212,6 +212,24 @@ public static class RichTextParser
         stack.Clear();
     }
 
+    // The characters a text shows for this markup and nothing else: the tags it reads are gone, <br> is a
+    // line break, a sprite is nothing, and a tag it does not read stays as written, as it would on screen.
+    public static string Plain(string? input)
+    {
+        if (string.IsNullOrEmpty(input) || input.IndexOf('<') < 0)
+            return input ?? string.Empty;
+        var text = new StringBuilder(input.Length);
+        var sprites = new List<string?>();
+        Parse(input, color.White, text, new List<color>(), new List<byte>(), new List<float>(), new List<color>(), sprites,
+            new List<AlignMark>(), new List<LineHeightMark>(), new List<FontMark>());
+        for (int i = text.Length - 1; i >= 0; i--)
+        {
+            if (sprites[i] != null)
+                text.Remove(i, 1);
+        }
+        return text.ToString();
+    }
+
     // <noparse> runs to its </noparse> (or the end); <noparse=N> takes the next N characters as written.
     private static bool TryNoParse(string trimmed, string input, int close, out int literalEnd, out int resume)
     {
