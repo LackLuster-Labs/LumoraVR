@@ -153,6 +153,12 @@ public sealed class SteamListener : IListener
         foreach (var c in _connectionsBySteamId.Values) c.UpdateStats();
     }
 
+    internal void Pace(double nowMs)
+    {
+        if (!_isActive) return;
+        foreach (var c in _connectionsBySteamId.Values) c.Pace(nowMs);
+    }
+
     private ref ReassemblyState GetReassembly(uint connectionHandle)
     {
         if (_connectionsByHandle.TryGetValue(connectionHandle, out var conn)) return ref conn.GetReassembly(connectionHandle);
@@ -190,12 +196,18 @@ public sealed class SteamListener : IListener
                     return;
                 }
                 if (!_connectionsBySteamId.TryGetValue(remoteSteamId.m_SteamID, out var conn))
-                {
-                    conn = new SteamConnection(remoteSteamId, _channelGroup, _sessionId, _manager);
-                    _connectionsBySteamId[remoteSteamId.m_SteamID] = conn;
-                    conn.Closed += OnConnectionClosed;
-                }
+                    conn = Track(remoteSteamId);
                 bool assigned = conn.AssignConnection(info.m_hConn, channel);
+                if (!assigned)
+                {
+                    // The same account dialing in again while we still hold its last connection: it lost the link or
+                    // left and is back before that one timed out. Turned away, it could not rejoin for fifteen seconds
+                    // while the session kept its old user standing there; the old connection goes instead. -xlinka
+                    LumoraLogger.Log($"SteamListener: {remoteSteamId.m_SteamID} connected again, replacing its last connection");
+                    conn.Close(SteamCloseReason.ClosedRemotely);
+                    conn = Track(remoteSteamId);
+                    assigned = conn.AssignConnection(info.m_hConn, channel);
+                }
                 if (!assigned)
                 {
                     SteamNetworkingSockets.CloseConnection(info.m_hConn, (int)SteamCloseReason.ChannelMismatch, null, false);
@@ -209,22 +221,32 @@ public sealed class SteamListener : IListener
                 Announce(conn);
                 break;
 
+            // These go to the connection that holds the handle, not to whoever has that account now: a close still
+            // queued for a replaced connection's handles would otherwise take its replacement down with it.
             case ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_Connected:
                 // The second channel can come up after Connecting was seen for both. - xlinka
-                if (_connectionsBySteamId.TryGetValue(remoteSteamId.m_SteamID, out var openedConn))
+                if (_connectionsByHandle.TryGetValue(info.m_hConn.m_HSteamNetConnection, out var openedConn))
                     Announce(openedConn);
                 break;
 
             case ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ClosedByPeer:
-                if (_connectionsBySteamId.TryGetValue(remoteSteamId.m_SteamID, out var closing))
+                if (_connectionsByHandle.TryGetValue(info.m_hConn.m_HSteamNetConnection, out var closing))
                     closing.Close(SteamCloseReason.ClosedRemotely);
                 break;
 
             case ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ProblemDetectedLocally:
-                if (_connectionsBySteamId.TryGetValue(remoteSteamId.m_SteamID, out var failed))
+                if (_connectionsByHandle.TryGetValue(info.m_hConn.m_HSteamNetConnection, out var failed))
                     failed.Close(SteamCloseReason.LocalProblem);
                 break;
         }
+    }
+
+    private SteamConnection Track(CSteamID remoteSteamId)
+    {
+        var conn = new SteamConnection(remoteSteamId, _channelGroup, _sessionId, _manager);
+        _connectionsBySteamId[remoteSteamId.m_SteamID] = conn;
+        conn.Closed += OnConnectionClosed;
+        return conn;
     }
 
     private void Announce(SteamConnection conn)
@@ -237,13 +259,17 @@ public sealed class SteamListener : IListener
     {
         var sc = connection as SteamConnection;
         if (sc == null) return;
+        bool announced;
         lock (_manager.Lock)
         {
             foreach (var handle in sc.Connections) _connectionsByHandle.Remove(handle.m_HSteamNetConnection);
-            _connectionsBySteamId.Remove(sc.RemoteId.m_SteamID);
-            _announced.Remove(sc);
+            if (_connectionsBySteamId.TryGetValue(sc.RemoteId.m_SteamID, out var held) && held == sc)
+                _connectionsBySteamId.Remove(sc.RemoteId.m_SteamID);
+            announced = _announced.Remove(sc);
         }
-        PeerDisconnected?.Invoke(sc);
+        // A connection the session never heard of has nothing for it to take down.
+        if (announced)
+            PeerDisconnected?.Invoke(sc);
     }
 
     private int GetChannel(HSteamListenSocket listener)

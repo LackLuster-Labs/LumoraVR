@@ -59,6 +59,15 @@ public partial class DashboardToggle : Node
 		if (@event is not InputEventKey key || !key.Pressed)
 			return;
 
+		// Escape stops a middle-button scroll and does nothing else: no screen backs out, the dash stays as it is.
+		// Left unhandled so the keyboard still sees the key that ends the scroll.
+		if (key.Keycode == Key.Escape && Lumora.Core.Components.Interaction.DesktopAutoscroll.IsActive)
+		{
+			_escapeConsumedByScreen = true;
+			_escapeConsumedAge = 0.0;
+			return;
+		}
+
 		// Helio fields consume the keyboard driver themselves. Feeding the dashboard as well
 		// would edit its search box behind the focused field or swallow that field's typed text.
 		if (Helio.UI.TextInput.Focused is { IsDestroyed: false })
@@ -140,6 +149,38 @@ public partial class DashboardToggle : Node
 		}
 
 		IsDashboardVisible = TryGetDashboard(out var dashboard) && dashboard.IsOpen.Value;
+		HandlePad(IsDashboardVisible || dashboard?.PanelTakesKeys == true ? dashboard : null, delta);
+	}
+
+	// The pad's way back and its scroll. Back closes a focused text field first (the chat box, a panel's
+	// field), then backs a dash screen out the way Escape does, then closes the dash. The right stick scrolls
+	// whatever the dash cursor is over, faster the further it is pushed. The radial menu's back is the hand
+	// tool's, which owns that menu. -xlinka
+	private const float PadScrollNotchesPerSecond = 10f;
+
+	private void HandlePad(UserspaceDashboard? dash, double delta)
+	{
+		var menu = Lumora.Core.Engine.Current?.InputInterface?.Actions?.Menu;
+		if (menu == null)
+			return;
+
+		if (menu.Back.Pressed)
+		{
+			if (Helio.UI.TextInput.Focused is { IsDestroyed: false } field)
+				field.Unfocus();
+			else if (dash != null && !dash.FeedEscape() && dash.IsOpen.Value)
+				HideDashboard();
+		}
+
+		if (dash == null || !dash.IsOpen.Value)
+			return;
+		var scroll = menu.Scroll.Value;
+		if (scroll.x == 0f && scroll.y == 0f)
+			return;
+		float rate = PadScrollNotchesPerSecond * (float)delta * scroll.Length;
+		if (Lumora.Core.Components.UserInputState.FocusedScrollWheelCaptured)
+			return;
+		dash.FeedAxis(new Lumora.Core.Math.float2(scroll.x * rate, scroll.y * rate));
 	}
 
 	public void ToggleDashboard()

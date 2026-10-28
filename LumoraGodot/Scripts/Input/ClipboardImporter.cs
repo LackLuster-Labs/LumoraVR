@@ -160,36 +160,10 @@ public partial class ClipboardImporter : Node
         {
             if (request.Settings != null)
                 return _owner.PopulateModelSlotAsync(slot, path, request.Settings.IsAvatarImport, request.Settings, exactSettings: true);
-            var ext = Path.GetExtension(path).ToLowerInvariant();
-            bool isAvatar = ext == ".vrm";
-            // Map the dialog's request onto the core importer's settings so the Advanced
-            // panel actually drives the import (scale/material/colliders/dual-sided/etc.). - xlinka
-            return _owner.PopulateModelSlotAsync(slot, path, isAvatar, BuildSettings(request, isAvatar));
-        }
-
-        private static ModelImportSettings BuildSettings(ModelImportRequest r, bool isAvatar)
-        {
-            return new ModelImportSettings
-            {
-                // AutoScale -> rescale to a standard height; otherwise honor the unit scale verbatim.
-                Scale = r.Scale,
-                Rescale = r.AutoScale,
-                Center = r.AutoScale,
-                TargetHeight = isAvatar ? 1.7f : 1.8f,
-                GenerateColliders = r.Colliders,
-                SolidToPeople = r.SolidToPeople,
-                Grabbable = r.Grabbable,
-                Scalable = r.Scalable,
-                Material = r.Material,
-                MakeDualSided = r.MakeDualSided,
-                ImportAlbedoColor = r.ImportAlbedoColor,
-                ImportEmissive = r.ImportEmissive,
-                ForceNoMipMaps = r.ForceNoMipMaps,
-                MaxTextureSize = r.MaxTextureSize,
-                ImportAnimations = r.ImportAnimations,
-                IsAvatarImport = isAvatar,
-                SetupIK = isAvatar,
-            };
+            // The dialog's answers drive the import, a .vrm's included: ToSettings keeps the avatar preset under
+            // them, so a plain avatar import is what it always was. - xlinka
+            var settings = request.ToSettings(path);
+            return _owner.PopulateModelSlotAsync(slot, path, settings.IsAvatarImport, settings, exactSettings: true);
         }
     }
 
@@ -222,7 +196,7 @@ public partial class ClipboardImporter : Node
             var ext = Path.GetExtension(path).ToLowerInvariant();
             return ext switch
             {
-                ".png" or ".jpg" or ".jpeg" or ".webp" or ".bmp" or ".tga" or ".tif" or ".tiff"
+                ".png" or ".jpg" or ".jpeg" or ".webp" or ".gif" or ".bmp" or ".tga" or ".tif" or ".tiff"
                     => _owner.PopulateImageSlotAsync(slot, path),
                 ".gdshader"
                     => _owner.PopulateShaderSlotAsync(slot, path),
@@ -483,28 +457,60 @@ public partial class ClipboardImporter : Node
             return Task.CompletedTask;
         }
 
+        return ImportClipboardImage(image);
+    }
+
+    // The importer takes a file, so the picture is written out as a PNG first, and that is seconds of
+    // encoding for a big one: a 4096 square held the main thread five seconds, inside the world update
+    // that read Ctrl+V. It is written on a worker now and handed to the importer in the world's own
+    // update once it is on disk. -xlinka
+    public async Task ImportClipboardImage(Image image)
+    {
         var world = _engine?.WorldManager?.FocusedWorld;
         if (world == null)
         {
             GD.PrintErr("ClipboardImporter: No focused world for clipboard image");
-            return Task.CompletedTask;
+            return;
         }
 
         var tempDir = OS.GetUserDataDir() + "/tmp";
-        Directory.CreateDirectory(tempDir);
-        var tempPath = tempDir + "/clipboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".png";
+        // To the millisecond: two pastes inside one second are now two encodes at once, and one name for
+        // both had them writing the same file.
+        var tempPath = tempDir + "/clipboard_" + DateTime.Now.ToString("yyyyMMdd_HHmmss_fff") + ".png";
+        var (pos, rot) = GetSpawnPose();
 
-        var error = image.SavePng(tempPath);
+        Error error;
+        try
+        {
+            error = await Task.Run(() =>
+            {
+                Directory.CreateDirectory(tempDir);
+                return image.SavePng(tempPath);
+            });
+        }
+        catch (Exception ex)
+        {
+            GD.PrintErr($"ClipboardImporter: Failed to save clipboard image: {ex.Message}");
+            return;
+        }
+        finally
+        {
+            image.Dispose();
+        }
         if (error != Error.Ok)
         {
             GD.PrintErr($"ClipboardImporter: Failed to save clipboard image: {error}");
-            return Task.CompletedTask;
+            return;
         }
 
         Lumora.Core.Logging.Logger.Debug($"ClipboardImporter: Saved clipboard image to {tempPath}");
-        var (pos, rot) = GetSpawnPose();
-        UniversalImporter.Import(tempPath, world, pos, rot);
-        return Task.CompletedTask;
+        if (world.IsDestroyed)
+            return;
+        world.RunSynchronously(() =>
+        {
+            if (!world.IsDestroyed)
+                UniversalImporter.Import(tempPath, world, pos, rot);
+        });
     }
 
     // Attach quad+texture+grabbable to an existing slot. The dialog flow creates
@@ -513,6 +519,9 @@ public partial class ClipboardImporter : Node
     public async Task PopulateImageSlotAsync(Slot imageSlot, string filePath)
     {
         Lumora.Core.Logging.Logger.Debug($"ClipboardImporter: Populating image slot: {filePath}");
+
+        // Read before anything is attached: an animated picture gets a frame player beside its material.
+        bool animated = await Task.Run(() => FrameSheet.IsAnimatedFile(filePath));
 
         string localUri = null!;
         if (_localDB != null)
@@ -554,10 +563,41 @@ public partial class ClipboardImporter : Node
         material.Culling.Value = Culling.None;
         meshRenderer.Material.Target = material;
 
+        // A GIF or animated WebP plays on the quad, on the session clock for everyone in the world. A still gets
+        // none of this. -xlinka
+        if (animated)
+        {
+            var player = imageSlot.AttachComponent<Lumora.Core.Components.Utility.TextureFramePlayer>();
+            player.Texture.Target = imageProvider;
+            player.Scale.DriveTarget(material.TextureScale);
+            player.Offset.DriveTarget(material.TextureOffset);
+        }
+
         Lumora.Core.Logging.Logger.Debug($"ClipboardImporter: Image populated with visual components from {localUri ?? filePath}");
         OnAssetImported?.Invoke(filePath, imageSlot);
 
         QueueTextureVariants(localUri, imageProvider.IsNormalMap.Value);
+        DropOwnTemp(filePath, localUri);
+    }
+
+    // A pasted picture, a downloaded file or pasted shader text sat in a temp file of ours only so it could be
+    // imported. Once the store has it (sealed), the plain copy goes. A file the user dropped is never touched.
+    private void DropOwnTemp(string filePath, string? localUri)
+    {
+        if (string.IsNullOrEmpty(localUri) || string.IsNullOrEmpty(filePath))
+            return;
+        try
+        {
+            string full = Path.GetFullPath(filePath);
+            string ownTmp = Path.GetFullPath(OS.GetUserDataDir() + "/tmp") + Path.DirectorySeparatorChar;
+            string? dbTmp = _localDB == null ? null : Path.GetDirectoryName(Path.GetFullPath(_localDB.GetTempFilePath())) + Path.DirectorySeparatorChar;
+            if (full.StartsWith(ownTmp, StringComparison.OrdinalIgnoreCase)
+                || (dbTmp != null && full.StartsWith(dbTmp, StringComparison.OrdinalIgnoreCase)))
+                File.Delete(full);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+        }
     }
 
     // A video is never downloaded first: the player streams a URL as it plays, and a local file is
@@ -590,7 +630,9 @@ public partial class ClipboardImporter : Node
         if (videoSlot.IsDestroyed)
             return;
 
-        var player = videoSlot.AttachComponent<Lumora.Core.Components.Media.VideoPlayer>();
+        // A favourite player may already be in the slot; it gets the video instead of a new one. -xlinka
+        var player = videoSlot.GetComponentInChildren<Lumora.Core.Components.Media.VideoPlayer>()
+            ?? videoSlot.AttachComponent<Lumora.Core.Components.Media.VideoPlayer>();
         player.Projection.Value = options.Projection;
         player.StereoLayout.Value = options.Layout;
 
@@ -663,7 +705,7 @@ public partial class ClipboardImporter : Node
         var title = isAvatar
             ? "Import.Title.Avatar".AsLocale("Importing avatar")
             : "Import.Title.Model".AsLocale("Importing model");
-        var token = ModelImportIndicator.Show(importWorld, slot, title);
+        var token = ModelImportIndicator.Show(importWorld, slot, title, System.IO.Path.GetFileName(filePath));
         // The importer calls Complete when its last chunk lands, which is not a finish the meshes have
         // reached yet. Hold that back to the mesh band so the bar cannot read 100% while nine files are
         // still decoding - that readout is exactly what told the user "imported" before the machine died.
@@ -693,7 +735,8 @@ public partial class ClipboardImporter : Node
                 return;
             }
 
-            var (loaded, failedMeshes) = await AwaitMeshesAsync(result.RootSlot, token);
+            // Assets alone have nothing drawing them, so nothing loads them: there is no tail to wait out.
+            var (loaded, failedMeshes) = settings?.AssetsOnly == true ? (0, 0) : await AwaitMeshesAsync(result.RootSlot, token);
             finished = true;
             if (failedMeshes > 0)
             {
@@ -703,7 +746,9 @@ public partial class ClipboardImporter : Node
                 return;
             }
 
-            ModelImportIndicator.Hide(token);
+            ModelImportIndicator.Hide(token, default, isAvatar
+                ? "Import.Done.Avatar".AsLocale("Avatar imported")
+                : "Import.Done.Model".AsLocale("Model imported"));
             OnAssetImported?.Invoke(filePath, result.RootSlot);
         }
         catch (OperationCanceledException)
@@ -1079,6 +1124,7 @@ public partial class ClipboardImporter : Node
 
         Lumora.Core.Logging.Logger.Debug($"ClipboardImporter: Shader material created with local URI {localUri ?? filePath}");
         OnAssetImported?.Invoke(filePath, rootSlot);
+        DropOwnTemp(filePath, localUri);
     }
 
     private void PositionInFrontOfCamera(Slot slot, float distance = 2.0f)

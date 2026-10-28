@@ -40,7 +40,7 @@ public static class CameraSanity
             if (root != null && GodotObject.IsInstanceValid(root))
                 CheckViewport(root, "root");
             if (xr != null && xr != root && GodotObject.IsInstanceValid(xr) && xr.IsInsideTree())
-                CheckViewport(xr, xr.Name);
+                CheckViewport(xr, null);
             _scratch.Clear();
             RenderTextureHook.CollectLiveViewports(_scratch);
             CameraPortalHook.CollectLiveViewports(_scratch);
@@ -48,7 +48,7 @@ public static class CameraSanity
             {
                 var viewport = _scratch[i];
                 if (viewport != null && GodotObject.IsInstanceValid(viewport) && viewport.IsInsideTree())
-                    CheckViewport(viewport, viewport.Name);
+                    CheckViewport(viewport, null);
             }
             _scratch.Clear();
         }
@@ -58,7 +58,8 @@ public static class CameraSanity
         }
     }
 
-    private static void CheckViewport(Viewport viewport, string label)
+    // A viewport's name is only read for a report: read every frame, it was a new string per viewport per frame.
+    private static void CheckViewport(Viewport viewport, string? label)
     {
         // A headset viewport's projection comes from the runtime, not from a Camera3D.
         if (viewport.UseXR)
@@ -113,7 +114,7 @@ public static class CameraSanity
         }
         if (problem != null)
             ReportOnce($"{camera.GetInstanceId()}:{kinds}",
-                $"CameraSanity: '{camera.Name}' rendering viewport '{label}' would fail the renderer's frustum test: {problem}");
+                $"CameraSanity: '{camera.Name}' rendering viewport '{label ?? viewport.Name}' would fail the renderer's frustum test: {problem}");
     }
 
     // The culler's test in camera space. The planes come straight out of the projection the way the

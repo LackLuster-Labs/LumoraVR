@@ -50,6 +50,10 @@ project/assembly_name="Lumora"
 
 run/main_run_args="--steam"
 
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/action_map_guard/plugin.cfg")
+
 [filesystem]
 
 import/blender/enabled=false
@@ -545,8 +549,12 @@ jolt_physics_3d/limits/temporary_memory_buffer_size.android=32
 
 [rendering]
 
+rendering_device/staging_buffer/block_size_kb=1024
+rendering_device/staging_buffer/texture_upload_region_size_px=256
 renderer/rendering_method.mobile="forward_plus"
 textures/vram_compression/import_etc2_astc=true
+reflections/reflection_atlas/reflection_count=256
+reflections/reflection_atlas/reflection_size=128
 textures/default_filters/anisotropic_filtering_level=4
 anti_aliasing/quality/use_debanding=true
 mesh_lod/lod_change/threshold_pixels=2.0
@@ -561,6 +569,7 @@ openxr/startup_alert=false
 openxr/extensions/hand_tracking=true
 openxr/extensions/hand_tracking_unobstructed_data_source=true
 openxr/extensions/hand_tracking_controller_data_source=true
+openxr/extensions/eye_gaze_interaction=true
 shaders/enabled=true
 openxr/enabled.android_phone=false
 shaders/enabled.android_phone=false

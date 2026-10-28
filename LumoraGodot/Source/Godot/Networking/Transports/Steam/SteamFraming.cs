@@ -12,11 +12,17 @@ namespace Lumora.Godot.Networking.Transports.Steam;
 // own. A reliable frame bigger than one Steam message goes out as a 4-byte length and then its bytes in
 // message-sized pieces; the receiver collects the pieces in a buffer of that length and hands the frame on
 // whole once it is full. A reliable frame of exactly four bytes is sent the same way, or its receiver would
-// take it for a length. Unreliable frames always go as they are. -xlinka
+// take it for a length. Unreliable frames go as they are up to MaxUnreliableSize; a bigger one is sent as a
+// reliable frame. -xlinka
 internal static class SteamFraming
 {
     // What SendMessageToConnection accepts in one message.
     public const int MaxMessageSize = 524288;
+
+    // The most the library sends unreliably. A bigger unreliable message it sends reliably on its own, without a
+    // word, so it arrived flagged reliable and, on a channel whose frame was still waiting for room, between that
+    // frame's pieces: the receiver took it for one and the connection dropped or the frame came out wrong. -xlinka
+    public const int MaxUnreliableSize = 16500;
 
     public const int PrefixLength = 4;
 
@@ -42,14 +48,16 @@ internal static class SteamFraming
     public static int PieceCount(long count)
         => count <= 0 ? 0 : (int)((count + MaxMessageSize - 1) / MaxMessageSize);
 
-    // Messages on one connection handle arrive in order, and every reliable one after a length belongs to
-    // that frame until it is full.
+    // Messages on one connection handle arrive in order, and the reliable ones after a length are that frame's
+    // pieces until it is full: each a whole message but the last, which is what the frame still lacks. A reliable
+    // message of any other size in between is not a piece but something an older build let the library turn
+    // reliable (see MaxUnreliableSize), and it is handed on as it is.
     public static Arrival Classify(in ReassemblyState state, bool reliable, int payloadSize)
     {
         if (!reliable)
             return Arrival.Whole;
         if (state.buffer != null)
-            return Arrival.Piece;
+            return payloadSize == MaxMessageSize || payloadSize == state.expectingBytes - state.receivedBytes ? Arrival.Piece : Arrival.Whole;
         return payloadSize == PrefixLength ? Arrival.Prefix : Arrival.Whole;
     }
 

@@ -49,7 +49,7 @@ public partial class SessionThumbnailService : Node
             return false;
 
         var input = LumoraEngine.Current?.InputInterface;
-        if (input == null || input.IsDashboardOpen)
+        if (input == null || input.IsDashboardOpen || Lumora.Core.Components.WorldLoadIndicator.Showing)
             return false;
 
         try

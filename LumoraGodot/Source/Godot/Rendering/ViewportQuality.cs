@@ -141,9 +141,10 @@ public static class ViewportQuality
             // Once the buffer is scaled the mobile renderer leaves its single-pass path and 4x MSAA
             // stops being free; 2x MSAA under 1.2x supersampling is sharper AND cheaper than 4x at 1x.
             // FXAA is a full-resolution pass and adds nothing on top of that. Debanding is a dither
-            // folded into the tonemap pass, and a gradient sky in a headset bands without it. -xlinka
+            // folded into the tonemap pass, and a gradient sky in a headset bands without it. A PC headset
+            // takes 2x as well: with a toon-shaded avatar up close, 4x was a sixth of the frame. -xlinka
             viewport.ScreenSpaceAA = Viewport.ScreenSpaceAAEnum.Disabled;
-            viewport.Msaa3D = standalone ? Viewport.Msaa.Msaa2X : Viewport.Msaa.Msaa4X;
+            viewport.Msaa3D = Viewport.Msaa.Msaa2X;
             viewport.UseTaa = false;
             viewport.UseDebanding = true;
             viewport.TextureMipmapBias = 0f;
@@ -191,7 +192,7 @@ public static class ViewportQuality
         // multisampling smooths geometry while keeping the MSDF text shader's edge coverage.
         viewport.Scaling3DMode = Viewport.Scaling3DModeEnum.Bilinear;
         viewport.Scaling3DScale = 1f;
-        viewport.Msaa3D = Viewport.Msaa.Msaa4X;
+        viewport.Msaa3D = Viewport.Msaa.Msaa2X;
         viewport.ScreenSpaceAA = Viewport.ScreenSpaceAAEnum.Disabled;
         viewport.UseTaa = false;
     }

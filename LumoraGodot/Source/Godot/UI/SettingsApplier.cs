@@ -9,8 +9,7 @@ using Lumora.Source.Godot.Rendering;
 namespace Lumora.Source.UI;
 
 // Applies the engine-owned settings the platform layer is responsible for: vsync, frame cap, window
-// mode, 3D render scale and the master audio bus. Changes apply live for preview; persistence is
-// explicit (the settings screen's Save / the exit dialog commit via EngineSettings.Commit).
+// mode, 3D render scale and the master audio bus. Changes apply live; EngineSettings saves them itself.
 public partial class SettingsApplier : Node
 {
 	public override void _Ready()
@@ -61,6 +60,10 @@ public partial class SettingsApplier : Node
 	// Engine.MaxFps is enforced regardless of focus or vsync, so while unfocused we clamp to the user's background-fps
 	// setting and restore their normal limit when focus returns. -xlinka
 	private bool _background;
+
+	// A camera on the window is there to be recorded, and the recorder is what has focus, so the background cap
+	// stays off while it is up. -xlinka
+	private bool _feedCapLifted;
 
 	// --Lumora-Debug opens the console as a second window, and that is the window a person profiling
 	// is looking at, so the game window sits unfocused for most of a capture. With the background cap
@@ -156,14 +159,10 @@ public partial class SettingsApplier : Node
 		// rather than a separate walk over every claimed environment per setting.
 		var post = new Lumora.Godot.Hooks.SkyEnvironment.PostSettings
 		{
-			Tonemap = EngineSettings.Tonemap,
-			WhitePoint = EngineSettings.Exposure,
 			Bloom = EngineSettings.Bloom,
 			AmbientOcclusion = EngineSettings.AmbientOcclusion,
 			ScreenSpaceReflections = EngineSettings.ScreenSpaceReflections,
 			ScreenSpaceIndirectLighting = EngineSettings.ScreenSpaceIndirectLighting,
-			Contrast = EngineSettings.Contrast,
-			Saturation = EngineSettings.Saturation,
 		};
 		if (!_appliedPost.HasValue || !_appliedPost.Value.Equals(post))
 		{
@@ -179,10 +178,8 @@ public partial class SettingsApplier : Node
 			_appliedPost = post;
 			Lumora.Godot.Hooks.SkyEnvironment.ApplyPostSettings(in post, this);
 			string rendering = Lumora.Godot.Hooks.SkyEnvironment.DescribeRendering(this);
-			string postLine = $"Settings: post -> {EngineSettings.DescribeTonemap(post.Tonemap)} "
-				+ $"(white {post.WhitePoint:0.#}, bloom {post.Bloom:0.##}, ao {post.AmbientOcclusion:0.##}, "
-				+ $"ssil {(post.ScreenSpaceIndirectLighting ? "on" : "off")}, ssr {(post.ScreenSpaceReflections ? "on" : "off")}, "
-				+ $"contrast {post.Contrast:0.00}, saturation {post.Saturation:0.00}); "
+			string postLine = $"Settings: post -> (bloom {post.Bloom:0.##}, ao {post.AmbientOcclusion:0.##}, "
+				+ $"ssil {(post.ScreenSpaceIndirectLighting ? "on" : "off")}, ssr {(post.ScreenSpaceReflections ? "on" : "off")}); "
 				+ rendering;
 			// Every slider tick lands here. The line earns the log only when what renders is not the
 			// environment the settings went into. -xlinka
@@ -457,6 +454,12 @@ public partial class SettingsApplier : Node
 	{
 		base._Process(delta);
 
+		if (XRModeManager.FeedOnWindow != _feedCapLifted)
+		{
+			_feedCapLifted = XRModeManager.FeedOnWindow;
+			ApplyEffectiveFps();
+		}
+
 		if (!EngineSettings.DynamicResolution || _background)
 			return;
 
@@ -574,7 +577,7 @@ public partial class SettingsApplier : Node
 		int effective = inVr ? 0 : userCap;
 		bool throttled = false;
 
-		if (_background && !inVr && !ProfilingRun)
+		if (_background && !inVr && !ProfilingRun && !_feedCapLifted)
 		{
 			int backgroundCap = EngineSettings.BackgroundFps;
 			if (backgroundCap > 0)

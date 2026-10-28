@@ -25,9 +25,18 @@ namespace Lumora.Godot.Networking.Transports.Steam;
 public sealed class SteamConnection : IConnection
 {
     private const int ChannelCount = 2;
-    private const int SendFlagsReliable = Constants.k_nSteamNetworkingSend_Reliable;
-    // Unreliable is streams: voice and tracking. Nagle would hold each one back a few ms for company.
-    private const int SendFlagsUnreliable = Constants.k_nSteamNetworkingSend_UnreliableNoNagle;
+    // About what one of Steam's packets carries, for counting a backlog in packets.
+    private const int SteamPacketBytes = 1200;
+    // The live channel's changes go the moment they are handed over: Nagle held each one back up to 5 ms for
+    // company that is a whole sync cycle away. Bulk fills its packets anyway and keeps it. -xlinka
+    private static readonly int[] SendFlagsReliable =
+    {
+        Constants.k_nSteamNetworkingSend_ReliableNoNagle,
+        Constants.k_nSteamNetworkingSend_Reliable,
+    };
+    // Unreliable is streams: voice and tracking. A pose or a voice frame that cannot go out soon is worth
+    // nothing by the time it would, so the library drops it instead of queueing it behind the rest.
+    private const int SendFlagsUnreliable = Constants.k_nSteamNetworkingSend_UnreliableNoDelay;
 
     private enum State { Connecting, Open, Closed }
 
@@ -52,11 +61,23 @@ public sealed class SteamConnection : IConnection
     private long _droppedUnreliable;
     private DateTime _lastBehindLog;
     private HSteamNetPollGroup _pollGroup;
+    // Why a send found the connection gone, for the close that follows it.
+    private SteamCloseReason _sendFailure = SteamCloseReason.TransmissionError;
+
+    // Bytes Steam took on each channel, reliable and unreliable apart; what of them got through paces the link.
+    private readonly long[] _reliableHanded = new long[ChannelCount];
+    private readonly long[] _unreliableHanded = new long[ChannelCount];
+    private readonly SteamPace _pace = new();
+    private readonly int[] _appliedRate = new int[ChannelCount];
+    private IntPtr _rateScratch;
 
     private State _state;
     private ulong _receivedBytes;
     private SteamNetConnectionRealTimeStatus_t _lastMainStatus;
     private SteamNetConnectionRealTimeStatus_t _lastBackgroundStatus;
+    private double _packetsSent;
+    private double _packetsLost;
+    private long _statsAt;
 
     public bool IsOpen => _state == State.Open;
     public string FailReason { get; private set; } = string.Empty;
@@ -71,25 +92,42 @@ public sealed class SteamConnection : IConnection
     // end-to-end encrypted, so IsEncrypted is unconditionally true once open. -xlinka
     public int Ping => IsOpen ? _lastMainStatus.m_nPing : -1;
 
-    // What waits here plus what Steam holds unsent, both channels.
+    // What waits here plus what Steam holds unsent on the live channel: what the next change sent waits behind.
+    // The bulk channel is paced under the live one and only gets what it leaves, so asset chunks queued there
+    // hold up nothing the world sends. Counted, every transfer read as a peer far behind and the host withheld
+    // that peer's moving values for as long as it ran. -xlinka
     public long PendingSendBytes
     {
         get
         {
             if (!IsOpen) return 0;
-            long pending = _waiting[0].Bytes + _waiting[1].Bytes;
+            long pending = _waiting[0].Bytes;
             SteamNetConnectionRealTimeLaneStatus_t lanes = default;
-            for (int i = 0; i < ChannelCount; i++)
-            {
-                var status = default(SteamNetConnectionRealTimeStatus_t);
-                if (SteamNetworkingSockets.GetConnectionRealTimeStatus(_connections[i], ref status, 0, ref lanes) == EResult.k_EResultOK)
-                    pending += status.m_cbPendingReliable + status.m_cbPendingUnreliable;
-            }
+            var status = default(SteamNetConnectionRealTimeStatus_t);
+            if (SteamNetworkingSockets.GetConnectionRealTimeStatus(_connections[0], ref status, 0, ref lanes) == EResult.k_EResultOK)
+                pending += status.m_cbPendingReliable + status.m_cbPendingUnreliable;
             return pending;
         }
     }
 
     public long DroppedUnreliable => Interlocked.Read(ref _droppedUnreliable);
+
+    // Steam counts no resends; it reports the share of our packets the far end got, which is the same loss.
+    public long PacketsSent => (long)_packetsSent;
+    public long PacketsLost => (long)_packetsLost;
+
+    // What waits here and what Steam holds unsent, both channels, in packets of its size.
+    public int QueuedPackets
+    {
+        get
+        {
+            if (!IsOpen) return 0;
+            long bytes = _waiting[0].Bytes + _waiting[1].Bytes
+                + _lastMainStatus.m_cbPendingReliable + _lastMainStatus.m_cbPendingUnreliable
+                + _lastBackgroundStatus.m_cbPendingReliable + _lastBackgroundStatus.m_cbPendingUnreliable;
+            return (int)Math.Min(int.MaxValue, (bytes + SteamPacketBytes - 1) / SteamPacketBytes);
+        }
+    }
     public bool IsEncrypted => IsOpen;
     public string TransportName => "Steam";
 
@@ -122,7 +160,8 @@ public sealed class SteamConnection : IConnection
         for (int i = 0; i < ChannelCount; i++)
         {
             int channel = i;
-            _transmit[i] = (data, offset, count) => Push(channel, data, offset, count, SendFlagsReliable);
+            _transmit[i] = (data, offset, count) => Push(channel, data, offset, count, SendFlagsReliable[channel]);
+            _appliedRate[i] = (int)SteamPace.StartRate;
         }
         _pollGroup = SteamNetworkingSockets.CreatePollGroup();
         for (int i = 0; i < ChannelCount; i++)
@@ -164,13 +203,13 @@ public sealed class SteamConnection : IConnection
         bool alive;
         lock (_sendLock)
             alive = TransmitInternal(data, length, reliable, background);
-        // Closed outside the send lock: Close takes the manager's lock, and the main thread holds that one while
-        // it flushes, where it only ever tries this lock.
+        // Closed outside the send lock: Close takes the manager's lock, and the pump holds that one while it
+        // flushes, where it only ever tries this lock.
         if (!alive)
-            Close(SteamCloseReason.TransmissionError);
+            Close(_sendFailure);
     }
 
-    // Hands on what waits, from the manager's update. A send under way on another thread flushes for itself.
+    // Hands on what waits, from the manager's pump. A send under way on another thread flushes for itself.
     internal void FlushWaiting()
     {
         if (!IsOpen || (_waiting[0].Count == 0 && _waiting[1].Count == 0)) return;
@@ -189,7 +228,46 @@ public sealed class SteamConnection : IConnection
             Monitor.Exit(_sendLock);
         }
         if (!alive)
-            Close(SteamCloseReason.TransmissionError);
+            Close(_sendFailure);
+    }
+
+    // From the manager's pump, a few times a second: the link's rate from what got through.
+    internal void Pace(double nowMs)
+    {
+        if (!IsOpen) return;
+        SteamNetConnectionRealTimeLaneStatus_t lanes = default;
+        var live = default(SteamNetConnectionRealTimeStatus_t);
+        var bulk = default(SteamNetConnectionRealTimeStatus_t);
+        if (SteamNetworkingSockets.GetConnectionRealTimeStatus(_connections[0], ref live, 0, ref lanes) != EResult.k_EResultOK
+            || SteamNetworkingSockets.GetConnectionRealTimeStatus(_connections[1], ref bulk, 0, ref lanes) != EResult.k_EResultOK)
+            return;
+
+        long handed = Interlocked.Read(ref _reliableHanded[0]) + Interlocked.Read(ref _reliableHanded[1]);
+        long acked = handed - (live.m_cbPendingReliable + live.m_cbSentUnackedReliable + bulk.m_cbPendingReliable + bulk.m_cbSentUnackedReliable);
+        long unreliableOut = Interlocked.Read(ref _unreliableHanded[0]) + Interlocked.Read(ref _unreliableHanded[1])
+            - live.m_cbPendingUnreliable - bulk.m_cbPendingUnreliable;
+        long queued = _waiting[0].Bytes + _waiting[1].Bytes
+            + live.m_cbPendingReliable + live.m_cbPendingUnreliable + bulk.m_cbPendingReliable + bulk.m_cbPendingUnreliable;
+        _pace.Update(nowMs, acked, unreliableOut, queued, System.Math.Max(live.m_nPing, bulk.m_nPing));
+        bool bulkWaiting = _waiting[1].Bytes + bulk.m_cbPendingReliable + bulk.m_cbPendingUnreliable > 0;
+        bool liveWaiting = _waiting[0].Bytes + live.m_cbPendingReliable + live.m_cbPendingUnreliable > 0;
+        SetRate(0, _pace.LiveRate(bulkWaiting));
+        SetRate(1, _pace.BulkRate(live.m_flOutBytesPerSec, liveWaiting));
+    }
+
+    private void SetRate(int channel, int rate)
+    {
+        // A change under a couple of percent is not worth a call into the library.
+        int applied = _appliedRate[channel];
+        if (System.Math.Abs(rate - applied) <= applied / 64) return;
+        if (_rateScratch == IntPtr.Zero) _rateScratch = Marshal.AllocHGlobal(sizeof(int));
+        Marshal.WriteInt32(_rateScratch, rate);
+        var handle = (IntPtr)_connections[channel].m_HSteamNetConnection;
+        bool set = SteamNetworkingUtils.SetConfigValue(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin,
+            ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection, handle, ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32, _rateScratch);
+        set &= SteamNetworkingUtils.SetConfigValue(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax,
+            ESteamNetworkingConfigScope.k_ESteamNetworkingConfig_Connection, handle, ESteamNetworkingConfigDataType.k_ESteamNetworkingConfig_Int32, _rateScratch);
+        if (set) _appliedRate[channel] = rate;
     }
 
     public void Close() => Close(SteamCloseReason.ClosedLocally);
@@ -220,12 +298,15 @@ public sealed class SteamConnection : IConnection
             _waiting[0].Clear();
             _waiting[1].Clear();
         }
+        // A close of our own lingers until what is already queued is through, so the last thing said (a
+        // kick, a leave) still arrives; one the peer or a failure caused has nobody left to hear it.
+        bool linger = CloseReason == SteamCloseReason.ClosedLocally;
         for (int i = 0; i < _connections.Length; i++)
         {
             var handle = _connections[i];
             if (handle != HSteamNetConnection.Invalid)
             {
-                SteamNetworkingSockets.CloseConnection(handle, (int)CloseReason, null, false);
+                SteamNetworkingSockets.CloseConnection(handle, (int)CloseReason, null, linger);
                 _connections[i] = default;
             }
         }
@@ -233,6 +314,11 @@ public sealed class SteamConnection : IConnection
         {
             SteamNetworkingSockets.DestroyPollGroup(_pollGroup);
             _pollGroup = default;
+        }
+        if (_rateScratch != IntPtr.Zero)
+        {
+            Marshal.FreeHGlobal(_rateScratch);
+            _rateScratch = IntPtr.Zero;
         }
     }
 
@@ -277,6 +363,25 @@ public sealed class SteamConnection : IConnection
         SteamNetConnectionRealTimeLaneStatus_t lanes = default;
         SteamNetworkingSockets.GetConnectionRealTimeStatus(_connections[0], ref _lastMainStatus, 0, ref lanes);
         SteamNetworkingSockets.GetConnectionRealTimeStatus(_connections[1], ref _lastBackgroundStatus, 0, ref lanes);
+
+        long now = System.Diagnostics.Stopwatch.GetTimestamp();
+        if (_statsAt != 0)
+        {
+            double seconds = (now - _statsAt) / (double)System.Diagnostics.Stopwatch.Frequency;
+            CountLoss(_lastMainStatus, seconds);
+            CountLoss(_lastBackgroundStatus, seconds);
+        }
+        _statsAt = now;
+    }
+
+    private void CountLoss(in SteamNetConnectionRealTimeStatus_t status, double seconds)
+    {
+        // Quality is unknown (below zero) until the far end has reported.
+        if (status.m_flConnectionQualityRemote < 0 || status.m_flOutPacketsPerSec <= 0)
+            return;
+        double sent = status.m_flOutPacketsPerSec * seconds;
+        _packetsSent += sent;
+        _packetsLost += sent * (1 - Math.Clamp(status.m_flConnectionQualityRemote, 0f, 1f));
     }
 
     internal ref ReassemblyState GetReassembly(uint connectionHandle)
@@ -312,7 +417,14 @@ public sealed class SteamConnection : IConnection
             return;
         }
         _receivedBytes += (ulong)length;
-        DataReceived?.Invoke(data, length);
+        _manager.Arrived(this, data, length);
+    }
+
+    // The pump, after it lets go of the manager's lock.
+    internal void Deliver(byte[] data, int length)
+    {
+        if (IsOpen)
+            DataReceived?.Invoke(data, length);
     }
 
     internal void ConnectionStatusChanged(ref SteamNetConnectionStatusChangedCallback_t info)
@@ -370,17 +482,14 @@ public sealed class SteamConnection : IConnection
     }
 
     // False once the connection is gone. A full buffer is not that: the link is behind, so reliable data waits
-    // in order and unreliable data, the latest of something sent again soon, is let go.
+    // in order and unreliable data, the latest of something sent again soon, is let go. An unreliable frame
+    // bigger than the library sends unreliably would go reliably anyway, so it goes as a reliable frame of ours,
+    // behind whatever waits on the channel instead of between a held frame's pieces.
     private bool TransmitInternal(byte[] data, int count, bool reliable, bool background)
     {
         int channel = background ? 1 : 0;
-        if (!reliable)
+        if (!reliable && count <= SteamFraming.MaxUnreliableSize)
         {
-            if (count > SteamFraming.MaxMessageSize)
-            {
-                LumoraLogger.Warn($"SteamConnection: unreliable frame of {count}B is over one message, dropped");
-                return true;
-            }
             var outcome = Push(channel, data, 0, count, SendFlagsUnreliable);
             if (outcome == SteamSendQueue.Outcome.Full)
                 Interlocked.Increment(ref _droppedUnreliable);
@@ -412,7 +521,7 @@ public sealed class SteamConnection : IConnection
         if (!wasWaiting && queue.Count > 0 && (DateTime.UtcNow - _lastBehindLog).TotalSeconds >= 10)
         {
             _lastBehindLog = DateTime.UtcNow;
-            LumoraLogger.Log($"SteamConnection: {Identifier} is behind, holding {queue.Bytes}B on channel {channel} (peak {queue.PeakBytes}B, {DroppedUnreliable} unreliable let go)");
+            LumoraLogger.Log($"SteamConnection: {Identifier} is behind, holding {queue.Bytes}B on channel {channel} (peak {queue.PeakBytes}B, {DroppedUnreliable} unreliable let go), paced at {_pace.Rate / 1024:0} KB/s");
         }
         return true;
     }
@@ -434,14 +543,32 @@ public sealed class SteamConnection : IConnection
         switch (result)
         {
             case EResult.k_EResultOK:
+                if ((flags & Constants.k_nSteamNetworkingSend_Reliable) != 0)
+                    Interlocked.Add(ref _reliableHanded[channel], count);
+                else
+                    Interlocked.Add(ref _unreliableHanded[channel], count);
+                return SteamSendQueue.Outcome.Sent;
             case EResult.k_EResultIgnored:
                 return SteamSendQueue.Outcome.Sent;
             case EResult.k_EResultLimitExceeded:
                 return SteamSendQueue.Outcome.Full;
             default:
                 SteamNetworkingSockets.GetConnectionInfo(handle, out var info);
-                LumoraLogger.Warn(
-                    $"SteamConnection: send {count}B failed, result={result}, state={info.m_eState}, end={info.m_eEndReason}");
+                // A peer that hung up shows up here first when a send beats its status callback, which only
+                // arrives with the next frame's callbacks. That is a close, not a fault.
+                if (info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ClosedByPeer)
+                {
+                    _sendFailure = SteamCloseReason.ClosedRemotely;
+                    LumoraLogger.Log($"SteamConnection: {Identifier} closed by the peer, end={info.m_eEndReason}");
+                }
+                else
+                {
+                    _sendFailure = info.m_eState == ESteamNetworkingConnectionState.k_ESteamNetworkingConnectionState_ProblemDetectedLocally
+                        ? SteamCloseReason.LocalProblem
+                        : SteamCloseReason.TransmissionError;
+                    LumoraLogger.Warn(
+                        $"SteamConnection: send {count}B failed, result={result}, state={info.m_eState}, end={info.m_eEndReason}");
+                }
                 return SteamSendQueue.Outcome.Dead;
         }
     }

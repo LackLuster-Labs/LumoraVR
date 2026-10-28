@@ -9,7 +9,10 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading;
 using Steamworks;
 using Lumora.Nexus.Transport;
 using LumoraLogger = Lumora.Core.Logging.Logger;
@@ -18,7 +21,7 @@ namespace Lumora.Godot.Networking.Transports.Steam;
 
 // Top-level Steam relay transport. One instance per engine: owns the global
 // SteamNetConnectionStatusChangedCallback_t callback, allocates channel-group indices, and pumps
-// every owned SteamListener / SteamConnection from its Update loop.
+// every owned SteamListener / SteamConnection from a thread of its own.
 //
 // URI scheme is steam://{hostSteamID}/{channelGroup}/{sessionId}; channel group is doubled to
 // virtual ports (foreground/background) inside the listener and connection. - xlinka
@@ -26,23 +29,23 @@ public sealed class SteamNetworkManager : INetworkManager
 {
     public const string SCHEME = "steam";
     private const int MessageBufferSize = 256;
-    // Batches read per poll group per frame. One batch a frame was the whole budget once, and a peer
-    // getting more messages a second than that times its frame rate fell behind for good: everything the
-    // host sent it, transfer starts included, queued behind an ever longer backlog while its own traffic
-    // still went out. The cap only bounds one frame's work if a peer is flooded. -xlinka
+    // Batches read per poll group per pump. The cap only bounds one pass's work if a peer is flooded. -xlinka
     internal const int MaxReceiveBatchesPerFrame = 64;
     // A buffer this full is not fatal: what does not fit waits in the connection's own queue (SteamSendQueue)
     // and the sync loop sends a peer that far behind only what it cannot do without. -xlinka
     private const int SendBufferSize = 8 * 1024 * 1024;
-    private const int SendRateBytesPerSecond = 16 * 1024 * 1024;
-    // The background connection carries asset transfers. Its rate is a fixed pace, not an estimate, so
-    // 16 MB/s was the ceiling of any one transfer however good the link; what actually goes out is held
-    // by the transferer's window, which backs off as soon as anything queues. Its buffer holds the
-    // largest window with room over. -xlinka
+    // The background connection carries asset transfers. What actually goes out is held by the transferer's
+    // window, which backs off as soon as anything queues; its buffer holds the largest window with room over.
+    // The rate of both is SteamPace's. -xlinka
     private const int BulkSendBufferSize = 32 * 1024 * 1024;
-    private const int BulkSendRateBytesPerSecond = 64 * 1024 * 1024;
+    // What arrived and nobody has taken yet. The library's own limit is 1 MB and 1000 messages, past which it
+    // drops packets, and a dropped reliable packet costs its whole channel a resend round trip. At 16 MB/s
+    // 1 MB is 60 ms, one long frame or one GC on this side. -xlinka
+    private const int RecvBufferSize = 32 * 1024 * 1024;
+    private const int RecvBufferMessages = 65536;
     private const int InitialTimeoutMs = 15000;
     private const int ConnectedTimeoutMs = 15000;
+    private const double PaceIntervalMs = 50;
 
     internal object Lock { get; } = new();
 
@@ -52,12 +55,18 @@ public sealed class SteamNetworkManager : INetworkManager
     private readonly List<SteamListener> _listeners = new();
     private readonly List<SteamConnection> _connections = new();
     private readonly Queue<IDisposable> _toDispose = new();
+    // Taken off the poll groups under the lock, handed on after it: a session handler that closes a
+    // connection or answers on one must not do it inside the transport's lock.
+    private readonly List<(SteamConnection Connection, byte[] Data, int Length)> _arrived = new();
 
     private Callback<SteamNetConnectionStatusChangedCallback_t> _statusCallback = null!;
     private IntPtr[] _messageBuffer = null!;
     private CSteamID _localUser;
     private DateTime _lastStatUpdate;
+    private double _nextPace;
     private int _channelPool;
+    private Thread? _pump;
+    private volatile bool _pumpStop;
     private bool _initialized;
     private bool _disposed;
 
@@ -94,10 +103,11 @@ public sealed class SteamNetworkManager : INetworkManager
             SteamNetworkingSockets.GetIdentity(out var identity);
             _localUser = identity.GetSteamID();
 
-            DefaultConfigMain = BuildConfig(SendBufferSize, SendRateBytesPerSecond);
-            DefaultConfigBackground = BuildConfig(BulkSendBufferSize, BulkSendRateBytesPerSecond);
+            DefaultConfigMain = BuildConfig(SendBufferSize);
+            DefaultConfigBackground = BuildConfig(BulkSendBufferSize);
 
             _initialized = true;
+            StartPump();
             LumoraLogger.Log($"SteamNetworkManager: ready, local SteamID={_localUser.m_SteamID}");
             return true;
         }
@@ -157,29 +167,107 @@ public sealed class SteamNetworkManager : INetworkManager
         return result;
     }
 
+    // The pump thread drives the link, so what arrives comes off the wire within a millisecond or two whatever
+    // the world thread is doing. Driven from the frame, a long frame left everything sitting in the library,
+    // and at a few MB/s its receive buffer fills and drops. Update only pumps when that thread could not
+    // start. -xlinka
     public void Update()
     {
-        if (!_initialized) return;
+        if (!_initialized || _pump != null) return;
+        Pump();
+    }
+
+    private void StartPump()
+    {
+        if (_pump != null) return;
+        _pumpStop = false;
+        _pump = new Thread(PumpLoop)
+        {
+            Name = "SteamNetworkPump",
+            IsBackground = true,
+            Priority = ThreadPriority.AboveNormal,
+        };
+        _pump.Start();
+    }
+
+    private void StopPump()
+    {
+        var pump = _pump;
+        if (pump == null) return;
+        _pumpStop = true;
+        if (pump != Thread.CurrentThread) pump.Join(1000);
+        _pump = null;
+    }
+
+    // Optimized up front: a loop that never returns is otherwise swapped for an optimized copy mid-run, compiled
+    // on this thread while every peer waits on it.
+    [MethodImpl(MethodImplOptions.AggressiveOptimization)]
+    private void PumpLoop()
+    {
+        while (!_pumpStop)
+        {
+            try
+            {
+                Pump();
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Error($"SteamNetworkManager: pump threw: {ex}");
+            }
+            Thread.Sleep(1);
+        }
+    }
+
+    private void Pump()
+    {
         lock (Lock)
         {
             while (_toTransmit.TryDequeue(out var msg)) TransmitInternal(msg);
             while (_toDispose.Count > 0) _toDispose.Dequeue().Dispose();
             // What a full send buffer held back goes on first, ahead of anything new. By index from the end: a
-            // flush that finds a connection dead closes it, which takes it out of the list.
+            // flush or a receive that finds a connection dead closes it, which takes it out of the list.
             for (int i = _listeners.Count - 1; i >= 0; i--) _listeners[i].FlushWaiting();
             for (int i = _connections.Count - 1; i >= 0; i--) _connections[i].FlushWaiting();
-            foreach (var listener in _listeners) listener.Update(_messageBuffer);
-            foreach (var connection in _connections) connection.Update(_messageBuffer);
+            for (int i = _listeners.Count - 1; i >= 0; i--) _listeners[i].Update(_messageBuffer);
+            for (int i = _connections.Count - 1; i >= 0; i--) _connections[i].Update(_messageBuffer);
 
-            if ((DateTime.UtcNow - _lastStatUpdate).TotalSeconds < 1.0) return;
-            _lastStatUpdate = DateTime.UtcNow;
-            foreach (var listener in _listeners) listener.UpdateStats();
-            foreach (var connection in _connections) connection.UpdateStats();
+            double now = Stopwatch.GetTimestamp() * 1000.0 / Stopwatch.Frequency;
+            if (now >= _nextPace)
+            {
+                _nextPace = now + PaceIntervalMs;
+                for (int i = _listeners.Count - 1; i >= 0; i--) _listeners[i].Pace(now);
+                for (int i = _connections.Count - 1; i >= 0; i--) _connections[i].Pace(now);
+            }
+
+            if ((DateTime.UtcNow - _lastStatUpdate).TotalSeconds >= 1.0)
+            {
+                _lastStatUpdate = DateTime.UtcNow;
+                foreach (var listener in _listeners) listener.UpdateStats();
+                foreach (var connection in _connections) connection.UpdateStats();
+            }
         }
+
+        for (int i = 0; i < _arrived.Count; i++)
+        {
+            var (connection, data, length) = _arrived[i];
+            try
+            {
+                connection.Deliver(data, length);
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Error($"SteamNetworkManager: a receive handler on {connection.Identifier} threw: {ex}");
+            }
+        }
+        _arrived.Clear();
     }
+
+    // Under the lock, from a receive.
+    internal void Arrived(SteamConnection connection, byte[] data, int length) => _arrived.Add((connection, data, length));
 
     public void Stop()
     {
+        StopPump();
         lock (Lock)
         {
             for (int i = _listeners.Count - 1; i >= 0; i--) _listeners[i].Close();
@@ -235,14 +323,37 @@ public sealed class SteamNetworkManager : INetworkManager
         sessionId = uri.Segments.Length > 2 ? uri.Segments[2].Trim('/') : string.Empty;
     }
 
-    private static SteamNetworkingConfigValue_t[] BuildConfig(int sendBuffer, int sendRate) => new[]
+    // Every connection starts at SteamPace's opening rate and is paced from there. The receive limits are
+    // only set where this Steam client knows them: an option it does not know fails the whole connect.
+    private static SteamNetworkingConfigValue_t[] BuildConfig(int sendBuffer)
     {
-        ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendBufferSize, sendBuffer),
-        ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin, sendRate),
-        ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax, sendRate),
-        ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_TimeoutInitial, InitialTimeoutMs),
-        ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_TimeoutConnected, ConnectedTimeoutMs),
-    };
+        int startRate = (int)SteamPace.StartRate;
+        var config = new List<SteamNetworkingConfigValue_t>
+        {
+            ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendBufferSize, sendBuffer),
+            ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMin, startRate),
+            ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_SendRateMax, startRate),
+            ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_TimeoutInitial, InitialTimeoutMs),
+            ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_TimeoutConnected, ConnectedTimeoutMs),
+        };
+        if (Known(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_RecvBufferSize))
+            config.Add(ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_RecvBufferSize, RecvBufferSize));
+        if (Known(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_RecvBufferMessages))
+            config.Add(ConfigInt(ESteamNetworkingConfigValue.k_ESteamNetworkingConfig_RecvBufferMessages, RecvBufferMessages));
+        return config.ToArray();
+    }
+
+    private static bool Known(ESteamNetworkingConfigValue key)
+    {
+        try
+        {
+            return !string.IsNullOrEmpty(SteamNetworkingUtils.GetConfigValueInfo(key, out _, out _));
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private static SteamNetworkingConfigValue_t ConfigInt(ESteamNetworkingConfigValue key, int value)
     {
