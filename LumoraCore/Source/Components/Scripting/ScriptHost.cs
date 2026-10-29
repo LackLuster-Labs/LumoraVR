@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using Helio.UI;
 using Lumora.Core.Assets;
 using Lumora.Core.Components.Assets;
+using Lumora.Core.Components.UI;
 using Lumora.Core.Math;
 using Lumora.Core.Networking.Sync;
 using Lumora.Core.Scripting;
@@ -64,6 +65,13 @@ public sealed class ScriptHost : Component, IButtonPressReceiver, ICustomInspect
     public readonly SyncRefList<IWorldElement> Bindings = new();
     public readonly Sync<ScriptMode> Mode = new();
     public readonly Sync<string> Status = new();
+
+    // Where the open graph stood when it was last packed, in this object's own space; a zero turn, not the
+    // identity a rotation field starts at, is a graph never opened. See ScriptGraphPlacement.
+    [HideInInspector]
+    public readonly Sync<float3> GraphAt = new();
+    [HideInInspector]
+    public readonly Sync<floatQ> GraphTurn = new(default(floatQ));
 
     // Host-only and never saved: the host's say on a Local script, and what a Shared script of the same
     // author last sent it. The count comes last, so its change arrives with the text and number.
@@ -282,7 +290,7 @@ public sealed class ScriptHost : Component, IButtonPressReceiver, ICustomInspect
             ScriptPressRelay.For(world)?.Publish(this, context.WorldPoint);
     }
 
-    // Built with the inspector section, so it reads as of opening it.
+    // Built with the inspector section, and built again by ScriptGraphReadout whenever what it shows changes.
     public void BuildInspectorBody(UIBuilder ui)
     {
         InspectorStats.AddRow(ui, "Status", string.IsNullOrEmpty(Status.Value) ? "not started" : Status.Value);
@@ -302,26 +310,104 @@ public sealed class ScriptHost : Component, IButtonPressReceiver, ICustomInspect
                 InspectorStats.AddRow(ui, entry.Key.Value ?? string.Empty, text.Length > 40 ? text[..37] + "..." : text);
             }
         }
-        var space = ScriptGraphEditing.FindSpace(this);
-        bool open = space is { Packed.Value: false };
-        int nodes = 0;
-        if (open)
+        AddGraphRows(ui);
+        // Only the host lets a script check joins, and only for the graph it was shown.
+        if (World is { IsAuthority: true } && _runtime is { CanRun: true } checker && !checker.IsLocal
+            && checker.Runner.Instance.Handles(typeof(JoinRequested)))
         {
-            foreach (var _ in space!.Nodes)
-                nodes++;
+            bool on = _checksJoinsFor == checker.GraphHash;
+            InspectorStats.AddRow(ui, "Join checks", on
+                ? "on: it hears everyone who asks to join this session"
+                : "off: on, it can turn people away and pick their role until the session ends");
+            InspectorUI.RelayButton(ui, this, "joins", on ? "Stop it checking joins" : "Let it check joins", 0f);
         }
-        string graph = open ? $"open for editing, {nodes} nodes" : Graph.Target == null ? "none yet" : "packed";
-        if (space != null && !space.Slot.IsActive)
-            graph += ", switched off";
-        InspectorStats.AddRow(ui, "Graph", graph);
-        if (!string.IsNullOrEmpty(_lastAction))
-            InspectorStats.AddRow(ui, "Last press", _lastAction);
-        InspectorUI.RelayButton(ui, this, "edit", "Edit graph", 0f);
-        if (open)
-            InspectorUI.RelayButton(ui, this, "pack", "Pack", 0f);
         // A group never packed has no graph or bindings to take on; packing it is what makes it run.
         if (Status.Value?.Contains("someone else") == true && Graph.Target != null)
             InspectorUI.RelayButton(ui, this, "adopt", "Run these changes as mine", 0f);
+        ScriptGraphReadout.Watch(ui, this);
+    }
+
+    // The graph as one chip, tinted by how it stands, over the one thing to do with it next.
+    private void AddGraphRows(UIBuilder ui)
+    {
+        var (state, tint, action, label) = GraphState();
+        InspectorUI.FixedRow(ui.Root, "Graph", 30f, out var row, ui.Root);
+        row.PushStyle();
+        row.MinWidth(150f);
+        row.PreferredWidth(190f);
+        row.FlexibleWidth(0f);
+        var name = row.Text("Graph", InspectorUI.FontSize - 1f, InspectorUI.MutedColor);
+        InspectorUI.FillParent(name.RectTransform!);
+        name.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
+        name.VerticalAlignment.Value = TextVerticalAlignment.Middle;
+        row.PopStyle();
+
+        row.PushStyle();
+        row.FlexibleWidth(1f);
+        var chip = row.Next("State");
+        var plate = chip.AttachComponent<Image>();
+        plate.Tint.Value = new color(tint.r, tint.g, tint.b, 0.16f);
+        plate.CornerRadius.Value = 15f;
+        row.NestInto(chip);
+        var text = row.Text(state, InspectorUI.FontSize - 1f, tint);
+        InspectorUI.FillParent(text.RectTransform!);
+        text.RectTransform!.OffsetMin.Value = new float2(14f, 0f);
+        text.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
+        text.VerticalAlignment.Value = TextVerticalAlignment.Middle;
+        row.NestOut();
+        row.PopStyle();
+
+        InspectorUI.FixedRow(ui.Root, "Graph Action", 36f, out var act, ui.Root);
+        act.PushStyle();
+        act.BackgroundColor(action.Length > 0 ? DashTheme.Accent : DashTheme.Surface);
+        act.TextColor(action.Length > 0 ? DashTheme.OnAccent : DashTheme.TextMuted);
+        InspectorUI.RelayButton(act, this, action, label, 0f);
+        act.PopStyle();
+
+        if (!string.IsNullOrEmpty(_lastAction))
+            InspectorStats.AddRow(ui, "Last press", _lastAction).Color.Value = DashTheme.Warning;
+    }
+
+    // What the graph is doing, the chip's tint, and the press it offers: unpack, pack, or nothing while a pack
+    // is on its way.
+    private (string State, color Tint, string Action, string Label) GraphState()
+    {
+        var space = ScriptGraphEditing.FindSpace(this);
+        if (ScriptGraphEditing.IsPacking(space))
+            return ($"Packing {space!.NodeList.Count} nodes", DashTheme.Accent, string.Empty, "Packing...");
+        if (space is { Packed.Value: false })
+        {
+            int nodes = space.NodeList.Count;
+            if (!space.Slot.IsActive)
+                return ($"Open, {nodes} nodes, switched off", DashTheme.Warning, "pack", "Pack graph");
+            if (space.IsChecked && space.HasProblems)
+                return ($"Open, {nodes} nodes, has problems", DashTheme.Warning, "pack", "Pack graph");
+            return ($"Open, {nodes} nodes", DashTheme.Positive, "pack", "Pack graph");
+        }
+        if (space != null)
+        {
+            int kept = space.NodeList.Count;
+            return space.IsChecked && space.HasProblems
+                ? ($"Packed with errors, {kept} nodes", DashTheme.Warning, "edit", "Unpack graph")
+                : ($"Packed in place, {kept} nodes", DashTheme.Accent, "edit", "Unpack graph");
+        }
+        if (Graph.Target == null)
+            return ("No graph yet", DashTheme.TextMuted, "edit", "New graph");
+        return (Graph.IsAssetAvailable && Graph.Asset?.Graph is { } packed ? $"Packed, {packed.Nodes.Count} nodes" : "Packed",
+            DashTheme.Accent, "edit", "Unpack graph");
+    }
+
+    // The graph the Shared script runs here now and the objects its bindings stand for, while it runs one: the
+    // last good graph, which a graph with errors is packed as.
+    internal (ScriptGraph Graph, IReadOnlyList<object?> Bindings)? Running
+        => _runtime is { CanRun: true } runtime && _runningGraph != null ? (_runningGraph, runtime.Bindings) : null;
+
+    // Everything the section shows, in one line: the readout builds the section again when this reads differently.
+    internal string InspectorState()
+    {
+        var (state, _, action, _) = GraphState();
+        string running = _runtime is { CanRun: true } runtime ? runtime.GraphHash : string.Empty;
+        return $"{state}|{action}|{Status.Value}|{LocalStatus}|{_lastAction}|{Synced.Count}|{LastRefusal}|{LastRefusalHere}|{running}|{_checksJoinsFor}";
     }
 
     // On the machine of whoever pressed, so each of these acts as them.
@@ -333,14 +419,51 @@ public sealed class ScriptHost : Component, IButtonPressReceiver, ICustomInspect
                 _lastAction = ScriptGraphEditing.Unpack(this, out var error) == null ? error ?? "the graph did not open" : null;
                 break;
             case "pack":
+                _lastAction = null;
                 if (ScriptGraphEditing.FindSpace(this) is { } space)
                     _ = TakePackAsync(ScriptGraphEditing.PackAsync(space));
                 break;
             case "adopt":
                 RunEditsAsAuthor();
                 break;
+            case "joins":
+                ToggleJoinChecks();
+                break;
         }
     }
+
+    // The graph the host let check joins this session, by its hash: any edit takes it back. Kept on the host's
+    // own copy only, never synced or saved, so every session starts with no checks on. -xlinka
+    private string? _checksJoinsFor;
+
+    private void ToggleJoinChecks()
+    {
+        if (World is not { IsAuthority: true } || _runtime is not { CanRun: true } runtime || runtime.IsLocal)
+        {
+            _lastAction = "only the host lets a running script check joins";
+            return;
+        }
+        if (_checksJoinsFor == runtime.GraphHash)
+        {
+            _checksJoinsFor = null;
+            _lastAction = null;
+            return;
+        }
+        if (!runtime.Principal.IsWorldContent)
+        {
+            _lastAction = "only the world's own scripts check joins";
+            return;
+        }
+        _checksJoinsFor = runtime.GraphHash;
+        _lastAction = null;
+        LumoraLogger.Log($"ScriptHost {ReferenceID}: checks joins this session");
+    }
+
+    // The running script the host let check joins, while it is still the graph that was let.
+    internal ScriptHostRuntime? JoinCheck
+        => _checksJoinsFor != null && _runtime is { CanRun: true, IsLocal: false } runtime && runtime.GraphHash == _checksJoinsFor
+            && Mode.Value == ScriptMode.Shared && runtime.Principal.IsWorldContent && runtime.Runner.Instance.Handles(typeof(JoinRequested))
+            ? runtime : null;
 
     private async System.Threading.Tasks.Task TakePackAsync(System.Threading.Tasks.Task<string?> pack)
     {
@@ -355,7 +478,7 @@ public sealed class ScriptHost : Component, IButtonPressReceiver, ICustomInspect
         }
         _lastAction = refused;
         if (refused != null)
-            LumoraLogger.Warn($"ScriptHost {ReferenceID}: not packed: {refused}");
+            LumoraLogger.Warn($"ScriptHost {ReferenceID}: pack: {refused}");
     }
 
     // A press the authority takes: the slot still has a live button, and the presser may interact here.
@@ -1113,7 +1236,7 @@ public sealed class ScriptHost : Component, IButtonPressReceiver, ICustomInspect
             return false;
         for (int i = 0; i < current.Length; i++)
         {
-            if (!ReferenceEquals(running[i], current[i]))
+            if (!ReferenceEquals(ShaderPropertyFields.Unwrap(running[i]), current[i]))
                 return false;
         }
         return true;

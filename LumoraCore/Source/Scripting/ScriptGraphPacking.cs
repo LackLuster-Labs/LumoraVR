@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using Lumora.Core.Components;
 using Lumora.Core.Components.Scripting;
 using Lumora.Core.Math;
 using Lumora.Script;
@@ -58,6 +59,9 @@ public static class ScriptGraphPacking
                 Position = !withPositions ? float3.Zero
                     : ReferenceEquals(node.Slot.Parent, space.Slot) ? node.Slot.LocalPosition.Value
                     : space.Slot.GlobalPointToLocal(node.Slot.GlobalPosition),
+                Rotation = !withPositions ? floatQ.Identity
+                    : ReferenceEquals(node.Slot.Parent, space.Slot) ? node.Slot.LocalRotation.Value
+                    : space.Slot.GlobalRotationToLocal(node.Slot.GlobalRotation),
             };
             var overload = node.Resolve(out _);
 
@@ -145,19 +149,34 @@ public static class ScriptGraphPacking
         return new ScriptGraphBuild(graph, bindings, byId, problems);
     }
 
-    // Writes a document back out as node slots under the host, in a space facing the given point.
-    public static ScriptGraphSpace Unpack(ScriptHost host, ScriptGraph graph, float3? facing = null)
+    // Writes a document back out as node slots under the host, standing where ScriptGraphPlacement puts it for
+    // whoever opens it, held there while the object moves; with nobody opening it, where it was left or above
+    // the host, facing the given point, riding the host.
+    // A graph nobody has opened yet, a converted one or a document written without positions, is laid out for
+    // reading first when it came in too tall or in a muddle; on a copy, since the loaded document is shared by
+    // every script running it. From its first unpack on, a graph keeps wherever it was left.
+    public static ScriptGraphSpace Unpack(ScriptHost host, ScriptGraph graph, UserRoot? opener = null, float3? facing = null)
     {
+        if (!ScriptGraphPlacement.HasRemembered(host) && ScriptGraphLayout.Untidy(graph, GraphLanguage.Script))
+        {
+            graph = ScriptGraph.Parse(graph.ToUtf8Json());
+            ScriptGraphLayout.Arrange(graph, GraphLanguage.Script);
+        }
         var spaceSlot = host.Slot.AddSlot(SpaceSlotName);
         var space = spaceSlot.AttachComponent<ScriptGraphSpace>();
         space.Host.Target = host;
-        Place(host.Slot, spaceSlot, facing);
+        ScriptGraphPlacement.For(host, ScriptGraphLayout.Extent(graph, GraphLanguage.Script), opener, facing,
+            ScriptGraphLayout.Focus(graph, GraphLanguage.Script)).Apply(spaceSlot);
+        if (opener != null)
+            space.HoldHere();
 
         var made = new Dictionary<string, ScriptGraphNode>(StringComparer.Ordinal);
         foreach (var graphNode in graph.Nodes)
         {
             var slot = spaceSlot.AddSlot(graphNode.Type);
             slot.LocalPosition.Value = graphNode.Position;
+            if (graphNode.Rotation != floatQ.Identity)
+                slot.LocalRotation.Value = graphNode.Rotation;
             var node = slot.AttachComponent<ScriptGraphNode>();
             node.NodeId.Value = graphNode.Id;
             node.NodeType.Value = graphNode.Type;
@@ -214,21 +233,6 @@ public static class ScriptGraphPacking
         return space;
     }
 
-    // Above the item, a metre across at any item scale, turned to face whoever unpacked it.
-    private static void Place(Slot item, Slot space, float3? facing)
-    {
-        var at = item.GlobalPosition + new float3(0f, 0.35f, 0f);
-        space.GlobalPosition = at;
-        if (facing is float3 point)
-        {
-            var toward = point - at;
-            toward.y = 0f;
-            if (toward.LengthSquared > 1e-6f)
-                space.GlobalRotation = floatQ.LookRotation(toward.Normalized, float3.Up).Inverse;
-        }
-        space.GlobalScale = float3.One;
-    }
-
     private static bool TryBind(ScriptGraphNode node, NodeOverload? overload, string port, IWorldElement target,
         List<IWorldElement> bindings, List<string> bindingTypes, List<(ScriptGraphNode?, string)> problems, out int index)
     {
@@ -251,7 +255,7 @@ public static class ScriptGraphPacking
             problems.Add((node, $"'{port}' takes a {type.Name}, which cannot be bound to an object"));
             return false;
         }
-        if (!type.ClrType.IsInstanceOfType(target))
+        if (!type.ClrType.IsInstanceOfType(target) && !ShaderPropertyFields.Accepts(target, type.ClrType))
         {
             problems.Add((node, $"'{port}' takes {type.Name}; the bound object is a {target.GetType().Name}"));
             return false;

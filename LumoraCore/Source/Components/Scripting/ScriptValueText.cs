@@ -48,14 +48,17 @@ public static class ScriptValueText
         Slot slot => slot.Name.Value ?? "slot",
         User user => user.UserName.Value ?? "user",
         Component component => $"{component.Slot?.Name.Value}.{component.GetType().Name}",
+        Assets.ShaderUniformParam property when property.Parent is SyncElement { Parent: Component material }
+            => $"{material.Slot?.Name.Value}.{property.Name.Value}",
         SyncElement member when member.Parent is Slot owner => $"{owner.Name.Value}.{((ISyncMember)member).Name}",
         SyncElement member when member.Parent is Component owner => $"{owner.Slot?.Name.Value}.{((ISyncMember)member).Name}",
         _ => element.GetType().Name,
     };
 
-    // Whether a port of this type takes typed text at all; objects arrive by drop instead.
+    // Whether a port of this type takes typed text at all; objects arrive by drop instead. A big integer is
+    // typed as its digits.
     public static bool IsTyped(ScriptType type)
-        => type.Kind != ScriptTypeKind.Handle || type == ScriptTypes.String;
+        => type.Kind != ScriptTypeKind.Handle || type == ScriptTypes.String || type.ClrType == typeof(ScriptBigInt);
 
     public static bool TryParse(string text, ScriptType type, out GraphValue value, out string? error)
         => TryParse(text, type, 0d, out value, out error);
@@ -134,6 +137,16 @@ public static class ScriptValueText
         {
             value = GraphValue.Of(raw);
             return true;
+        }
+        if (type.ClrType == typeof(ScriptBigInt))
+        {
+            if (ScriptBigInt.TryParse(text, out var number))
+            {
+                value = GraphValue.Of(number.ToString());
+                return true;
+            }
+            error = "a whole number, or hex after 0x";
+            return false;
         }
         error = "drop an object here";
         return false;

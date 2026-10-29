@@ -120,6 +120,14 @@ public static partial class ScriptGraphEditing
             {
                 try
                 {
+                    if (slot.GetComponent<ScriptGraphNode>() is { } node)
+                    {
+                        if (DeleteNode(node, out _))
+                            deleted += count;
+                        else
+                            refused += count;
+                        continue;
+                    }
                     if (undo != null && SlotExistenceUndoBatch.Destroy(world, new[] { slot }) is { } removed)
                         undo.Record(removed);
                     else
@@ -141,8 +149,8 @@ public static partial class ScriptGraphEditing
 
     // Copies of nodes, each in its own node's graph, made in one pass: a wire or a pointer between two of them
     // joins the two copies, and one to a node left out stays on that node, the way a copied slot keeps what it
-    // points at outside itself. Each copy lies on its graph's plane where its node is now, a node in a hand
-    // included, with an id of its own, and a shader copy that makes a material property with a name of its own.
+    // points at outside itself. Each copy lies on its node as it is now, a node in a hand included, with an id of
+    // its own, and a shader copy that makes a material property with a name of its own.
     // Not recorded: the copies are for the caller's undo step.
     public static List<Slot> CopyNodes(IEnumerable<ScriptGraphNode> nodes)
     {
@@ -195,7 +203,6 @@ public static partial class ScriptGraphEditing
         {
             if (copy == null)
                 continue;
-            LayOnPlane(copy);
             if (copy.GetComponent<ScriptGraphNode>() is { } node && node.Space is { Kind.Value: GraphKind.Shader } space)
             {
                 if (!named.TryGetValue(space, out var list))
@@ -231,7 +238,7 @@ public static partial class ScriptGraphEditing
         string? refused = null;
         int taken = 0;
         var undo = FindUndo(world);
-        using (undo != null ? undo.BeginBatch(PackStep) : default)
+        using (undo != null ? undo.BeginBatch(JoinStep) : default)
         {
             into = EditScriptOn(target, out var error);
             if (into == null)
@@ -256,8 +263,8 @@ public static partial class ScriptGraphEditing
         return refused == null ? pack : pack.ContinueWith<string?>(done => done.Result ?? refused, TaskScheduler.Default);
     }
 
-    // The scripts and groups some nodes are in, each packed where it stands. A shader graph never packs: its nodes
-    // are passed over, and the answer says so. The first refusal, or null.
+    // The scripts and groups some nodes are in, each packed where it stands, all as one undo step. A shader graph
+    // never packs: its nodes are passed over, and the answer says so. The first refusal, or null.
     public static async Task<string?> PackGraphsOf(IEnumerable<ScriptGraphNode> nodes)
     {
         var spaces = new List<ScriptGraphSpace>();
@@ -271,11 +278,8 @@ public static partial class ScriptGraphEditing
             else if (!spaces.Contains(space))
                 spaces.Add(space);
         }
-        // Every pack starts here, on the world's thread, which is where its first half has to run.
-        var packs = spaces.Select(space => PackAsync(space)).ToList();
-        string? error = null;
-        foreach (var refused in await Task.WhenAll(packs).ConfigureAwait(false))
-            error ??= refused;
+        // Started here, on the world's thread, which is where reading a graph out has to happen.
+        var error = spaces.Count == 0 ? null : await PackTogetherAsync(spaces).ConfigureAwait(false);
         if (shader > 0)
             error ??= shader == 1 ? "a shader node never packs, so it was left as it is" : $"shader nodes never pack, so {shader} were left as they are";
         return error;

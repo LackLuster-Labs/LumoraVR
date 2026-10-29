@@ -21,22 +21,29 @@ namespace Lumora.Core.Components.Scripting;
 [ComponentCategory("Hidden")]
 public sealed class ShaderTextureSlot : Component, IProxyReceiver, IButtonPressReceiver
 {
-    public ShaderGraphSource? Source { get; set; }
+    // The graph the card is in. A loose graph gets its material later, from its output's well, and the slot finds
+    // it there without the card being made again.
+    public ScriptGraphSpace? Space { get; set; }
     public string Uniform { get; set; } = string.Empty;
     public RawImage? Picture { get; set; }
     public Text? Label { get; set; }
 
     private IAssetProvider<TextureAsset>? _shown;
+    private ShaderGraphSource? _shownSource;
     private bool _drawn;
+
+    public ShaderGraphSource? Source => Space?.ShaderSource.Target is { IsDestroyed: false } source ? source : null;
 
     public override void OnUpdate(float delta)
     {
         base.OnUpdate(delta);
-        var current = Source is { IsDestroyed: false } source ? source.TextureFor(Uniform) : null;
-        if (_drawn && ReferenceEquals(current, _shown))
+        var source = Source;
+        var current = source?.TextureFor(Uniform);
+        if (_drawn && ReferenceEquals(current, _shown) && ReferenceEquals(source, _shownSource))
             return;
         _drawn = true;
         _shown = current;
+        _shownSource = source;
         if (Picture is { IsDestroyed: false } picture)
         {
             // Empty shows the checker behind it rather than the white an empty picture samples.

@@ -49,8 +49,14 @@ internal sealed class ScriptEventSources
         public readonly Dictionary<Slot, ulong> Touching = new();
     }
 
-    // The frame each watched field last told a change of text, so a burst of keys is heard once.
-    private readonly Dictionary<Slot, ulong> _editFrame = new();
+    // The text a watched field's change will be heard with while its call waits to run: a burst of keys is
+    // heard once, with the text the last of them left.
+    private readonly Dictionary<Slot, EditText> _editWaiting = new();
+
+    private sealed class EditText
+    {
+        public string Text = string.Empty;
+    }
 
     private readonly Dictionary<Slot, Dictionary<User, ulong>> _hovering = new();
     private readonly List<User> _goneScratch = new();
@@ -101,16 +107,16 @@ internal sealed class ScriptEventSources
         var fields = new Dictionary<IField, List<ScriptEventEntry>>();
         var deletes = new Dictionary<Slot, List<ScriptEventEntry>>();
         var collisions = new Dictionary<Slot, List<ScriptEventEntry>>();
-        var children = new Dictionary<Slot, List<ScriptEventEntry>>();
         var seats = new Dictionary<Components.Avatar.Seat, List<ScriptEventEntry>>();
         var tools = new Dictionary<ToolItem, List<ScriptEventEntry>>();
-        var edibles = new Dictionary<Edible, List<ScriptEventEntry>>();
-        var analyzers = new Dictionary<Components.Audio.AudioAnalyzer, List<ScriptEventEntry>>();
         var home = _runtime.Host.Slot;
         foreach (var entry in events)
         {
             var type = entry.PayloadType;
             var source = sourceOf(entry);
+            // An event node that hears its event by itself says how in its own Listen.
+            if (EventListeners.TryListen(_runtime, entry, source, _undo))
+                continue;
             if (type == typeof(GrabStarted) || type == typeof(GrabEnded))
             {
                 if (source is Slot { IsDestroyed: false } slot && slot.GetComponent<Grabbable>() is { } grab)
@@ -164,25 +170,10 @@ internal sealed class ScriptEventSources
             {
                 _footsteps.Add(entry);
             }
-            else if (type == typeof(EdibleEating) || type == typeof(EdibleBite) || type == typeof(EdibleFinished))
-            {
-                if (source is Slot { IsDestroyed: false } slot && slot.GetComponent<Edible>() is { IsDestroyed: false } edible)
-                    Add(edibles, edible, entry);
-            }
-            else if (type == typeof(AudioBeat))
-            {
-                if (source is Slot { IsDestroyed: false } slot && slot.GetComponent<Components.Audio.AudioAnalyzer>() is { IsDestroyed: false } analyzer)
-                    Add(analyzers, analyzer, entry);
-            }
             else if (type == typeof(SyncedChanged))
             {
                 if (source is Slot { IsDestroyed: false } slot)
                     AddSynced(slot, entry);
-            }
-            else if (type == typeof(ChildAdded) || type == typeof(ChildRemoved))
-            {
-                if (source is Slot { IsDestroyed: false } slot)
-                    Add(children, slot, entry);
             }
             else if (type == typeof(SeatTaken) || type == typeof(SeatLeft))
             {
@@ -208,16 +199,10 @@ internal sealed class ScriptEventSources
             WatchDelete(slot, entries);
         foreach (var (slot, entries) in collisions)
             WatchCollisions(slot, entries);
-        foreach (var (slot, entries) in children)
-            WatchChildren(slot, entries);
         foreach (var (seat, entries) in seats)
             WatchSeat(seat, entries);
         foreach (var (item, entries) in tools)
             WatchTool(item, entries);
-        foreach (var (edible, entries) in edibles)
-            WatchEdible(edible, entries);
-        foreach (var (analyzer, entries) in analyzers)
-            WatchBeats(analyzer, entries);
         if (_footsteps.Count > 0)
         {
             _onFootstep = HeardFootstep;
@@ -239,7 +224,7 @@ internal sealed class ScriptEventSources
         _synced.Clear();
         _fieldFrame.Clear();
         _stays.Clear();
-        _editFrame.Clear();
+        _editWaiting.Clear();
         _hovering.Clear();
         if (_onFootstep != null)
             Components.Avatar.AvatarIK.Footstep -= _onFootstep;
@@ -272,8 +257,10 @@ internal sealed class ScriptEventSources
         => slot != null && (slot.GetComponent<Button>() is { CanInteract: true }
             || slot.GetComponent<Components.UI.ContextMenuEntry>() is { Enabled.Value: true, Interactable.Value: true });
 
+    // On Released is a panel button's press ending as well as a touch control's, so it follows the steps too.
     internal static bool IsPressStep(ScriptEventEntry entry)
-        => entry.PayloadType == typeof(PressBegan) || entry.PayloadType == typeof(PressHeld) || entry.PayloadType == typeof(PressEnded);
+        => entry.PayloadType == typeof(PressBegan) || entry.PayloadType == typeof(PressHeld) || entry.PayloadType == typeof(PressEnded)
+            || entry.PayloadType == typeof(ButtonReleased);
 
     // Where a press is on the element pressed: in the element's own layout space, and across its rect.
     internal static (float2 Local, float2 Normalized) PointsOn(InteractionElement element, in UIInteractionContext context)
@@ -308,6 +295,8 @@ internal sealed class ScriptEventSources
                 _runtime.Enqueue(runner => runner.Raise(node, new PressHeld(user, point, local, normalized)));
             else if (kind == ScriptSourceKind.PressEnd && type == typeof(PressEnded))
                 _runtime.Enqueue(runner => runner.Raise(node, new PressEnded(user, point, local, normalized)));
+            else if (kind == ScriptSourceKind.PressEnd && type == typeof(ButtonReleased))
+                _runtime.Enqueue(runner => runner.Raise(node, new ButtonReleased(user, point)));
         }
     }
 
@@ -341,7 +330,7 @@ internal sealed class ScriptEventSources
     // What a relay passed on that carries more than a point: typing into a field on the watched object, a
     // drop onto a surface on it, a scripted tool on it pressed or let go of. Typing needs the Touch domain
     // and a tool press ToolUse, the rights a person needs to do either by hand; a change of text is heard
-    // once a frame however many keys went into it.
+    // once however many keys went into it before its call ran, with the text they left.
     public void Relay(User? user, Slot source, ScriptSourceKind kind, float3 point, string? text, Slot? other)
     {
         if (kind < ScriptSourceKind.EditStart)
@@ -365,14 +354,20 @@ internal sealed class ScriptEventSources
         if (kind == ScriptSourceKind.Received && (source.GetComponent<DropSurface>() == null || other is not { IsDestroyed: false }
                 || ScriptHands.GrabbableAt(other) is not { Receivable: true }))
             return;
+        string said = text ?? string.Empty;
+        EditText? edit = null;
         if (kind == ScriptSourceKind.EditChange)
         {
-            ulong frame = _runtime.Host.World?.Time.UpdateIndex ?? 0;
-            if (_editFrame.TryGetValue(source, out ulong last) && last == frame)
+            if (_editWaiting.TryGetValue(source, out var waiting))
+            {
+                waiting.Text = said;
                 return;
-            _editFrame[source] = frame;
+            }
+            if (!entries.Exists(entry => entry.PayloadType == typeof(TextEdited)))
+                return;
+            edit = new EditText { Text = said };
+            _editWaiting[source] = edit;
         }
-        string said = text ?? string.Empty;
         bool secondary = kind is ScriptSourceKind.ToolSecondaryDown or ScriptSourceKind.ToolSecondaryUp;
         foreach (var entry in entries)
         {
@@ -380,8 +375,16 @@ internal sealed class ScriptEventSources
             var type = entry.PayloadType;
             if (kind == ScriptSourceKind.EditStart && type == typeof(EditStarted))
                 _runtime.Enqueue(runner => runner.Raise(node, new EditStarted(user)));
-            else if (kind == ScriptSourceKind.EditChange && type == typeof(TextEdited))
-                _runtime.Enqueue(runner => runner.Raise(node, new TextEdited(user, said)));
+            else if (kind == ScriptSourceKind.EditChange && type == typeof(TextEdited) && edit != null)
+            {
+                var heard = edit;
+                _runtime.Enqueue(runner =>
+                {
+                    if (_editWaiting.TryGetValue(source, out var waiting) && ReferenceEquals(waiting, heard))
+                        _editWaiting.Remove(source);
+                    return runner.Raise(node, new TextEdited(user, heard.Text));
+                });
+            }
             else if (kind == ScriptSourceKind.EditEnd && type == typeof(EditEnded))
                 _runtime.Enqueue(runner => runner.Raise(node, new EditEnded(user, said)));
             else if (kind == ScriptSourceKind.EditSubmit && type == typeof(TextSubmitted))
@@ -407,12 +410,13 @@ internal sealed class ScriptEventSources
         foreach (var watch in _triggers)
         {
             var slot = watch.Slot;
-            if (slot.IsDestroyed || !slot.IsActive)
+            if (slot.IsDestroyed)
                 continue;
+            // A switched off object holds nothing, as a switched off collider does: what was inside leaves.
             var inside = new HashSet<Slot>();
             foreach (var collider in slot.GetComponents<Collider>())
             {
-                if (!collider.Enabled.Value)
+                if (!collider.Enabled.Value || !slot.IsActive)
                     continue;
                 Overlap(physics, collider, _hits, _people);
                 foreach (var hit in _hits)
@@ -551,7 +555,9 @@ internal sealed class ScriptEventSources
         }
     }
 
-    // Touches the physics hook reports for the watched slot, from either side of the touch.
+    // Touches the physics hook reports for the watched slot, from either side of the touch. Two moving bodies
+    // that meet each report it, so a thing begins touching with its first report and stops with its last.
+    // -xlinka
     private void WatchCollisions(Slot slot, List<ScriptEventEntry> entries)
     {
         var physics = slot.World?.Physics;
@@ -563,9 +569,17 @@ internal sealed class ScriptEventSources
             stays = new ContactStays { Slot = slot, Entries = entries };
             _stays.Add(stays);
         }
+        var reports = new Dictionary<Slot, int>();
         var stop = physics.WatchContacts(slot,
             contact =>
             {
+                if (contact.Other is { } other)
+                {
+                    reports.TryGetValue(other, out int count);
+                    reports[other] = count + 1;
+                    if (count > 0)
+                        return;
+                }
                 var user = ScriptReads.BodyOf(contact.Other);
                 if (stays != null && contact.Other != null)
                     stays.Touching[contact.Other] = slot.World?.Time.UpdateIndex ?? 0;
@@ -574,6 +588,18 @@ internal sealed class ScriptEventSources
             },
             contact =>
             {
+                // A touch that began before the watch did was never heard beginning, so its end is not heard either.
+                if (contact.Other is { } other)
+                {
+                    if (!reports.TryGetValue(other, out int count))
+                        return;
+                    if (count > 1)
+                    {
+                        reports[other] = count - 1;
+                        return;
+                    }
+                    reports.Remove(other);
+                }
                 var user = ScriptReads.BodyOf(contact.Other);
                 if (stays != null && contact.Other != null)
                     stays.Touching.Remove(contact.Other);
@@ -673,38 +699,6 @@ internal sealed class ScriptEventSources
         }
     }
 
-    // An analyser's onsets, as this machine's analyser hears them, with the tempo it was hearing at the time.
-    private void WatchBeats(Components.Audio.AudioAnalyzer analyzer, List<ScriptEventEntry> entries)
-    {
-        Action<Components.Audio.AudioAnalyzer, float> beat = (_, strength) =>
-        {
-            var heard = new AudioBeat(strength, analyzer.Tempo);
-            Raise(entries, typeof(AudioBeat), node => runner => runner.Raise(node, heard));
-        };
-        analyzer.Beat += beat;
-        _undo.Add(() => analyzer.Beat -= beat);
-    }
-
-    // What an edible tells as its bites go: on the host as it decides them, on other machines as they arrive.
-    private void WatchEdible(Edible edible, List<ScriptEventEntry> entries)
-    {
-        Action<Edible, User?, int, float> eating = (_, user, bite, progress) =>
-            Raise(entries, typeof(EdibleEating), node => runner => runner.Raise(node, new EdibleEating(user, bite, progress)));
-        Action<Edible, User?, int> bitten = (_, user, bite) =>
-            Raise(entries, typeof(EdibleBite), node => runner => runner.Raise(node, new EdibleBite(user, bite)));
-        Action<Edible, User?> eaten = (_, user) =>
-            Raise(entries, typeof(EdibleFinished), node => runner => runner.Raise(node, new EdibleFinished(user)));
-        edible.Eating += eating;
-        edible.BiteTaken += bitten;
-        edible.Eaten += eaten;
-        _undo.Add(() =>
-        {
-            edible.Eating -= eating;
-            edible.BiteTaken -= bitten;
-            edible.Eaten -= eaten;
-        });
-    }
-
     // A tool is equipped when its link to a hand is set and put away when it clears; the link replicates,
     // so the host hears a guest's equip. Same init-phase rule as a grab. -xlinka
     private void WatchTool(ToolItem item, List<ScriptEventEntry> entries)
@@ -800,7 +794,9 @@ internal sealed class ScriptEventSources
             if (_fieldFrame.TryGetValue(field, out ulong last) && last == frame)
                 return;
             _fieldFrame[field] = frame;
-            var by = (field as ConflictingSyncElement)?.LastModifyingUser;
+            // The host learns who wrote a change as it decodes one that came in; one made here leaves the last
+            // writer in place until it goes out, so naming it would name whoever wrote before. -xlinka
+            var by = field is ConflictingSyncElement { IsLoading: true } member ? member.LastModifyingUser : null;
             Raise(entries, typeof(FieldChanged), node => runner => runner.Raise(node, new FieldChanged(by)));
         };
         field.Changed += changed;
@@ -837,34 +833,6 @@ internal sealed class ScriptEventSources
         {
             slot.OnPrepareDestroy -= destroyed;
             slot.ParentSlotRef.OnTargetChange -= moved;
-        });
-    }
-
-    // Children coming and going directly under the watched slot, as this machine's hierarchy has them. A slot
-    // local to this machine counts only for a Local script, under its own object. A new slot joins its parent
-    // before it learns whether it is local, so an arrival is judged when the call runs.
-    private void WatchChildren(Slot slot, List<ScriptEventEntry> entries)
-    {
-        var home = _runtime.Host.Slot;
-        bool Seen(Slot child) => !child.IsLocalElement
-            || (_runtime.IsLocal && home != null && (ReferenceEquals(slot, home) || slot.IsDescendantOf(home)));
-        Action<Slot, Slot> added = (_, child) => Raise(entries, typeof(ChildAdded), node => runner => Seen(child)
-            ? runner.Raise(node, new ChildAdded(child.IsDestroyed ? null : child))
-            : new ScriptCallResult(ScriptCallStatus.NoSuchEvent, node, "a child the script does not see", 0));
-        Action<Slot, Slot> removed = (_, child) =>
-        {
-            if (!Seen(child))
-                return;
-            var name = child.Name.Value ?? string.Empty;
-            var left = child.IsDestroyed ? null : child;
-            Raise(entries, typeof(ChildRemoved), node => runner => runner.Raise(node, new ChildRemoved(left, name)));
-        };
-        slot.OnChildAdded += added;
-        slot.OnChildRemoved += removed;
-        _undo.Add(() =>
-        {
-            slot.OnChildAdded -= added;
-            slot.OnChildRemoved -= removed;
         });
     }
 

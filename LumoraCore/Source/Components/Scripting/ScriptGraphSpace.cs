@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using Lumora.Core.Components.Assets;
+using Lumora.Core.Math;
 using Lumora.Core.Persistence;
 using Lumora.Core.Scripting;
 using Lumora.Script;
@@ -24,7 +25,8 @@ namespace Lumora.Core.Components.Scripting;
 //
 // A packed graph keeps its slot on and draws nothing: no cards, no wires, nothing a beam or a hand can
 // find. A closed material graph is packed like that and still makes its material's shader, checked a
-// little less often than one being built. Switching a graph's slot off is what stops it: its script stops
+// little less often than one being built; a script graph is packed like that when it has errors, and is
+// checked the same way so its errors are known. Switching a graph's slot off is what stops it: its script stops
 // running it, and its material keeps the shader it last made. A graph parked for an undo step is switched
 // off in the graveyard; a graph joined into another is parked like that, and whatever a hand held from it
 // now belongs to the other. -xlinka
@@ -48,10 +50,78 @@ public sealed class ScriptGraphSpace : Component
 
     public readonly Sync<bool> Packed = new();
 
+    // A graph someone unpacked stands still in the world while it is open, so an object that moves or spins
+    // does not carry its graph off. Where it stands is kept here in world space, and every machine holds the
+    // slot there itself with local drives on its place under the object: nothing is sent while the object
+    // moves. A zero turn holds nothing and the graph rides its object, as one a script opened does. -xlinka
+    [HideInInspector]
+    public readonly Sync<float3> HoldAt = new();
+    [HideInInspector]
+    public readonly Sync<floatQ> HoldTurn = new(default(floatQ));
+    [HideInInspector]
+    public readonly Sync<float> HoldSize = new(1f);
+
+    private FieldDrive<float3>? _heldAt;
+    private FieldDrive<floatQ>? _heldTurn;
+    private FieldDrive<float3>? _heldSize;
+
     private static readonly IReadOnlyList<string> NoProblems = Array.Empty<string>();
 
     // Drawn and in reach: not packed away, and switched on.
     public bool IsShown => !Packed.Value && Slot is { IsDestroyed: false, IsActive: true };
+
+    public bool IsHeld => HoldTurn.Value.LengthSquared > 0.5f;
+
+    // Holds the graph where its slot stands now.
+    public void HoldHere()
+    {
+        if (Slot is not { IsDestroyed: false } slot)
+            return;
+        HoldAt.Value = slot.GlobalPosition;
+        HoldTurn.Value = slot.GlobalRotation.Normalized;
+        HoldSize.Value = slot.GlobalScale.x;
+    }
+
+    // Every frame on every machine while it is held: the slot's place under its object, worked out from where
+    // the graph stands in the world.
+    private void KeepHeld()
+    {
+        var slot = Slot;
+        if (!IsHeld || slot?.Parent is not { IsDestroyed: false } parent)
+        {
+            LetGo();
+            return;
+        }
+        if (_heldAt == null)
+        {
+            _heldAt = FieldDrive<float3>.CreateLocal(this);
+            _heldAt.LocalValueOnly = true;
+            _heldAt.DriveTarget(slot.LocalPosition);
+            _heldTurn = FieldDrive<floatQ>.CreateLocal(this);
+            _heldTurn.LocalValueOnly = true;
+            _heldTurn.DriveTarget(slot.LocalRotation);
+            _heldSize = FieldDrive<float3>.CreateLocal(this);
+            _heldSize.LocalValueOnly = true;
+            _heldSize.DriveTarget(slot.LocalScale);
+        }
+        _heldAt.SetValue(parent.GlobalPointToLocal(HoldAt.Value));
+        _heldTurn!.SetValue((parent.GlobalRotation.Inverse * HoldTurn.Value.Normalized).Normalized);
+        var outer = parent.GlobalScale;
+        float size = HoldSize.Value > 1e-4f ? HoldSize.Value : 1f;
+        _heldSize!.SetValue(new float3(size / NonZero(outer.x), size / NonZero(outer.y), size / NonZero(outer.z)));
+    }
+
+    private static float NonZero(float value) => MathF.Abs(value) > 1e-6f ? value : 1e-6f;
+
+    private void LetGo()
+    {
+        _heldAt?.Dispose();
+        _heldTurn?.Dispose();
+        _heldSize?.Dispose();
+        _heldAt = null;
+        _heldTurn = null;
+        _heldSize = null;
+    }
 
     public GraphLanguage Language => GraphLanguage.For(Kind.Value);
 
@@ -278,9 +348,13 @@ public sealed class ScriptGraphSpace : Component
 
         // Switched off, it is stopped, and nobody is looking at it.
         if (Slot?.IsActive != true)
+        {
+            LetGo();
             return;
+        }
 
         bool packed = Packed.Value;
+        KeepHeld();
         if (World?.IsAuthority == true)
             KeepBodies(packed);
         if (packed && _view != null)
@@ -289,10 +363,7 @@ public sealed class ScriptGraphSpace : Component
             _view = null;
             HandOverHeld();
         }
-        // A packed script runs the document it was packed into; there is nothing here to check.
-        if (packed && Kind.Value != GraphKind.Shader)
-            return;
-
+        // A graph packed as it is, with its errors, is still looked at now and then, so whoever asks can tell.
         double now = World?.Time.TotalTime ?? 0.0;
         // Closed graphs that came up together would all poll in the same frame, every time: each takes its own
         // place in the half second instead.
@@ -368,6 +439,7 @@ public sealed class ScriptGraphSpace : Component
         }
         _view?.Dispose();
         _view = null;
+        LetGo();
         if (World != null && Host.Target is { IsDestroyed: false } host && (World.IsAuthority || host.Mode.Value == ScriptMode.Local))
             World.RunSynchronously(host.Reconcile);
         base.OnDestroy();

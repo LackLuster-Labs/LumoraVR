@@ -53,6 +53,28 @@ internal sealed class ScriptMotion
 
     public static float3 VelocityOf(World world, User user) => _worlds.GetValue(world, static w => new ScriptMotion(w)).Velocity(user);
 
+    // The character of the user at this machine, for a node that pushes its own person, who must have a body
+    // that walks. A velocity that is not a finite number fails.
+    public static CharacterController? OwnCharacter(ScriptContext ctx, User? user, float3 velocity)
+    {
+        if (!ScriptReads.HereFor(ctx, user))
+            return null;
+        if (ScriptUserActions.Character(user) is not { } controller)
+        {
+            ctx.Fail("the user has no body that walks here");
+            return null;
+        }
+        return Finite(ctx, velocity) ? controller : null;
+    }
+
+    public static bool Finite(ScriptContext ctx, float3 velocity)
+    {
+        if (ScriptPhysics.IsFinite(velocity))
+            return true;
+        ctx.Fail("the velocity is not a finite number");
+        return false;
+    }
+
     // Where a body stands for movement: over the ground where the head is, at the height of the feet, so
     // walking round a play space counts as much as walking with a stick.
     private static bool TryBodyPoint(User user, out float3 point)

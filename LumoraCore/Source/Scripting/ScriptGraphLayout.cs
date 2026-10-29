@@ -19,7 +19,8 @@ namespace Lumora.Core.Scripting;
 // columns. Order in a column: barycentre sweeps with a long wire held in every column it crosses, keeping the
 // order with the fewest crossings. Heights: column by column, each card goes where its wires come in level,
 // as near as the order and the gap allow, swept both ways a few times; placing cards only from what is left
-// of them drifts the rows down into a staircase. A part far wider than tall wraps into bands. The parts are
+// of them drifts the rows down into a staircase. A part far wider than tall wraps into bands, and one far
+// taller than a person reaches folds into strips side by side. The parts are
 // then shelved into one block, biggest first, centred on x = 0 and standing on y = 0: unpacking puts a graph
 // just above its object, and a script on an avatar's root sits at the floor. -xlinka
 public static class ScriptGraphLayout
@@ -148,6 +149,91 @@ public static class ScriptGraphLayout
         }
         return new ShaderGraphBuilder.Bounds(left, right, top, bottom);
     }
+
+    // Where the cards gather: the mean of their middles, in the graph's own metres.
+    public static float2 Focus(ScriptGraph graph, GraphLanguage language)
+    {
+        if (graph.Nodes.Count == 0)
+            return float2.Zero;
+        bool previews = language.Kind == GraphKind.Shader;
+        float x = 0f, y = 0f;
+        foreach (var node in graph.Nodes)
+        {
+            var overload = Resolve(language.Registry, node);
+            var card = ScriptCardLayout.For(overload, previews, overload == null ? ScriptEditorStyle.MaxProblemLines : 0);
+            x += node.Position.x + card.Width * ScriptEditorStyle.CardScale * 0.5f;
+            y += node.Position.y - card.Height * ScriptEditorStyle.CardScale * 0.5f;
+        }
+        return new float2(x / graph.Nodes.Count, y / graph.Nodes.Count);
+    }
+
+    // Laid out in a way nobody could work in: taller than a person reaches, any card over another, or cards
+    // strewn so thin the block is mostly empty. What a converted graph can come in as, and a document written
+    // without positions, every node at the origin; a graph someone placed by hand is left as they placed it,
+    // so this is only asked of a graph nobody has opened yet.
+    public static bool Untidy(ScriptGraph graph, GraphLanguage language)
+    {
+        if (graph.Nodes.Count < 2)
+            return false;
+        var block = Extent(graph, language);
+        if (block.Height > TallestBlock || block.Width > WidestBlock || Overlapping(graph, language, 0.1f))
+            return true;
+        bool previews = language.Kind == GraphKind.Shader;
+        float cards = 0f;
+        foreach (var node in graph.Nodes)
+        {
+            var overload = Resolve(language.Registry, node);
+            var card = ScriptCardLayout.For(overload, previews, overload == null ? ScriptEditorStyle.MaxProblemLines : 0);
+            cards += card.Width * card.Height * ScriptEditorStyle.CardScale * ScriptEditorStyle.CardScale;
+        }
+        return cards < block.Width * block.Height * SparsestShare;
+    }
+
+    // Metres: a block a person standing can reach the top of, and walk the width of without losing it.
+    private const float TallestBlock = 2.5f;
+    private const float WidestBlock = 12f;
+    // How little of its block a graph's cards may cover.
+    private const float SparsestShare = 0.04f;
+
+    // Two cards in one plane, one covering more than a share of the smaller.
+    private static bool Overlapping(ScriptGraph graph, GraphLanguage language, float share)
+    {
+        int count = graph.Nodes.Count;
+        if (count < 2)
+            return false;
+        bool previews = language.Kind == GraphKind.Shader;
+        var cards = new (float Left, float Right, float Top, float Bottom, float Depth)[count];
+        for (int i = 0; i < count; i++)
+        {
+            var node = graph.Nodes[i];
+            var overload = Resolve(language.Registry, node);
+            var card = ScriptCardLayout.For(overload, previews, overload == null ? ScriptEditorStyle.MaxProblemLines : 0);
+            var at = node.Position;
+            cards[i] = (at.x, at.x + card.Width * ScriptEditorStyle.CardScale, at.y, at.y - card.Height * ScriptEditorStyle.CardScale, at.z);
+        }
+        Array.Sort(cards, static (a, b) => a.Left.CompareTo(b.Left));
+        for (int i = 0; i < count; i++)
+        {
+            var a = cards[i];
+            for (int j = i + 1; j < count && cards[j].Left < a.Right; j++)
+            {
+                var b = cards[j];
+                if (MathF.Abs(a.Depth - b.Depth) > SamePlane)
+                    continue;
+                float wide = MathF.Min(a.Right, b.Right) - b.Left;
+                float tall = MathF.Min(a.Top, b.Top) - MathF.Max(a.Bottom, b.Bottom);
+                if (wide <= 0f || tall <= 0f)
+                    continue;
+                float smaller = MathF.Min((a.Right - a.Left) * (a.Top - a.Bottom), (b.Right - b.Left) * (b.Top - b.Bottom));
+                if (wide * tall > smaller * share)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    // Metres of depth within which two cards count as one plane.
+    private const float SamePlane = 0.05f;
 
     private static NodeOverload? Resolve(NodeRegistry registry, GraphNode node)
     {
@@ -596,6 +682,8 @@ public static class ScriptGraphLayout
             x[nodes[v]] = columnX[layer[v]] - columnX[starts[b]];
             top[nodes[v]] = y[v] - bandHigh[b] + bandTop[b];
         }
+        if (starts.Count == 1)
+            Fold(part, nodes, height, x, top);
 
         void AddSegment(int a, int b, float fracA, float fracB)
         {
@@ -767,6 +855,72 @@ public static class ScriptGraphLayout
             (a, scratch) = (scratch, a);
         }
         return count;
+    }
+
+    // A part taller than a person reaches, many chains side by side down the same columns most often, is folded
+    // the other way: its rows cut into strips that stand side by side, as many as the widest block allows, each
+    // cut where the fewest cards straddle it. A card a cut runs through stays with the strip its top is in.
+    private static void Fold(Part part, List<int> nodes, float[] height, float[] x, float[] top)
+    {
+        float tall = part.Height, wide = MathF.Max(part.Width, 0.01f);
+        if (tall <= TallestBlock)
+            return;
+        int strips = System.Math.Min((int)MathF.Ceiling(tall / TallestBlock), (int)MathF.Floor((WidestBlock + PartGapX) / (wide + PartGapX)));
+        if (strips < 2)
+            return;
+        float share = tall / strips;
+        var cuts = new List<float> { float.MaxValue };
+        for (int j = 1; j < strips; j++)
+        {
+            float ideal = -share * j;
+            float best = float.NaN;
+            int fewest = int.MaxValue;
+            foreach (int v in nodes)
+            {
+                float y = top[v] + 1e-4f;
+                if (MathF.Abs(y - ideal) > share * 0.35f || y >= cuts[^1])
+                    continue;
+                int straddle = 0;
+                foreach (int u in nodes)
+                {
+                    if (top[u] > y && top[u] - height[u] < y)
+                        straddle++;
+                }
+                if (straddle < fewest || (straddle == fewest && MathF.Abs(y - ideal) < MathF.Abs(best - ideal)))
+                {
+                    fewest = straddle;
+                    best = y;
+                }
+            }
+            if (!float.IsNaN(best))
+                cuts.Add(best);
+        }
+        if (cuts.Count < 2)
+            return;
+        var stripTop = new float[cuts.Count];
+        var stripLow = new float[cuts.Count];
+        Array.Fill(stripTop, float.MinValue);
+        Array.Fill(stripLow, float.MaxValue);
+        var stripOf = new Dictionary<int, int>(nodes.Count);
+        foreach (int v in nodes)
+        {
+            int s = 0;
+            while (s + 1 < cuts.Count && top[v] <= cuts[s + 1])
+                s++;
+            stripOf[v] = s;
+            stripTop[s] = MathF.Max(stripTop[s], top[v]);
+            stripLow[s] = MathF.Min(stripLow[s], top[v] - height[v]);
+        }
+        float highest = 0f;
+        foreach (int v in nodes)
+        {
+            int s = stripOf[v];
+            x[v] += s * (wide + PartGapX);
+            top[v] -= stripTop[s];
+            highest = MathF.Max(highest, stripTop[s] - stripLow[s]);
+        }
+        part.Width = cuts.Count * wide + (cuts.Count - 1) * PartGapX;
+        part.Height = highest;
     }
 
     // The parts in rows, biggest first, each row filled left to right up to a width that keeps the block

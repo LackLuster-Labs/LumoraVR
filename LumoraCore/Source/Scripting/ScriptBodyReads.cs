@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Collections.Concurrent;
 using Lumora.Core.Components;
 using Lumora.Core.Components.Avatar;
 using Lumora.Core.Input;
@@ -35,11 +36,22 @@ internal static class ScriptBodyReads
             case BodyNode.RightFoot:
                 return Alive(root.RightFootSlot);
         }
-        var positioner = root.GetRegisteredComponent<TrackedDevicePositioner>(p => p.AutoBodyNode.Value == node);
+        var positioner = root.GetRegisteredComponent(PositionerFor(node));
         if (Alive(positioner?.Slot) is { } tracked)
             return tracked;
-        return Alive(root.GetRegisteredComponent<AvatarSocket>(s => s.Node.Value == node)?.Slot);
+        return Alive(root.GetRegisteredComponent(SocketFor(node))?.Slot);
     }
+
+    // One match per body node, made once: these searches run every frame for every person a script looks at,
+    // and a new closure each time was an allocation each time.
+    private static readonly ConcurrentDictionary<BodyNode, Predicate<TrackedDevicePositioner>> _positioners = new();
+    private static readonly ConcurrentDictionary<BodyNode, Predicate<AvatarSocket>> _sockets = new();
+
+    private static Predicate<TrackedDevicePositioner> PositionerFor(BodyNode node)
+        => _positioners.GetOrAdd(node, static wanted => positioner => positioner.AutoBodyNode.Value == wanted);
+
+    private static Predicate<AvatarSocket> SocketFor(BodyNode node)
+        => _sockets.GetOrAdd(node, static wanted => socket => socket.Node.Value == wanted);
 
     // The humanoid rig of the avatar a user wears. Null while they wear the default pieces or an avatar
     // with no rig.
@@ -59,9 +71,9 @@ internal static class ScriptBodyReads
             return null;
         if (Bone(slot.GetComponentInChildren<HumanoidRig>(), node) is { } bone)
             return bone;
-        if (Alive(slot.GetComponentInChildren<AvatarSocket>(s => s.Node.Value == node)?.Slot) is { } socket)
+        if (Alive(slot.GetComponentInChildren(SocketFor(node))?.Slot) is { } socket)
             return socket;
-        return Alive(slot.GetComponentInChildren<TrackedDevicePositioner>(p => p.AutoBodyNode.Value == node)?.Slot);
+        return Alive(slot.GetComponentInChildren(PositionerFor(node))?.Slot);
     }
 
     // A hand for the nearest search and the body pose: the hand socket, else the controller carrying it.

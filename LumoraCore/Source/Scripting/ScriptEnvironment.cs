@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 using Lumora.Core.Assets;
@@ -31,6 +32,7 @@ public static class ScriptEnvironment
     private static readonly Dictionary<string, ScriptCompileRecord> _records = new();
     private static readonly Queue<string> _order = new();
     private static readonly Dictionary<string, Task<CompileResult>> _running = new();
+    private static readonly List<Assembly> _nodeAssemblies = new();
     private static volatile NodeRegistry? _registry;
     private static int _warming;
     private static double _registryScanMs;
@@ -55,13 +57,32 @@ public static class ScriptEnvironment
 
                 long start = Stopwatch.GetTimestamp();
                 RegisterTypes();
-                var scanned = NodeRegistry.Scan(new[] { typeof(ScriptNode).Assembly, typeof(ScriptEnvironment).Assembly });
+                var assemblies = new List<Assembly> { typeof(ScriptNode).Assembly, typeof(ScriptEnvironment).Assembly };
+                assemblies.AddRange(_nodeAssemblies);
+                var scanned = NodeRegistry.Scan(assemblies);
                 _registryScanMs = Stopwatch.GetElapsedTime(start).TotalMilliseconds;
                 foreach (var problem in scanned.Problems)
                     LumoraLogger.Warn($"Loom: node left out: {problem}");
                 _registry = scanned;
                 return scanned;
             }
+        }
+    }
+
+    // A module's own nodes, scanned after the two fixed assemblies. The registry is built once and shared by
+    // every compile, so this only counts before that build: a later call is left out and named in the log.
+    public static void AddNodeAssembly(Assembly assembly)
+    {
+        ArgumentNullException.ThrowIfNull(assembly);
+        lock (_registryLock)
+        {
+            if (_registry != null)
+            {
+                LumoraLogger.Warn($"Loom: nodes of {assembly.GetName().Name} came after the registry was built and are left out");
+                return;
+            }
+            if (!_nodeAssemblies.Contains(assembly))
+                _nodeAssemblies.Add(assembly);
         }
     }
 
@@ -112,6 +133,8 @@ public static class ScriptEnvironment
         ScriptTypes.RegisterHandle("probe", typeof(ReflectionProbe));
         // A reference field, whatever it points at: Reference Target reads it as the type asked for.
         ScriptTypes.RegisterHandle("reference", typeof(ISyncRef));
+        // Someone asking to join, as a join check hears them; never a world object.
+        ScriptTypes.RegisterHandle("joinrequest", typeof(JoinRequest));
         ScriptTypes.RegisterEnum("httpmethod", typeof(Lumora.Core.Networking.Web.WebMethod));
         ScriptTypes.RegisterEnum("slotAxis", typeof(SlotAxis));
         // What the user and body nodes read that no component keeps in a field. One already known under
@@ -220,9 +243,13 @@ public static class ScriptEnvironment
         try
         {
             var result = CompileFresh(graph, hash, out _);
-            // What linking will ask for, made here instead of on the world thread.
+            // What linking will ask for, made here instead of on the world thread, and the module's native
+            // code with it.
             foreach (var overload in result.Imports)
                 _ = overload.Invoker;
+            foreach (var entry in result.Events)
+                ScriptContext.WarmCause(entry.PayloadType);
+            result.PrepareNative();
             return result;
         }
         catch (Exception ex)

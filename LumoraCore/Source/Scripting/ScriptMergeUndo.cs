@@ -11,8 +11,8 @@ using Lumora.Core.Math;
 namespace Lumora.Core.Scripting;
 
 // One group taken into another's graph, kept in the undo step of the edit that needed their nodes together.
-// Its nodes move over, each laid onto the other graph's plane where it sat as seen from the front; a node a
-// hand holds goes there when it is let go of. The emptied group is parked for the step, and its script stops
+// Its nodes move over and stay where they stood, depth and turn and all; a node a hand holds goes there when
+// it is let go of. The emptied group is parked for the step, and its script stops
 // with it. Undo takes the nodes back to where they sat and brings the group back; redo takes in whatever the
 // group holds by then.
 //
@@ -165,14 +165,7 @@ internal sealed class ScriptMergeUndo : IUndoBatch, IUndoTargetQuery
                 _into.NoteHeld(node);
                 continue;
             }
-            var place = into.GlobalPointToLocal(slot.GlobalPosition);
-            place.z = 0f;
-            slot.SetParent(into, preserveGlobalTransform: false);
-            slot.LocalPosition.Value = place;
-            if (slot.LocalRotation.Value != floatQ.Identity)
-                slot.LocalRotation.Value = floatQ.Identity;
-            if (slot.LocalScale.Value != float3.One)
-                slot.LocalScale.Value = float3.One;
+            slot.SetParent(into, preserveGlobalTransform: true);
         }
         var came = new List<ScriptGraphNode>(_moves.Count);
         foreach (var move in _moves)

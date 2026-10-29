@@ -13,7 +13,7 @@ public sealed class ScriptCardHandle : Component
     public string Port { get; set; } = string.Empty;
     public ScriptCardHandleKind Kind { get; set; }
 
-    public bool IsPort => Kind != ScriptCardHandleKind.Header;
+    public bool IsPort => Kind is not (ScriptCardHandleKind.Header or ScriptCardHandleKind.Material);
 
     public static ScriptCardHandle? Find(Slot? slot)
     {

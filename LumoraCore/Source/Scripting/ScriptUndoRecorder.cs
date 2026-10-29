@@ -69,7 +69,7 @@ internal sealed class ScriptUndoRecorder
             _ctx.Fail(field == null ? "no field" : "the field is gone");
             return;
         }
-        if (field is not SyncElement element)
+        if (ScriptWrites.Member(field) is not { } element)
             throw new UnauthorizedAccessException("scripts record only fields they could change");
         ScriptWrites.Check(_ctx, element);
         Record(new ScriptUndoFieldStep<T>(field));

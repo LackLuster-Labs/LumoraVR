@@ -125,6 +125,7 @@ public sealed class ScriptNodeCard
         card.BuildSettings(content, font, node);
         card.BuildExtra(content, font, node);
         card.BuildPreviewWell(content, font, node);
+        card.BuildOutputWell(content, font, node);
         card.BuildProblems(content, font, shown, noted, faulted ? "at run time: " + fault : null);
         // The options drawer starts closed on nearly every card and is a sixth of a card's slots, so it is made
         // the first time it opens. -xlinka
@@ -170,14 +171,14 @@ public sealed class ScriptNodeCard
         Place(line, 0f, height * 0.5f - 3f, width, 6f);
         line.AttachComponent<Image>().Tint.Value = tint;
 
-        float input = 40f;
-        float output = 56f;
+        float input = 48f;
+        float output = 48f;
         var middle = content.AddSlot("Header");
         Place(middle, input, 0f, width - input - output, height);
         var grip = middle.AttachComponent<Image>();
         grip.Tint.Value = new color(tint.r, tint.g, tint.b, 0.16f);
         grip.CornerRadius.Value = 8f;
-        middle.AttachComponent<Button>();
+        middle.AttachComponent<Button>().Tip.Value = ScriptNodeHelp.For(node.Overload?.Definition);
         var handle = middle.AttachComponent<ScriptCardHandle>();
         handle.Node = node;
         handle.Kind = ScriptCardHandleKind.Header;
@@ -268,6 +269,7 @@ public sealed class ScriptNodeCard
         image.Tint.Value = tint;
         image.CornerRadius.Value = ScriptEditorStyle.CornerRadius;
         var grab = header.AttachComponent<Button>();
+        grab.Tip.Value = ScriptNodeHelp.For(node.Overload?.Definition);
         var handle = header.AttachComponent<ScriptCardHandle>();
         handle.Node = node;
         handle.Kind = ScriptCardHandleKind.Header;
@@ -332,15 +334,24 @@ public sealed class ScriptNodeCard
                 Place(next.Slot, width - 42f, 3f, 42f, 42f);
             }
         }
+        float top = typeRow ? ScriptEditorStyle.RowHeight : 0f;
         if (overload?.Definition.IsVariadic == true)
         {
-            float top = typeRow ? ScriptEditorStyle.RowHeight : 0f;
-            Label(_options, font, "Inputs", 2f, top, width - 92f, ScriptEditorStyle.RowHeight, DashTheme.TextDim);
-            var fewer = ui.Button("−", (_, _) => ScriptGraphEditing.ChangeInputCount(node, -1), DashTheme.Field);
-            Place(fewer.Slot, width - 88f, top + 3f, 42f, 42f);
-            var more = ui.Button("+", (_, _) => ScriptGraphEditing.ChangeInputCount(node, 1), DashTheme.Field);
-            Place(more.Slot, width - 42f, top + 3f, 42f, 42f);
+            CountRow(ui, font, "Inputs", width, top, step => ScriptGraphEditing.ChangeInputCount(node, step));
+            top += ScriptEditorStyle.RowHeight;
         }
+        if (overload?.Definition.GrowsExits == true)
+            CountRow(ui, font, "Outputs", width, top, step => ScriptGraphEditing.ChangeExitCount(node, step));
+    }
+
+    // One fewer or one more of a node's inputs or exits, beside what it is a count of.
+    private void CountRow(UIBuilder ui, FontProvider font, string label, float width, float top, Func<int, bool> change)
+    {
+        Label(_options!, font, label, 2f, top, width - 92f, ScriptEditorStyle.RowHeight, DashTheme.TextDim);
+        var fewer = ui.Button("−", (_, _) => change(-1), DashTheme.Field);
+        Place(fewer.Slot, width - 88f, top + 3f, 42f, 42f);
+        var more = ui.Button("+", (_, _) => change(1), DashTheme.Field);
+        Place(more.Slot, width - 42f, top + 3f, 42f, 42f);
     }
 
     // The options drawer's type field, or a Function's ports. It commits when it lets go of focus; text the node
@@ -524,6 +535,115 @@ public sealed class ScriptNodeCard
             18f, Layout.PreviewTop + 116f, leftWidth, 28f, DashTheme.TextDim, size: 18f);
     }
 
+    private static readonly Localization.LocaleText DrivesLabel = Localization.LocaleText.Keyed("Loom.Shader.Drives", "Drives");
+    private static readonly Localization.LocaleText NoMaterialLabel = Localization.LocaleText.Keyed("Loom.Shader.NoMaterial",
+        "no material yet: spawn its orb, or drop something here");
+    private static readonly Localization.LocaleText SpawnOrbLabel = Localization.LocaleText.Keyed("Loom.Shader.SpawnOrb", "Spawn orb");
+    private static readonly Localization.LocaleText DropHintLabel = Localization.LocaleText.Keyed("Loom.Shader.DropHint",
+        "drop an orb, a material or an object");
+    private static readonly Localization.LocaleText SwapLabel = Localization.LocaleText.Keyed("Loom.Shader.Swap", "Swap in");
+    private static readonly Localization.LocaleText KeepLabel = Localization.LocaleText.Keyed("Loom.Shader.Keep", "Keep");
+
+    // A Material Output's material well (ShaderOutputWell): a sphere wearing the graph's own material in front of a
+    // dark square, the materials the graph drives listed beside it, a button for an orb of its own and a line for
+    // what was last done. The sphere sits on a local slot beside the card, like a node's preview, so it is no part
+    // of the canvas.
+    private void BuildOutputWell(Slot content, FontProvider font, ScriptGraphNode node)
+    {
+        if (!Layout.OutputWell)
+            return;
+        float top = Layout.PreviewTop;
+        float size = ScriptCardLayout.PreviewSize;
+        float width = Layout.Width - 20f;
+        float row = ScriptEditorStyle.RowHeight;
+
+        var area = content.AddSlot("Material Well");
+        Place(area, 10f, top, width, ScriptCardLayout.OutputWellHeight);
+        var ground = area.AttachComponent<Image>();
+        ground.Tint.Value = new color(DashTheme.Field.r, DashTheme.Field.g, DashTheme.Field.b, 0.45f);
+        ground.CornerRadius.Value = 10f;
+        area.AttachComponent<Button>();
+        var well = area.AttachComponent<ShaderOutputWell>();
+        well.Node = node;
+
+        var square = area.AddSlot("Sphere Well");
+        Place(square, 0f, 0f, size, size);
+        var squareImage = square.AttachComponent<Image>();
+        squareImage.Tint.Value = DashTheme.Field;
+        squareImage.CornerRadius.Value = 8f;
+        square.AttachComponent<Button>();
+        var handle = square.AttachComponent<ScriptCardHandle>();
+        handle.Node = node;
+        handle.Kind = ScriptCardHandleKind.Material;
+        handle.Port = "material";
+        _handles.Add(handle);
+        var pull = square.AttachComponent<ReferenceProxySource>();
+        pull.GrabArea.Target = square;
+        well.Pull = pull;
+        var empty = Builder(square, font).Text(NoMaterialLabel.Resolve(), ScriptEditorStyle.FontSize - 5f, DashTheme.TextMuted);
+        Place(empty.RectTransform, 14f, 14f, size - 28f, size - 28f);
+        empty.HorizontalAlignment.Value = TextHorizontalAlignment.Center;
+        empty.VerticalAlignment.Value = TextVerticalAlignment.Middle;
+        empty.WordWrap.Value = true;
+        well.Empty = empty;
+
+        float scale = ScriptEditorStyle.CardScale;
+        float radius = (size * 0.5f - 18f) * scale;
+        var sphere = node.Slot.AddLocalSlot("Card Material");
+        sphere.LocalPosition.Value = new float3((10f + size * 0.5f) * scale, -(top + size * 0.5f) * scale, radius + 2f * scale);
+        var mesh = sphere.AttachComponent<SphereMesh>();
+        mesh.Radius.Value = radius;
+        mesh.Segments.Value = 32;
+        mesh.Rings.Value = 16;
+        var renderer = sphere.AttachComponent<MeshRenderer>();
+        renderer.Mesh.Target = mesh;
+        renderer.ShadowCastMode.Value = ShadowCastMode.Off;
+        sphere.ActiveSelf.Value = false;
+        well.Sphere = sphere;
+        well.SphereRenderer = renderer;
+
+        float listX = size + 14f;
+        float listWidth = width - listX - 8f;
+        Label(area, font, DrivesLabel.Resolve().ToUpperInvariant(), listX, 4f, listWidth, 32f, DashTheme.TextMuted, size: ScriptEditorStyle.FontSize - 6f);
+        const int rows = 4;
+        const float rowHeight = 38f;
+        for (int i = 0; i < rows; i++)
+        {
+            int index = i;
+            var button = Builder(area, font).Button(string.Empty, (_, _) => well.SpawnRow(index), DashTheme.Surface);
+            button.Slot.Name.Value = "Driven " + i;
+            Place(button.Slot, listX, 40f + i * (rowHeight + 2f), listWidth, rowHeight);
+            var chip = button.Slot.AddSlot("Chip");
+            Place(chip, 10f, (rowHeight - 18f) * 0.5f, 18f, 18f);
+            var chipImage = chip.AttachComponent<Image>();
+            chipImage.CornerRadius.Value = 9f;
+            var label = Label(button.Slot, font, string.Empty, 36f, 0f, listWidth - 44f, rowHeight, DashTheme.Text, size: ScriptEditorStyle.FontSize - 4f);
+            button.Slot.ActiveSelf.Value = false;
+            well.Rows.Add((button.Slot, chipImage, label));
+        }
+        well.More = Label(area, font, string.Empty, listX + 10f, 40f + (rows - 1) * (rowHeight + 2f), listWidth - 10f, rowHeight, DashTheme.TextMuted,
+            size: ScriptEditorStyle.FontSize - 5f);
+        well.None = Label(area, font, ShaderOutputWell.NoneLabel.Resolve(), listX + 4f, 40f, listWidth - 4f, rowHeight, DashTheme.TextMuted,
+            size: ScriptEditorStyle.FontSize - 5f);
+
+        var spawn = Builder(area, font).Button(SpawnOrbLabel, (_, _) => well.SpawnOwn(), DashTheme.Accent);
+        Place(spawn.Slot, 0f, size + 6f, 180f, row - 10f);
+        Label(area, font, DropHintLabel.Resolve(), 194f, size + 6f, width - 198f, row - 10f, DashTheme.TextMuted, size: ScriptEditorStyle.FontSize - 5f);
+
+        var status = Label(area, font, string.Empty, 4f, size + row + 2f, width - 8f, row - 10f, DashTheme.TextDim, size: ScriptEditorStyle.FontSize - 5f);
+        status.Slot.ActiveSelf.Value = false;
+        well.Status = status;
+        var offer = area.AddSlot("Offer");
+        Place(offer, 0f, size + row + 2f, width, row - 10f);
+        well.OfferText = Label(offer, font, string.Empty, 4f, 0f, width - 236f, row - 10f, DashTheme.Warning, size: ScriptEditorStyle.FontSize - 5f);
+        var swap = Builder(offer, font).Button(SwapLabel, (_, _) => well.TakeOffer(true), DashTheme.Accent);
+        Place(swap.Slot, width - 228f, 0f, 112f, row - 10f);
+        var keep = Builder(offer, font).Button(KeepLabel, (_, _) => well.TakeOffer(false), DashTheme.Surface);
+        Place(keep.Slot, width - 110f, 0f, 110f, row - 10f);
+        offer.ActiveSelf.Value = false;
+        well.OfferRow = offer;
+    }
+
     private void ChangePreviewRange(ScriptGraphNode node, float factor)
     {
         if (node.Space?.View?.PreviewOf(node)?.Material is { } material)
@@ -618,8 +738,12 @@ public sealed class ScriptNodeCard
         if (!ScriptValueText.IsTyped(type))
         {
             var bound = ScriptValueText.Display(entry);
+            // What a bound row points at opens in an inspector from here: the field a drive writes, the slot
+            // a node reads. -xlinka
+            var inspected = bound.Length > 0 ? entry?.Reference.Target : null;
+            bool inspectable = ElementInspector.CanOpen(inspected);
             var drop = content.AddSlot("Drop " + port);
-            Place(drop, x, top + 3f, bound.Length > 0 ? EditorWidth - 42f : EditorWidth, ScriptEditorStyle.RowHeight - 6f);
+            Place(drop, x, top + 3f, bound.Length > 0 ? EditorWidth - (inspectable ? 84f : 42f) : EditorWidth, ScriptEditorStyle.RowHeight - 6f);
             var image = drop.AttachComponent<Image>();
             image.Tint.Value = DashTheme.Field;
             image.CornerRadius.Value = 8f;
@@ -634,6 +758,8 @@ public sealed class ScriptNodeCard
                 var clear = Builder(content, font).TextColor(DashTheme.Negative).Button("Ø", (_, _) => receiver.Clear(), DashTheme.Field);
                 Place(clear.Slot, x + EditorWidth - 40f, top + 3f, 40f, ScriptEditorStyle.RowHeight - 6f);
             }
+            if (inspectable)
+                InspectButton(content, font, node, inspected!, x + EditorWidth - 82f, top + 3f);
             var dropUi = Builder(drop, font);
             var label = dropUi.Text(bound.Length > 0 ? Shorten(bound, 16) : "drop " + type.Name, ScriptEditorStyle.FontSize - 3f,
                 bound.Length > 0 ? DashTheme.Text : DashTheme.TextMuted);
@@ -708,6 +834,8 @@ public sealed class ScriptNodeCard
     {
         if (type == ScriptTypes.String)
             return string.Empty;
+        if (type.ClrType == typeof(ScriptBigInt))
+            return "0";
         var overload = node.Overload;
         int index = overload?.InputIndex(port) ?? -1;
         object? value = index >= 0 && overload!.Inputs[index].HasDefault ? overload.Inputs[index].Default : null;
@@ -809,7 +937,7 @@ public sealed class ScriptNodeCard
             }
         }
         var receiver = slot.AttachComponent<ShaderTextureSlot>();
-        receiver.Source = space.ShaderSource.Target;
+        receiver.Space = space;
         receiver.Uniform = Lumora.Shading.ImageTexture.UniformName(node.NodeId.Value ?? string.Empty, name);
         receiver.Picture = raw;
         receiver.Label = label;
@@ -856,6 +984,31 @@ public sealed class ScriptNodeCard
         var overload = node.Overload;
         int index = overload?.InputIndex(port) ?? -1;
         return index >= 0 && overload!.Inputs[index].Default is { } fallback ? fallback.ToString() ?? names[0] : names[0];
+    }
+
+    private static void InspectButton(Slot content, FontProvider font, ScriptGraphNode node, IWorldElement target, float x, float y)
+    {
+        var button = Builder(content, font).Button(string.Empty, (button, _) =>
+        {
+            var at = button.Slot;
+            if (!node.IsDestroyed && at != null && !at.IsDestroyed)
+                ElementInspector.Open(node.World, target, at.GlobalPosition, at.GlobalRotation);
+        }, DashTheme.Field);
+        button.Slot.Name.Value = "Inspect";
+        Place(button.Slot, x, y, 40f, ScriptEditorStyle.RowHeight - 6f);
+        var glyph = button.Slot.AddSlot("Glass");
+        var rect = glyph.AttachComponent<RectTransform>();
+        rect.AnchorMin.Value = rect.AnchorMax.Value = new float2(0.5f, 0.5f);
+        rect.OffsetMin.Value = new float2(-9f, -9f);
+        rect.OffsetMax.Value = new float2(9f, 9f);
+        var picture = glyph.AttachComponent<Lumora.Core.Assets.ImageProvider>();
+        picture.GenerateMipmaps.Value = false;
+        picture.AllowCompression.Value = false;
+        picture.MaxSizeOverride.Value = -1;
+        picture.URL.Value = new Uri("res://Assets/Textures/Icons/inspect.svg");
+        var image = glyph.AttachComponent<Image>();
+        image.Texture.Target = picture;
+        image.Tint.Value = DashTheme.TextDim;
     }
 
     private static void StepChoice(ScriptGraphNode node, string port, ScriptType type, int step)

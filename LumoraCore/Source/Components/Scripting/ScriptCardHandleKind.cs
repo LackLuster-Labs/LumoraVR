@@ -13,5 +13,8 @@ public enum ScriptCardHandleKind : byte
 
     // A Write Value's "var", or a Return's or a call's "fn": dragged onto a Stored Value card to choose what it
     // writes, or onto a Function card to choose the Function.
-    Variable
+    Variable,
+
+    // A Material Output's material well: dragged onto anything in the world to paint it with the graph's material.
+    Material
 }

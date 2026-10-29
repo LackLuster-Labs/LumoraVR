@@ -41,6 +41,7 @@ public sealed class ScriptNodeBrowser : Component
     private PanelShell? _shell;
     private Slot? _view;
     private Slot? _list;
+    private Slot? _breadcrumbs;
     private Text? _hint;
     private TextInput? _search;
     private bool _dirty = true;
@@ -88,6 +89,15 @@ public sealed class ScriptNodeBrowser : Component
             _query = string.Empty;
             BuildView();
         }
+    }
+
+    // Where the shared list is: anyone at the panel browses it, whoever has it in hand.
+    public override void OnAwake()
+    {
+        base.OnAwake();
+        BrowseKind.MarkUiState();
+        BrowseQuery.MarkUiState();
+        BrowsePath.MarkUiState();
     }
 
     public override void OnAttach()
@@ -171,6 +181,7 @@ public sealed class ScriptNodeBrowser : Component
     {
         _path = Library.Find(path) != null ? path : string.Empty;
         BrowsePath.Value = _path;
+        Search(string.Empty);
         _dirty = true;
     }
 
@@ -205,6 +216,8 @@ public sealed class ScriptNodeBrowser : Component
         input.SetChangeAction(OnSearchChanged);
         input.SetSubmitAction(OnSearchChanged);
         searchUi.PopStyle();
+
+        _breadcrumbs = InspectorUI.FixedRow(page, "Categories", 34f, out _, Slot);
 
         var host = page.AddSlot("List");
         host.AttachComponent<RectTransform>();
@@ -257,6 +270,7 @@ public sealed class ScriptNodeBrowser : Component
         _shownReady = _tool?.ReadyType;
         list.DestroyChildren();
         RowCount = 0;
+        BuildBreadcrumbs();
 
         string query = _query.Trim();
         if (query.Length > 0)
@@ -264,12 +278,17 @@ public sealed class ScriptNodeBrowser : Component
         else
             BuildFolder(list, Library.Find(_path) ?? Library);
 
-        if (_shell != null && !_shell.IsDestroyed)
+        // The title is the shared shell's, kept by the authority like every panel's rows; the list itself is
+        // this machine's own.
+        if (_shell != null && !_shell.IsDestroyed && World?.IsAuthority == true)
         {
             string noun = _kind == GraphKind.Shader ? "Shader nodes" : "Nodes";
-            string title = query.Length > 0 ? noun + ": search" : _path.Length == 0 ? noun : noun + " / " + _path.Replace("/", " / ");
+            string title = query.Length > 0 ? noun + ": search all categories" : _path.Length == 0 ? noun : noun + " / " + _path.Replace("/", " / ");
             if (_shell.Title.Value != title)
+            {
+                using var keep = World.DataModelPermissions?.EnterUiUpkeep(this);
                 _shell.Title.Value = title;
+            }
         }
         if (_hint != null && !_hint.IsDestroyed)
         {
@@ -283,36 +302,65 @@ public sealed class ScriptNodeBrowser : Component
         }
     }
 
+    // Keep every parent within reach, including while a search is showing. -xlinka
+    private void BuildBreadcrumbs()
+    {
+        if (_breadcrumbs is not { IsDestroyed: false } row)
+            return;
+        row.DestroyChildren();
+        var ui = new UIBuilder(row);
+        InspectorUI.ApplyTheme(ui, Slot);
+        Breadcrumb(ui, "All categories", string.Empty);
+        string path = string.Empty;
+        foreach (var part in _path.Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            path = path.Length == 0 ? part : path + "/" + part;
+            Breadcrumb(ui, "> " + part, path);
+        }
+    }
+
+    private void Breadcrumb(UIBuilder ui, string label, string path)
+    {
+        ui.PushStyle();
+        ui.MinWidth(28f);
+        ui.FlexibleWidth(label.Length);
+        ui.TextColor(path == _path ? InspectorUI.TextColor : InspectorUI.AccentColor);
+        var button = ui.Button(label, (_, _) => ShowFolder(path));
+        if (button.Slot.GetComponentInChildren<Text>() is { } text)
+        {
+            text.WordWrap.Value = false;
+            text.ClipToRect.Value = true;
+            text.Ellipsis.Value = true;
+        }
+        ui.PopStyle();
+    }
+
     private void BuildFolder(Slot list, Folder folder)
     {
-        if (folder.Path.Length > 0)
-            AddRow(list, "< Back", InspectorUI.MutedColor, false, () => ShowFolder(ParentOf(folder.Path)));
         foreach (var sub in folder.Folders)
         {
             var path = sub.Path;
-            AddRow(list, sub.Name + " >", InspectorUI.AccentColor, false, () => ShowFolder(path));
+            AddRow(list, sub.Name + " >", InspectorUI.AccentColor, false, () => ShowFolder(path),
+                $"{sub.NodeCount} nodes");
         }
         foreach (var definition in folder.Nodes)
         {
             var chosen = definition;
-            AddRow(list, TitleOf(definition), InspectorUI.TextColor, IsReady(definition), () => Pick(chosen));
+            AddRow(list, TitleOf(definition), InspectorUI.TextColor, IsReady(definition), () => Pick(chosen), help: definition);
         }
     }
 
-    // Every node whose name or folder matches, across all folders, with its folder on the right.
+    // Every node the search finds across all folders, best first (NodeSearch), with its folder on the right.
     private void BuildSearch(Slot list, string query)
     {
         int total = 0;
-        foreach (var definition in Library.All())
+        foreach (var definition in NodeSearch.Find(Library.All(), query))
         {
-            if (!definition.Path.Contains(query, StringComparison.OrdinalIgnoreCase)
-                && !definition.Name.Contains(query, StringComparison.OrdinalIgnoreCase))
-                continue;
             total++;
             if (RowCount >= MaxSearchResults)
                 continue;
             var chosen = definition;
-            AddRow(list, TitleOf(definition), InspectorUI.TextColor, IsReady(definition), () => Pick(chosen), ParentOf(definition.Path));
+            AddRow(list, TitleOf(definition), InspectorUI.TextColor, IsReady(definition), () => Pick(chosen), ParentOf(definition.Path), definition);
         }
         if (total == 0)
             AddNote(list, "No matching nodes");
@@ -322,7 +370,7 @@ public sealed class ScriptNodeBrowser : Component
 
     private bool IsReady(NodeDefinition definition) => _shownReady == definition.Name && _tool?.ReadyKind == _kind;
 
-    private void AddRow(Slot list, string label, color tint, bool lit, Action pressed, string? folder = null)
+    private void AddRow(Slot list, string label, color tint, bool lit, Action pressed, string? folder = null, NodeDefinition? help = null)
     {
         InspectorUI.FixedRow(list, label, RowHeight, out var ui, Slot);
         ui.PushStyle();
@@ -331,6 +379,7 @@ public sealed class ScriptNodeBrowser : Component
         if (lit)
             ui.BackgroundColor(InspectorUI.SelectionColor);
         var button = ui.Button(label, (_, _) => pressed());
+        button.Tip.Value = ScriptNodeHelp.For(help);
         var text = button.Slot.GetComponentInChildren<Text>();
         if (text?.RectTransform is { } rect)
         {
@@ -406,6 +455,7 @@ public sealed class ScriptNodeBrowser : Component
     {
         public string Name = string.Empty;
         public string Path = string.Empty;
+        public int NodeCount;
         public readonly List<Folder> Folders = new();
         public readonly List<NodeDefinition> Nodes = new();
 
@@ -463,8 +513,12 @@ public sealed class ScriptNodeBrowser : Component
         {
             Folders.Sort((a, b) => string.CompareOrdinal(a.Name, b.Name));
             Nodes.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
+            NodeCount = Nodes.Count;
             foreach (var folder in Folders)
+            {
                 folder.Sort();
+                NodeCount += folder.NodeCount;
+            }
         }
     }
 }

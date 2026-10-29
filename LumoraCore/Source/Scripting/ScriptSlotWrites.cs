@@ -137,18 +137,39 @@ internal static class ScriptSlotWrites
     // which move, each on its own slot, under a holder named after it: for a world script one it makes under
     // the world root, for a Local script a local one under its own object. A guest's script, which makes
     // nothing that outlasts its author, leaves them under the world root instead. Everything under the slot
-    // has to be its author's to destroy, or nothing changes.
+    // has to be its author's to destroy, or nothing changes. The script's own slot, or one above it, goes once
+    // the call has returned, as with Destroy.
     public static void DestroyKeepingAssets(ScriptContext ctx, Slot slot)
     {
+        if (ScriptWrites.HoldsSelf(ctx, slot))
+        {
+            if (ctx.IsLocal)
+                throw new UnauthorizedAccessException("a Local script keeps assets under its own object, which this destroys");
+            CheckTakeApart(ctx, slot, own: true);
+            ctx.DestroyOwn(slot, keepAssets: true);
+            return;
+        }
         CheckTakeApart(ctx, slot);
+        TakeApart(ctx, slot);
+    }
+
+    // What DestroyKeepingAssets asked for the script's own slot, as its call returns.
+    internal static void DestroyOwnKeepingAssets(ScriptContext ctx, Slot slot)
+    {
+        CheckTakeApart(ctx, slot, own: true);
+        TakeApart(ctx, slot);
+    }
+
+    private static void TakeApart(ScriptContext ctx, Slot slot)
+    {
         var holder = AssetHolder(ctx, slot.Name.Value);
         slot.DestroyPreservingAssets(holder);
         DropIfEmpty(holder);
     }
 
-    private static void CheckTakeApart(ScriptContext ctx, Slot slot)
+    private static void CheckTakeApart(ScriptContext ctx, Slot slot, bool own = false)
     {
-        ScriptWrites.CheckPark(ctx, slot);
+        ScriptWrites.CheckPark(ctx, slot, own);
         if (ctx.IsLocal)
             return;
         var registry = ctx.World.SlotRegistry;

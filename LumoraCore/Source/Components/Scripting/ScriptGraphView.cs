@@ -78,6 +78,7 @@ public sealed class ScriptGraphView
     private readonly Dictionary<ScriptGraphNode, ScriptNodePreview> _previews = new();
     private readonly Dictionary<ScriptGraphNode, string> _documentIds = new();
     private int _previewCheck = -1;
+    private Lumora.Core.Components.Assets.ShaderGraphSource? _previewSource;
     private readonly List<ScriptGraphNode> _nodes = new();
     private readonly List<ScriptGraphNode> _gone = new();
     private readonly List<ScriptWireCurve> _curves = new();
@@ -347,6 +348,14 @@ public sealed class ScriptGraphView
             foreach (var (id, node) in build.Nodes)
                 _documentIds[node] = id;
             _previewCheck = _space.CheckCount;
+            foreach (var node in _previews.Keys)
+                _stalePreviews.Add(node);
+        }
+        // A loose graph given its material from its output's well: its previews take the material's textures.
+        var current = _space.ShaderSource.Target is { IsDestroyed: false } live ? live : null;
+        if (!ReferenceEquals(current, _previewSource))
+        {
+            _previewSource = current;
             foreach (var node in _previews.Keys)
                 _stalePreviews.Add(node);
         }
@@ -717,6 +726,7 @@ public sealed class ScriptGraphView
             _slabs.Add(placed);
             hash.Add(Quantize(placed.Center));
             hash.Add(Quantize(placed.Rotation * float3.Right));
+            hash.Add(Quantize(placed.Rotation * float3.Up));
             hash.Add(Quantize(new float3(placed.Size.x, placed.Size.y, placed.CornerRadius)));
         }
         int stamp = hash.ToHashCode();

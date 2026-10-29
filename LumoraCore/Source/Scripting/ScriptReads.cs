@@ -96,7 +96,7 @@ internal static class ScriptReads
         if (ctx.IsMachineUser(user))
             return true;
         if (Reached(ctx, user) && !ctx.IsLocal)
-            ctx.Fail($"{Named(user)} is not the user at this machine");
+            ctx.Fail(ctx.MayActOn(user) ? $"{Named(user)} is not the user at this machine" : $"a person's script acts only on its author, not {Named(user)}");
         return false;
     }
 

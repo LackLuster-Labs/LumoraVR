@@ -25,6 +25,19 @@ internal static class ScriptTweens
             || type == typeof(floatQ) || type == typeof(color) || type == typeof(colorHDR) || type == typeof(int) || type == typeof(long)
             || type == typeof(int2) || type == typeof(int3) || type == typeof(int4);
 
+    // A rotation made unit length, false for one of no length or not finite: an unwired one is all zeros, and
+    // written as the end of the way it left a slot with no shape. Anything else is usable as it is. -xlinka
+    public static bool Usable<T>(ref T value)
+    {
+        if (value is not floatQ rotation)
+            return true;
+        float lengthSquared = floatQ.Dot(rotation, rotation);
+        if (!float.IsFinite(lengthSquared) || lengthSquared < 1e-12f)
+            return false;
+        value = (T)(object)ScriptWrites.Unit(rotation);
+        return true;
+    }
+
     // How far apart two values are, for a duration given per unit: a length for numbers, vectors and colours,
     // degrees for rotations.
     public static float Distance<T>(T a, T b) => (a, b) switch

@@ -25,7 +25,7 @@ namespace Lumora.Core.Scripting;
 //
 // Unpack writes the host's current graph out as node slots under it; a host with no graph unpacks to an
 // empty space. Pack checks the space, stores the document in this machine's asset store, points the
-// host at it and removes the node slots.
+// host at it and removes the node slots. Both live in ScriptGraphPackFlow.
 //
 // A slot picked up as a card works on everything under the slot: every script anywhere under it unpacks,
 // or packs back, at once; and nodes standing on their own pack into it, becoming its script.
@@ -238,67 +238,6 @@ public static partial class ScriptGraphEditing
         return null;
     }
 
-    // The open space if there is one, else the host's graph unpacked. Null, with the reason, when the
-    // graph has not loaded on this machine yet.
-    public static ScriptGraphSpace? Unpack(ScriptHost host, out string? error)
-    {
-        error = null;
-        if (host == null || host.IsDestroyed || host.World == null)
-        {
-            error = "there is no script here";
-            return null;
-        }
-        if (FindSpace(host) is { } open)
-        {
-            Reveal(open, UnpackStep);
-            return open;
-        }
-
-        ScriptGraph graph;
-        if (host.Graph.Target == null)
-        {
-            graph = new ScriptGraph();
-        }
-        else if (host.Graph.Target is IUrlAssetProvider { IsLoadPending: true })
-        {
-            // Mid-switch, the old graph would still read as loaded, and editing it would lose the new one.
-            error = "its graph is still loading here";
-            return null;
-        }
-        else if (host.Graph.IsAssetAvailable && host.Graph.Asset?.Graph is { } loaded)
-        {
-            graph = loaded;
-        }
-        else
-        {
-            error = (host.Graph.Target as IUrlAssetProvider)?.LoadFailure ?? host.Graph.Asset?.LoadError ?? "its graph has not loaded here yet";
-            return null;
-        }
-
-        var world = host.World;
-        var space = ScriptGraphPacking.Unpack(host, graph, world.LocalUser?.Root?.HeadPosition);
-        InspectorUndo.Record(world, SlotExistenceUndoBatch.Created(world, new[] { space.Slot }, UnpackStep));
-        return space;
-    }
-
-    // A graph put away is shown again where it was, and switched on: opening a graph is for working on it.
-    internal static void Reveal(ScriptGraphSpace space, LocaleText step)
-    {
-        var records = new List<IUndoBatch>();
-        if (space.Packed.Value)
-        {
-            space.Packed.Value = false;
-            records.Add(new FieldEditUndoBatch(space.Packed, true, false, step));
-        }
-        if (!space.Slot.ActiveSelf.Value)
-        {
-            space.Slot.ActiveSelf.Value = true;
-            records.Add(new FieldEditUndoBatch(space.Slot.ActiveSelf, false, true, step));
-        }
-        if (records.Count > 0 && space.World is { } world)
-            Record(world, step, records);
-    }
-
     // What a hand grabs a node by: a box the size of its card, sized without problem lines so it is the
     // same on every machine, and a grab that never scales the node. It does not stop anyone walking. A node
     // made into a packed graph starts with both switched off; the host keeps them that way while the graph
@@ -491,7 +430,6 @@ public static partial class ScriptGraphEditing
 
         // The new node's port sits in its first row, on the side facing the port it answers.
         var place = localPoint;
-        place.z = 0f;
         place.y += (ScriptEditorStyle.HeaderHeight + ScriptEditorStyle.Padding + ScriptEditorStyle.RowHeight * 0.5f) * ScriptEditorStyle.CardScale;
 
         var undo = FindUndo(space.World);
@@ -552,7 +490,6 @@ public static partial class ScriptGraphEditing
         }
 
         var place = localPoint;
-        place.z = 0f;
         place.y += (ScriptEditorStyle.HeaderHeight + ScriptEditorStyle.Padding + ScriptEditorStyle.RowHeight * 0.5f) * ScriptEditorStyle.CardScale;
 
         var undo = FindUndo(space.World);
@@ -681,7 +618,9 @@ public static partial class ScriptGraphEditing
 
     // What could go between two data ports whose types do not match: every conversion node with an
     // overload that takes what the output gives and gives what the input takes. Empty when the two
-    // match, are not an output and an input, are in two scripts, or nothing fits.
+    // match, are not an output and an input, are in two scripts, or nothing fits, and when the input's
+    // node can change to an overload that takes the output as it is: a double wired into Add on floats
+    // makes it Add on doubles, the join does that itself, and a conversion is for when no overload fits.
     public static List<ScriptConversion> ConversionsFor(ScriptCardHandle a, ScriptCardHandle b)
     {
         var found = new List<ScriptConversion>();
@@ -695,7 +634,8 @@ public static partial class ScriptGraphEditing
             return found;
         var given = producer.Outputs[from].Type;
         var wanted = consumer.Inputs[to].Type;
-        if (Lumora.Script.ScriptTypes.Accepts(wanted, given))
+        if (Lumora.Script.ScriptTypes.Accepts(wanted, given)
+            || ScriptGraphOverloads.SelectInput(input.Node!, input.Port, given) != null)
             return found;
 
         var registry = ScriptEnvironment.Registry;
@@ -776,7 +716,6 @@ public static partial class ScriptGraphEditing
             to = space.Slot.GlobalPointToLocal(inPoint);
         }
         var place = (from + to) * 0.5f;
-        place.z = 0f;
         place.y += (ScriptEditorStyle.HeaderHeight + ScriptEditorStyle.Padding + ScriptEditorStyle.RowHeight * 0.5f) * ScriptEditorStyle.CardScale;
 
         ScriptGraphNode? converter;
@@ -880,7 +819,7 @@ public static partial class ScriptGraphEditing
             return null;
         var layout = ScriptCardLayout.For(relay, 0);
         relay.Slot.LocalPosition.Value = new Math.float3(localPoint.x - layout.Width * ScriptEditorStyle.CardScale * 0.5f,
-            localPoint.y + layout.Height * ScriptEditorStyle.CardScale * 0.5f, 0f);
+            localPoint.y + layout.Height * ScriptEditorStyle.CardScale * 0.5f, localPoint.z);
 
         // The relay's own wire first, then the one already there moved onto the relay.
         var own = wire.Exit
@@ -964,26 +903,89 @@ public static partial class ScriptGraphEditing
             error = "that node is gone";
             return false;
         }
+        var records = new List<IUndoBatch>();
+        bool committed = false;
         try
         {
-            // The last node of a group takes the group with it; nothing else of it shows, and undo brings
-            // both back.
             var gone = node.Slot;
             if (node.Space is { } space && IsImplicit(space) && space.Nodes.All(n => ReferenceEquals(n, node))
                 && space.Slot?.Parent is { IsRootSlot: false } group)
                 gone = group;
-            var undo = FindUndo(world);
-            if (undo != null && SlotExistenceUndoBatch.Destroy(world, new[] { gone }) is { } removed)
-                undo.Record(removed);
+            if (!gone.MayDestroy())
+            {
+                error = "you may not delete that node";
+                return false;
+            }
+            // A relay is a bend in a wire. Splice every consumer before parking it, so undo restores
+            // the relay before putting its wires back. Refuse the whole edit if any end is protected. -xlinka
+            if (!SpliceRelay(node, records, out error))
+                return false;
+            if (FindUndo(world) != null && SlotExistenceUndoBatch.Destroy(world, new[] { gone }) is { } removed)
+                records.Add(removed);
             else
                 gone.Destroy();
+            Record(world, DeleteStep, records);
+            committed = true;
             return true;
         }
         catch (UnauthorizedAccessException)
         {
-            error = "you may not delete a node someone else made";
+            error = "you may not delete that node or change its wires";
             return false;
         }
+        finally
+        {
+            if (!committed)
+                for (int i = records.Count - 1; i >= 0; i--)
+                    records[i].Undo();
+        }
+    }
+
+    private static bool SpliceRelay(ScriptGraphNode relay, List<IUndoBatch> records, out string? error)
+    {
+        error = null;
+        bool flow = relay.NodeType.Value == FlowRelayNode;
+        if ((!flow && relay.NodeType.Value != DataRelayNode) || relay.Space == null)
+            return true;
+        var through = flow ? relay.FindExit("next") : relay.FindInput("value");
+        var target = through?.Node.Target;
+        string targetPort = through?.NodePort.Value ?? string.Empty;
+        if (ReferenceEquals(target, relay))
+            target = null;
+        var ends = new List<(ScriptGraphNode Node, string Port)>();
+        foreach (var consumer in relay.Space.Nodes)
+        {
+            if (ReferenceEquals(consumer, relay))
+                continue;
+            foreach (var wire in flow ? consumer.Exits : consumer.Inputs)
+            {
+                if (!ReferenceEquals(wire.Node.Target, relay))
+                    continue;
+                if (!MayWire(consumer, flow, wire.Port.Value))
+                {
+                    error = "you may not reconnect a wire attached to that relay";
+                    return false;
+                }
+                if (target != null && consumer.WireProblem(flow, wire.Port.Value, target, targetPort) is { } problem)
+                {
+                    error = problem;
+                    return false;
+                }
+                ends.Add((consumer, wire.Port.Value));
+            }
+        }
+        foreach (var (consumer, port) in ends)
+        {
+            var wire = flow ? consumer.FindExit(port) : consumer.FindInput(port);
+            var change = new ScriptWireUndo(consumer, flow, port, relay, wire?.NodePort.Value ?? string.Empty, target, targetPort);
+            if (!change.Redo())
+            {
+                error = "that relay's wire could not be reconnected";
+                return false;
+            }
+            records.Add(change);
+        }
+        return true;
     }
 
     // The script on an object, unpacked, or a new one on it when it has none.
@@ -1010,271 +1012,6 @@ public static partial class ScriptGraphEditing
             ComponentUndo.RecordAttach(host, host);
         }
         return Unpack(host, out error);
-    }
-
-    // The graphs under a slot, what a slot card held in a hand works on: every script anywhere under it,
-    // packed or open, and the material graphs on orbs under it, closed or open. Open means not packed, on
-    // or switched off: either way it is there to pack.
-    public readonly record struct SlotGraphs(List<ScriptHost> Packed, List<ScriptGraphSpace> Open,
-        List<ShaderGraphSource> Parked, List<ShaderGraphSource> Shown)
-    {
-        public bool AnyPacked => Packed.Count + Parked.Count > 0;
-
-        public bool AnyOpen => Open.Count + Shown.Count > 0;
-
-        public bool Any => AnyPacked || AnyOpen;
-    }
-
-    public static SlotGraphs GraphsUnder(Slot root)
-    {
-        var graphs = new SlotGraphs(new List<ScriptHost>(), new List<ScriptGraphSpace>(), new List<ShaderGraphSource>(),
-            new List<ShaderGraphSource>());
-        if (root == null || root.IsDestroyed)
-            return graphs;
-        foreach (var host in root.GetComponentsInChildren<ScriptHost>())
-        {
-            if (host.IsDestroyed)
-                continue;
-            if (FindSpace(host) is { Packed.Value: false } space)
-                graphs.Open.Add(space);
-            else
-                graphs.Packed.Add(host);
-        }
-        foreach (var source in root.GetComponentsInChildren<ShaderGraphSource>())
-        {
-            if (source.IsDestroyed || source.Graph.Target is not { IsDestroyed: false } graph)
-                continue;
-            (graph.Packed.Value ? graphs.Parked : graphs.Shown).Add(source);
-        }
-        return graphs;
-    }
-
-    // Every packed script under a slot unpacked, as one undo step, and the material graphs under it opened
-    // over their orbs. What opened, and the first refusal.
-    public static List<ScriptGraphSpace> UnpackAll(Slot root, out string? error)
-    {
-        error = null;
-        var opened = new List<ScriptGraphSpace>();
-        var world = root?.World;
-        if (root == null || root.IsDestroyed || world == null)
-        {
-            error = "that object is gone";
-            return opened;
-        }
-        var graphs = GraphsUnder(root);
-        var undo = FindUndo(world);
-        var fresh = new List<(ScriptGraphSpace Space, ScriptGraph Graph)>();
-        using (undo != null ? undo.BeginBatch(UnpackStep) : default)
-        {
-            foreach (var host in graphs.Packed)
-            {
-                try
-                {
-                    bool made = FindSpace(host) == null;
-                    if (Unpack(host, out var refused) is { } space)
-                    {
-                        opened.Add(space);
-                        if (made && host.Graph.Asset?.Graph is { } document)
-                            fresh.Add((space, document));
-                    }
-                    else
-                    {
-                        error ??= refused;
-                    }
-                }
-                catch (UnauthorizedAccessException)
-                {
-                    error ??= $"you may not unpack the script on {host.Slot.Name.Value}";
-                }
-            }
-            if (fresh.Count > 1)
-                StandSideBySide(root, fresh);
-        }
-        foreach (var source in graphs.Parked)
-        {
-            if (ShaderGraphMaterials.SetOpen(source, true) && source.Graph.Target is { } space)
-                opened.Add(space);
-            else
-                error ??= $"you may not open the graph of {source.Slot.Name.Value}";
-        }
-        return opened;
-    }
-
-    private const float WallWidth = 12f;
-    private const float WallMaxWidth = 48f;
-    private const float WallHeight = 6f;
-    private const float WallGap = 0.3f;
-
-    // Each graph unpacks 35 cm above its own script, and the scripts of one avatar sit within a hand of each
-    // other, so unpacking a whole flux slot stood thirty graphs inside one another. Graphs unpacked together
-    // go up as one wall instead, facing whoever unpacked them: rows a gap apart, tallest first, centred over
-    // the object. The rows start WallWidth wide and widen until the wall is no taller than WallHeight, so the
-    // top rows stay within reach. A graph opened again keeps the place it was packed at. -xlinka
-    private static void StandSideBySide(Slot root, List<(ScriptGraphSpace Space, ScriptGraph Graph)> fresh)
-    {
-        var boxes = new List<(ScriptGraphSpace Space, ShaderGraphBuilder.Bounds Box)>();
-        foreach (var (space, graph) in fresh)
-            boxes.Add((space, ScriptGraphLayout.Extent(graph, space.Language)));
-        boxes.Sort((a, b) => (b.Box.Top - b.Box.Bottom).CompareTo(a.Box.Top - a.Box.Bottom));
-        float limit = WallWidth;
-        foreach (var (_, box) in boxes)
-            limit = MathF.Max(limit, box.Right - box.Left);
-
-        var rows = new List<(float Width, float Height, int First, int Count)>();
-        while (true)
-        {
-            rows.Clear();
-            for (int i = 0; i < boxes.Count; i++)
-            {
-                float width = boxes[i].Box.Right - boxes[i].Box.Left;
-                float height = boxes[i].Box.Top - boxes[i].Box.Bottom;
-                if (rows.Count == 0 || rows[^1].Width + WallGap + width > limit)
-                {
-                    rows.Add((width, height, i, 1));
-                    continue;
-                }
-                var row = rows[^1];
-                rows[^1] = (row.Width + WallGap + width, MathF.Max(row.Height, height), row.First, row.Count + 1);
-            }
-            float tall = -WallGap;
-            foreach (var row in rows)
-                tall += row.Height + WallGap;
-            if (tall <= WallHeight || limit >= WallMaxWidth)
-                break;
-            limit += 2f;
-        }
-
-        var at = root.GlobalPosition + new Math.float3(0f, 0.35f, 0f);
-        var facing = Math.floatQ.Identity;
-        if (root.World?.LocalUser?.Root?.HeadPosition is Math.float3 head)
-        {
-            var toward = head - at;
-            toward.y = 0f;
-            if (toward.LengthSquared > 1e-6f)
-                facing = Math.floatQ.LookRotation(toward.Normalized, Math.float3.Up).Inverse;
-        }
-        var across = facing * Math.float3.Right;
-        float y = 0f;
-        foreach (var (rowWidth, rowHeight, first, count) in rows)
-        {
-            float x = -rowWidth * 0.5f;
-            for (int i = first; i < first + count; i++)
-            {
-                var (space, box) = boxes[i];
-                var slot = space.Slot;
-                slot.GlobalRotation = facing;
-                slot.GlobalPosition = at + across * (x - box.Left) + Math.float3.Up * (y - box.Bottom);
-                slot.GlobalScale = Math.float3.One;
-                x += box.Right - box.Left + WallGap;
-            }
-            y += rowHeight + WallGap;
-        }
-    }
-
-    // Every open script graph under a slot packed back, and the material graphs under it closed onto their
-    // orbs. Each pack is its own undo step. The first refusal, or null.
-    public static async Task<string?> PackAllAsync(Slot root)
-    {
-        if (root == null || root.IsDestroyed || root.World == null)
-            return "that object is gone";
-        var graphs = GraphsUnder(root);
-        string? error = null;
-        foreach (var source in graphs.Shown)
-        {
-            if (!ShaderGraphMaterials.SetOpen(source, false))
-                error ??= $"you may not close the graph of {source.Slot.Name.Value}";
-        }
-        // Every pack starts here, on the world's thread, which is where its first half has to run.
-        var packs = graphs.Open.Select(space => PackAsync(space)).ToList();
-        foreach (var refused in await Task.WhenAll(packs).ConfigureAwait(false))
-            error ??= refused;
-        return error;
-    }
-
-    // Nodes standing on their own packed into an object picked by its card: the object's script takes them
-    // in, a new script when it has none and its graph unpacked first when it has one, and is packed. They
-    // go beside what the script already holds. Taking them in is one undo step and the pack another.
-    public static Task<string?> PackIntoAsync(ScriptGraphSpace group, Slot target)
-    {
-        var world = group?.World;
-        if (group == null || group.IsDestroyed || world == null)
-            return Task.FromResult<string?>("there is no graph to pack");
-        if (group.Kind.Value == GraphKind.Shader)
-            return Task.FromResult<string?>("a shader graph stays with its material; there is nothing to pack");
-        if (!IsImplicit(group))
-            return Task.FromResult<string?>("that graph is a script of its own already; only nodes standing on their own pack into an object");
-        if (target == null || target.IsDestroyed || target.IsRootSlot)
-            return Task.FromResult<string?>("pick an object to pack into");
-        if (group.Slot?.Parent is { } loose && (ReferenceEquals(target, loose) || target.IsDescendantOf(loose)))
-            return Task.FromResult<string?>("those nodes cannot pack into themselves");
-
-        ScriptGraphSpace? into;
-        var undo = FindUndo(world);
-        using (undo != null ? undo.BeginBatch(PackStep) : default)
-        {
-            into = EditScriptOn(target, out var error);
-            if (into == null)
-                return Task.FromResult<string?>(error ?? "that object's script could not be opened");
-            var already = new HashSet<ScriptGraphNode>(into.Nodes);
-            var merge = ScriptMergeUndo.Take(into, group, out error);
-            if (merge == null)
-                return Task.FromResult<string?>(error);
-            InspectorUndo.Record(world, merge);
-            Beside(into, already);
-        }
-        return PackAsync(into);
-    }
-
-    // The nodes that just came into a graph as a block, to the right of the ones it had, tops level; in a
-    // graph that had none, centred on its origin. Undoing the join puts them back where they were.
-    private static void Beside(ScriptGraphSpace space, HashSet<ScriptGraphNode> already)
-    {
-        var came = new List<ScriptGraphNode>();
-        foreach (var node in space.Nodes)
-        {
-            if (!already.Contains(node) && node.Slot is { IsDestroyed: false })
-                came.Add(node);
-        }
-        if (came.Count == 0)
-            return;
-        var (left, right, top, _) = Extent(came);
-        Math.float3 move;
-        if (already.Count > 0)
-        {
-            var had = Extent(already);
-            move = new Math.float3(had.Right + 0.1f - left, had.Top - top, 0f);
-        }
-        else
-        {
-            move = new Math.float3(-(left + right) * 0.5f, -top, 0f);
-        }
-        foreach (var node in came)
-        {
-            try
-            {
-                node.Slot.LocalPosition.Value += move;
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-    }
-
-    private static (float Left, float Right, float Top, float Bottom) Extent(IEnumerable<ScriptGraphNode> nodes)
-    {
-        float left = float.MaxValue, right = float.MinValue, top = float.MinValue, bottom = float.MaxValue;
-        foreach (var node in nodes)
-        {
-            if (node.Slot is not { IsDestroyed: false } slot)
-                continue;
-            var at = slot.LocalPosition.Value;
-            var layout = ScriptCardLayout.For(node, 0);
-            left = MathF.Min(left, at.x);
-            right = MathF.Max(right, at.x + layout.Width * ScriptEditorStyle.CardScale);
-            top = MathF.Max(top, at.y);
-            bottom = MathF.Min(bottom, at.y - layout.Height * ScriptEditorStyle.CardScale);
-        }
-        return (left, right, top, bottom);
     }
 
     // A node's input wired to another's output, or its exit to another's flow input, as one undo step for
@@ -1525,44 +1262,89 @@ public static partial class ScriptGraphEditing
         }
         if (definition.GenericArity != 1)
             return choices;
-        foreach (var type in CommonTypes)
-        {
-            if (registry.TryResolve(definition, type, out _, out _))
-                choices.Add(type);
-        }
+        choices.AddRange(TypeChoices(definition, registry));
         return choices;
     }
 
-    // What a node starts as when picked from the browser: its only overload, a float one when it has
-    // several, float for a generic one. The card's arrows step through the rest.
+    private static readonly Dictionary<NodeDefinition, string[]> _typeChoices = new();
+
+    // The usual types a one-type node takes; for a node that takes none of them, such as an enum node or a
+    // quantity node, every type it does take, by name. Worked out once per node: the card asks on every
+    // layout, and a type a node refuses costs a thrown exception to find out. -xlinka
+    private static string[] TypeChoices(NodeDefinition definition, NodeRegistry registry)
+    {
+        lock (_typeChoices)
+        {
+            if (_typeChoices.TryGetValue(definition, out var known))
+                return known;
+        }
+        var found = CommonTypes.Where(type => registry.TryResolve(definition, type, out _, out _)).ToList();
+        if (found.Count == 0)
+            found.AddRange(OtherTypes().Where(type => registry.TryResolve(definition, type, out _, out _)));
+        var made = found.ToArray();
+        lock (_typeChoices)
+            _typeChoices[definition] = made;
+        return made;
+    }
+
+    // Every plain type a script can name past the usual ones, by name. A closed generic such as list<int> is
+    // left out; a node is opened over it by typing it.
+    private static IEnumerable<string> OtherTypes()
+        => ScriptTypes.Known.Select(t => t.Name).Where(name => name.IndexOf('<') < 0 && Array.IndexOf(CommonTypes, name) < 0)
+            .OrderBy(name => name, StringComparer.OrdinalIgnoreCase);
+
+    // What a node starts as when picked from the browser: its only overload, the one it marks [Preferred],
+    // a float one when it has several, float for a generic one or the first type it takes when it takes no
+    // float. A node of two types starts as string and float, the way a dictionary is most often keyed. The
+    // card's arrows or its type field change it. -xlinka
     public static string? DefaultSignature(NodeDefinition definition, GraphLanguage? language = null)
     {
         var registry = (language ?? GraphLanguage.Script).Registry;
         if (definition.IsGeneric)
-        {
-            if (definition.GenericArity != 1)
-                return null;
-            foreach (var type in CommonTypes)
-            {
-                if (type == "float" && registry.TryResolve(definition, type, out _, out _))
-                    return type;
-            }
-            foreach (var type in CommonTypes)
-            {
-                if (registry.TryResolve(definition, type, out _, out _))
-                    return type;
-            }
-            return null;
-        }
+            return DefaultTypes(definition, registry);
         var overloads = definition.KnownOverloads;
         if (overloads.Count <= 1)
             return null;
+        if (definition.Preferred is { } preferred)
+            return preferred.Signature;
         foreach (var overload in overloads)
         {
             if (overload.Signature.StartsWith("float", StringComparison.Ordinal))
                 return overload.Signature;
         }
         return overloads[0].Signature;
+    }
+
+    private static string? DefaultTypes(NodeDefinition definition, NodeRegistry registry)
+    {
+        int arity = definition.GenericArity;
+        if (arity == 1)
+        {
+            if (registry.TryResolve(definition, "float", out _, out _))
+                return "float";
+            var choices = TypeChoices(definition, registry);
+            return choices.Length > 0 ? choices[0] : null;
+        }
+        // Each place steps through the usual types, string first in the first place and float first in the
+        // rest, the last place fastest, until the node takes them.
+        var places = new string[arity][];
+        for (int i = 0; i < arity; i++)
+        {
+            string first = i == 0 ? "string" : "float";
+            places[i] = CommonTypes.Where(t => t != first).Prepend(first).ToArray();
+        }
+        var at = new int[arity];
+        while (true)
+        {
+            var signature = string.Join(",", at.Select((index, place) => places[place][index]));
+            if (registry.TryResolve(definition, signature, out _, out _))
+                return signature;
+            int step = arity - 1;
+            while (step >= 0 && ++at[step] == places[step].Length)
+                at[step--] = 0;
+            if (step < 0)
+                return null;
+        }
     }
 
     // How many inputs a variadic node has now, from its signature.
@@ -1588,6 +1370,32 @@ public static partial class ScriptGraphEditing
             return false;
         string current = node.Signature.Value ?? string.Empty;
         string next = string.Join(",", Enumerable.Repeat(type, count));
+        try
+        {
+            node.Signature.Value = next;
+            FitNodeBody(node);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return false;
+        }
+        InspectorUndo.Record(node, new FieldEditUndoBatch(node.Signature, current, next, ValueStep));
+        return true;
+    }
+
+    // One more or one fewer exit in a flow node's run of them (a Sequence's out0, out1...), within the run's
+    // limits. Back at the length the node declares, "sig" is cleared, so the node reads as one never grown.
+    // Wires from an exit that goes stay, and the check marks them, as with inputs.
+    public static bool ChangeExitCount(ScriptGraphNode node, int delta)
+    {
+        if (node == null || node.IsDestroyed || node.Overload is not { } overload || !overload.Definition.GrowsExits)
+            return false;
+        var definition = overload.Definition;
+        int count = System.Math.Clamp(overload.FlowOutputs.Count + delta, FlowBuilder.MinExits, FlowBuilder.MaxExits);
+        if (count == overload.FlowOutputs.Count)
+            return false;
+        string current = node.Signature.Value ?? string.Empty;
+        string next = count == definition.ExitRun ? string.Empty : count.ToString(System.Globalization.CultureInfo.InvariantCulture);
         try
         {
             node.Signature.Value = next;
@@ -1672,372 +1480,9 @@ public static partial class ScriptGraphEditing
         return true;
     }
 
-    public static Task<string?> PackAsync(ScriptGraphSpace space)
-    {
-        var world = space?.World;
-        if (space == null || world == null || space.IsDestroyed)
-            return Task.FromResult<string?>("there is no graph to pack");
-        return PackAsync(space, world);
-    }
-
-    private static async Task<string?> PackAsync(ScriptGraphSpace space, World world)
-    {
-        if (space.Kind.Value == GraphKind.Shader)
-            return "a shader graph stays with its material; there is nothing to pack";
-        var host = space.Host.Target;
-        if (host == null || host.IsDestroyed)
-            return "the graph has no script to pack into";
-
-        RenameClashingIds(space);
-        var build = ScriptGraphPacking.Build(space);
-        if (build.Problems.Count > 0)
-            return Describe(build.Problems[0].Node, build.Problems[0].Message);
-
-        var compiled = await ScriptEnvironment.CompileAsync(build.Graph).ConfigureAwait(false);
-        if (!compiled.Success)
-        {
-            foreach (var diagnostic in compiled.Errors)
-            {
-                build.Nodes.TryGetValue(diagnostic.NodeId ?? string.Empty, out var node);
-                return await OnWorldThread(world, () => Describe(node, diagnostic.Message)).ConfigureAwait(false);
-            }
-            return "the graph does not compile";
-        }
-
-        Uri? url;
-        try
-        {
-            url = await ScriptGraphAsset.StoreAsync(build.Graph).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            return "the graph could not be stored: " + ex.Message;
-        }
-        if (url == null)
-            return "there is no local asset store to keep the graph in";
-
-        return await OnWorldThread(world, () => Apply(space, build, url)).ConfigureAwait(false);
-    }
-
-    private static string? Apply(ScriptGraphSpace space, ScriptGraphBuild build, Uri url)
-    {
-        var world = space.World;
-        var host = space.Host.Target;
-        if (world == null || space.IsDestroyed || host == null || host.IsDestroyed)
-            return "the graph or its script went away while packing";
-
-        var undo = FindUndo(world);
-        using var scope = undo != null ? undo.BeginBatch(PackStep) : default;
-
-        // Asked before the graph is stored on the host, after which it is a group no longer.
-        bool group = IsImplicit(space);
-        var packer = world.LocalUser;
-        byte owner = host.ReferenceID.GetUserByte();
-        bool worldContent = owner == RefIDConstants.AUTHORITY_BYTE;
-        var target = host;
-        if (!worldContent && (packer == null || !packer.HoldsByte(owner)) && host.Slot.MayRemoveComponent(host))
-            target = Remint(host);
-
-        var provider = target.Graph.Target as ScriptGraphProvider;
-        if (provider == null || provider.IsDestroyed || !ReferenceEquals(provider.Slot, target.Slot)
-            || provider.ReferenceID.GetUserByte() != target.ReferenceID.GetUserByte())
-        {
-            provider = target.Slot.AttachComponent<ScriptGraphProvider>();
-            ComponentUndo.RecordAttach(target, provider);
-        }
-
-        var beforeUrl = provider.URL.Value;
-        provider.URL.Value = url;
-        InspectorUndo.Record(world, new FieldEditUndoBatch(provider.URL, beforeUrl, url, PackStep));
-
-        var beforeGraph = target.Graph.Value;
-        target.Graph.Target = provider;
-        if (!beforeGraph.Equals(target.Graph.Value))
-            InspectorUndo.Record(world, new FieldEditUndoBatch(target.Graph, beforeGraph, target.Graph.Value, PackStep));
-
-        var beforeBindings = ScriptBindingsUndo.Snapshot(target.Bindings);
-        var afterBindings = new IWorldElement?[build.Bindings.Count];
-        for (int i = 0; i < afterBindings.Length; i++)
-            afterBindings[i] = build.Bindings[i];
-        bool rebuild = world.IsAuthority || packer?.HoldsByte(target.ReferenceID.GetUserByte()) == true;
-        ScriptBindingsUndo.Assign(target.Bindings, afterBindings, rebuild);
-        InspectorUndo.Record(world, new ScriptBindingsUndo(target.Bindings, beforeBindings, afterBindings, PackStep, rebuild));
-
-        // A packed group is a Script from now on.
-        var named = target.Slot.Name;
-        if (group && named.Value != ScriptSlotName)
-        {
-            var beforeName = named.Value;
-            named.Value = ScriptSlotName;
-            if (named.Value == ScriptSlotName)
-                InspectorUndo.Record(world, new FieldEditUndoBatch(named, beforeName, ScriptSlotName, PackStep));
-        }
-
-        RemoveSpace(world, undo, space, target);
-        return null;
-    }
-
-    // Parked for the undo step, or destroyed. Someone who may not delete another's node slots packs them in
-    // place instead, pointed at the script they now pack into, so the next unpack finds and shows them.
-    private static void RemoveSpace(World world, UndoManager? undo, ScriptGraphSpace space, ScriptHost host)
-    {
-        try
-        {
-            if (undo != null && SlotExistenceUndoBatch.Destroy(world, new[] { space.Slot }) is { } removed)
-                undo.Record(removed);
-            else
-                space.Slot.Destroy();
-        }
-        catch (UnauthorizedAccessException)
-        {
-            if (space.Slot.IsDestroyed)
-                return;
-            try
-            {
-                var beforeHost = space.Host.Value;
-                if (!ReferenceEquals(space.Host.Target, host))
-                {
-                    space.Host.Target = host;
-                    InspectorUndo.Record(world, new FieldEditUndoBatch(space.Host, beforeHost, space.Host.Value, PackStep));
-                }
-                if (!space.Packed.Value)
-                {
-                    space.Packed.Value = true;
-                    InspectorUndo.Record(world, new FieldEditUndoBatch(space.Packed, false, true, PackStep));
-                }
-            }
-            catch (UnauthorizedAccessException)
-            {
-            }
-        }
-    }
-
-    // The packer's own host in place of someone else's: same slot, same settings, new author.
-    private static ScriptHost Remint(ScriptHost old)
-    {
-        var fresh = old.Slot.AttachComponent<ScriptHost>();
-        fresh.Mode.Value = old.Mode.Value;
-        fresh.Enabled.Value = old.Enabled.Value;
-        ComponentUndo.RecordAttach(fresh, fresh);
-        ComponentUndo.RecordDestroy(old, old);
-        return fresh;
-    }
-
-    // Only on the packer's machine, right before it packs: every other peer only reads the ids.
-    private static void RenameClashingIds(ScriptGraphSpace space)
-    {
-        var taken = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var node in space.Nodes)
-        {
-            string id = node.NodeId.Value ?? string.Empty;
-            if (GraphNode.IsValidId(id) && taken.Add(id))
-                continue;
-            string fresh = node.FreshId();
-            for (int i = 2; !taken.Add(fresh); i++)
-                fresh = node.FreshId() + "_" + i;
-            node.NodeId.Value = fresh;
-        }
-    }
-
     private static string Describe(ScriptGraphNode? node, string message)
         => node == null ? message : $"{node.Title}: {message}";
 
     internal static UndoManager? FindUndo(World world)
         => world.LocalUser?.Root?.Slot?.GetComponentInChildren<UndoManager>();
-
-    private const string LocalOnly = "a Local script changes only what it made on this machine";
-
-    // A script's Unpack Graph: the open graph when there is one, else the host's graph written out under it,
-    // made the way the script makes any slot. Refused, with the reason, while the graph has not loaded on the
-    // host. No undo step: a script that wants one records the space itself.
-    internal static ScriptGraphSpace? UnpackFor(ScriptContext ctx, ScriptHost? host)
-    {
-        if (ctx.OffHost)
-            throw new UnauthorizedAccessException(LocalOnly);
-        if (!ScriptReads.Reached(ctx, host, "script"))
-            return null;
-        if (FindSpace(host) is { } open)
-        {
-            if (open.Packed.Value)
-                ScriptWrites.Write(ctx, open.Packed, false);
-            if (!open.Slot.ActiveSelf.Value)
-                ScriptWrites.Write(ctx, open.Slot.ActiveSelf, true);
-            return open;
-        }
-
-        ScriptGraph graph;
-        if (host.Graph.Target == null)
-            graph = new ScriptGraph();
-        else if (host.Graph.Target is IUrlAssetProvider { IsLoadPending: true })
-            throw new InvalidOperationException("its graph is still loading here");
-        else if (host.Graph.IsAssetAvailable && host.Graph.Asset?.Graph is { } loaded)
-            graph = loaded;
-        else
-            throw new InvalidOperationException((host.Graph.Target as IUrlAssetProvider)?.LoadFailure ?? host.Graph.Asset?.LoadError
-                ?? "its graph has not loaded here yet");
-
-        var made = ScriptWrites.MakeUnder(ctx, host.Slot, 1 + graph.Nodes.Count, () => ScriptGraphPacking.Unpack(host, graph).Slot);
-        return made.GetComponent<ScriptGraphSpace>();
-    }
-
-    // A script's Pack Graph: the graph in space as a new script of the packer's own, on a new slot beside the
-    // graph's script, made the way the packer makes any slot. Its compile runs on a worker and the graph is
-    // stored as the editor stores it; the script appears on the slot once both land, and runs as whoever
-    // packed it, the same rule a person's pack follows.
-    internal static Slot? PackFor(ScriptContext ctx, ScriptGraphSpace? space)
-    {
-        if (ctx.OffHost)
-            throw new UnauthorizedAccessException(LocalOnly);
-        var world = ctx.World;
-        if (!ScriptReads.Reached(ctx, space, "graph"))
-            return null;
-        if (!world.IsAuthority)
-        {
-            ctx.Fail("graphs are packed on the host");
-            return null;
-        }
-        if (space.Kind.Value == GraphKind.Shader)
-            throw new InvalidOperationException("a shader graph stays with its material; there is nothing to pack");
-        if (NotPackersOwn(ctx.Principal, space) is { } refused)
-            throw new UnauthorizedAccessException(refused);
-        if (space.IsChecked && space.HasProblems)
-            throw new InvalidOperationException("the graph has problems: " + FirstProblem(space));
-        var build = ScriptGraphPacking.Build(space);
-        if (build.Problems.Count > 0)
-            throw new InvalidOperationException(Describe(build.Problems[0].Node, build.Problems[0].Message));
-
-        var scripts = world.Scripts;
-        var source = space.Host.Target is { IsDestroyed: false } owner ? owner : null;
-        var anchor = source?.Slot ?? space.Slot;
-        string name = IsImplicit(space) || string.IsNullOrEmpty(anchor.Name.Value) ? ScriptSlotName : anchor.Name.Value;
-        var made = ScriptWrites.MakeBeside(ctx, anchor, name);
-        scripts.Packed(ctx);
-
-        var principal = ctx.Principal;
-        var mode = source?.Mode.Value ?? ScriptMode.Shared;
-        var bindings = new List<IWorldElement>(build.Bindings);
-        var compile = ScriptEnvironment.CompileAsync(build.Graph);
-        var store = ScriptGraphAsset.StoreAsync(build.Graph);
-        scripts.AwaitPack(Task.WhenAll(compile, store), () => LandPack(world, principal, made, store, bindings, mode));
-        return made;
-    }
-
-    // Why a script may not pack a graph as its own, or null when it may. A world script packs a graph open on
-    // one of the world's own scripts, where every edit already runs as the world. A guest's script packs only
-    // its author's own work and the world's, and nothing anyone else wrote, or someone else's graph would run
-    // with its author's rights.
-    internal static string? NotPackersOwn(ScriptPrincipal principal, ScriptGraphSpace space)
-    {
-        if (principal.IsWorldContent)
-        {
-            return space.Host.Target is { IsDestroyed: false } host && host.ReferenceID.GetUserByte() == RefIDConstants.AUTHORITY_BYTE
-                && ReferenceEquals(FindSpace(host), space)
-                ? null
-                : "a world script packs only a graph open on one of the world's own scripts";
-        }
-        byte author = principal.AllocationByte;
-        var user = principal.Author;
-        foreach (var node in space.Nodes)
-        {
-            if (!HeldBy(node, author) || WrittenByOther(node.NodeType, user) || WrittenByOther(node.Signature, user)
-                || WrittenByOther(node.Version, user) || WrittenByOther(node.NodeId, user))
-                return OnlyOwnWork;
-            foreach (var value in node.Values)
-            {
-                if (!HeldBy(value, author) || WrittenByOther(value.Port, user) || WrittenByOther(value.Json, user)
-                    || WrittenByOther(value.Reference, user))
-                    return OnlyOwnWork;
-            }
-            foreach (var wire in node.Inputs)
-            {
-                if (!HeldBy(wire, author) || WrittenByOther(wire.Port, user) || WrittenByOther(wire.Node, user) || WrittenByOther(wire.NodePort, user))
-                    return OnlyOwnWork;
-            }
-            foreach (var wire in node.Exits)
-            {
-                if (!HeldBy(wire, author) || WrittenByOther(wire.Port, user) || WrittenByOther(wire.Node, user) || WrittenByOther(wire.NodePort, user))
-                    return OnlyOwnWork;
-            }
-        }
-        return null;
-    }
-
-    private const string OnlyOwnWork = "a guest's script packs only its author's own work and the world's";
-
-    private static bool HeldBy(IWorldElement element, byte author)
-    {
-        byte owner = element.ReferenceID.GetUserByte();
-        return owner == author || owner == RefIDConstants.AUTHORITY_BYTE;
-    }
-
-    private static bool WrittenByOther(Networking.Sync.ConflictingSyncElement member, User? author)
-        => member.LastModifyingUser is { } writer && !ReferenceEquals(writer, author);
-
-    private static string FirstProblem(ScriptGraphSpace space)
-    {
-        if (space.GraphProblems.Count > 0)
-            return space.GraphProblems[0];
-        foreach (var node in space.Nodes)
-        {
-            var problems = space.ProblemsOf(node);
-            if (problems.Count > 0)
-                return Describe(node, problems[0]);
-        }
-        return "it does not compile";
-    }
-
-    // Once the compile and the store have landed, on the host: the script onto the slot, as the packer, in the
-    // packer's range. A graph that could not be stored takes its slot with it.
-    private static void LandPack(World world, ScriptPrincipal principal, Slot slot, Task<Uri?> store, List<IWorldElement> bindings,
-        ScriptMode mode)
-    {
-        if (slot.IsDestroyed || world.IsDestroyed || !principal.IsStillAuthorIn(world))
-            return;
-        var url = store.IsCompletedSuccessfully ? store.Result : null;
-        using (world.DataModelPermissions?.EnterActor(principal))
-        {
-            if (url == null)
-            {
-                LumoraLogger.Warn($"Loom [{principal}]: a packed graph could not be stored, so nothing was packed");
-                slot.Destroy();
-                return;
-            }
-            using (ScriptWrites.RangeOf(world, principal))
-            {
-                var provider = slot.AttachComponent<ScriptGraphProvider>();
-                provider.URL.Value = url;
-                var host = slot.AttachComponent<ScriptHost>();
-                if (host.Mode.Value != mode)
-                    host.Mode.Value = mode;
-                host.Graph.Target = provider;
-                foreach (var binding in bindings)
-                    host.Bindings.Add(binding.IsDestroyed ? null! : binding);
-                if (!principal.IsWorldContent)
-                {
-                    var decides = new List<IField> { host.Graph, provider.URL };
-                    for (int i = 0; i < host.Bindings.Count; i++)
-                        decides.Add(host.Bindings.GetElement(i));
-                    world.Scripts.RememberSetUp(host, decides);
-                }
-            }
-        }
-    }
-
-    private static Task<string?> OnWorldThread(World world, Func<string?> action)
-    {
-        var done = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
-        world.RunSynchronously(() =>
-        {
-            try
-            {
-                done.SetResult(action());
-            }
-            catch (Exception ex)
-            {
-                LumoraLogger.Warn($"Loom: pack failed: {ex}");
-                done.SetResult("packing failed: " + ex.Message);
-            }
-        });
-        return done.Task;
-    }
 }

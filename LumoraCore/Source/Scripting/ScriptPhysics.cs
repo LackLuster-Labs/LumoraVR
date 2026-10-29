@@ -13,8 +13,9 @@ namespace Lumora.Core.Scripting;
 // script on the host is anything not in someone's body or hands; a push on any other would be dropped
 // by the body anyway, and the author has to be allowed to write its velocity. A ray, a sphere cast and
 // a search each count once against the script's share of the frame, a cast that goes on past what it
-// struck counts every ray it casts, and a hit on something only the host machine has, a local slot,
-// reads as nothing: it is not in the world the script sees.
+// struck counts every ray it casts, and something only the host machine has, a local slot, is passed
+// through: it is not in the world the script sees, and stopped a Shared script's ray at the host's own
+// panels.
 //
 // A cast for people alone finds them the way a search does, by the upright body each stands in, worked
 // out from where heads and feet are. A person's own body is not a collider a cast reports, and every
@@ -25,15 +26,20 @@ internal static class ScriptPhysics
     // from within.
     private const float StepPast = 0.001f;
 
-    // The rigid body on slot that this machine simulates. One another machine simulates is no failure for a
-    // Local script, whose copy there pushes it; for any other script nothing pushes it, and it fails.
+    // How many casts one ray or sweep goes on through, past what it ignores or cannot see.
+    private const int MaxPasses = 8;
+
+    // The rigid body slot is part of, its own or the nearest above it, that this machine simulates: a body's
+    // shape takes in the colliders under it, so a ray's hit on one part of a model pushes the model. One
+    // another machine simulates is no failure for a Local script, whose copy there pushes it; for any other
+    // script nothing pushes it, and it fails.
     public static RigidBody? Body(ScriptContext ctx, Slot? slot)
     {
         if (!ScriptReads.Reached(ctx, slot))
             return null;
-        if (slot!.GetComponent<RigidBody>() is not { IsDestroyed: false } body)
+        if (BodyAt(slot!) is not { } body || !ScriptReads.Visible(ctx, body))
         {
-            ctx.Fail($"{ScriptReads.Named(slot)} has no rigid body");
+            ctx.Fail($"{ScriptReads.Named(slot)} is not part of a rigid body");
             return null;
         }
         if (!body.IsSimulationOwner)
@@ -44,6 +50,16 @@ internal static class ScriptPhysics
         }
         ScriptWrites.Check(ctx, body.LinearVelocity);
         return body;
+    }
+
+    private static RigidBody? BodyAt(Slot slot)
+    {
+        for (var current = slot; current != null && !current.IsRootSlot; current = current.Parent)
+        {
+            if (current.GetComponent<RigidBody>() is { IsDestroyed: false } body)
+                return body;
+        }
+        return null;
     }
 
     public static bool IsFinite(float3 value) => float.IsFinite(value.x) && float.IsFinite(value.y) && float.IsFinite(value.z);
@@ -77,26 +93,53 @@ internal static class ScriptPhysics
     private static bool Ignored(Slot? slot, Slot[]? ignoring)
         => slot != null && ignoring != null && (ReferenceEquals(slot, ignoring[0]) || slot.IsDescendantOf(ignoring[0]));
 
-    // A ball swept along a ray, passing over what it ignores. The sweep itself leaves nothing out, so on
-    // touching something ignored the ball sweeps on from just inside it, which a sweep passes through; a
-    // collider touching the ignored one at that very spot is passed over with it. Each sweep after the
-    // first counts as a ray.
+    // The first collider along a ray the script can see. Something it cannot see is passed through the way
+    // StrikeAll passes it, each ray after the first counted.
+    public static bool StrikeFirst(ScriptContext ctx, float3 origin, float3 direction, float reach, bool triggers,
+        IReadOnlyList<Slot>? ignoring, out PhysicsRaycastHit hit)
+    {
+        float travelled = 0f;
+        for (int ray = 0; ray < MaxPasses && travelled < reach; ray++)
+        {
+            if (ray > 0)
+                ctx.CountCast();
+            if (!ctx.World.Physics.Raycast(origin + direction * travelled, direction, reach - travelled, ignoring, out hit, triggers))
+                return false;
+            hit.Distance += travelled;
+            if (hit.Slot == null || ScriptReads.Visible(ctx, hit.Slot))
+                return true;
+            float next = hit.Distance + StepPast;
+            if (!(next > travelled))
+                break;
+            travelled = next;
+        }
+        hit = default;
+        return false;
+    }
+
+    // A ball swept along a ray, passing over what it ignores and what the script cannot see. The sweep
+    // itself leaves nothing out, so on touching one of those the ball sweeps on from just inside it, which a
+    // sweep passes through; a collider touching it at that very spot is passed over with it. At most
+    // MaxPasses sweeps, each after the first counted as a ray.
     public static bool Sweep(ScriptContext ctx, float3 origin, float3 direction, float radius, float reach, bool triggers,
         Slot[]? ignoring, out PhysicsRaycastHit hit)
     {
         float travelled = 0f;
-        for (int sweep = 0; travelled < reach; sweep++)
+        for (int sweep = 0; sweep < MaxPasses && travelled < reach; sweep++)
         {
             if (sweep > 0)
                 ctx.CountCast();
             if (!ctx.World.Physics.SphereCast(origin + direction * travelled, direction, radius, reach - travelled, out hit, triggers))
                 return false;
-            if (!Ignored(hit.Slot, ignoring))
+            if (!Ignored(hit.Slot, ignoring) && (hit.Slot == null || ScriptReads.Visible(ctx, hit.Slot)))
             {
                 hit.Distance += travelled;
                 return true;
             }
-            travelled += hit.Distance + StepPast;
+            float next = travelled + hit.Distance + StepPast;
+            if (!(next > travelled))
+                break;
+            travelled = next;
         }
         hit = default;
         return false;
@@ -116,9 +159,13 @@ internal static class ScriptPhysics
             if (!ctx.World.Physics.Raycast(origin + direction * travelled, direction, reach - travelled, ignoring, out var hit, triggers))
                 return;
             hit.Distance += travelled;
-            travelled = hit.Distance + StepPast;
             if (ScriptReads.Visible(ctx, hit.Slot))
                 into.Add(hit);
+            // Far out a millimetre can be lost to rounding, and the same surface would be struck forever. -xlinka
+            float next = hit.Distance + StepPast;
+            if (!(next > travelled))
+                return;
+            travelled = next;
         }
     }
 

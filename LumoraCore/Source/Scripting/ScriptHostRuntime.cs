@@ -182,8 +182,28 @@ internal sealed class ScriptHostRuntime : IDisposable
         _onComponentsChanged = (_, component) =>
         {
             if (component is TouchControl)
-                Resubscribe();
+                HookControls();
         };
+    }
+
+    // A shader property is bound as itself and run as the field its port takes (ShaderPropertyFields).
+    private static IReadOnlyList<object?> AsDeclared(CompileResult compiled, IReadOnlyList<object?> bindings)
+    {
+        object?[]? adapted = null;
+        for (int i = 0; i < bindings.Count && i < compiled.Bindings.Count; i++)
+        {
+            var value = ShaderPropertyFields.Adapt(bindings[i], compiled.Bindings[i].Type.ClrType);
+            if (ReferenceEquals(value, bindings[i]))
+                continue;
+            if (adapted == null)
+            {
+                adapted = new object?[bindings.Count];
+                for (int j = 0; j < bindings.Count; j++)
+                    adapted[j] = bindings[j];
+            }
+            adapted[i] = value;
+        }
+        return adapted ?? bindings;
     }
 
     // Replacing is the script this one takes over from, which gives its memory back once this one runs.
@@ -194,6 +214,7 @@ internal sealed class ScriptHostRuntime : IDisposable
         ScriptPrincipal principal, ScriptHostRuntime? replacing = null, bool local = false, bool drivesOnly = false, bool authorMachine = false)
     {
         ScriptEnvironment.TryGetCompileRecord(compiled.GraphHash, out var record);
+        bindings = AsDeclared(compiled, bindings);
         var runner = ScriptRunner.Start(host.World, compiled, record, cached, principal, bindings, self: host.Slot,
             local: local && !authorMachine, authorMachine: authorMachine);
         runner.Context.Host = host;
@@ -252,7 +273,10 @@ internal sealed class ScriptHostRuntime : IDisposable
             if (now < due)
                 continue;
             int fired = count + 1;
-            _intervals[i] = (node, seconds, System.Math.Max(due + seconds, now), fired);
+            // A frame that ran past the next beat as well starts the beat again from now, so the late fire is
+            // not followed by another a frame later. -xlinka
+            double next = due + seconds;
+            _intervals[i] = (node, seconds, next > now ? next : now + seconds, fired);
             Enqueue(runner => runner.Raise(node, new IntervalElapsed(fired)));
         }
         if (Runner.Instance.PendingTimers == 0)
@@ -315,6 +339,27 @@ internal sealed class ScriptHostRuntime : IDisposable
             }
         }
         _sources.Subscribe(Runner.Instance.Events, BoundSource);
+    }
+
+    // The touch controls on the watched slots, hooked again as they come and go. Only these: starting every
+    // source over would hear all that is already inside a trigger or under a beam come in again. -xlinka
+    private void HookControls()
+    {
+        foreach (var control in _controls)
+            control.Responded -= _onResponded;
+        _controls.Clear();
+        if (_disposed || IsLocal)
+            return;
+        foreach (var slot in _watched)
+        {
+            if (slot.IsDestroyed)
+                continue;
+            foreach (var control in slot.GetComponents<TouchControl>())
+            {
+                control.Responded += _onResponded;
+                _controls.Add(control);
+            }
+        }
     }
 
     private void Unsubscribe()

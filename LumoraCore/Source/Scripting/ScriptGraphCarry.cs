@@ -11,10 +11,9 @@ using Lumora.Core.Math;
 
 namespace Lumora.Core.Scripting;
 
-// A node carried by hand and let go of lands on its graph's plane: level with it, upright and at its own size,
-// wherever along the plane the hand left it. Only the machine whose hand picked it up lands it, in the same
-// update as the release, so the landing travels with the release and the host takes it from the hand that held
-// the node. Everything let go of at once is one undo step back to where each node was picked up. -xlinka
+// A node carried by hand and let go of stays where the hand left it, at whatever depth and turn, the way any
+// object does; nothing pulls it back onto its graph's plane. Only the machine whose hand picked it up records
+// the move, and everything let go of at once is one undo step back to where each node was picked up. -xlinka
 public static partial class ScriptGraphEditing
 {
     public static readonly LocaleText MoveStep = LocaleText.Keyed("Loom.Undo.Move", "Move Nodes");
@@ -68,8 +67,8 @@ public static partial class ScriptGraphEditing
     // Below this a pose read back through a hand is the same pose.
     private const float Rounding = 1e-5f;
 
-    // A hand here let go of a node it picked up: onto its graph's plane if that is where it went, and into the
-    // undo step of this release unless it went back where it was.
+    // A hand here let go of a node it picked up: into the undo step of this release unless it went back where it
+    // was.
     internal static void LetGo(ScriptGraphNode node, Grabbable grab)
     {
         var world = node.World;
@@ -82,7 +81,6 @@ public static partial class ScriptGraphEditing
         var records = new List<IUndoBatch>();
         try
         {
-            LayOnPlane(slot);
             if (!ReferenceEquals(pickup.Graph, graph))
                 return;
             Settle(slot.LocalPosition, pickup.Position, (a, b) => (a - b).Length < Rounding, records);
@@ -115,18 +113,6 @@ public static partial class ScriptGraphEditing
         }
         if (!EqualityComparer<T>.Default.Equals(after, before))
             field.Value = before;
-    }
-
-    // Level with its graph's plane, upright and at its own size, where it is along the plane.
-    private static void LayOnPlane(Slot slot)
-    {
-        var at = slot.LocalPosition.Value;
-        if (at.z != 0f)
-            slot.LocalPosition.Value = new float3(at.x, at.y, 0f);
-        if (slot.LocalRotation.Value != floatQ.Identity)
-            slot.LocalRotation.Value = floatQ.Identity;
-        if (slot.LocalScale.Value != float3.One)
-            slot.LocalScale.Value = float3.One;
     }
 
     // A node deleted, or taken out of its graph, or in a graph put away since it landed, has nowhere in this step

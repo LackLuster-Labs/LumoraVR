@@ -124,8 +124,7 @@ public sealed class ScriptGraphNode : Component
         WatchWires(Exits, 0, Exits.Count);
     }
 
-    // A hand here picking the node up keeps where it sat for the undo step; letting it go lands it on its
-    // graph's plane.
+    // A hand here picking the node up keeps where it sat for the undo step; letting it go records the move.
     public override void OnStart()
     {
         base.OnStart();

@@ -50,7 +50,7 @@ public static class ScriptFieldNodes
     public static List<ScriptFieldNodeKind> Offers(IWorldElement? member)
     {
         var offers = new List<ScriptFieldNodeKind>();
-        if (member is not SyncElement { IsDestroyed: false, IsLocalElement: false } || member is not IField)
+        if (member is not SyncElement { IsDestroyed: false, IsLocalElement: false } || FieldOf(member) == null)
             return offers;
         foreach (var kind in Order)
         {
@@ -76,7 +76,7 @@ public static class ScriptFieldNodes
                 _ => ("ReferenceTarget", handle.Name),
             };
         }
-        if (member is not IField field)
+        if (FieldOf(member) is not { } field)
             return null;
         if (!ScriptTypes.TryGet(field.ValueType, out var type))
             return kind == ScriptFieldNodeKind.Reference ? ("Constant", "anyfield") : null;
@@ -186,9 +186,13 @@ public static class ScriptFieldNodes
                 node.SetReference("target", target);
             return;
         }
-        if (member is IField field && ScriptTypes.TryGet(field.ValueType, out var type) && ConstantOf(type, field.BoxedValue) is { } value)
+        if (FieldOf(member) is { } field && ScriptTypes.TryGet(field.ValueType, out var type) && ConstantOf(type, field.BoxedValue) is { } value)
             node.SetValue("value", value);
     }
+
+    // A value field, or a shader property as the field of its own type (a material panel's row hands one over).
+    private static IField? FieldOf(IWorldElement member)
+        => member as IField ?? (member is Components.Assets.ShaderUniformParam param ? ShaderPropertyFields.Natural(param) : null);
 
     // The handle a reference's target travels as: the kind it holds, or the nearest kind a script names.
     public static ScriptType? TargetHandle(ISyncRef reference)

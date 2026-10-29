@@ -95,7 +95,8 @@ internal static class ScriptGraphOverloads
             var type = candidate.Inputs[index].Type;
             if (!value.Reference.Value.IsNull)
             {
-                if (value.Reference.Target is not { IsDestroyed: false } target || !type.ClrType.IsInstanceOfType(target))
+                if (value.Reference.Target is not { IsDestroyed: false } target
+                    || !type.ClrType.IsInstanceOfType(target) && !ShaderPropertyFields.Accepts(target, type.ClrType))
                     return false;
             }
             else if (!string.IsNullOrEmpty(value.Json.Value))

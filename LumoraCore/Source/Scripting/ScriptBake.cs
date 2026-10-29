@@ -56,6 +56,12 @@ internal static class ScriptBake
         {
             ScriptAttach.CheckPlace(ctx, root!);
         }
+        catch (UnauthorizedAccessException refused)
+        {
+            // Refused here as when it lands: failed says so, and the refusal is still counted. -xlinka
+            ticket.Answer("failed", new MeshesBaked(null, 0, 0, refused.Message));
+            throw;
+        }
         catch
         {
             ticket.Abandon();

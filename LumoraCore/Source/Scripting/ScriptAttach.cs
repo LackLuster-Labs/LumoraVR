@@ -47,6 +47,11 @@ internal static class ScriptAttach
         {
             CheckPlace(ctx, slot!);
         }
+        catch (UnauthorizedAccessException refused)
+        {
+            ticket.Answer("failed", failed(refused.Message));
+            throw;
+        }
         catch
         {
             ticket.Abandon();
@@ -56,14 +61,14 @@ internal static class ScriptAttach
 
         if (host == null)
         {
-            AttachNow(ticket, slot!, address, attach);
+            AttachNow(ticket, slot!, address, attach, failed);
             return;
         }
         var access = ScriptWebClient.Shared.Access;
         if (access.TryGetDecision(host, out bool allowed))
         {
             if (allowed)
-                AttachNow(ticket, slot!, address, attach);
+                AttachNow(ticket, slot!, address, attach, failed);
             else
                 ticket.Answer("denied", failed($"web access to {host} was denied"));
             return;
@@ -73,13 +78,20 @@ internal static class ScriptAttach
         ctx.World.StartCoroutine(AfterAnswer(ctx, ticket, slot!, address, host, asking, attach, failed));
     }
 
-    // Inside the node's own call: a refusal is counted like any write's, and the wait is let go.
-    private static void AttachNow<T>(AwaitTicket<T> ticket, Slot slot, Uri address, Func<Slot, Uri, T> attach) where T : struct
+    // Inside the node's own call: a refusal is counted like any write's, and answers failed the way one after
+    // asking does, so the flow waiting on it carries on. -xlinka
+    private static void AttachNow<T>(AwaitTicket<T> ticket, Slot slot, Uri address, Func<Slot, Uri, T> attach,
+        Func<string, T> failed) where T : struct
     {
         T result;
         try
         {
             result = attach(slot, address);
+        }
+        catch (UnauthorizedAccessException refused)
+        {
+            ticket.Answer("failed", failed(refused.Message));
+            throw;
         }
         catch
         {

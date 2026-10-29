@@ -36,14 +36,17 @@ internal static class ScriptDriveLinks
         var kept = new HashSet<IScriptDrive>(ReferenceEqualityComparer.Instance);
         string? refused = null;
         var principal = context.Principal;
-        using (world.DataModelPermissions?.EnterActor(principal))
+        using (world.DataModelPermissions?.EnterActor(context.Actor))
         {
             foreach (var entry in compiled.Drives)
             {
                 var target = entry.Binding >= 0 && entry.Binding < bindings.Count ? bindings[entry.Binding] as IWorldElement : null;
+                // A shader property is held through its float4 by a link of its own.
                 var type = entry.FieldType == ScriptTypes.Get(typeof(ISyncRef))
                     ? typeof(ScriptReferenceDrive<>).MakeGenericType(entry.ValueType.ClrType)
-                    : typeof(ScriptFieldDrive<>).MakeGenericType(entry.ValueType.ClrType);
+                    : target is IFieldView
+                        ? typeof(ScriptShaderPropertyDrive<>).MakeGenericType(entry.ValueType.ClrType)
+                        : typeof(ScriptFieldDrive<>).MakeGenericType(entry.ValueType.ClrType);
                 IScriptDrive? drive = null;
                 foreach (var candidate in existing)
                 {

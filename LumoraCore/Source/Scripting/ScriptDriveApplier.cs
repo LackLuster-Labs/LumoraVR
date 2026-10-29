@@ -109,7 +109,7 @@ internal sealed class ScriptDriveApplier
         var permissions = _runtime.Host.World?.DataModelPermissions;
         try
         {
-            using (target == null ? permissions?.EnterSystemBypass() : permissions?.EnterActor(_runtime.Runner.Context.Principal))
+            using (target == null ? permissions?.EnterSystemBypass() : permissions?.EnterActor(_runtime.Runner.Context.Actor))
                 link.Aim(target);
         }
         catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException)

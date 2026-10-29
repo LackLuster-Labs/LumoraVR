@@ -120,13 +120,15 @@ public static class ShaderGraphMaterials
             records.Add(new FieldEditUndoBatch(field, before, field.Value, step));
     }
 
-    // The material a graph makes, found from anything on or under its object.
+    // The material a graph makes, found from anything on or under its object, or from an orb carrying it.
     public static ShaderGraphSource? FindOn(Slot? slot)
     {
         for (var at = slot; at != null && !at.IsRootSlot; at = at.Parent)
         {
             if (at.GetComponent<ShaderGraphSource>() is { IsDestroyed: false } source)
                 return source;
+            if (at.GetComponent<MaterialOrb>()?.Material is CustomShaderMaterial { Shader.Target: ShaderGraphSource { IsDestroyed: false } worn })
+                return worn;
         }
         return null;
     }

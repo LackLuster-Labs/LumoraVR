@@ -16,8 +16,8 @@ namespace Lumora.Core.Components.Scripting;
 // Inputs down the left, flow first; outputs down the right, flow first; then the node's settings (a
 // Stored Value's name and start, a Write Value's target, a Function's name, the Function a Return or a
 // call points at, the name another script's Function is called by, the object an event listens to); then a
-// Display's or Pulse's readout, or a Call's button; then a shader node's preview of what it makes; then up
-// to two lines of what is wrong with it.
+// Display's or Pulse's readout, or a Call's button; then a shader node's preview of what it makes, or a Material
+// Output's material well; then up to two lines of what is wrong with it.
 //
 // A relay's card is a short bar with its one port at each end and nothing else, so it sits on its wire like a
 // bead rather than a box. A relay with something wrong opens out into a full card, which can say what.
@@ -34,6 +34,7 @@ public sealed class ScriptCardLayout
     public bool Readout { get; private set; }
     public bool CallButton { get; private set; }
     public bool Preview { get; private set; }
+    public bool OutputWell { get; private set; }
     public float InputLabelWidth { get; private set; } = 80f;
     public float OutputLabelWidth { get; private set; } = 104f;
     public float EditorWidth { get; private set; } = 180f;
@@ -49,7 +50,11 @@ public sealed class ScriptCardLayout
 
     public float ExtraHeight => Readout || CallButton ? ScriptEditorStyle.RowHeight * 1.5f : 0f;
 
-    public float PreviewHeight => Preview ? PreviewSize + ScriptEditorStyle.Padding : 0f;
+    public float PreviewHeight => Preview ? PreviewSize + ScriptEditorStyle.Padding
+        : OutputWell ? OutputWellHeight + ScriptEditorStyle.Padding : 0f;
+
+    // The sphere's square with the driven materials beside it, then a row of buttons and a row of what happened.
+    public static float OutputWellHeight => PreviewSize + ScriptEditorStyle.RowHeight * 2f;
 
     public float Height => Compact ? CompactHeight
         : ScriptEditorStyle.HeaderHeight + (PortRows + Settings.Count + ProblemLines) * ScriptEditorStyle.RowHeight
@@ -78,7 +83,7 @@ public sealed class ScriptCardLayout
             layout.OptionsRows = 1;
         else
             layout.OptionsRows = (overload.Definition.IsGeneric || ScriptGraphEditing.SignatureChoices(node).Count > 1 ? 1 : 0)
-                + (overload.Definition.IsVariadic ? 1 : 0);
+                + (overload.Definition.IsVariadic ? 1 : 0) + (overload.Definition.GrowsExits ? 1 : 0);
         return layout;
     }
 
@@ -150,6 +155,7 @@ public sealed class ScriptCardLayout
         foreach (var output in overload.Outputs)
             layout.Right.Add(new ScriptCardPort(output.Name, ScriptCardHandleKind.DataOutput, output.Type));
         layout.Preview = preview && overload.Outputs.Count > 0;
+        layout.OutputWell = preview && overload.Definition.ClrType == typeof(Lumora.Shading.MaterialOutput);
         foreach (var port in layout.Left)
             layout.InputLabelWidth = MathF.Max(layout.InputLabelWidth, LabelWidth(port.Name));
         foreach (var port in layout.Settings)
@@ -170,6 +176,13 @@ public sealed class ScriptCardLayout
     public bool TryAnchor(ScriptCardHandleKind kind, string port, out float2 point)
     {
         point = default;
+        if (kind == ScriptCardHandleKind.Material)
+        {
+            if (!OutputWell)
+                return false;
+            point = new float2(10f + PreviewSize * 0.5f, -(PreviewTop + PreviewSize * 0.5f));
+            return true;
+        }
         bool left = kind is ScriptCardHandleKind.FlowInput or ScriptCardHandleKind.DataInput;
         var list = left ? Left : Right;
         for (int i = 0; i < list.Count; i++)

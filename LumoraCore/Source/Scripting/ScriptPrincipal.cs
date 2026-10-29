@@ -1,6 +1,8 @@
 // Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
+using System;
+using System.Collections.Generic;
 using Lumora.Warden;
 
 namespace Lumora.Core.Scripting;
@@ -33,6 +35,14 @@ public sealed class ScriptPrincipal : IPermissionActor
     // The user record behind a user principal, for the questions the gate asks of a User. Null for the
     // world's own scripts.
     public User? Author { get; private init; }
+
+    // The slot a world script runs on, so the gate can tell what inside a worn or held object is its own.
+    public IPermissionTarget? ScriptHome { get; private init; }
+
+    // The world's own script sitting on home: WorldContent's rights, with the gate told where it sits.
+    public static ScriptPrincipal WorldContentAt(Slot? home)
+        => home == null ? WorldContent
+            : new(0, RefIDConstants.AUTHORITY_BYTE, "world script", null, null, worldContent: true) { ScriptHome = home };
 
     private ScriptPrincipal(ulong id, byte allocationByte, string? displayName, string? machineKey, string? accountKey, bool worldContent)
     {
@@ -77,20 +87,34 @@ public sealed class ScriptPrincipal : IPermissionActor
     }
 
     // Whether the author this principal was pinned to is still the one behind its byte.
+    // Asked before every call a person's script makes, so the user list is read into a list kept for it rather
+    // than a new one each time.
+    [ThreadStatic]
+    private static List<User>? _users;
+
     public bool IsStillAuthorIn(World world)
     {
         if (IsWorldContent)
             return true;
 
-        foreach (var user in world.GetAllUsers())
+        var users = _users ??= new List<User>();
+        world.GetAllUsers(users);
+        try
         {
-            if (!user.HoldsByte(AllocationByte) || user.IsDestroyed)
-                continue;
-            return user.ReferenceID.RawValue == Id
-                && user.MachineID.Value == MachineKey
-                && user.AccountId.Value == AccountKey;
+            foreach (var user in users)
+            {
+                if (!user.HoldsByte(AllocationByte) || user.IsDestroyed)
+                    continue;
+                return user.ReferenceID.RawValue == Id
+                    && user.MachineID.Value == MachineKey
+                    && user.AccountId.Value == AccountKey;
+            }
+            return false;
         }
-        return false;
+        finally
+        {
+            users.Clear();
+        }
     }
 
     public override string ToString() => DisplayName ?? $"principal {Id}";

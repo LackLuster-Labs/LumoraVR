@@ -12,7 +12,7 @@ namespace Lumora.Core.Scripting;
 // never seen here. -xlinka
 internal static class ScriptTextFocus
 {
-    public static bool InFront(ScriptContext ctx) => ctx.OffHost && ctx.World.Focus == World.WorldFocus.Focused;
+    public static bool InFront(ScriptContext ctx) => ScriptInput.InFront(ctx);
 
     // The text field on a slot, when a Local script in front of the person may see it.
     public static TextInput? FieldOn(ScriptContext ctx, Slot? slot)

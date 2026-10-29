@@ -91,7 +91,7 @@ public sealed class ScriptPortDrop : Component, IProxyReceiver
     public static IWorldElement? Pick(ScriptType type, IWorldElement element)
     {
         var wanted = type.ClrType;
-        if (wanted.IsInstanceOfType(element))
+        if (wanted.IsInstanceOfType(element) || ShaderPropertyFields.Accepts(element, wanted))
             return element;
         if (element is ISyncRef reference && reference.Target is { } target && wanted.IsInstanceOfType(target))
             return target;
