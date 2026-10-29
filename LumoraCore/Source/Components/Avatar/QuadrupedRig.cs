@@ -830,6 +830,10 @@ public class QuadrupedRig : Component
 
     // Restore mapped bones and their connecting hierarchy. Skips anything still driven, because writing
     // through a live link is exactly the silent no-op this whole hunt was about.
+    //
+    // Forced, not set. A bone a local-only driver held reads the authored value already on this machine, so a
+    // plain set skipped it as unchanged and every other machine kept the value the package was saved with: they
+    // captured a different animal for rest than the wearer did. -xlinka
     public int RestoreAuthoredPose()
     {
         int restored = 0;
@@ -841,8 +845,8 @@ public class QuadrupedRig : Component
             if (bone.LocalPosition.IsDriven || bone.LocalRotation.IsDriven)
                 continue;
 
-            bone.LocalPosition.Value = pair.Value.Position;
-            bone.LocalRotation.Value = pair.Value.Rotation;
+            bone.LocalPosition.ForceSet(pair.Value.Position);
+            bone.LocalRotation.ForceSet(pair.Value.Rotation);
             restored++;
         }
         return restored;

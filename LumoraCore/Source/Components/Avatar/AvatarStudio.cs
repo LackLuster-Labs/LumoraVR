@@ -15,6 +15,7 @@ using Lumora.Core.Components.UI;
 using Lumora.Core.Components.Utility;
 using Lumora.Core.Input;
 using Lumora.Core.Math;
+using Lumora.Core.Security;
 using LumoraMeshes = Lumora.Core.Components.Meshes;
 using LumoraLogger = Lumora.Core.Logging.Logger;
 
@@ -26,6 +27,12 @@ public sealed class AvatarStudio : Component
     public readonly Sync<bool> CalibrateFeet = new();
 
     public readonly Sync<bool> CalibratePelvis = new();
+
+    public readonly Sync<bool> MirrorEditing = new(true);
+    private Slot? _mirrorPlane;
+    private float3 _mirrorPlanePosition;
+    private floatQ _mirrorPlaneRotation;
+    private readonly Dictionary<Slot, (float3 LeftPosition, floatQ LeftRotation, float3 RightPosition, floatQ RightRotation)> _mirrorPoses = new();
 
     public readonly Sync<bool> SetupEyes = new();
 
@@ -43,6 +50,9 @@ public sealed class AvatarStudio : Component
     // biped with a tail and digitigrade legs hits every other quadruped signal there is. So the answer
     // is to let the person who can SEE the model say, rather than guessing harder. -xlinka
     public readonly Sync<bool> QuadrupedMode = new();
+
+    // Seal the avatar Create makes to the account signed in here. Off until the maker ticks it.
+    public readonly Sync<bool> ProtectAvatar = new();
 
     // Front and rear body anchors, and one marker per paw. A four-legged spine is a bridge with a
     // support at each end rather than a stack on one, which is why there are two body markers here and
@@ -122,6 +132,8 @@ public sealed class AvatarStudio : Component
         CalibrateFeet.OnChanged += _ => React(RefreshOptionalMarkers);
         CalibratePelvis.OnChanged += _ => React(RefreshOptionalMarkers);
         SetupEyes.OnChanged += _ => React(null);
+        MirrorEditing.OnChanged += _ => { _mirrorPoses.Clear(); React(null); };
+        ProtectAvatar.OnChanged += _ => React(null);
         ShowDirections.OnChanged += _ => React(RefreshDirectionArrows);
         ShowToolAnchors.OnChanged += _ => React(RefreshOptionalMarkers);
 
@@ -141,9 +153,12 @@ public sealed class AvatarStudio : Component
             AnchorToUser();
             BuildMarkers();
         }
-        if (_controls.Target == null)
+        if (_controls.Target == null || _togglePills.Count != ToggleRows.Length)
         {
             Slot.FindChild("Controls", recursive: false)?.Destroy();
+            _togglePills.Clear();
+            _needsHead.Clear();
+            _needsRig.Clear();
             BuildControlPanel();
         }
 
@@ -153,6 +168,74 @@ public sealed class AvatarStudio : Component
         RefreshOptionalMarkers();
         RefreshDirectionArrows();
         PaintToggles();
+
+        // Opened for one model by name, by the import that just brought it in, so no coin toss: it stands
+        // at that model and lines up on that rig.
+        if (_openOver is { IsDestroyed: false } rig)
+            StandOver(rig);
+        _openOver = null;
+    }
+
+    // The rig OpenFor named, for OnStart to stand over. Local: only the machine that opened it acts on it.
+    private HumanoidRig? _openOver;
+
+    // Open the studio over a model that has just come in, every marker already on its rig as Align All would
+    // put it, so what is left is checking them and pressing Create. A studio already up moves over to this
+    // model instead of a second one appearing. Null when the model has no rig to line up on. -xlinka
+    public static AvatarStudio? OpenFor(Slot model)
+    {
+        var world = model?.World;
+        if (model == null || model.IsDestroyed || world?.RootSlot == null)
+            return null;
+        var rig = model.GetComponentInChildren<HumanoidRig>();
+        if (rig == null && model.GetComponentInChildren<SkeletonBuilder>() is { } skeleton)
+            rig = EnsureRig(skeleton);
+        if (rig == null || rig.IsDestroyed || rig.Bones.Count == 0)
+            return null;
+        bool quadruped = model.GetComponentInChildren<QuadrupedIK>() != null;
+        if (!quadruped && !rig.IsHumanoid)
+            return null;
+
+        var existing = world.RootSlot.GetComponentInChildren<AvatarStudio>();
+        if (existing is { IsDestroyed: false } && existing._headProxy.Target != null)
+        {
+            if (existing.QuadrupedMode.Value != quadruped)
+                existing.QuadrupedMode.Value = quadruped;
+            existing.StandOver(rig);
+            return existing;
+        }
+
+        var slot = world.AddSpawnSlot(world.RootSlot, "Avatar Studio");
+        slot.GlobalPosition = model.GlobalPosition;
+        var studio = slot.AttachComponent<AvatarStudio>();
+        studio.QuadrupedMode.Value = quadruped;
+        studio._openOver = rig;
+        return studio;
+    }
+
+    private void StandOver(HumanoidRig rig)
+    {
+        var avatar = ResolveAvatarRoot(rig);
+        if (avatar == null || avatar.IsDestroyed)
+            return;
+        AnchorAt(avatar.GlobalPosition);
+        _cachedRig = rig;
+        _stateKnown = false;
+        AlignMarkersToComputedReferences(avatar, rig);
+    }
+
+    // At the model's feet, turned to face the user the way AnchorToUser turns it, so the panel beside it reads.
+    private void AnchorAt(float3 feet)
+    {
+        Slot.GlobalPosition = feet;
+        var user = World?.LocalUser?.Root;
+        if (user == null)
+            return;
+        var toModel = feet - user.FeetPosition;
+        toModel.y = 0f;
+        if (toModel.LengthSquared < 1e-5f)
+            return;
+        Slot.GlobalRotation = FabrikSolver.FromToRotation(float3.Backward, -toModel.Normalized, float3.Up);
     }
 
     // A setting changed, by a press on any machine: the host answers it, once, being the one machine
@@ -290,6 +373,7 @@ public sealed class AvatarStudio : Component
 
     private void RebuildMarkersForMode()
     {
+        _mirrorPoses.Clear();
         foreach (var proxy in new[]
         {
             // Anchor proxies first: they are children of the hand markers, so destroying a hand takes its
@@ -739,10 +823,9 @@ public sealed class AvatarStudio : Component
 
         var panel = panelSlot.AttachComponent<PanelShell>();
         panel.Title.Value = "Avatar Studio";
-        // Sized to its rows, not guessed: header 52, top+bottom padding 28, sixteen rows summing 570, and
-        // the fifteen 6px gaps between them. A panel shorter than its content does not scroll or clip
-        // here, it spills into the world. -xlinka
-        panel.Size.Value = new float2(400f, 740f);
+        // Include the mirror option and leg-fit row in the panel height; this layout does not scroll.
+        // Keep its controls inside the panel rather than spilling below it. -xlinka
+        panel.Size.Value = new float2(400f, 868f);
         panel.TitleTextSize.Value = 22f;
         panel.HeaderHeight.Value = 52f;
         // The panel grabs by its OWN title bar and moves ONLY itself - the markers are independent siblings, so
@@ -797,6 +880,9 @@ public sealed class AvatarStudio : Component
         Gate(CellButton(b, limbs[0], "Hands", OnHands, DashTheme.SurfaceHover), needsHead: true);
         Gate(CellButton(b, limbs[1], "Body", OnBody, DashTheme.SurfaceHover), needsHead: true);
 
+        SetRowHeight(b, 38f);
+        Gate(b.Button("Fit Pelvis From Legs", OnFitPelvis, DashTheme.SurfaceHover), needsHead: true);
+
         SetRowHeight(b, 42f);
         Gate(b.Button("Align All", OnAlignAll, DashTheme.Accent), needsHead: true);
 
@@ -806,6 +892,9 @@ public sealed class AvatarStudio : Component
         SetRowHeight(b, 38f);
         Round(b.Button("Align Tool Anchors", OnToolAnchors, DashTheme.SurfaceHover), DashTheme.RadiusControl);
 
+        // On the main part of the panel, right above Create, because it decides what Create makes.
+        AddToggleRow(b, ToggleRows[0].Label, ToggleRows[0].State);
+
         SetRowHeight(b, 50f);
         var create = b.Button("Create Avatar", OnCreate, DashTheme.Positive);
         // Strips the handles and takes the studio down, with no undo.
@@ -813,13 +902,16 @@ public sealed class AvatarStudio : Component
         Gate(create, needsHead: true);
 
         AddSectionLabel(b, "OPTIONS");
-        foreach (var (label, state) in ToggleRows)
-            AddToggleRow(b, label, state);
+        var rows = ToggleRows;
+        for (int i = 1; i < rows.Length; i++)
+            AddToggleRow(b, rows[i].Label, rows[i].State);
     }
 
-    // The panel's options, in the order their pills are kept.
+    // The panel's options, in the order their pills are kept: Protect first, which sits above Create.
     private (string Label, Sync<bool> State)[] ToggleRows => new[]
     {
+        (ProtectionLocale.StudioToggle.Resolve(), ProtectAvatar),
+        ("Mirror editing", MirrorEditing),
         ("Calibrate feet", CalibrateFeet),
         ("Calibrate pelvis", CalibratePelvis),
         ("Set up eyes", SetupEyes),
@@ -836,6 +928,18 @@ public sealed class AvatarStudio : Component
     [SyncMethod] private void OnHeadRight(Button button, UIInteractionContext context) => AlignHeadAxis(forward: false, up: false, right: true);
     [SyncMethod] private void OnHands(Button button, UIInteractionContext context) => AlignHands();
     [SyncMethod] private void OnBody(Button button, UIInteractionContext context) => AlignBody();
+    [SyncMethod] private void OnFitPelvis(Button button, UIInteractionContext context)
+    {
+        var rig = RequireRig();
+        var avatar = rig == null ? null : ResolveAvatarRoot(rig);
+        if (avatar == null || QuadrupedMode.Value)
+            return;
+        var pose = AvatarCalibration.ComputePelvisFromLegs(avatar, rig!);
+        if (!pose.Valid)
+            return;
+        CalibratePelvis.Value = true;
+        ApplyMarkerPose(_pelvisProxy.Target, avatar, pose);
+    }
     [SyncMethod] private void OnAlignAll(Button button, UIInteractionContext context) => AlignMarkersToRig();
     [SyncMethod] private void OnToolAnchors(Button button, UIInteractionContext context) => AlignToolAnchors();
     [SyncMethod] private void OnCreate(Button button, UIInteractionContext context) => RunCreate();
@@ -930,6 +1034,62 @@ public sealed class AvatarStudio : Component
         }
     }
 
+    private void MirrorMarkers()
+    {
+        if (!MirrorEditing.Value || _headProxy.Target is not { IsDestroyed: false } plane)
+        {
+            _mirrorPoses.Clear();
+            _mirrorPlane = null;
+            return;
+        }
+        bool planeMoved = ReferenceEquals(_mirrorPlane, plane)
+            && (_mirrorPlanePosition != plane.GlobalPosition || _mirrorPlaneRotation != plane.GlobalRotation);
+        _mirrorPlane = plane;
+        _mirrorPlanePosition = plane.GlobalPosition;
+        _mirrorPlaneRotation = plane.GlobalRotation;
+        MirrorPair(_leftHandProxy.Target, _rightHandProxy.Target, plane, planeMoved);
+        MirrorPair(_leftFootProxy.Target, _rightFootProxy.Target, plane, planeMoved);
+        MirrorPair(_leftToolAnchorProxy.Target, _rightToolAnchorProxy.Target, plane, planeMoved);
+        MirrorPair(_leftGrabAnchorProxy.Target, _rightGrabAnchorProxy.Target, plane, planeMoved);
+        MirrorPair(_frontLeftPawProxy.Target, _frontRightPawProxy.Target, plane, planeMoved);
+        MirrorPair(_rearLeftPawProxy.Target, _rearRightPawProxy.Target, plane, planeMoved);
+    }
+
+    private void MirrorPair(Slot? left, Slot? right, Slot plane, bool planeMoved)
+    {
+        if (left is not { IsDestroyed: false } || right is not { IsDestroyed: false })
+            return;
+        var current = (left.GlobalPosition, left.GlobalRotation, right.GlobalPosition, right.GlobalRotation);
+        if (_mirrorPoses.TryGetValue(left, out var before))
+        {
+            bool leftChanged = current.Item1 != before.LeftPosition || current.Item2 != before.LeftRotation;
+            bool rightChanged = current.Item3 != before.RightPosition || current.Item4 != before.RightRotation;
+            var leftHand = left.GetComponent<Grabbable>()?.Grabber;
+            var rightHand = right.GetComponent<Grabbable>()?.Grabber;
+            // Only the holder mirrors a drag. With neither marker held, the authority mirrors inspector
+            // edits and undo. Moving both at once is an alignment, not a single-sided edit. -xlinka
+            bool mayAct = leftHand != null || rightHand != null
+                ? ReferenceEquals((leftHand ?? rightHand)?.OwningUser, World.LocalUser)
+                : World.IsAuthority;
+            if (mayAct && !(leftHand != null && rightHand != null)
+                && (leftChanged != rightChanged || planeMoved && !leftChanged && !rightChanged))
+            {
+                var from = leftChanged ? left : right;
+                var to = leftChanged ? right : left;
+                if (!to.LocalPosition.IsBlockedByDrive && !to.LocalRotation.IsBlockedByDrive
+                    && to.LocalPosition.IsWriteAllowedQuietly() && to.LocalRotation.IsWriteAllowedQuietly())
+                {
+                    var local = plane.GlobalPointToLocal(from.GlobalPosition);
+                    local.x = -local.x;
+                    to.GlobalPosition = plane.LocalPointToGlobal(local);
+                    var rotation = plane.GlobalRotationToLocal(from.GlobalRotation);
+                    to.GlobalRotation = plane.GlobalRotation * MirrorTransform.ReflectRotation(rotation, float3.Right);
+                }
+            }
+        }
+        _mirrorPoses[left] = (left.GlobalPosition, left.GlobalRotation, right.GlobalPosition, right.GlobalRotation);
+    }
+
     // The studio opens in any world, model or not: it is the tool you use to FIND the model, so
     // refusing to appear until one exists is backwards. What it does gate is the work: aligning and
     // creating need a rig, and the head marker has to be sitting on it, because every align is
@@ -938,6 +1098,7 @@ public sealed class AvatarStudio : Component
     {
         base.OnCommonUpdate();
         WirePanel();
+        MirrorMarkers();
 
         // The host keeps the readout and the gates, so there is one writer whoever is looking.
         if (World?.IsAuthority != true)
@@ -1552,6 +1713,9 @@ public sealed class AvatarStudio : Component
 
         (avatar.GetComponent<AvatarForm>() ?? avatar.AttachComponent<AvatarForm>()).EnsureEquipTarget();
         LumoraLogger.Debug($"AvatarStudio: created avatar '{avatar.SlotName.Value}' - click it to equip");
+        // Runs on the machine of whoever pressed Create, which is the account the seal is asked for.
+        if (ProtectAvatar.Value)
+            ItemSeals.Protect(avatar);
         Slot.Destroy();
     }
 

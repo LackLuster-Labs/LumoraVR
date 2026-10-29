@@ -25,7 +25,8 @@ namespace Lumora.Core.Components.Avatar;
 // An avatar that is all here when it is put on never sees any of this. One that takes a moment is held out
 // of sight a moment; the figure only appears past a short grace, so a quick load is a short blink rather
 // than a flash of light. A mesh that cannot be had fails the arrival: the figure turns amber and stays, and
-// says why. A texture that cannot be had does not; the surface draws without it, as it would anywhere.
+// says why, until a cloud part that was only late lands after all (LateCloudParts) and the arrival carries on.
+// A texture that cannot be had does not; the surface draws without it, as it would anywhere.
 //
 // Cost: idle it is one registry lookup a frame. Arriving it walks the avatar once (and again at most once a
 // second if it changes shape), asks its parts where they stand five times a second, and poses nine pieces

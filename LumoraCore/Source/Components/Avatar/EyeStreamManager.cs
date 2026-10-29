@@ -194,11 +194,14 @@ public class EyeStreamManager : UserRootComponent
                 s.FullFrameMax = new float3(1f, 1f, 1f);
                 s.SetInterpolation();
                 s.SetUpdatePeriod(StreamPeriod, 0);
+                // Eyes ride with the face, apart from the voice, so they can be sent less often to whoever is far off.
+                s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup;
             });
             _state = user.GetStreamOrAdd<Float3ValueStream>(StateStreamName, s =>
             {
                 s.SetInterpolation();
                 s.SetUpdatePeriod(StreamPeriod, 0);
+                s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup;
             });
             _expr = user.GetStreamOrAdd<Float3ArrayValueStream>(ExprStreamName, s =>
             {
@@ -209,8 +212,9 @@ public class EyeStreamManager : UserRootComponent
                 s.FullFrameMax = new float3(1f, 1f, 1f);
                 s.SetInterpolation();
                 s.SetUpdatePeriod(StreamPeriod, 0);
+                s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup;
             });
-            _tracking = user.GetStreamOrAdd<BoolValueStream>(TrackingName, s => s.SetUpdatePeriod(StreamPeriod, 0));
+            _tracking = user.GetStreamOrAdd<BoolValueStream>(TrackingName, s => { s.SetUpdatePeriod(StreamPeriod, 0); s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup; });
         }
         else
         {

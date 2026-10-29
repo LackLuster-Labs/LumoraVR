@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using Lumora.Core;
+using Lumora.Core.Components.Avatar;
 using Lumora.Core.Components.Interaction;
 using Lumora.Core.Input;
 using Lumora.Core.Math;
@@ -54,7 +55,8 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
 
     public readonly Sync<float3> Gravity;
 
-    // Constant force in the chain root's local frame (wind, tail curl).
+    // Constant force in the frame of the slot the chain root hangs from (wind, tail curl). It grows with that slot's
+    // scale like the bones do, so a chain scaled up or down sways the same.
     public readonly Sync<float3> LocalForce;
 
     // Uniform length multiplier on the whole chain.
@@ -330,6 +332,32 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
     private bool _paused;
     private bool _hasStepped;
     private ulong _lastSteppedFrame;
+
+    // The avatar this chain hangs off, for AvatarViewLod: looked up again now and then, since putting the
+    // avatar on or taking it off moves the chain under a different root.
+    private Slot? _lodRoot;
+    private ulong _lodRootFrame = ulong.MaxValue;
+    private float _lodDelta;
+    private const ulong LodRootRefresh = 60;
+
+    // A chain going still (behind the viewer, out of range, under a picture) first settles toward its hang for a
+    // moment, swinging less and less, so what is left standing is a tail at rest and not one frozen half way
+    // through a swing that drops the moment it is looked at again. -xlinka
+    private const float SettleSeconds = 0.6f;
+    private const float SettleDamping = 12f;
+    private bool _settling;
+    private float _settleLeft;
+    private float _settleDamping;
+
+    private Slot? LodRoot(ulong frame)
+    {
+        if (_lodRootFrame == ulong.MaxValue || frame - _lodRootFrame >= LodRootRefresh || _lodRoot is { IsDestroyed: true })
+        {
+            _lodRoot = AvatarViewLod.RootOf(Slot);
+            _lodRootFrame = frame;
+        }
+        return _lodRoot;
+    }
     private int _rootTurner = -1;
     private int _angleEnd = -1;
     private int[] _ends = Array.Empty<int>();
@@ -429,10 +457,21 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
 
     internal bool RunManagedSimulation(DynamicBoneManager manager, float delta)
     {
-        if (!Enabled.Value || IsDestroyed)
+        // The batch reaches every registered chain, so a switched-off avatar or accessory kept stepping its
+        // chains every frame. Hidden is a gap like any other: it reseeds from the skeleton when it comes back. -xlinka
+        if (!Enabled.Value || IsDestroyed || Slot?.IsActive != true)
         {
             _wasSimulating = false;
             return false;
+        }
+
+        // Already still and staying so (behind the viewer, under a picture): nothing to look at until it moves
+        // again, and a crowd holds hundreds of these. A rebuild or a dead bone is found on the way back. -xlinka
+        if (_paused && !_settling && _lodRootFrame != ulong.MaxValue)
+        {
+            var level = AvatarViewLod.For(LodRoot(World?.Time.UpdateIndex ?? 0));
+            if (level is AvatarViewLod.Level.Hidden or AvatarViewLod.Level.StandIn)
+                return false;
         }
 
         if (_needsRebuild)
@@ -452,15 +491,43 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
             }
         }
 
-        if (IsBeyondViewDistance(manager))
+        // Somebody else's avatar behind the viewer, a long way off or drawn as a picture holds still, the same as a
+        // distance pause, once it has settled; further off than arm's reach it swings on the avatar's pose frames,
+        // each step carrying the time of the frames it sat out, which the skeleton glides between. -xlinka
+        ulong frame = World?.Time.UpdateIndex ?? 0;
+        var view = AvatarViewLod.Look(LodRoot(frame));
+        bool still = IsBeyondViewDistance(manager) || view.Level is AvatarViewLod.Level.Hidden or AvatarViewLod.Level.StandIn;
+        if (still && !_settling)
         {
-            // Paused chains write nothing, so the bones simply ride the skeleton rigidly. Nobody at
-            // that range can tell, and there is no frozen pose left lying around to pop back in.
-            _paused = true;
-            _wasSimulating = false;
-            RestoreLengths();
-            return false;
+            if (_paused || !_hasStepped || !_wasSimulating)
+            {
+                Pause();
+                return false;
+            }
+            _settling = true;
+            _settleLeft = SettleSeconds;
         }
+        else if (!still)
+        {
+            _settling = false;
+        }
+        _lodDelta += delta;
+        if (!view.PoseFrame(frame))
+            return false;
+        delta = _lodDelta;
+        _lodDelta = 0f;
+        if (_settling)
+        {
+            _settleLeft -= delta;
+            if (_settleLeft <= 0f)
+            {
+                _settling = false;
+                Pause();
+                return false;
+            }
+        }
+        _settleDamping = _settling ? SettleDamping : 0f;
+        ulong allowedGap = ResumeGapFrames + (ulong)AvatarViewLod.PoseInterval(view.Level) - 1;
 
         // Re-entry after ANY gap, not just a distance pause: a backgrounded world, a disabled chain, an
         // avatar that was hidden for a while. Reseed straight from the live skeleton instead of picking
@@ -468,8 +535,7 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
         // a minute away by now and those stored positions are not a pose, they are a teleport waiting
         // to happen. Starting at rest with no velocity keeps the first frame's step bounded by the
         // springs, and the chain settles into its hang over the usual fraction of a second. -xlinka
-        ulong frame = World?.Time.UpdateIndex ?? 0;
-        if (_paused || !_hasStepped || frame - _lastSteppedFrame > ResumeGapFrames)
+        if (_paused || !_hasStepped || frame - _lastSteppedFrame > allowedGap)
         {
             _paused = false;
             SeedParticlePositions();
@@ -487,6 +553,17 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
             WriteOutputs();
         SimulationCount++;
         return true;
+    }
+
+    // Paused chains write nothing, so the bones simply ride the skeleton rigidly. Nobody at that range can tell,
+    // and there is no frozen pose left lying around to pop back in.
+    private void Pause()
+    {
+        _paused = true;
+        _wasSimulating = false;
+        _lodDelta = 0f;
+        _settleDamping = 0f;
+        RestoreLengths();
     }
 
     // Silent writes: every peer works these out for itself. Stretch and squish are the chain's furthest-gone end:
@@ -516,8 +593,8 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
                     squish = MathF.Max(squish, MathF.Min((rest - length) / (rest - shortest), 1f));
             }
         }
-        OutputStretch.SetValueSilently(stretch);
-        OutputSquish.SetValueSilently(squish);
+        SetOutput(OutputStretch, stretch);
+        SetOutput(OutputSquish, squish);
         float angle = 0f;
         int end = _angleEnd;
         if (end > 0 && end < particles.Length)
@@ -529,7 +606,19 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
             if (rest.LengthSquared > 1e-12f && now.LengthSquared > 1e-12f)
                 angle = MathF.Acos(System.Math.Clamp(float3.Dot(rest.Normalized, now.Normalized), -1f, 1f)) / MathF.PI;
         }
-        OutputAngle.SetValueSilently(angle);
+        SetOutput(OutputAngle, angle);
+    }
+
+    // A settled chain still jitters in the last few digits, and an animator reading these never got to rest:
+    // every frame was a parameter change. A fifth of a percent is no movement anybody animates on; the ends of
+    // the range always land exactly. -xlinka
+    private const float OutputDeadband = 0.002f;
+
+    private static void SetOutput(Sync<float> output, float value)
+    {
+        float was = output.Value;
+        if (MathF.Abs(was - value) >= OutputDeadband || (value != was && (value == 0f || value == 1f)))
+            output.SetValueSilently(value);
     }
 
     // Frames a chain may miss and still carry on from where it was. Anything longer is a gap, and a
@@ -578,6 +667,41 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
             AddRecursive(child);
     }
 
+    // A bone the chain ends on, hung beside a sibling that carries the chain on (a collider slot, an ornament, a
+    // stray end a whole hierarchy brought in with it), rides its parent like any other child slot. Simulated, it
+    // made its parent a fork, and a fork holds still, so the strand went rigid from that bone down. A fork of
+    // two strands that both carry on still holds. -xlinka
+    private static void DropRiders(List<Slot> bones)
+    {
+        if (bones.Count < 3)
+            return;
+        var inChain = new HashSet<Slot>(bones);
+        var parentOf = new Dictionary<Slot, Slot>(bones.Count);
+        var hasChildren = new HashSet<Slot>();
+        foreach (var bone in bones)
+        {
+            for (var p = bone.Parent; p != null; p = p.Parent)
+            {
+                if (!inChain.Contains(p))
+                    continue;
+                parentOf[bone] = p;
+                hasChildren.Add(p);
+                break;
+            }
+        }
+        var carried = new HashSet<Slot>();
+        foreach (var bone in bones)
+        {
+            if (hasChildren.Contains(bone) && parentOf.TryGetValue(bone, out var parent))
+                carried.Add(parent);
+        }
+        if (carried.Count == 0)
+            return;
+        var root = bones[0];
+        bones.RemoveAll(bone => bone != root && !hasChildren.Contains(bone) && parentOf.TryGetValue(bone, out var parent)
+            && carried.Contains(parent));
+    }
+
     private void BuildParticles()
     {
         _needsRebuild = false;
@@ -598,6 +722,7 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
         }
         if (bones.Count == 0)
             return;
+        DropRiders(bones);
 
         var rootBone = bones[0];
         floatQ rootRot = rootBone.GlobalRotation;
@@ -916,7 +1041,7 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
         _frameWearer = (_frameCollidePlayers || _frameCollideOwn || _frameCollideOwnHands) ? Slot?.ActiveUser : null;
 
         float inertia = System.Math.Clamp(Inertia.Value, 0f, 1f);
-        float damping = MathF.Max(Damping.Value, 0f);
+        float damping = MathF.Max(Damping.Value, 0f) + _settleDamping;
         float elasticity = MathF.Max(Elasticity.Value, 0f);
         float stiffness = System.Math.Clamp(Stiffness.Value, 0f, 1f);
         float inertiaForce = InertiaForce.Value;
@@ -1010,7 +1135,7 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
             }
         }
 
-        float3 externalForce = rootParent.GlobalRotation * LocalForce.Value + Gravity.Value;
+        float3 externalForce = rootParent.LocalVectorToGlobal(LocalForce.Value) + Gravity.Value;
         float particleRadius = BaseBoneRadius.Value * scaleNow;
 
         // Carry base motion through the chain (inertia = how rigidly the world motion is followed). A chain
@@ -1150,6 +1275,7 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
                 p.Vel += force * step;
                 p.Pos += p.Vel * step;
             }
+            float3 integrated = p.Pos;
 
             // A held bone answers to the hand, so the clamps that pull a particle back toward its rest
             // pose are skipped for the whole held path. They come back the moment it is let go.
@@ -1223,6 +1349,21 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
                     if (_frameInside)
                         KeepInside(ref p.Pos, particles[parent].Pos, segLength, particleRadius * p.RadiusScale);
                 }
+            }
+
+            // What the clamps, the limit, the colliders and the length took back is taken out of the velocity too:
+            // left in, the particle drove into the same wall every frame, was put back, and drove in again, so a
+            // stiff chain held at its limit (a tail, a row of spikes) shook at the frame rate and its tip was drawn
+            // in one place on one frame and another on the next. Only the part heading into the correction goes;
+            // sliding along it stays. -xlinka
+            float3 pushed = p.Pos - integrated;
+            float pushedLength = pushed.Length;
+            if (pushedLength > 1e-6f)
+            {
+                float3 normal = pushed / pushedLength;
+                float into = float3.Dot(p.Vel, normal);
+                if (into < 0f)
+                    p.Vel -= normal * into;
             }
 
             // Velocity from actual travel, clamped so corrections can't inject energy.
@@ -1779,7 +1920,7 @@ public class DynamicBoneChain : Component, IGrabbable, IPermissionGrabSurface, I
     // kind here because a bone grab never writes a transform: the chain is not reparented and the
     // solved rotations are local, silent writes that never reach the wire. -xlinka
 
-    bool IPermissionGrabSurface.AllowsGrab => AllowGrab.Value;
+    bool IPermissionGrabSurface.AllowsGrab => !IsDestroyed && Enabled.Value && AllowGrab.Value;
 
     bool IPermissionGrabSurface.AllowsSteal => AllowSteal.Value;
 

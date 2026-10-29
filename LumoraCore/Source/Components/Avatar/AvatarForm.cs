@@ -71,6 +71,7 @@ public class AvatarForm : Component, IAvatarEquippable
         base.OnAwake();
         if (Slot != null)
             Slot.ActiveUserRootChanged += OnActiveUserRootChanged;
+        Owner.OnTargetChange += OnOwnerChanged;
     }
 
     public override void OnInit()
@@ -133,6 +134,21 @@ public class AvatarForm : Component, IAvatarEquippable
             return;
         if (Slot.GetComponent<RayTarget>() != null)
             EnsureEquipTarget();
+    }
+
+    // Put on, the avatar becomes part of somebody's body, and a gizmo still up on it from when it stood in the
+    // world went with it: it followed the wearer about and its box grew and shrank with the walking body. Every
+    // machine drops its own rigs on the avatar as it goes on, wherever the equip came from. One put up on the worn
+    // avatar afterwards is somebody editing it on purpose, and stays. -xlinka
+    private void OnOwnerChanged(SyncRef<UserRoot> owner)
+    {
+        if (owner.Target == null)
+            return;
+        World?.RunSynchronously(() =>
+        {
+            if (!IsDestroyed && Owner.Target != null && Slot is { IsDestroyed: false } avatar)
+                Gizmos.GizmoHelper.DismissWithin(avatar);
+        });
     }
 
     // Left-click (use) on the avatar pops a small "Equip Avatar / Cancel" confirm, then equips.

@@ -182,6 +182,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
     private ReferenceOffset _viewOffset;
     private ReferenceOffset _leftHandOffset;
     private ReferenceOffset _rightHandOffset;
+    private float _referenceScale;   // the avatar's world scale when the offsets above were measured
 
     // Procedural locomotion for untracked feet. The model lives in BipedGait: each foot holds a resting
     // place under the body and a target pushed along the travel line, and a swing advances with the ground
@@ -301,6 +302,9 @@ public class AvatarIK : Component, IAvatarEquipReceiver
 
     public void OnEquip(AvatarSocket slot)
     {
+        _lastRescaleHeight = -1f;
+        _lastRescaleCompensation = -1f;
+        _rescaleWait = null;
         _grounding.Reset();
         _gait.Reset();
         _hasLeftPlant = _hasRightPlant = false;
@@ -441,6 +445,9 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         if (worn == _wasWorn)
             return;
         _wasWorn = worn;
+        _lastRescaleHeight = -1f;
+        _lastRescaleCompensation = -1f;
+        _rescaleWait = null;
 
         if (worn)
         {
@@ -678,10 +685,22 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         {
             MaybeRescaleAvatar();
             MaybeRefitColliders();
+            FollowReferenceScale();
         }
 
-        if (!CanRun() || _suspendSolve)
+        float frameDelta = MathF.Max(World?.Time.Delta ?? 0f, 0f);
+        if (!CanRun() || _suspendSolve || SolveWaits())
+        {
+            _heldDelta += frameDelta;
             return;
+        }
+        // A solve after frames sat out steps the walk and every ease by all of their time, or a body solved every
+        // other frame would walk in slow motion. A gap longer than any pose interval is a pause, not a slow beat,
+        // and starts again from one frame's time.
+        ulong solveFrame = World?.Time.UpdateIndex ?? 0;
+        _solveDelta = solveFrame - _lastSolveFrame <= 16 ? _heldDelta + frameDelta : frameDelta;
+        _heldDelta = 0f;
+        _lastSolveFrame = solveFrame;
 
         if (!_gaitHooked)
         {
@@ -700,6 +719,30 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         RefreshBodyDrivers();
         RunGait();
         SolveBody();
+    }
+
+    // Somebody else's avatar is solved on its pose frames (AvatarViewLod): every frame up close, every other one
+    // between 10 and 25 metres, every third further off, every fourth behind the viewer, and only now and then for
+    // one drawn as a picture. Each solve carries the time of the frames it sat out (_solveDelta), and the skeleton
+    // glides between the poses in view, so a body solved half as often still walks at its own pace and moves every
+    // frame. The wearer's own is solved every frame. -xlinka
+    private Slot? _lodRoot;
+    private ulong _lodRootAt = ulong.MaxValue;
+    private float _solveDelta = 1f / 60f;
+    private float _heldDelta;
+    private ulong _lastSolveFrame;
+
+    private bool SolveWaits()
+    {
+        if (IsUnderLocalUser)
+            return false;
+        ulong frame = World?.Time.UpdateIndex ?? 0;
+        if (_lodRootAt == ulong.MaxValue || frame - _lodRootAt > 60 || frame < _lodRootAt)
+        {
+            _lodRoot = AvatarViewLod.RootOf(Slot);
+            _lodRootAt = frame;
+        }
+        return !AvatarViewLod.Look(_lodRoot).PoseFrame(frame);
     }
 
     // BODY PARTS SOMETHING ELSE PUTS SOMEWHERE.
@@ -731,7 +774,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
 
     private void RefreshBodyDrivers()
     {
-        float step = BodyDriverEaseRate * MathF.Max(World?.Time.Delta ?? 0f, 0f);
+        float step = BodyDriverEaseRate * MathF.Max(_solveDelta, 0f);
 
         _pelvisDriven = IsBodyNodeDriven(_pelvisNode.Target);
         _pelvisProvided = _pelvisDriven && IsProvided(_pelvisNode.Target);
@@ -871,7 +914,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         }
         _gaitStopped = true;
         // Imported legs stop the gait, but still need a live grounded/airborne state.
-        _grounding.Update(UserRoot.Target, MathF.Max(World?.Time.Delta ?? (1f / 60f), 1e-4f));
+        _grounding.Update(UserRoot.Target, MathF.Max(_solveDelta, 1e-4f));
         _hasLeftPlant = _hasRightPlant = false;
         _hasProceduralGroundY = false;
         _leftStepLift = _rightStepLift = 0f;
@@ -881,33 +924,6 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         _bodyAccelLocal = float3.Zero;
         _locomotionOffset = _bodySettleXZ = _bodySettleVel = float3.Zero;
         _bob = _bobVelocity = 0f;
-    }
-
-    // A socket that turned up after this avatar went on (a seat's stand-in, a tracker plugged in late). The pose
-    // drivers for the parts that come and go (hips, chest, feet, knees, elbows) go into it while they are free;
-    // head and hands were filled at equip. The wearer's machine only, as every equip is. -xlinka
-    internal void OfferSocket(AvatarSocket socket)
-    {
-        if (socket == null || socket.IsDestroyed || socket.HasEquipped || !IsEquipped || UserRoot.Target?.IsLocalUserRoot != true)
-            return;
-        var driver = socket.Node.Value switch
-        {
-            BodyNode.Hips => _pelvisNode.Target,
-            BodyNode.Chest => _chestNode.Target,
-            BodyNode.LeftFoot => _leftFootNode.Target,
-            BodyNode.RightFoot => _rightFootNode.Target,
-            BodyNode.LeftLowerLeg => _leftKneeNode.Target,
-            BodyNode.RightLowerLeg => _rightKneeNode.Target,
-            BodyNode.LeftLowerArm => _leftElbowNode.Target,
-            BodyNode.RightLowerArm => _rightElbowNode.Target,
-            _ => null,
-        };
-        if (driver == null || driver.IsDestroyed)
-            return;
-        if (driver.CurrentSocket is { IsDestroyed: false })
-            return;
-        if (socket.PreEquip(driver, null!))
-            socket.Equip(driver);
     }
 
     // Re-fit the body colliders whenever the bone scale actually changes. The FBX armature scale lands on the
@@ -958,20 +974,36 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         if (input == null)
             return;
 
-        float userHeight = input.UserHeight;
-        if (userHeight < 0.8f)
+        // An equip can precede the first valid tracking frame. Keep it pending; the next update retries.
+        // Floor height is deliberately not a scale input: seated or eye-relative tracking can start at zero. -xlinka
+        var head = input.HeadDevice;
+        if (input.IsVRActive && (head == null || !head.IsTracked
+            || !float.IsFinite(head.Position.X) || !float.IsFinite(head.Position.Y) || !float.IsFinite(head.Position.Z)))
+        {
+            WaitForRescale("tracking", input.UserHeight);
             return;
+        }
+
+        float userHeight = input.UserHeight;
+        if (!float.IsFinite(userHeight) || userHeight < 0.5f || userHeight > 2.5f
+            || !float.IsFinite(HeightCompensation.Value))
+        {
+            WaitForRescale("calibration", userHeight);
+            return;
+        }
 
         float comp = System.Math.Clamp(HeightCompensation.Value, 0.25f, 2f);
         float avatarHeight = AvatarHeight.Value;
-        if (avatarHeight <= 0.01f)
+        if (!float.IsFinite(avatarHeight) || avatarHeight <= 0.01f)
             return;
 
         var userSpace = UserRoot.Target?.Slot ?? Slot.ActiveUserRoot?.Slot;
         float currentHeight = userSpace != null && !userSpace.IsDestroyed
             ? Slot.LocalScaleToSpace(avatarHeight, userSpace)
             : Slot.LocalScaleToGlobal(avatarHeight);
-        if (currentHeight <= 0.01f)
+        // A tiny saved equip scale is precisely what this fit must repair. Reject invalid measurements,
+        // not a positive height just because the avatar is currently smaller than a centimetre. -xlinka
+        if (!float.IsFinite(currentHeight) || currentHeight <= 0f)
             return;
 
         if (_lastRescaleHeight > 0f
@@ -979,17 +1011,20 @@ public class AvatarIK : Component, IAvatarEquipReceiver
             && System.Math.Abs(comp - _lastRescaleCompensation) < 0.001f)
             return;
 
-        float scaleFactor = userHeight / currentHeight * comp;
-        if (float.IsNaN(scaleFactor) || float.IsInfinity(scaleFactor) || scaleFactor <= 0f)
+        double scaleFactor = (double)userHeight / currentHeight * comp;
+        var before = Slot.LocalScale.Value;
+        var s = new float3((float)(before.x * scaleFactor), (float)(before.y * scaleFactor), (float)(before.z * scaleFactor));
+        if (!float.IsFinite(s.x) || !float.IsFinite(s.y) || !float.IsFinite(s.z) || s.x <= 0f || s.y <= 0f || s.z <= 0f)
             return;
-        var s = Slot.LocalScale.Value * scaleFactor;
         _lastRescaleHeight = userHeight;
         _lastRescaleCompensation = comp;
+        _rescaleWait = null;
 
         var root = Slot.GetComponent<AvatarForm>();
         if (root != null)
             root.SetEquipScale(s);         // canonical scale, re-applied on (re)equip
         Slot.LocalScale.Value = s;         // take effect now
+        LumoraLogger.Log($"AvatarIK[scale] applied '{Slot.SlotName.Value}' tracked={head?.IsTracked} headY={head?.Position.Y:F3} seated={EngineSettings.SeatedMode} calibrated={userHeight:F3} avatar={avatarHeight:F4} current={currentHeight:G5} target={userHeight * comp:F3} factor={scaleFactor:G5} scale={s}");
 
         // Bone lengths are read fresh from the default local pose every solve, so a scale change does not need a
         // solver re-capture. Re-capturing here would be dangerous because this callback can run after a solved frame.
@@ -1004,6 +1039,15 @@ public class AvatarIK : Component, IAvatarEquipReceiver
             RecomputeReferenceOffsets();
             _suspendSolve = false;
         });
+    }
+
+    private string? _rescaleWait;
+
+    private void WaitForRescale(string reason, float height)
+    {
+        if (_rescaleWait == reason) return;
+        _rescaleWait = reason;
+        LumoraLogger.Log($"AvatarIK[scale] waiting '{Slot.SlotName.Value}' reason={reason} calibrated={height:G5}");
     }
 
     private bool CanRun()
@@ -1070,7 +1114,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
     // full reach. Those are measured live at the current scale, hence the divide. -xlinka
     private float GaitLegLength(float scale)
     {
-        float seen = MathF.Max(SideLength(_solver.LeftSideLeg), SideLength(_solver.RightSideLeg));
+        float seen = MathF.Max(MathF.Max(SideLength(_solver.LeftSideLeg), SideLength(_solver.RightSideLeg)), _solver.CopiedLegLength);
         return seen > 1e-3f ? seen / MathF.Max(scale, 1e-5f) : _gaitLegLength;
 
         static float SideLength(SideLeg? leg) => leg == null ? 0f : leg.ThighLength + leg.ShinLength;
@@ -1223,7 +1267,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
 
         // The arm simulation needs the body's own change of speed: it is what makes a hand lag when you set
         // off and carry on when you stop.
-        _solver.DeltaTime = System.Math.Clamp(World?.Time.Delta ?? (1f / 60f), 1f / 240f, 0.1f);
+        _solver.DeltaTime = System.Math.Clamp(_solveDelta, 1f / 240f, 0.1f);
         _solver.BodyAcceleration = _bodyAccelLocal;
         _solver.RunBlend = _runBlend;
         _solver.AirBlend = _airBlend;
@@ -1322,7 +1366,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         float rightKeepW = TrackingKeepWeight(ref _rightHandTrackedOnce, rightHandTracked, input);
         // Eased over a few frames both ways, so a controller waking up or a hand tracker taking over swings the arm
         // across instead of snapping it there in one frame.
-        float handDt = MathF.Max(World?.Time.Delta ?? 0f, 0f);
+        float handDt = MathF.Max(_solveDelta, 0f);
         _leftHandWeight = EaseHandWeight(_leftHandWeight, MathF.Max(leftKeepW, leftHoldW), handDt);
         _rightHandWeight = EaseHandWeight(_rightHandWeight, MathF.Max(rightKeepW, rightHoldW), handDt);
         leftHandT.PositionWeight = leftHandT.RotationWeight = handW * _leftHandWeight;
@@ -1447,7 +1491,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         }
         else
         {
-            float step = MathF.Max(World?.Time.Delta ?? 0f, 0f) / DigiLegsEaseTime;
+            float step = MathF.Max(_solveDelta, 0f) / DigiLegsEaseTime;
             _digiBlend = target > _digiBlend ? MathF.Min(target, _digiBlend + step) : MathF.Max(target, _digiBlend - step);
         }
         _solver.DigitigradeBlend = _digiBlend * _digiBlend * (3f - 2f * _digiBlend);
@@ -1729,7 +1773,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
 
         if (_bodyForwardTurning)
         {
-            float dt = (float)(World?.Time.Delta ?? (1.0 / 60.0));
+            float dt = _solveDelta;
             float t = System.Math.Clamp(BodyForwardRate * dt, 0f, 1f);
             // Turn by ANGLE about up, never by blending the two directions: a blend between opposite
             // vectors passes through zero and only shortens, so a half turn on the spot left the torso
@@ -1782,9 +1826,6 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         if (!hardwareHead && chosen.Valid)
             chosen = UprightHeadTarget(chosen);
 
-        if (chosen.Valid && userSlot != null && !userSlot.IsDestroyed)
-            chosen = CorrectInvertedView(chosen, userSlot);
-
         return chosen;
     }
 
@@ -1808,23 +1849,6 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         float3 forward = upright.Rotation * float3.Backward;
         upright.Rotation = BuildUprightRotation(forward);
         return upright;
-    }
-
-    // The avatar's View reference point can be authored ~180 from its head bone (a model authored facing +Z while
-    // engine forward is -Z), baking a 180 yaw into _viewOffset. That sends the IK head target - and everything
-    // derived from it (the body-forward reference the gait walks with, the head facing the solver pins) - out the
-    // BACK of the head, so the head looks backward and the feet walk that way. A real head turn never reaches 180
-    // from the body, so when the resolved target opposes the user-root forward we strip the spurious 180 yaw.
-    // No-op for correctly authored avatars (the target already agrees with the body). -xlinka
-    private static FullBodyIKSolver.Target CorrectInvertedView(FullBodyIKSolver.Target target, Slot userSlot)
-    {
-        float3 tFwd = target.Rotation * float3.Backward; tFwd.y = 0f;
-        float3 rFwd = userSlot.GlobalRotation * float3.Backward; rFwd.y = 0f;
-        if (tFwd.LengthSquared < 1e-6f || rFwd.LengthSquared < 1e-6f)
-            return target;
-        if (float3.Dot(tFwd.Normalized, rFwd.Normalized) < -0.25f)
-            target.Rotation = floatQ.AxisAngleRad(float3.Up, MathF.PI) * target.Rotation;
-        return target;
     }
 
     // True only when a body node has a LIVE tracked source (VR controller/tracker). Desktop hands/feet have no
@@ -2049,11 +2073,17 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         if (poseNode?.IsEquippedAndActive ?? false)
             return ProxyTarget(proxy, offset);
 
+        // The filtered pose is in the space the socket hands back (the user root), not the world. Taken as world,
+        // the hand went wherever those root-local numbers land: right only for a user standing unscaled at the
+        // world origin, and at any other size the arm reached for a point scaled away from the controller.
+        // A socket without a user root answers with itself and an empty pose; the body-node slot below is better.
+        // -xlinka
         var socket = FindSocket(node);
         if (socket != null)
         {
-            socket.GetFilteredPose(out float3 pos, out floatQ rot, out _);
-            return TargetFromPose(pos, rot, offset);
+            var space = socket.GetFilteredPose(out float3 pos, out floatQ rot, out _);
+            if (space != null && !space.IsDestroyed && !ReferenceEquals(space, socket.Slot))
+                return TargetFromPose(space.LocalPointToGlobal(pos), space.LocalRotationToGlobal(rot), offset);
         }
 
         // No socket either: fall back to the raw body-node slot, then to the proxy as a last resort.
@@ -2103,11 +2133,9 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         return ViewTargetFromPose(proxy.GlobalPosition, proxy.GlobalRotation, offset);
     }
 
-    // HEAD-target variant: keep the RAW tracked rotation - the tracked head pose IS the view/camera.
-    // Rebasing it into the head BONE's authored frame (like TargetFromPose does for limb bones) put the
-    // bone's arbitrary axes into the look: on a back-authored head bone the look came out the camera's
-    // BACK, whose flattened yaw the downstream 180-patch fixes but whose PITCH stays mirrored (look up,
-    // head down). The offset still places the bone position exactly like the limb path. -xlinka
+    // The tracked rotation already includes the user's root and tracking space. Keep it through a full
+    // physical turn; the root's forward is not a limit on where someone can look. Calibration offsets
+    // place the head joint, and the solver applies the head bone's authored axes separately. -xlinka
     private static FullBodyIKSolver.Target ViewTargetFromPose(float3 position, floatQ rotation, in ReferenceOffset offset)
     {
         if (offset.Valid)
@@ -2378,34 +2406,155 @@ public class AvatarIK : Component, IAvatarEquipReceiver
 
     private void EnsurePoseNodes()
     {
-        EnsurePoseNode(_headProxy, _headNode, BodyNode.Head, "Head");
-        EnsurePoseNode(_pelvisProxy, _pelvisNode, BodyNode.Hips, "Hips");
-        EnsurePoseNode(_chestProxy, _chestNode, BodyNode.Chest, "Chest");
-        EnsurePoseNode(_leftHandProxy, _leftHandNode, BodyNode.LeftHand, "LeftHand");
-        EnsurePoseNode(_rightHandProxy, _rightHandNode, BodyNode.RightHand, "RightHand");
-        EnsurePoseNode(_leftElbowProxy, _leftElbowNode, BodyNode.LeftLowerArm, "LeftElbow");
-        EnsurePoseNode(_rightElbowProxy, _rightElbowNode, BodyNode.RightLowerArm, "RightElbow");
-        EnsurePoseNode(_leftFootProxy, _leftFootNode, BodyNode.LeftFoot, "LeftFoot");
-        EnsurePoseNode(_rightFootProxy, _rightFootNode, BodyNode.RightFoot, "RightFoot");
-        EnsurePoseNode(_leftKneeProxy, _leftKneeNode, BodyNode.LeftLowerLeg, "LeftKnee");
-        EnsurePoseNode(_rightKneeProxy, _rightKneeNode, BodyNode.RightLowerLeg, "RightKnee");
+        var drivers = new List<AvatarPoseDriver>();
+        Slot.GetComponentsInChildren(drivers);
+        EnsurePoseNode(_headProxy, _headNode, BodyNode.Head, "Head", drivers);
+        EnsurePoseNode(_pelvisProxy, _pelvisNode, BodyNode.Hips, "Hips", drivers);
+        EnsurePoseNode(_chestProxy, _chestNode, BodyNode.Chest, "Chest", drivers);
+        EnsurePoseNode(_leftHandProxy, _leftHandNode, BodyNode.LeftHand, "LeftHand", drivers);
+        EnsurePoseNode(_rightHandProxy, _rightHandNode, BodyNode.RightHand, "RightHand", drivers);
+        EnsurePoseNode(_leftElbowProxy, _leftElbowNode, BodyNode.LeftLowerArm, "LeftElbow", drivers);
+        EnsurePoseNode(_rightElbowProxy, _rightElbowNode, BodyNode.RightLowerArm, "RightElbow", drivers);
+        EnsurePoseNode(_leftFootProxy, _leftFootNode, BodyNode.LeftFoot, "LeftFoot", drivers);
+        EnsurePoseNode(_rightFootProxy, _rightFootNode, BodyNode.RightFoot, "RightFoot", drivers);
+        EnsurePoseNode(_leftKneeProxy, _leftKneeNode, BodyNode.LeftLowerLeg, "LeftKnee", drivers);
+        EnsurePoseNode(_rightKneeProxy, _rightKneeNode, BodyNode.RightLowerLeg, "RightKnee", drivers);
     }
 
+    // ONE DRIVER PER BODY NODE, and it is the one this solver reads.
+    //
+    // A packaged avatar brings its own pose proxies, each with its driver, wherever its creator put them.
+    // Growing a second set beside them broke the avatar: its own came first in the tree and took the sockets,
+    // the solver read the grown set that nothing moved, the head never counted as equipped, nothing solved,
+    // and the arms stayed straight out in the stored stance. The avatar's own driver for a part
+    // is adopted, a part it lacks gets a grown one, and a grown one an earlier equip left beside it goes. The
+    // proxy slot is what gets read, never its "Target" child: the grip and view offsets already place the bone
+    // against the tracked pose, so an adopted proxy solves exactly as a grown one. -xlinka
     private AvatarPoseDriver EnsurePoseNode(
         SyncRef<Slot> proxy,
         SyncRef<AvatarPoseDriver> poseNode,
         BodyNode node,
-        string name)
+        string name,
+        List<AvatarPoseDriver> drivers)
     {
-        if (proxy.Target == null)
-            proxy.Target = Slot.AddSlot($"{name}Proxy");
+        string grownName = $"{name}Proxy";
+        var rig = Rig.Target;
+        var current = poseNode.Target;
+        if (current != null && (current.IsDestroyed || current.Slot == null || current.Slot.IsDestroyed || !InThisAvatar(current.Slot)
+                                || (!IsGrownProxy(current, grownName) && !Adoptable(current, rig))))
+            current = null;
 
-        if (poseNode.Target == null)
-            poseNode.Target = proxy.Target.AttachComponent<AvatarPoseDriver>();
+        AvatarPoseDriver? authored = null, grown = null;
+        foreach (var driver in drivers)
+        {
+            if (driver.IsDestroyed || driver.Node.Value != node || driver.Slot == null || !InThisAvatar(driver.Slot))
+                continue;
+            if (IsGrownProxy(driver, grownName))
+                grown ??= driver;
+            // Lowest priority, then first in the tree: the one the equip pairing would put in the socket.
+            else if (Adoptable(driver, rig) && (authored == null || driver.EquipPriority < authored.EquipPriority))
+                authored = driver;
+        }
 
-        poseNode.Target.Node.Value = node;
+        var keep = current != null && !IsGrownProxy(current, grownName) ? current : authored ?? current ?? grown;
+        DropGrownProxies(drivers, node, grownName, keep);
+
+        if (keep != null)
+        {
+            poseNode.Target = keep;
+            proxy.Target = keep.Slot;
+        }
+        else
+        {
+            if (proxy.Target == null || proxy.Target.IsDestroyed)
+                proxy.Target = Slot.AddSlot(grownName);
+            poseNode.Target = proxy.Target.GetComponent<AvatarPoseDriver>() ?? proxy.Target.AttachComponent<AvatarPoseDriver>();
+        }
+
+        if (poseNode.Target.Node.Value != node)
+            poseNode.Target.Node.Value = node;
         return poseNode.Target;
     }
+
+    // A driver that is off, or under a slot the avatar keeps inactive, never moves its proxy. One on a bone pins
+    // that bone to the device, and the solver could never pose it; a rig can also list the proxies themselves as
+    // its View and controller entries, and those are not bones.
+    private bool Adoptable(AvatarPoseDriver driver, HumanoidRig? rig)
+    {
+        if (!driver.Enabled.Value || driver.HeldElsewhere || (rig != null && rig.GetBoneType(driver.Slot) > BodyNode.RightController))
+            return false;
+        for (var at = driver.Slot; at != null && !ReferenceEquals(at, Slot); at = at.Parent)
+        {
+            if (!at.ActiveSelf.Value)
+                return false;
+        }
+        return true;
+    }
+
+    // The proxy this solver grows for a part: under the avatar root, named for the part, with no Target child.
+    private bool IsGrownProxy(AvatarPoseDriver driver, string grownName)
+    {
+        var slot = driver.Slot;
+        return slot != null && ReferenceEquals(slot.Parent, Slot) && slot.SlotName.Value == grownName
+               && slot.FindChild("Target", recursive: false) == null;
+    }
+
+    // Under this avatar and not inside another one it carries.
+    private bool InThisAvatar(Slot slot)
+    {
+        for (var at = slot; at != null; at = at.Parent)
+        {
+            if (ReferenceEquals(at, Slot))
+                return true;
+            if (at.GetComponent<AvatarForm>() != null)
+                return false;
+        }
+        return false;
+    }
+
+    // Grown proxies for a part beside the one kept. A bare one goes whole; one somebody hung things on keeps its
+    // slot and loses only its driver. One still in a socket, or not this machine's to take away, stays: the equip
+    // pairing leaves it out of the sockets either way.
+    private void DropGrownProxies(List<AvatarPoseDriver> drivers, BodyNode node, string grownName, AvatarPoseDriver? keep)
+    {
+        foreach (var driver in drivers)
+        {
+            if (ReferenceEquals(driver, keep) || driver.IsDestroyed || driver.Node.Value != node || !IsGrownProxy(driver, grownName))
+                continue;
+            if (driver.CurrentSocket is { IsDestroyed: false })
+                continue;
+            var slot = driver.Slot;
+            if (!MayDestroyHere(slot) || !InThisAvatar(slot))
+                continue;
+            try
+            {
+                if (slot.ChildCount == 0 && slot.Components.Count == 1)
+                    slot.Destroy();
+                else
+                    driver.Destroy();
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
+        }
+    }
+
+    // The driver this solver reads for a part, null for a part it does not read.
+    internal AvatarPoseDriver? PoseDriverFor(BodyNode node) => node switch
+    {
+        BodyNode.Head => _headNode.Target,
+        BodyNode.Hips => _pelvisNode.Target,
+        BodyNode.Chest => _chestNode.Target,
+        BodyNode.LeftHand => _leftHandNode.Target,
+        BodyNode.RightHand => _rightHandNode.Target,
+        BodyNode.LeftLowerArm => _leftElbowNode.Target,
+        BodyNode.RightLowerArm => _rightElbowNode.Target,
+        BodyNode.LeftFoot => _leftFootNode.Target,
+        BodyNode.RightFoot => _rightFootNode.Target,
+        BodyNode.LeftLowerLeg => _leftKneeNode.Target,
+        BodyNode.RightLowerLeg => _rightKneeNode.Target,
+        _ => null,
+    };
 
     private static void EquipPoseNodeToBodySlot(Slot bodySlot, AvatarPoseDriver poseNode)
     {
@@ -2443,6 +2592,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         _viewOffset = default;
         _leftHandOffset = default;
         _rightHandOffset = default;
+        _referenceScale = MathF.Abs(Slot.GlobalScale.x);
 
         var rig = Rig.Target;
         if (rig == null)
@@ -2508,7 +2658,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         if (!TryMeasureFromReferences(rig, view, leftFoot, rightFoot, out float measured))
             measured = MeasureFromDefaultBonePose(rig);
 
-        if (measured <= 0.01f)
+        if (!float.IsFinite(measured) || measured <= 0.01f)
             return;
 
         if (System.Math.Abs(measured - AvatarHeight.Value) > 0.001f)
@@ -2811,6 +2961,24 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         }
     }
 
+    // The offsets are world lengths, taken at whatever size the avatar had when they were measured. The wearer's
+    // scale moving afterwards (Reset Scale, a two-hand pull, the next avatar's own default) left them at the old
+    // size: put on at 2.5 and reset to 1, the head target hung two and a half eye-to-head lengths under the view
+    // and the whole body squatted under it. They follow the avatar's size instead. -xlinka
+    private void FollowReferenceScale()
+    {
+        if (_referenceScale <= 1e-6f || Slot == null || Slot.IsDestroyed)
+            return;
+        float scale = MathF.Abs(Slot.GlobalScale.x);
+        if (scale <= 1e-6f || !float.IsFinite(scale) || MathF.Abs(scale - _referenceScale) <= _referenceScale * 1e-4f)
+            return;
+        float ratio = scale / _referenceScale;
+        _viewOffset.LocalPosition *= ratio;
+        _leftHandOffset.LocalPosition *= ratio;
+        _rightHandOffset.LocalPosition *= ratio;
+        _referenceScale = scale;
+    }
+
     private static void TryComputeReferenceOffset(Slot bone, Slot reference, ref ReferenceOffset offset)
     {
         offset = default;
@@ -2855,7 +3023,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         var headSlot = _headProxy.Target;
         if (root == null || headSlot == null)
             return;
-        float dt = World.Time.Delta;
+        float dt = _solveDelta;
         if (dt <= 0f)
             return;
         _grounding.Update(UserRoot.Target, dt);
@@ -2932,7 +3100,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         if (_hasRightPlant && _rightFootProxy.Target != null && !_rightFootProxy.Target.IsDestroyed)
             WriteFoot(_rightFootProxy.Target, _rightFootPlant);
 
-        float speed = _gait.SmoothSpeed;
+        float speed = _gait.BodySpeed;
 
         // BODY MOTION IN THE BODY FRAME, which is what the arm simulation is pushed by. Taken from
         // where the body actually was rather than from the gait's own smoothed number, because the
@@ -2967,7 +3135,7 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         // Walk against run, so the arms change shape rather than only amplitude as somebody speeds up. The gait
         // decides it, so the legs and the arms change gait together; eased so a jump in pace bends the elbows over
         // a few frames instead of one.
-        _runBlend += (_gait.RunBlend - _runBlend) * (1f - MathF.Exp(-dt * 6f));
+        _runBlend += (_gait.BodyRunBlend - _runBlend) * (1f - MathF.Exp(-dt * 6f));
 
         // Off the ground the hands stop swinging and drift; eased so a hop is not a snap.
         float airTarget = _grounding.Grounded ? 0f : 1f;
@@ -3035,7 +3203,11 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         // the air. A walk vaults over its leg instead, which the solver's reach already gives it.
         float reach = MathF.Max(_gait.StepLength * 0.5f, 1e-3f);
         float sink = MathF.Max(Sink(_gait.Left), Sink(_gait.Right));
+        // Standing still, the dip only lets go, as the run and the stride fade: both feet under the body read as the
+        // deepest point of a stride, and a stop sank the body a hand's width the instant it stood. -xlinka
         float dipTarget = sink * run * moving * leg * RunSinkShare;
+        if (_gait.IsStandingStill)
+            dipTarget = MathF.Min(dipTarget, _runDip);
         _runDip = SmoothDamp(_runDip, dipTarget, ref _runDipVelocity, 0.04f, dt);
 
         float Sink(GaitFoot foot)
@@ -3362,6 +3534,24 @@ public class AvatarIK : Component, IAvatarEquipReceiver
     // Downward physics probe for the floor under a foot, ignoring this avatar's own colliders so the ray doesn't
     // catch its capsule. The bool matters: a miss is not the same as "the floor is at fallbackY", especially while
     // jumping where the root can be above the contact floor. -xlinka
+    // The ground under somebody else's feet is asked again once the point has moved a couple of centimetres or
+    // a few frames have gone by: a crowd standing about cast rays every frame at ground that had not moved. The
+    // wearer's own feet always cast. -xlinka
+    private struct GroundProbe
+    {
+        public bool Valid;
+        public ulong Frame;
+        public float X, Z, FallbackY;
+        public bool Hit;
+        public float Height;
+        public float3 Normal;
+    }
+
+    private readonly GroundProbe[] _groundProbes = new GroundProbe[4];
+    private int _groundProbeNext;
+    private const float GroundProbeReuse = 0.02f;
+    private const ulong GroundProbeFrames = 8;
+
     private bool TryGroundHeight(float x, float z, float fallbackY, out float height, out float3 normal)
     {
         height = fallbackY;
@@ -3371,6 +3561,26 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         if (world == null || userSlot == null)
             return false;
 
+        bool reuse = !IsUnderLocalUser;
+        ulong frame = world.Time?.UpdateIndex ?? 0;
+        if (reuse)
+        {
+            for (int i = 0; i < _groundProbes.Length; i++)
+            {
+                ref var probe = ref _groundProbes[i];
+                if (!probe.Valid || frame < probe.Frame || frame - probe.Frame > GroundProbeFrames
+                    || MathF.Abs(probe.X - x) > GroundProbeReuse || MathF.Abs(probe.Z - z) > GroundProbeReuse
+                    || MathF.Abs(probe.FallbackY - fallbackY) > GroundProbeReuse)
+                    continue;
+                if (probe.Hit)
+                {
+                    height = probe.Height;
+                    normal = probe.Normal;
+                }
+                return probe.Hit;
+            }
+        }
+
         _footRayExclude.Clear();
         _footRayExclude.Add(userSlot);
 
@@ -3378,6 +3588,21 @@ public class AvatarIK : Component, IAvatarEquipReceiver
         var origin = new float3(x, fallbackY + GroundProbeUp * scale, z);
         var hit = world.Physics.Raycast(origin, new float3(0f, -1f, 0f), _footRayExclude,
             (GroundProbeUp + GroundProbeDown) * scale);
+        if (reuse)
+        {
+            _groundProbes[_groundProbeNext] = new GroundProbe
+            {
+                Valid = true,
+                Frame = frame,
+                X = x,
+                Z = z,
+                FallbackY = fallbackY,
+                Hit = hit.HasValue,
+                Height = hit.HasValue ? hit.Value.Point.y : fallbackY,
+                Normal = hit.HasValue ? hit.Value.Normal : float3.Up,
+            };
+            _groundProbeNext = (_groundProbeNext + 1) % _groundProbes.Length;
+        }
         if (!hit.HasValue)
             return false;
 

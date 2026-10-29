@@ -127,11 +127,36 @@ public class LocalViewOverride : ImplementableComponent<IHook>
     // changes.
     private bool _lastExternalCamera;
 
+    // An external view whose lens sits right at your own head (a wall pulled the orbit in, a focused panel
+    // zoomed back through you, a free camera parked in your face) keeps the first-person head hide, or the
+    // inside of your own head fills the view. In the user's own metres, with a gap so it cannot flicker. -xlinka
+    private const float LensAtHeadIn = 0.3f;
+    private const float LensAtHeadOut = 0.4f;
+    private static bool _lensAtHead;
+
+    public static bool ExternalViewShowsHead
+    {
+        get
+        {
+            if (!UserInputState.FocusedExternalCameraActive)
+                return false;
+            var input = Engine.Current?.InputInterface;
+            var root = Engine.Current?.WorldManager?.FocusedWorld?.LocalUser?.Root;
+            var head = root?.HeadSlot;
+            if (input == null || !input.DesktopCameraPoseValid || root == null || head == null || head.IsDestroyed)
+                return true;
+            float scale = System.MathF.Max(root.GlobalScale, 0.01f);
+            float distance = float3.Distance(input.DesktopCameraPosition, head.GlobalPosition) / scale;
+            _lensAtHead = distance < (_lensAtHead ? LensAtHeadOut : LensAtHeadIn);
+            return !_lensAtHead;
+        }
+    }
+
     public override void OnUpdate(float delta)
     {
         base.OnUpdate(delta);
 
-        bool external = UserInputState.FocusedExternalCameraActive;
+        bool external = ExternalViewShowsHead;
         if (external != _lastExternalCamera)
         {
             _lastExternalCamera = external;

@@ -74,6 +74,7 @@ internal struct QuadGaitInput
     public float3 RootDelta;
     public QuadGaitMode Mode;
     public float3[] Home;               // [4] body-fixed home point per limb, y = root plane
+    public float3[] HomeDelta;          // [4] how far each home point moved since the last tick, flat
     public float3[] LimbRoots;          // [4] live limb root, for the stretch test
     public float[] LimbReach;           // [4] root-to-paw distance the leg may not exceed, 0 = no test
     public Slot?[] Proxies;             // [4]
@@ -147,12 +148,13 @@ internal sealed class QuadrupedGait
     // LateralOrderStart and LateralOrderFull of the travel direction's lateral component, so travel
     // within 30 degrees of the body axis is ordered exactly as before. -xlinka
     private const float MidlineMargin = 0.25f;
+    private const float PairGapRatio = 0.5f;
     private const float SameSideAvoidance = 0.2f;
     private const float TrailingLiftDelay = 0.35f;
     private const float LateralOrderStart = 0.5f;
     private const float LateralOrderFull = 0.85f;
-    private const float SideStepTrackRatio = 0.3f;
-    private const float MinSideInterval = 0.16f;
+    private const float SideStepTrackRatio = 0.55f;
+    private const float MinSideInterval = 0.14f;
 
     // Forward cadence. The stride is the body travel between two lifts of one limb: the authored
     // length at 1.4 body lengths a second, growing with the square root of speed and never below
@@ -167,8 +169,20 @@ internal sealed class QuadrupedGait
     private const float FirstSwingScale = 0.6f;
     private const float ReachMargin = 0.2f;
     private const float ReAimCos = 0.7071f;
+    // Shortest time between two lifts, and the shortest swing: below it a pair would leave before the other
+    // landed. A tenth of a second keeps the stance inside the legs' reach up to the desktop walk of an animal
+    // worn at twice size, ten metres a second; at 0.16 its hind paws skated a metre a stride. -xlinka
+    private const float MinInterval = 0.1f;
+    private const float MinSwing = 0.1f;
 
-    // Lifts whose lead the reach clamp shortened, for the diagnostics line and the harness.
+    // Each paw's own travel. The body is rigid but it does not move as one point: turned about the head, the
+    // rear girdle sweeps sideways at the length of the animal times the turn while the front barely moves, and
+    // one velocity read off the middle of the body gave every paw the same lead. The rear landed short and on
+    // the inside of the turn, then was dragged under the body until it crossed its pair. -xlinka
+    private readonly float3[] _limbVel = new float3[QuadLimb.Count];
+    private readonly float3[] _limbDir = new float3[QuadLimb.Count];
+
+    // Lifts whose lead the reach clamp shortened, for the diagnostics line and tests.
     public int ReachClampBites { get; private set; }
     private readonly bool[] _leadClamped = new bool[QuadLimb.Count];
 
@@ -196,11 +210,24 @@ internal sealed class QuadrupedGait
             _instantVel = _smoothedVel = float3.Zero;
             _wasMoving = false;
             Array.Clear(_liftDelay);
+            Array.Clear(_limbVel);
+        }
+        float limbFollow = 1f - MathF.Exp(-dt * GaitVelocitySmoothing);
+        float fastestLimb = 0f;
+        for (int i = 0; i < QuadLimb.Count; i++)
+        {
+            float3 step = input.HomeDelta != null && !teleported ? input.HomeDelta[i] : float3.Zero;
+            step.y = 0f;
+            float3 instant = step / dt;
+            if (instant.Length > input.MaxStepVelocity)
+                instant = instant.Normalized * input.MaxStepVelocity;
+            _limbVel[i] = float3.Lerp(_limbVel[i], instant, limbFollow);
+            fastestLimb = MathF.Max(fastestLimb, instant.Length);
         }
         _stepCooldown = MathF.Max(_stepCooldown - dt, 0f);
         _sinceLift = MathF.Min(_sinceLift + dt, 1e3f);
         float bodyLength = MathF.Max(input.BodyLength, 0.1f);
-        bool moving = _instantVel.Length > bodyLength * 0.06f;
+        bool moving = MathF.Max(_instantVel.Length, fastestLimb) > bodyLength * 0.06f;
         float3 right = float3.Cross(input.BodyForward, float3.Up).Normalized;
         float track = MathF.Min(MathF.Abs(float3.Dot(input.Home[1] - input.Home[0], right)),
             MathF.Abs(float3.Dot(input.Home[3] - input.Home[2], right)));
@@ -210,10 +237,15 @@ internal sealed class QuadrupedGait
         float3 direction = moving ? gaitVelocity.Normalized : input.BodyForward;
         float speed = MathF.Max(float3.Dot(LimitSideVelocity(_smoothedVel, right, maxSideSpeed), direction), gaitVelocity.Length);
         _travelDir = direction;
-        // Above the lateral stepping speed, carry the whole contact path with the excess root travel.
-        // Holding it in world space would leave paws metres behind a sprinting body. -xlinka
-        float rootSide = float3.Dot(planarDelta, right);
-        float3 sideCarry = right * (rootSide - System.Math.Clamp(rootSide, -maxSideSpeed * dt, maxSideSpeed * dt));
+        // The cadence follows whichever paw has furthest to go, so a turn in place steps as fast as its rear needs.
+        float cadenceSpeed = speed;
+        for (int i = 0; i < QuadLimb.Count; i++)
+        {
+            float3 limbVel = LimitSideVelocity(_limbVel[i], right, maxSideSpeed);
+            float limbSpeed = limbVel.Length;
+            cadenceSpeed = MathF.Max(cadenceSpeed, limbSpeed);
+            _limbDir[i] = moving && limbSpeed > bodyLength * 0.03f ? limbVel / limbSpeed : direction;
+        }
         float lateral = float3.Dot(direction, right);
         float facing = float3.Dot(direction, input.BodyForward);
         // Stride scale for the travel direction: 1 ahead, the backwards ratio behind, the sideways
@@ -239,28 +271,24 @@ internal sealed class QuadrupedGait
             _startupSteps = groups;
         float speedScale = System.Math.Clamp(speed / (bodyLength * ReferenceSpeedRatio), 0f, 2f);
         float stride = input.StrideLength * ratio * MathF.Max(MathF.Sqrt(speedScale), MinStrideRatio);
-        float interval = System.Math.Clamp(stride / MathF.Max(speed * groups, 0.05f), 0.16f, 0.55f);
+        float interval = System.Math.Clamp(stride / MathF.Max(cadenceSpeed * groups, 0.05f), MinInterval, 0.55f);
         if (sidestepping)
             interval = System.Math.Clamp(sideDistance / MathF.Max(MathF.Abs(float3.Dot(gaitVelocity, right)), 0.05f), MinSideInterval, 0.4f);
         float cycle = interval * groups;
         float duty = input.DutyFactor > 0f ? input.DutyFactor : DutyFactors[(int)_activeMode];
         float swingShare = System.Math.Clamp(duty * groups, 0.65f, groups == 4 ? 1.8f : 0.95f);
-        _swingDuration = System.Math.Clamp(interval * swingShare, 0.12f, MathF.Max(input.StepDuration * 1.6f, 0.12f));
+        _swingDuration = System.Math.Clamp(interval * swingShare, MinSwing, MathF.Max(input.StepDuration * 1.6f, MinSwing));
         if (moving && _startupSteps > 0)
-            _swingDuration = MathF.Max(_swingDuration * FirstSwingScale, 0.12f);
+            _swingDuration = MathF.Max(_swingDuration * FirstSwingScale, MinSwing);
         if (!moving)
             _swingDuration = MathF.Min(_swingDuration, 0.22f);
         _swingHeight = MathF.Max(input.StepHeight, 0f);
-        // Lead at touch-down: half the stance travel, so the paw is dragged as far behind home as it
-        // landed ahead of it. The cycle comes off the ratio-scaled stride, so the sideways and
-        // backwards ratios are already in it. StepPrediction, when set, caps it at that many seconds of
-        // travel. The swing travel is added on top only because the landing is measured from the home
-        // at LIFT and the body keeps moving until the paw is down; it pays for nothing else. Less one
+        // Lead at touch-down, per paw off its own travel: half the stance travel, so the paw is dragged as
+        // far behind home as it landed ahead of it. The cycle comes off the ratio-scaled stride, so the
+        // sideways and backwards ratios are already in it. StepPrediction, when set, caps it at that many
+        // seconds of travel. The swing travel is added on top only because the landing is measured from the
+        // home at LIFT and the body keeps moving until the paw is down; it pays for nothing else. Less one
         // frame: the swing clock advances on the lift frame before the body moves again.
-        float stanceLead = speed * MathF.Max(cycle - _swingDuration, 0f) * 0.5f;
-        if (input.StepPrediction > 0f)
-            stanceLead = MathF.Min(stanceLead, speed * input.StepPrediction);
-        float swingTravel = speed * MathF.Max(_swingDuration - dt, 0f);
         bool leading = moving && input.Grounded;
         float avoidance = bodyLength * SameSideAvoidance;
         float threshold = MathF.Max(input.StepThreshold, 0.001f);
@@ -271,14 +299,32 @@ internal sealed class QuadrupedGait
             ref var gait = ref Limbs[i];
             if (gait.Init)
             {
-                float3 carry = teleported || !input.Grounded || !_wasGrounded ? input.RootDelta : sideCarry;
+                // Above the lateral stepping speed the contact path rides with the excess of its OWN home's
+                // travel. This read the user root's, and the user root is not under the animal: turned about the
+                // head it swings round on a wide arc, and every planted paw slid with it. -xlinka
+                float3 carry;
+                if (teleported || !input.Grounded || !_wasGrounded)
+                {
+                    carry = input.RootDelta;
+                }
+                else
+                {
+                    float3 homeStep = input.HomeDelta != null ? input.HomeDelta[i] : float3.Zero;
+                    float homeSide = float3.Dot(homeStep, right);
+                    carry = right * (homeSide - System.Math.Clamp(homeSide, -maxSideSpeed * dt, maxSideSpeed * dt));
+                }
                 gait.Planted += carry;
                 gait.StepFrom += carry;
                 gait.StepTo += carry;
                 gait.CurrentPos += carry;
             }
             float3 home = input.Home[i];
-            float limbLead = stanceLead;
+            float limbSpeed = moving ? LimitSideVelocity(_limbVel[i], right, maxSideSpeed).Length : 0f;
+            float limbStanceLead = limbSpeed * MathF.Max(cycle - _swingDuration, 0f) * 0.5f;
+            if (input.StepPrediction > 0f)
+                limbStanceLead = MathF.Min(limbStanceLead, limbSpeed * input.StepPrediction);
+            float limbSwingTravel = limbSpeed * MathF.Max(_swingDuration - dt, 0f);
+            float limbLead = limbStanceLead;
             float reach = HorizontalReach(i, in input);
             _leadClamped[i] = false;
             if (reach >= 0f && limbLead > reach * (1f - ReachMargin))
@@ -286,8 +332,8 @@ internal sealed class QuadrupedGait
                 limbLead = reach * (1f - ReachMargin);
                 _leadClamped[i] = true;
             }
-            float3 lead = leading ? direction * (limbLead + swingTravel) : float3.Zero;
-            float3 landing = ConstrainLanding(i, home + lead, leading ? direction * swingTravel : float3.Zero, in input, right, avoidance);
+            float3 lead = leading ? _limbDir[i] * (limbLead + limbSwingTravel) : float3.Zero;
+            float3 landing = ConstrainLanding(i, home + lead, leading ? _limbDir[i] * limbSwingTravel : float3.Zero, in input, right, avoidance);
             landing.y = input.GroundY;
             _landing[i] = landing;
             if (!input.Grounded)
@@ -316,6 +362,21 @@ internal sealed class QuadrupedGait
                 gait.GroundNormal = BlendNormal(contactNormal, contactConform);
                 float supportY = input.GroundY + (contactY - input.GroundY) * contactConform;
                 gait.Planted.y += (supportY - gait.Planted.y) * (1f - MathF.Exp(-dt * GlideFollow));
+            }
+            // A planted paw the body has run past the leg's reach of stays on the ground at the edge of it. Left
+            // where it was, the leg stretched toward it and the paw came up off the floor and hung behind the body
+            // half a metre in the air; held at the edge it slides, on the floor, until its swing comes round.
+            if (!gait.Stepping && reach > 1e-4f)
+            {
+                float3 away = gait.Planted - input.LimbRoots[i];
+                away.y = 0f;
+                float far = away.Length;
+                if (far > reach)
+                {
+                    float3 pull = away * ((reach - far) / far);
+                    gait.Planted += pull;
+                    gait.CurrentPos += pull;
+                }
             }
             gait.DistFromHome = FlatDistance(gait.Planted, home);
             gait.Stretch = input.LimbReach[i] > 1e-4f ? float3.Distance(input.LimbRoots[i], gait.Planted) / input.LimbReach[i] : 0f;
@@ -383,7 +444,7 @@ internal sealed class QuadrupedGait
                         Lift(i, desiredRot, in input);
                 }
                 else if (moving && Limbs[i].Stepping && !Limbs[i].ReAimed
-                         && float3.Dot(direction, Limbs[i].StepDir) < ReAimCos)
+                         && float3.Dot(_limbDir[i], Limbs[i].StepDir) < ReAimCos)
                 {
                     ReAim(i, desiredRot, in input);
                 }
@@ -447,6 +508,18 @@ internal sealed class QuadrupedGait
         if (lateral < margin)
             landing += right * (side * (margin - lateral));
 
+        // Across its pair too, wherever that paw stands. The midline rule knows only where the body will be; a
+        // pair paw planted a while ago can be anywhere under it, and a wide side step landed past it. -xlinka
+        ref var pair = ref Limbs[opposite];
+        if (pair.Init)
+        {
+            float3 pairPoint = pair.Stepping ? pair.StepTo : pair.Planted;
+            float apart = float3.Dot(landing - pairPoint, right) * side;
+            float least = track * PairGapRatio;
+            if (apart < least)
+                landing += right * (side * (least - apart));
+        }
+
         int mate = index ^ 2;
         ref var other = ref Limbs[mate];
         if (other.Init && avoidance > 0f)
@@ -503,7 +576,7 @@ internal sealed class QuadrupedGait
         gait.SwingT = 0f;
         gait.SwingRate = 1f / _swingDuration;
         gait.StepTo = _landing[index];
-        gait.StepDir = _travelDir;
+        gait.StepDir = _limbDir[index].LengthSquared > 1e-8f ? _limbDir[index] : _travelDir;
         bool hit = TryGroundHeight(gait.StepTo.x, gait.StepTo.z, input.GroundY, out float groundY, out float3 normal);
         float conform = hit ? GroundConformance(groundY - input.GroundY, input.ConformScale, input.BodyLength) : 0f;
         gait.StepTo.y = input.GroundY + (groundY - input.GroundY) * conform;
@@ -818,6 +891,8 @@ internal sealed class QuadrupedGait
         ReachClampBites = 0;
         Array.Clear(_liftDelay);
         Array.Clear(_leadClamped);
+        Array.Clear(_limbVel);
+        Array.Clear(_limbDir);
         for (int i = 0; i < QuadLimb.Count; i++)
             Limbs[i] = default;
     }

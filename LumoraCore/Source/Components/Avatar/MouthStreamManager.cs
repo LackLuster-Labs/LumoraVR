@@ -113,8 +113,10 @@ public class MouthStreamManager : UserRootComponent
                 s.FullFrameMax = new float3(1f, 1f, 1f);
                 s.SetInterpolation();
                 s.SetUpdatePeriod(StreamPeriod, 0);
+                // The mouth rides with the face, apart from the voice, so it can be sent less often to whoever is far off.
+                s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup;
             });
-            _tracking = user.GetStreamOrAdd<BoolValueStream>(TrackingName, s => s.SetUpdatePeriod(StreamPeriod, 0));
+            _tracking = user.GetStreamOrAdd<BoolValueStream>(TrackingName, s => { s.SetUpdatePeriod(StreamPeriod, 0); s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup; });
         }
         else
         {

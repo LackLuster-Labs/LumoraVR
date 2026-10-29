@@ -437,6 +437,41 @@ public static class AvatarCalibration
         return ToLocal(avatarRoot, hips.GlobalPosition, BuildRotation(Flatten(forward), float3.Up));
     }
 
+    // An explicit straight-leg fit for a rig imported with bent knees. Preserve the hips' horizontal
+    // placement and its offset above the thigh joints; measure lengths in world space so scale counts. -xlinka
+    public static RefPose ComputePelvisFromLegs(Slot avatarRoot, HumanoidRig rig)
+    {
+        var hips = rig?.TryGetBone(BodyNode.Hips);
+        if (avatarRoot == null || hips is not { IsDestroyed: false })
+            return default;
+        float height = 0;
+        int legs = 0;
+        Measure(BodyNode.LeftUpperLeg, BodyNode.LeftLowerLeg, BodyNode.LeftFoot);
+        Measure(BodyNode.RightUpperLeg, BodyNode.RightLowerLeg, BodyNode.RightFoot);
+        if (legs == 0)
+            return default;
+        var position = hips.GlobalPosition;
+        position.y = height / legs;
+        TryComputeBodyAxes(rig!, out _, out _, out var forward);
+        return ToLocal(avatarRoot, position, BuildRotation(Flatten(forward), float3.Up));
+
+        void Measure(BodyNode upperNode, BodyNode lowerNode, BodyNode footNode)
+        {
+            var upper = rig!.TryGetBone(upperNode);
+            var lower = rig.TryGetBone(lowerNode);
+            var foot = rig.TryGetBone(footNode);
+            if (upper is not { IsDestroyed: false } || lower is not { IsDestroyed: false } || foot is not { IsDestroyed: false })
+                return;
+            float thigh = (upper.GlobalPosition - lower.GlobalPosition).Length;
+            float shin = (lower.GlobalPosition - foot.GlobalPosition).Length;
+            float fitted = foot.GlobalPosition.y + thigh + shin + hips.GlobalPosition.y - upper.GlobalPosition.y;
+            if (!float.IsFinite(fitted) || thigh <= 1e-5f || shin <= 1e-5f)
+                return;
+            height += fitted;
+            legs++;
+        }
+    }
+
     // Build (or rebuild) the "AvatarReferences" subtree with auto-aligned AvatarReferencePoints.
     // Returns the reference root, or null if the rig is unusable.
     // Keep the wearer from seeing the inside of their own head: a zero-scale UserView override on the

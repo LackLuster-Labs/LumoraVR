@@ -5,11 +5,16 @@ using System;
 using System.Collections.Generic;
 using Lumora.Core;
 using Lumora.Core.Input;
+using Lumora.Core.Math;
 
 namespace Lumora.Core.Components.Avatar;
 
 // Pupils drift procedurally until eye tracking takes over; widen, squeeze and frown come from tracking
 // only and rest at 0 without it.
+//
+// An avatar can name its eye shapes, on any of its meshes: each follows one channel of one eye through a remap of
+// its own (input x..y lands output z..w, so a widen can start late and overdrive), and is claimed over the guesses
+// by name. With ExactShapes those are all the eye shapes there are. -xlinka
 [ComponentCategory("Users/Avatar/Face")]
 public sealed class EyeExpressionDriver : Component
 {
@@ -18,6 +23,14 @@ public sealed class EyeExpressionDriver : Component
     // Dilation range of the procedural drift, 0..1.
     public readonly Sync<float> PupilNoiseMin = new();
     public readonly Sync<float> PupilNoiseMax = new();
+
+    // Channel: 0 pupil, 1 widen, 2 squeeze, 3 frown. Side: -1 both eyes, 0 left, 1 right.
+    public readonly SyncRefList<SkinnedMeshRenderer> ShapeMeshes = new();
+    public readonly SyncFieldList<string> ShapeNames = new();
+    public readonly SyncFieldList<int> ShapeChannels = new();
+    public readonly SyncFieldList<int> ShapeSides = new();
+    public readonly SyncFieldList<float4> ShapeRemaps = new();
+    public readonly Sync<bool> ExactShapes = new();
 
     private enum Channel { Pupil, Widen, Squeeze, Frown }
 
@@ -33,8 +46,9 @@ public sealed class EyeExpressionDriver : Component
     };
 
     // side: -1 combined, 0 left, 1 right
-    private readonly List<(SkinnedMeshRenderer Renderer, int Index, Channel Channel, int Side)> _targets = new();
+    private readonly List<(SkinnedMeshRenderer Renderer, int Index, Channel Channel, int Side, float4? Remap)> _targets = new();
     private bool _resolved;
+    private float _retry;
     private float _time;
     private EyeStreamManager? _eye;
     private readonly AvatarFaceWearer _wearer = new();
@@ -59,7 +73,11 @@ public sealed class EyeExpressionDriver : Component
             return;
 
         if (!_resolved)
-            ResolveTargets();
+        {
+            _retry -= delta;
+            if (_retry <= 0f)
+                ResolveTargets();
+        }
         if (_targets.Count == 0)
             return;
 
@@ -71,10 +89,11 @@ public sealed class EyeExpressionDriver : Component
 
         for (int i = 0; i < _targets.Count; i++)
         {
-            var (renderer, index, channel, side) = _targets[i];
+            var (renderer, index, channel, side, remap) = _targets[i];
             if (renderer == null || renderer.IsDestroyed || !renderer.OwnsBlendShape(index, this))
             {
                 _resolved = false; // mesh went away or our claim was lost; rescan next frame
+                _retry = 0f;
                 return;
             }
 
@@ -87,7 +106,14 @@ public sealed class EyeExpressionDriver : Component
                 _ => 0f,
             };
 
-            renderer.DriveBlendShapeWeight(index, System.Math.Clamp(weight, 0f, 1f));
+            if (remap is { } r)
+            {
+                float span = r.y - r.x;
+                float v = System.Math.Clamp(MathF.Abs(span) < 1e-6f ? (weight >= r.y ? 1f : 0f) : (weight - r.x) / span, 0f, 1f);
+                renderer.DriveBlendShapeWeight(index, r.z + (r.w - r.z) * v);
+            }
+            else
+                renderer.DriveBlendShapeWeight(index, System.Math.Clamp(weight, 0f, 1f));
         }
     }
 
@@ -120,13 +146,14 @@ public sealed class EyeExpressionDriver : Component
 
     private void Release()
     {
-        foreach (var (renderer, index, _, _) in _targets)
+        foreach (var (renderer, index, _, _, _) in _targets)
         {
             if (renderer != null && !renderer.IsDestroyed)
                 renderer.ReleaseBlendShape(index, this);
         }
         _targets.Clear();
         _resolved = false;
+        _retry = 0f;
         _eye = null;
     }
 
@@ -155,12 +182,36 @@ public sealed class EyeExpressionDriver : Component
     private void ResolveTargets()
     {
         _targets.Clear();
+
+        // A named shape whose mesh has not loaded its shapes yet is looked for again in a moment.
+        bool missing = false;
+        for (int n = 0; n < ShapeNames.Count && n < ShapeMeshes.Count && n < ShapeChannels.Count; n++)
+        {
+            var mesh = ShapeMeshes[n];
+            if (mesh == null || mesh.IsDestroyed || string.IsNullOrEmpty(ShapeNames[n]) || (uint)ShapeChannels[n] > (uint)Channel.Frown)
+                continue;
+            int index = FaceShapes.Find(mesh, ShapeNames[n]);
+            if (index < 0)
+            {
+                missing |= mesh.BlendShapeCount == 0;
+                continue;
+            }
+            int side = n < ShapeSides.Count ? ShapeSides[n] : -1;
+            var remap = n < ShapeRemaps.Count ? ShapeRemaps[n] : new float4(0f, 1f, 0f, 1f);
+            if (mesh.ClaimBlendShape(index, this, SkinnedMeshRenderer.BlendShapePriorityEye))
+                _targets.Add((mesh, index, (Channel)ShapeChannels[n], side, remap));
+        }
+        _retry = 1f;
+        _resolved = !missing;
+        if (ExactShapes.Value)
+            return;
+
         foreach (var renderer in Slot.GetComponentsInChildren<SkinnedMeshRenderer>())
         {
             for (int i = 0; i < renderer.BlendShapeCount; i++)
             {
                 var name = renderer.BlendShapeName(i);
-                if (string.IsNullOrEmpty(name))
+                if (string.IsNullOrEmpty(name) || renderer.OwnsBlendShape(i, this))
                     continue;
                 var lower = name.ToLowerInvariant();
 
@@ -171,23 +222,17 @@ public sealed class EyeExpressionDriver : Component
                     if (ChannelKeywords[c].Channel == Channel.Pupil && ContainsAny(lower, NotDilation))
                         break;
                     if (renderer.ClaimBlendShape(i, this, SkinnedMeshRenderer.BlendShapePriorityEye))
-                        _targets.Add((renderer, i, ChannelKeywords[c].Channel, Side(lower)));
+                        _targets.Add((renderer, i, ChannelKeywords[c].Channel, Side(lower), null));
                     break; // one channel per blendshape
                 }
             }
         }
-        _resolved = true;
     }
 
     private static readonly string[] NotDilation = { "small", "constrict", "shrink", "contract", "nasal", "nose", "nostril" };
 
-    private static bool ContainsAny(string lower, string[] keywords)
-    {
-        foreach (var kw in keywords)
-            if (lower.Contains(kw))
-                return true;
-        return false;
-    }
+    // Whole segments only (FaceShapes.HasToken), as the other face drivers match.
+    private static bool ContainsAny(string lower, string[] keywords) => FaceShapes.HasAnyToken(lower, keywords);
 
     private static int Side(string lower)
     {

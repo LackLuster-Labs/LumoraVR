@@ -66,6 +66,13 @@ public class AvatarPoseDriver : UserRootComponent, IAvatarEquippable
 
     public bool CanEquip => !Slot.LocalPosition.IsDriven && !Slot.LocalRotation.IsDriven;
 
+    // Something other than this driver holds the slot's position or rotation, so a socket would move nothing.
+    internal bool HeldElsewhere
+        => Slot != null && (HeldByOther(Slot.LocalPosition.ActiveLink, _position) || HeldByOther(Slot.LocalRotation.ActiveLink, _rotation));
+
+    private static bool HeldByOther(ILinkRef? link, ILinkRef own)
+        => link != null && link.IsDriving && !ReferenceEquals(link, own);
+
     public override void OnInit()
     {
         base.OnInit();

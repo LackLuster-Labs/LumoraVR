@@ -25,7 +25,13 @@ public sealed class BlinkDriver : Component
 
     public readonly Sync<bool> ExactLids = new();
     public readonly SyncRef<SkinnedMeshRenderer> LidMesh = new();
+    // The blink on LidMesh: one shape that shuts both eyes, or a shape per eye. A named pair wins and each eye
+    // blinks with its own (tracked winks stay apart); the both-eyes shape is then left alone, since driving it
+    // on top of the pair shuts the lids past closed. Without a pair the both-eyes shape blinks, and a lone eye's
+    // shape only when nothing else is named. -xlinka
     public readonly Sync<string> BlinkShape = new();
+    public readonly Sync<string> LeftBlinkShape = new();
+    public readonly Sync<string> RightBlinkShape = new();
     public readonly Sync<string> LookUpShape = new();
     public readonly Sync<string> LookDownShape = new();
 
@@ -41,7 +47,14 @@ public sealed class BlinkDriver : Component
         { "blink", "eyesclosed", "eyes_closed", "eyeclose", "eye_close", "eyeblink", "まばたき" };
 
     // Side: 0 left, 1 right, -1 a shape that closes both.
-    private readonly List<(SkinnedMeshRenderer Renderer, int Index, int Side)> _targets = new();
+    // Lid shapes the avatar names, on any of its meshes: the shape, the eye it shuts (-1 both, 0 left, 1 right)
+    // and the weight it holds open (x) and shut (y). One driver works them all, so every mesh blinks together.
+    public readonly SyncRefList<SkinnedMeshRenderer> LidShapeMeshes = new();
+    public readonly SyncFieldList<string> LidShapeNames = new();
+    public readonly SyncFieldList<int> LidShapeSides = new();
+    public readonly SyncFieldList<float2> LidShapeStates = new();
+
+    private readonly List<(SkinnedMeshRenderer Renderer, int Index, int Side, float2 State)> _targets = new();
     private readonly List<(SkinnedMeshRenderer Renderer, int Index, bool Up)> _lookTargets = new();
     private readonly List<(Slot Bone, floatQ Home, int Lid)> _bones = new();
     private bool _resolved;
@@ -147,14 +160,14 @@ public sealed class BlinkDriver : Component
 
         for (int i = 0; i < _targets.Count; i++)
         {
-            var (renderer, index, side) = _targets[i];
+            var (renderer, index, side, state) = _targets[i];
             if (renderer == null || renderer.IsDestroyed || !renderer.OwnsBlendShape(index, this))
             {
                 _resolved = false; // mesh went away or our claim was lost; rescan next frame
                 return;
             }
             float w = !tracked || side < 0 ? weight : side == 0 ? leftWeight : rightWeight;
-            renderer.DriveBlendShapeWeight(index, w);
+            renderer.DriveBlendShapeWeight(index, state.x + (state.y - state.x) * w);
         }
 
         float look = Look();
@@ -223,7 +236,7 @@ public sealed class BlinkDriver : Component
     // driving starts again.
     private void LetGo()
     {
-        foreach (var (renderer, index, _) in _targets)
+        foreach (var (renderer, index, _, _) in _targets)
         {
             if (renderer != null && !renderer.IsDestroyed)
                 renderer.ReleaseBlendShape(index, this);
@@ -294,8 +307,20 @@ public sealed class BlinkDriver : Component
 
         var mesh = LidMesh.Target;
         int named = FaceShapes.Find(mesh, BlinkShape.Value);
-        if (named >= 0)
+        int left = FaceShapes.Find(mesh, LeftBlinkShape.Value);
+        int right = FaceShapes.Find(mesh, RightBlinkShape.Value);
+        if (left >= 0 && right >= 0)
+        {
+            TryClaimTarget(mesh!, left, 0);
+            TryClaimTarget(mesh!, right, 1);
+        }
+        else if (named >= 0)
             TryClaimTarget(mesh!, named, -1);
+        else
+        {
+            if (left >= 0) TryClaimTarget(mesh!, left, 0);
+            if (right >= 0) TryClaimTarget(mesh!, right, 1);
+        }
         TryClaimLook(mesh, LookUpShape.Value, true);
         TryClaimLook(mesh, LookDownShape.Value, false);
 
@@ -306,39 +331,66 @@ public sealed class BlinkDriver : Component
                 _bones.Add((bone, bone.LocalRotation.Value, lid));
         }
 
-        if (!ExactLids.Value && named < 0 && string.IsNullOrEmpty(BlinkShape.Value))
+        bool listMissing = false;
+        for (int i = 0; i < LidShapeNames.Count && i < LidShapeMeshes.Count; i++)
+        {
+            var lidMesh = LidShapeMeshes[i];
+            if (lidMesh == null || lidMesh.IsDestroyed || string.IsNullOrEmpty(LidShapeNames[i]))
+                continue;
+            int index = FaceShapes.Find(lidMesh, LidShapeNames[i]);
+            if (index < 0)
+            {
+                listMissing |= lidMesh.BlendShapeCount == 0;
+                continue;
+            }
+            int side = i < LidShapeSides.Count ? LidShapeSides[i] : -1;
+            var state = i < LidShapeStates.Count ? LidShapeStates[i] : new float2(0f, 1f);
+            TryClaimTarget(lidMesh, index, side, state);
+        }
+
+        if (!ExactLids.Value && string.IsNullOrEmpty(BlinkShape.Value) && string.IsNullOrEmpty(LeftBlinkShape.Value)
+            && string.IsNullOrEmpty(RightBlinkShape.Value) && LidShapeNames.Count == 0)
             FindByName();
 
         // A named shape whose mesh has not loaded its shapes yet is looked for again in a moment.
-        bool missing = (!string.IsNullOrEmpty(BlinkShape.Value) && named < 0)
+        bool missing = listMissing || (!string.IsNullOrEmpty(BlinkShape.Value) && named < 0)
+            || (!string.IsNullOrEmpty(LeftBlinkShape.Value) && left < 0)
+            || (!string.IsNullOrEmpty(RightBlinkShape.Value) && right < 0)
             || (!string.IsNullOrEmpty(LookUpShape.Value) && !_lookTargets.Exists(static t => t.Up))
             || (!string.IsNullOrEmpty(LookDownShape.Value) && !_lookTargets.Exists(static t => !t.Up));
-        _resolved = !missing || mesh == null || mesh.IsDestroyed;
+        _resolved = !missing || (!listMissing && (mesh == null || mesh.IsDestroyed));
         _retry = 1f;
         if (_targets.Count + _lookTargets.Count + _bones.Count > 0)
             LumoraLogger.Debug($"BlinkDriver: resolved {_targets.Count} blink, {_lookTargets.Count} lid look shape(s), {_bones.Count} lid bone(s)");
     }
 
+    // Of each kind, the shape whose name says least besides blinking and its side. A face that keeps a mood
+    // variant beside its plain blink ("Blink Happy" beside Blink_L and Blink_R) blinks with the plain one: the
+    // first match won before, and with no side in its name the happy squint counted as both eyes and shut them
+    // into a smile on every blink. A combined shape still wins when it is as plain as the pair. -xlinka
     private void FindByName()
     {
         foreach (var renderer in Slot.GetComponentsInChildren<SkinnedMeshRenderer>())
         {
             int combined = -1, left = -1, right = -1;
+            int combinedExtra = int.MaxValue, leftExtra = int.MaxValue, rightExtra = int.MaxValue;
             for (int i = 0; i < renderer.BlendShapeCount; i++)
             {
                 var name = renderer.BlendShapeName(i);
                 if (string.IsNullOrEmpty(name) || !IsBlinkName(name.ToLowerInvariant()))
                     continue;
                 var lower = name.ToLowerInvariant();
+                int extra = ExtraWords(lower);
                 switch (Side(lower))
                 {
-                    case 0: if (left < 0) left = i; break;
-                    case 1: if (right < 0) right = i; break;
-                    default: if (combined < 0) combined = i; break;
+                    case 0: if (extra < leftExtra) { left = i; leftExtra = extra; } break;
+                    case 1: if (extra < rightExtra) { right = i; rightExtra = extra; } break;
+                    default: if (extra < combinedExtra) { combined = i; combinedExtra = extra; } break;
                 }
             }
 
-            if (combined >= 0)
+            bool pair = left >= 0 && right >= 0;
+            if (combined >= 0 && (!pair || combinedExtra <= System.Math.Max(leftExtra, rightExtra)))
             {
                 TryClaimTarget(renderer, combined, -1);
             }
@@ -350,13 +402,42 @@ public sealed class BlinkDriver : Component
         }
     }
 
-    private static bool IsBlinkName(string lower)
+    private static readonly string[] BlinkWords =
+        { "eyes_closed", "eyesclosed", "eye_closed", "eyeclosed", "eye_close", "eyeclose", "eyeblink", "blink", "まばたき" };
+
+    private static readonly HashSet<string> PlainWords = new(StringComparer.Ordinal) { "l", "r", "eye", "eyes", "vrc", "both" };
+
+    // Letters left in a blink shape's name once the blink, the side and the usual prefixes are taken out.
+    private static int ExtraWords(string lower)
     {
-        foreach (var kw in BlinkKeywords)
-            if (lower.Contains(kw))
-                return true;
-        return false;
+        foreach (var word in BlinkWords)
+        {
+            int at = lower.IndexOf(word, StringComparison.Ordinal);
+            if (at >= 0)
+            {
+                lower = lower.Remove(at, word.Length);
+                break;
+            }
+        }
+        lower = lower.Replace("left", " ").Replace("right", " ");
+        int extra = 0, start = -1;
+        for (int i = 0; i <= lower.Length; i++)
+        {
+            bool letter = i < lower.Length && char.IsLetter(lower[i]);
+            if (letter && start < 0)
+                start = i;
+            else if (!letter && start >= 0)
+            {
+                if (!PlainWords.Contains(lower.Substring(start, i - start)))
+                    extra += i - start;
+                start = -1;
+            }
+        }
+        return extra;
     }
+
+    // Whole segments only (FaceShapes.HasToken): "eye_close" is not the start of "eye_closeup_glint".
+    private static bool IsBlinkName(string lower) => FaceShapes.HasAnyToken(lower, BlinkKeywords);
 
     // Eye side from a blendshape name: 0 = left, 1 = right, -1 = combined/both. Handles the "left"/"right"
     // words and the common _L / .L / -L (and R) suffix conventions.
@@ -381,10 +462,12 @@ public sealed class BlinkDriver : Component
         return sep == '_' || sep == '.' || sep == '-' || sep == ' ';
     }
 
-    private void TryClaimTarget(SkinnedMeshRenderer renderer, int index, int side)
+    private void TryClaimTarget(SkinnedMeshRenderer renderer, int index, int side) => TryClaimTarget(renderer, index, side, new float2(0f, 1f));
+
+    private void TryClaimTarget(SkinnedMeshRenderer renderer, int index, int side, float2 state)
     {
         if (renderer.ClaimBlendShape(index, this, SkinnedMeshRenderer.BlendShapePriorityBlink))
-            _targets.Add((renderer, index, side));
+            _targets.Add((renderer, index, side, state));
     }
 
     private void TryClaimLook(SkinnedMeshRenderer? renderer, string? name, bool up)

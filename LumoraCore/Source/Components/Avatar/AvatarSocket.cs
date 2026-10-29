@@ -90,6 +90,25 @@ public class AvatarSocket : UserRootComponent
             OfferToWearer();
             QueueLateFill();
         };
+        Equipped.OnTargetChange += _ => QueueReclaim();
+    }
+
+    // The authority dresses a socket that reaches it empty, and the wearer can be putting their own part in at
+    // the same moment. The writes cross, the default lands last, and a respawned joiner wore the grey head over
+    // their avatar's. The wearer takes the socket back once the default has landed. -xlinka
+    private bool _reclaimQueued;
+
+    private void QueueReclaim()
+    {
+        if (_reclaimQueued || World == null || Equipped.Target is not Component held || !AvatarEquipManager.IsDefaultPiece(held))
+            return;
+        _reclaimQueued = true;
+        World.RunSynchronously(() =>
+        {
+            _reclaimQueued = false;
+            if (!IsDestroyed)
+                OfferToWearer();
+        });
     }
 
     // The head socket is the one a user's own positioner adds on its first input frame, and a joiner's
@@ -117,14 +136,14 @@ public class AvatarSocket : UserRootComponent
         });
     }
 
-    // A socket that turns up once the avatar is on (a seat's stand-in, a tracker plugged in late) is offered
-    // to the wearer's IK, which puts its pose driver for that part in it when the driver is free. Only the
-    // wearer's machine does it: equip state is the wearer's to write.
+    // A socket that turns up once the avatar is on (a body's own head and controllers, a seat's stand-in, a
+    // tracker plugged in late), or one left holding a default piece, gets the worn avatar's part for it. Only
+    // the wearer's machine does it: equip state is the wearer's to write.
     internal void OfferToWearer()
     {
         if (IsDestroyed || Node.Value == BodyNode.NONE || !IsUnderLocalUser)
             return;
-        _userRoot?.GetRegisteredComponent<AvatarIK>(static ik => ik.IsEquipped)?.OfferSocket(this);
+        _userRoot?.GetRegisteredComponent<AvatarEquipManager>()?.OfferSocket(this);
     }
 
     // Hips/feet jitter visibly without smoothing in any IK/tracker setup

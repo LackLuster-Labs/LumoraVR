@@ -47,6 +47,13 @@ public sealed class NameplateTheme : Component
     public static readonly color PlateEdge =
         new color(DashTheme.OutlineStrong.r, DashTheme.OutlineStrong.g, DashTheme.OutlineStrong.b, 0.22f);
 
+    // Under a beam that would open the person's profile: the glass lifts the way a dash card does under the
+    // pointer, and a plain ring takes the accent.
+    public static readonly color PlateHoverFill =
+        new color(DashTheme.SurfaceHover.r, DashTheme.SurfaceHover.g, DashTheme.SurfaceHover.b, 0.86f);
+    public static readonly color PlateHoverEdge =
+        new color(DashTheme.Accent.r, DashTheme.Accent.g, DashTheme.Accent.b, 0.75f);
+
     public static readonly color ChipFill = DashTheme.Field;
     public static readonly color ChipInk = DashTheme.TextDim;
     public static readonly color NameInk = DashTheme.Text;
@@ -63,7 +70,15 @@ public sealed class NameplateTheme : Component
     public static readonly color StaffRim = new color(0.36f, 0.84f, 0.92f, 0.95f).ToLinear();
     public static readonly colorHDR StaffGlint = new colorHDR(0.3f, 0.86f, 1f, 1f);
 
+    // The tab under a staff plate: the ring's cyan, lit, with the word in the body's navy.
+    public static readonly color StaffTabFill = new color(0.45f, 0.9f, 0.98f, 1f).ToLinear();
+    public static readonly color StaffTabInk = new color(0.03f, 0.06f, 0.16f, 1f).ToLinear();
+
     private const string StaffRimShader = "res://Shaders/Nameplate_StaffRim.gdshader";
+    private const string StaffPanelShader = "res://Shaders/Nameplate_StaffPanel.gdshader";
+    private const string StaffAccentShader = "res://Shaders/Nameplate_StaffAccent.gdshader";
+    private const string FlowRimShader = "res://Shaders/Nameplate_FlowRim.gdshader";
+    private const string FlowAccentShader = "res://Shaders/Nameplate_FlowAccent.gdshader";
 
     // Faint, not a black keyline: the plate behind the name does most of the contrast work and the ring is
     // only there for the range where the plate has faded out from under it.
@@ -77,22 +92,30 @@ public sealed class NameplateTheme : Component
 
     private readonly Dictionary<string, UnlitMaterial> _iconMaterials = new();
     private CustomShaderMaterial? _staffRim;
+    private CustomShaderMaterial? _staffAccent;
+    private CustomShaderMaterial? _staffPanel;
+    private CustomShaderMaterial? _flowRim;
+    private CustomShaderMaterial? _flowAccent;
 
-    // Built the first time a staff plate asks, then shared by every staff plate in the world.
-    public CustomShaderMaterial? StaffRimMaterial
+    // Staff, and tiers the accounts service marks as animated, each wear a moving ring and accent bar.
+    public CustomShaderMaterial? StaffRimMaterial => Shared(ref _staffRim, "Staff Rim", StaffRimShader);
+    public CustomShaderMaterial? StaffAccentMaterial => Shared(ref _staffAccent, "Staff Accent", StaffAccentShader);
+    public CustomShaderMaterial? StaffPanelMaterial => Shared(ref _staffPanel, "Staff Panel", StaffPanelShader);
+    public CustomShaderMaterial? FlowRimMaterial => Shared(ref _flowRim, "Flow Rim", FlowRimShader);
+    public CustomShaderMaterial? FlowAccentMaterial => Shared(ref _flowAccent, "Flow Accent", FlowAccentShader);
+
+    // Built the first time a plate asks, then shared by every plate in the world that wears it.
+    private CustomShaderMaterial? Shared(ref CustomShaderMaterial? material, string name, string shader)
     {
-        get
-        {
-            if (_staffRim != null && !_staffRim.IsDestroyed)
-                return _staffRim;
-            if (Slot == null || Slot.IsDestroyed)
-                return null;
-            _staffRim = Slot.AddSlot("Staff Rim").AttachComponent<CustomShaderMaterial>();
-            _staffRim.ShaderPath.Value = StaffRimShader;
-            _staffRim.BlendMode.Value = BlendMode.Alpha;
-            _staffRim.Culling.Value = Culling.None;
-            return _staffRim;
-        }
+        if (material != null && !material.IsDestroyed)
+            return material;
+        if (Slot == null || Slot.IsDestroyed)
+            return null;
+        material = Slot.AddSlot(name).AttachComponent<CustomShaderMaterial>();
+        material.ShaderPath.Value = shader;
+        material.BlendMode.Value = BlendMode.Alpha;
+        material.Culling.Value = Culling.None;
+        return material;
     }
 
     public override void OnStart()

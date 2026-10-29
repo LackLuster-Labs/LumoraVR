@@ -49,19 +49,25 @@ public static class HandPosePresets
     {
         var pose = new StaticHandPose();
         foreach (var side in HandPoseHelper.Sides)
-        {
-            var positions = HandPoseHelper.NewPositions();
-            var rotations = HandPoseHelper.NewRotations();
-            HandPoseModel.BuildOpenPose(side, positions, rotations);
-            HandPoseHelper.ToHierarchy(positions, rotations);
-            // A splay turns about the parent's up, which mirrors as itself between the hands, so the
-            // left thumb needs the opposite sign to land as the right thumb's mirror image. Curl turns
-            // about the parent's right, which mirrors with a sign flip of its own and needs nothing.
-            float splay = side == Chirality.Left ? -thumbSplay : thumbSplay;
-            HandPoseHelper.ModifyPose(rotations, thumb, index, middle, ring, pinky, splay, 0f, 0f, 0f, 0f);
-            HandPoseHelper.ToFlat(positions, rotations);
-            pose.SetPose(side, positions, rotations);
-        }
+            Shape(pose, side, thumb, index, middle, ring, pinky, thumbSplay);
         return pose;
+    }
+
+    // Writes one side of a pose as the open hand curled per finger, in the presets' units. Called every frame
+    // it animates a hand: a gesture keys its curls and a hand pose source hands them on, so fingers can relax,
+    // spread for a wave and close into a fist instead of jumping between the four presets.
+    public static void Shape(StaticHandPose pose, Chirality side, float thumb, float index, float middle, float ring, float pinky, float thumbSplay)
+    {
+        var positions = HandPoseHelper.NewPositions();
+        var rotations = HandPoseHelper.NewRotations();
+        HandPoseModel.BuildOpenPose(side, positions, rotations);
+        HandPoseHelper.ToHierarchy(positions, rotations);
+        // A splay turns about the parent's up, which mirrors as itself between the hands, so the
+        // left thumb needs the opposite sign to land as the right thumb's mirror image. Curl turns
+        // about the parent's right, which mirrors with a sign flip of its own and needs nothing.
+        float splay = side == Chirality.Left ? -thumbSplay : thumbSplay;
+        HandPoseHelper.ModifyPose(rotations, thumb, index, middle, ring, pinky, splay, 0f, 0f, 0f, 0f);
+        HandPoseHelper.ToFlat(positions, rotations);
+        pose.SetPose(side, positions, rotations);
     }
 }

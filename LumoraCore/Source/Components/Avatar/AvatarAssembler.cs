@@ -202,10 +202,12 @@ public class AvatarAssembler : Component, IAvatarAssembler, IAvatarSocketFiller
             var menuSlot = userSlot.AddSlot("Context Menu");
             menuSlot.AttachComponent<UI.ContextMenuSystem>();
             menuSlot.AttachComponent<AvatarContextActions>();
+            menuSlot.AttachComponent<UserContextActions>();
             menuSlot.AttachComponent<LocomotionContextActions>();
             menuSlot.AttachComponent<InspectorContextActions>();
             menuSlot.AttachComponent<Interaction.ToolContextActions>();
             menuSlot.AttachComponent<Interaction.GrabbedObjectContextActions>();
+            menuSlot.AttachComponent<Interaction.ItemRemovalContextActions>();
             menuSlot.AttachComponent<UserScaleContextActions>();
             menuSlot.AttachComponent<BodyCalibrationContextActions>();
             menuSlot.AttachComponent<HandViewfinder>();

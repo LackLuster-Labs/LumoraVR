@@ -217,6 +217,10 @@ internal sealed class AvatarArrivalCensus
 
         foreach (var part in _parts)
         {
+            // A cloud part that was missing and has arrived since loads again (LateCloudParts): no longer
+            // failed, it is waited for like any other.
+            if (part.Failed && part.Url.LoadFailure == null)
+                part.Failed = part.Broken = false;
             if (!part.Done && !part.Failed && !IsWanted(part))
                 continue;
             wanted++;

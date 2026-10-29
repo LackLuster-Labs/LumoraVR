@@ -4,6 +4,7 @@
 using System;
 using System.Collections.Generic;
 using Helio.UI;
+using Lumora.Core.Localization;
 using Lumora.Core.Math;
 
 namespace Lumora.Core.Components.Avatar;
@@ -36,6 +37,7 @@ public sealed class NameplateManager : UserRootComponent
     private const string BadgeRowSlotName = "Badges";
     private const string StatusSlotName = "Status";
     private const string GroupCardSlotName = "GroupCard";
+    private const string StaffTabSlotName = "StaffTab";
     private const string BadgeSlotPrefix = "badge_";
 
     // Reconcile cadence for the role read. Not a frame cost: a couple of dictionary lookups twice a
@@ -71,6 +73,10 @@ public sealed class NameplateManager : UserRootComponent
     private const float PanelDepth = -0.004f;
     private const float ChipDepth = -0.002f;
     private const float IconDepth = -0.001f;
+    // On the group strip, in front of the strip (+Z faces the viewer here): the chip, then its mark and tag.
+    private const float StripChipDepth = 0.001f;
+    private const float CardMarkDepth = 0.002f;
+    private const float StripTextDepth = 0.003f;
 
     // Corner geometry as a FRACTION of the piece it rounds, not a fixed metre count, so the plate keeps a
     // dash card's corner at every name length instead of turning into a pill on a short name. The numbers
@@ -84,6 +90,16 @@ public sealed class NameplateManager : UserRootComponent
     private const float RimWidth = 0.002f;
     // A staff ring is wider so the light running round it has room to be seen.
     private const float StaffRimWidth = RimWidth * 2.5f;
+    // A tier's colour runs round the whole ring as well as the bar, wide enough to read across a room.
+    private const float TierRimWidth = RimWidth * 1.5f;
+
+    // THE STAFF TAB
+    // A pill on the plate's bottom edge, half on and half off it, with the word on it: the one mark on a
+    // staff plate that says staff without anybody having to learn what the colours mean. It takes the bar's
+    // place. Sized off the name like the chips. -xlinka
+    private const float StaffTabHeightRatio = 0.56f;
+    private const float StaffTabTextRatio = 0.66f;
+    private const float StaffTabPadRatio = 1.2f;
 
     // The one place the user's own colour still lands: a short bar on the plate's bottom edge instead of
     // the fat coloured border that used to wrap the whole thing.
@@ -111,6 +127,24 @@ public sealed class NameplateManager : UserRootComponent
     // How much of the group colour lands over the plate's own tint. Held back from the slab it used to be
     // so the card still reads as part of the plate rather than a sticker on top of it.
     private const float GroupFillStrength = 0.6f;
+
+    // THE GROUP BANNER
+    // The represented group as a strip over the plate: the group's banner, a little see-through, rounded
+    // all round, lower than the plate so the name stays the thing you read. A group with no banner gets the
+    // same strip in its colour. The mark and the tag sit on a small dark chip at the strip's left so they
+    // read over any picture. -xlinka
+    private const float BannerHeightRatio = 0.62f;
+    // the strip's widest shape, and how much of the plate's width it may take at most
+    private const float BannerAspect = 3.2f;
+    private const float BannerMinAspect = 2.2f;
+    private const float BannerWidthRatio = 0.86f;
+    private const float BannerAlpha = 0.86f;
+    private const float BannerChipHeightRatio = 0.7f;
+    private const float BannerChipInset = Gap * 0.6f;
+    private const float BannerChipPad = Gap * 0.7f;
+    // the tag's size over the chip's height
+    private const float BannerTagScale = 0.8f;
+    private static readonly color BannerChipFill = new color(0.04f, 0.04f, 0.06f, 0.55f);
 
     public readonly Sync<float> HeightOffset = new();
     public readonly Sync<float> TextSize = new();
@@ -157,8 +191,15 @@ public sealed class NameplateManager : UserRootComponent
     private Meshes.RoundedQuadMesh? _panelMesh;
     private Meshes.RoundedQuadRingMesh? _rimMesh;
     private MeshRenderer? _rimRenderer;
+    private MeshRenderer? _accentRenderer;
+    private MeshRenderer? _panelRenderer;
+    private Slot? _staffTab;
+    private Meshes.RoundedQuadMesh? _staffTabMesh;
+    private MeshRenderer? _staffTabRenderer;
+    private TextRenderer? _staffTabWord;
+    private float2 _tabLaidOutFor = new float2(-1f, -1f);
     private NameplateTheme? _theme;
-    private bool _staff;
+    private PlateFrame _frame;
     private Meshes.RoundedQuadMesh? _accentMesh;
     private Meshes.RoundedQuadMesh? _statusMesh;
 
@@ -171,6 +212,17 @@ public sealed class NameplateManager : UserRootComponent
     private TextRenderer? _groupTag;
     private Slot? _groupDotSlot;
     private Meshes.RoundedQuadMesh? _groupDotMesh;
+    private MeshRenderer? _groupCardRenderer;
+    private Slot? _groupChipSlot;
+    private Meshes.RoundedQuadMesh? _groupChipMesh;
+    private Lumora.Core.Assets.UnlitMaterial? _groupBannerMaterial;
+    private Lumora.Core.Assets.ImageProvider? _groupBannerProvider;
+    private string _cardBannerUrl = string.Empty;
+    // a banner asked for and not drawn yet: the strip shows the colour until the picture is in
+    private bool _bannerWanted;
+    private bool _bannerShown;
+    private float _cardHeight;
+    private float _stripAspect = BannerAspect;
 
     private readonly NameplateActivityWatcher _activity = new();
     private readonly List<NameplateBadge> _wanted = new();
@@ -194,6 +246,8 @@ public sealed class NameplateManager : UserRootComponent
     private float2 _cardLaidOutFor = new float2(-1f, -1f);
 
     private float _reconcileCountdown;
+    // Time sat out behind the viewer, handed to the next run so the plate's idle clock keeps time.
+    private float _heldDelta;
     private float _chipsBuiltFor = -1f;
     private bool _hasCustomBadgeDriver;
     private bool _avatarShowing;
@@ -202,12 +256,24 @@ public sealed class NameplateManager : UserRootComponent
     private float2 _laidOutFor = new float2(-1f, -1f);
     private bool _plateVisible = true;
     private RenderLayerOverride? _plateLayer;
+    private NameplatePress? _press;
+    private bool _pressHovered;
 
     public NameplatePresence Presence => _activity.State;
 
     public IReadOnlyList<NameplateBadge> Badges => _drawn;
 
     public Slot? PlateSlot => _plate;
+
+    public NameplatePress? Press => _press;
+
+    internal void SetPressHovered(bool hovered)
+    {
+        if (_pressHovered == hovered)
+            return;
+        _pressHovered = hovered;
+        ApplyPlateColors();
+    }
 
     public TextRenderer? Label => _label;
 
@@ -265,10 +331,13 @@ public sealed class NameplateManager : UserRootComponent
             _user.UserName.Changed += _userChanged;
             _user.IsPresent.Changed += _userChanged;
             _user.IsLive.Changed += _userChanged;
+            _user.Capture.Changed += _userChanged;
             _user.AccountId.Changed += _userChanged;
             _user.IsSupporter.Changed += _userChanged;
             _user.SupporterColor.Changed += _userChanged;
+            _user.SupporterStyle.Changed += _userChanged;
             _user.IsStaff.Changed += _userChanged;
+            _user.AccountKind.Changed += _userChanged;
 
             // The card is rebuilt off a change event, never polled: six string compares per frame per
             // visible user is the sort of thing that only shows up when a room fills. -xlinka
@@ -277,6 +346,7 @@ public sealed class NameplateManager : UserRootComponent
             _user.GroupTag.Changed += _groupChanged;
             _user.GroupName.Changed += _groupChanged;
             _user.GroupIconHash.Changed += _groupChanged;
+            _user.GroupBannerHash.Changed += _groupChanged;
             _user.GroupRole.Changed += _groupChanged;
             _user.GroupColor.Changed += _groupChanged;
         }
@@ -384,7 +454,10 @@ public sealed class NameplateManager : UserRootComponent
         _panelMesh = panel.AttachComponent<Meshes.RoundedQuadMesh>();
         _panelMesh.Size.Value = new float2(0.4f, startHeight);
         _panelMesh.CornerRadius.Value = startHeight * PanelRadiusRatio;
-        AttachRenderer(panel, _panelMesh, theme.PlateMaterial);
+        _panelRenderer = AttachRenderer(panel, _panelMesh, theme.PlateMaterial);
+        _press = plate.AttachComponent<NameplatePress>();
+        _press.Manager = this;
+        _press.Panel = _panelMesh;
         ApplyPlateColors();
 
         var accent = plate.AddSlot(AccentSlotName);
@@ -393,8 +466,30 @@ public sealed class NameplateManager : UserRootComponent
         _accentMesh = accent.AttachComponent<Meshes.RoundedQuadMesh>();
         _accentMesh.Size.Value = new float2(AccentHeight * 4f, AccentHeight);
         _accentMesh.CornerRadius.Value = AccentHeight * 0.5f;
-        AttachRenderer(accent, _accentMesh, theme.PlateMaterial);
+        _accentRenderer = AttachRenderer(accent, _accentMesh, theme.PlateMaterial);
+        // The bar and the tab sit on the glass, and both are see-through: told to draw after it, or the
+        // glass sorted after them from some angles and dimmed them.
+        _accentRenderer.SortingOrder.Value = 1;
         ApplyAccentColor();
+
+        var tab = plate.AddSlot(StaffTabSlotName);
+        tab.LocalPosition.Value = new float3(0f, 0f, ChipDepth);
+        tab.ActiveSelf.Value = false;
+        _staffTab = tab;
+        _staffTabMesh = tab.AttachComponent<Meshes.RoundedQuadMesh>();
+        _staffTabMesh.Color = NameplateTheme.StaffTabFill;
+        _staffTabRenderer = AttachRenderer(tab, _staffTabMesh, theme.PlateMaterial);
+        _staffTabRenderer.SortingOrder.Value = 1;
+        var word = tab.AddSlot("Word");
+        word.LocalPosition.Value = new float3(0f, 0f, IconDepth - ChipDepth);
+        _staffTabWord = word.AttachComponent<TextRenderer>();
+        if (theme.Font != null)
+            _staffTabWord.Font.Target = theme.Font;
+        _staffTabWord.HorizontalAlign.Value = TextHorizontalAlignment.Center;
+        _staffTabWord.VerticalAlign.Value = TextVerticalAlignment.Middle;
+        _staffTabWord.Color.Value = NameplateTheme.StaffTabInk;
+        _staffTabWord.OutlineThickness.Value = 0f;
+        _staffTabWord.Text.Value = "Nameplate.Staff".AsLocale("STAFF").Resolve();
 
         var label = plate.AddSlot(LabelSlotName);
         _label = label.AttachComponent<TextRenderer>();
@@ -440,13 +535,30 @@ public sealed class NameplateManager : UserRootComponent
         _groupCardMesh = card.AttachComponent<Meshes.RoundedQuadMesh>();
         _groupCardMesh.Size.Value = new float2(GroupCardHeight, GroupCardHeight);
         _groupCardMesh.CornerRadius.Value = GroupCardHeight * PanelRadiusRatio;
-        _groupCardMesh.BottomCornerRadius.Value = GroupCardHeight * ChipRadiusRatio;
-        AttachRenderer(card, _groupCardMesh, theme?.PlateMaterial);
+        _groupCardMesh.BottomCornerRadius.Value = GroupCardHeight * PanelRadiusRatio;
+        _groupCardRenderer = AttachRenderer(card, _groupCardMesh, theme?.PlateMaterial);
         card.ActiveSelf.Value = false;
         _groupCard = card;
 
+        // The banner's own material, for the same reason the icon has one: the plate material is shared by
+        // every plate in the world. Swapped onto the strip once the picture is in.
+        var banner = card.AttachComponent<Lumora.Core.Assets.UnlitMaterial>();
+        banner.TintColor.Value = new colorHDR(1f, 1f, 1f, BannerAlpha);
+        banner.UseVertexColor.Value = false;
+        banner.BlendMode.Value = Lumora.Core.Assets.BlendMode.Alpha;
+        banner.Culling.Value = Lumora.Core.Assets.Culling.None;
+        _groupBannerMaterial = banner;
+
+        var chip = card.AddSlot("Chip");
+        chip.LocalPosition.Value = new float3(0f, 0f, StripChipDepth);
+        _groupChipMesh = chip.AttachComponent<Meshes.RoundedQuadMesh>();
+        AttachRenderer(chip, _groupChipMesh, theme?.PlateMaterial);
+        _groupChipMesh.Color = BannerChipFill;
+        chip.ActiveSelf.Value = false;
+        _groupChipSlot = chip;
+
         var icon = card.AddSlot("Icon");
-        icon.LocalPosition.Value = new float3(0f, 0f, ChipDepth);
+        icon.LocalPosition.Value = new float3(0f, 0f, CardMarkDepth);
         _groupIconMesh = icon.AttachComponent<Meshes.RoundedQuadMesh>();
         _groupIconMesh.Size.Value = new float2(GroupIconSize, GroupIconSize);
         _groupIconMesh.CornerRadius.Value = GroupIconSize * ChipRadiusRatio;
@@ -474,7 +586,7 @@ public sealed class NameplateManager : UserRootComponent
         tagSlot.ActiveSelf.Value = false;
 
         var dot = card.AddSlot("Dot");
-        dot.LocalPosition.Value = new float3(0f, 0f, ChipDepth);
+        dot.LocalPosition.Value = new float3(0f, 0f, CardMarkDepth);
         _groupDotMesh = dot.AttachComponent<Meshes.RoundedQuadMesh>();
         _groupDotMesh.Size.Value = new float2(GroupDotSize, GroupDotSize);
         _groupDotMesh.CornerRadius.Value = GroupDotSize * 0.5f;
@@ -537,6 +649,15 @@ public sealed class NameplateManager : UserRootComponent
         if (!_plateVisible)
             return;
 
+        // A plate behind the viewer is brought up to date now and then rather than every frame; one in view
+        // follows every frame, near or far. -xlinka
+        var view = AvatarViewLod.Look(Slot.ActiveUserRoot?.Slot);
+        _heldDelta += delta;
+        if (view.Level == AvatarViewLod.Level.Hidden && !view.RunsThisFrame(World.Time.UpdateIndex))
+            return;
+        delta = _heldDelta;
+        _heldDelta = 0f;
+
         if (_activity.Tick(Slot.ActiveUserRoot, _user, delta))
             ApplyStatusColor();
 
@@ -557,6 +678,7 @@ public sealed class NameplateManager : UserRootComponent
             _groupDirty = false;
             RebuildGroupCard();
         }
+        TryShowBanner();
 
         Layout();
     }
@@ -655,46 +777,114 @@ public sealed class NameplateManager : UserRootComponent
         var outline = authored ? _equip!.BadgeOutline.Value : FallbackOutline;
         _label.OutlineColor.Value = new colorHDR(outline.r, outline.g, outline.b, outline.a);
 
-        ApplyStaff();
+        ApplyFrame();
         MarkLayoutDirty();
     }
 
-    // Staff wear a living ring and a light that crosses the name, both run by the GPU off the clock: one
-    // ring material shared by every staff plate in the world, and the label's own text material told how
-    // strong. Nothing here runs per frame. -xlinka
-    private void ApplyStaff()
+    private enum PlateFrame { Plain, Tier, Staff, Animated }
+
+    // Staff wear night glass with light crossing it, a bright living ring, the STAFF tab on the bottom edge
+    // and a light crossing the name. A tier the accounts service marks as animated wears its own colour
+    // flowing round the ring and along the bar, and the light across the name in that colour. Every other
+    // tier wears its colour still, round the ring and on the bar. Staff outrank any tier. All of it is the
+    // GPU running off the clock, one material per look shared by every plate in the world, and the label's
+    // own text material told how strong; nothing here runs per frame. -xlinka
+    private void ApplyFrame()
     {
-        bool staff = _user != null && !_user.IsDestroyed && !_user.IsGuest && _user.IsStaff.Value;
+        var frame = FrameOf(_user);
+        bool moving = frame is PlateFrame.Staff or PlateFrame.Animated;
 
         if (_label != null && !_label.IsDestroyed)
         {
-            float shimmer = staff ? 1f : 0f;
+            float shimmer = moving ? 1f : 0f;
             if (_label.Shimmer.Value != shimmer)
                 _label.Shimmer.Value = shimmer;
-            if (staff && !_label.ShimmerColor.Value.Equals(NameplateTheme.StaffGlint))
-                _label.ShimmerColor.Value = NameplateTheme.StaffGlint;
+            if (moving)
+            {
+                var glint = frame == PlateFrame.Staff ? NameplateTheme.StaffGlint : TierGlint(_user!);
+                if (!_label.ShimmerColor.Value.Equals(glint))
+                    _label.ShimmerColor.Value = glint;
+            }
         }
 
-        if (_rimRenderer != null && !_rimRenderer.IsDestroyed && _theme != null && !_theme.IsDestroyed)
+        if (_theme != null && !_theme.IsDestroyed)
         {
-            Lumora.Core.Assets.IAssetProvider<Lumora.Core.Assets.MaterialAsset>? wanted =
-                staff ? _theme.StaffRimMaterial : _theme.PlateMaterial;
-            if (wanted != null && !ReferenceEquals(_rimRenderer.Material.Target, wanted))
-                _rimRenderer.Material.Target = wanted;
+            SetMaterial(_rimRenderer, frame switch
+            {
+                PlateFrame.Staff => _theme.StaffRimMaterial,
+                PlateFrame.Animated => _theme.FlowRimMaterial,
+                _ => _theme.PlateMaterial,
+            });
+            SetMaterial(_accentRenderer, frame switch
+            {
+                PlateFrame.Staff => _theme.StaffAccentMaterial,
+                PlateFrame.Animated => _theme.FlowAccentMaterial,
+                _ => _theme.PlateMaterial,
+            });
+            SetMaterial(_panelRenderer, frame == PlateFrame.Staff ? _theme.StaffPanelMaterial : _theme.PlateMaterial);
+            SetMaterial(_staffTabRenderer, _theme.StaffAccentMaterial);
         }
 
         if (_rimMesh != null && !_rimMesh.IsDestroyed)
         {
-            float width = staff ? StaffRimWidth : RimWidth;
+            float width = frame switch
+            {
+                PlateFrame.Plain => RimWidth,
+                PlateFrame.Tier => TierRimWidth,
+                _ => StaffRimWidth,
+            };
             if (_rimMesh.RimWidth.Value != width)
                 _rimMesh.RimWidth.Value = width;
         }
 
-        if (_staff != staff)
+        // The tab takes the bar's place on a staff plate.
+        bool staff = frame == PlateFrame.Staff;
+        if (_staffTab != null && !_staffTab.IsDestroyed && _staffTab.ActiveSelf.Value != staff)
         {
-            _staff = staff;
-            ApplyPlateColors();
+            _staffTab.ActiveSelf.Value = staff;
+            _tabLaidOutFor = new float2(-1f, -1f);
         }
+        if (_accentSlot != null && !_accentSlot.IsDestroyed && _accentSlot.ActiveSelf.Value == staff)
+            _accentSlot.ActiveSelf.Value = !staff;
+
+        // Every time, not only on a change of look: an animated tier's ring wears the tier colour, and that
+        // can change while the look stays the same.
+        _frame = frame;
+        ApplyPlateColors();
+    }
+
+    private static PlateFrame FrameOf(User? user)
+    {
+        if (user == null || user.IsDestroyed || user.IsGuest)
+            return PlateFrame.Plain;
+        if (user.IsStaff.Value)
+            return PlateFrame.Staff;
+        if (!user.IsSupporter.Value)
+            return PlateFrame.Plain;
+        return string.Equals(user.SupporterStyle.Value, AnimatedStyle, StringComparison.OrdinalIgnoreCase)
+            ? PlateFrame.Animated
+            : PlateFrame.Tier;
+    }
+
+    // The style word the accounts service sends for a tier whose name tag moves.
+    private const string AnimatedStyle = "Animated";
+
+    // The tier's colour lifted toward white, so the light reads as light crossing a name already in colour.
+    private static colorHDR TierGlint(User user)
+    {
+        var tier = TierColor(user);
+        return new colorHDR(tier.r + (1f - tier.r) * 0.4f, tier.g + (1f - tier.g) * 0.4f, tier.b + (1f - tier.b) * 0.4f, 1f);
+    }
+
+    private static color TierColor(User user)
+        => user.SupporterColor.Value.a > 0f ? user.SupporterColor.Value : NameplateTheme.SupporterAccent;
+
+    private static void SetMaterial(MeshRenderer? renderer, Lumora.Core.Assets.IAssetProvider<Lumora.Core.Assets.MaterialAsset>? wanted)
+    {
+        if (renderer == null || renderer.IsDestroyed || wanted == null)
+            return;
+        if (!ReferenceEquals(renderer.Material.Target, wanted))
+            renderer.Material.Target = wanted;
     }
 
     // Trailing dots rather than an ellipsis character: the shipping face does not carry every dot glyph a
@@ -717,9 +907,14 @@ public sealed class NameplateManager : UserRootComponent
     private void ApplyPlateColors()
     {
         if (_panelMesh != null && !_panelMesh.IsDestroyed)
-            _panelMesh.Color = NameplateTheme.PlateFill;
+            _panelMesh.Color = _pressHovered ? NameplateTheme.PlateHoverFill : NameplateTheme.PlateFill;
         if (_rimMesh != null && !_rimMesh.IsDestroyed)
-            _rimMesh.Color = _staff ? NameplateTheme.StaffRim : NameplateTheme.PlateEdge;
+            _rimMesh.Color = _frame switch
+            {
+                PlateFrame.Staff => NameplateTheme.StaffRim,
+                PlateFrame.Animated or PlateFrame.Tier when _user != null && !_user.IsDestroyed => TierColor(_user),
+                _ => _pressHovered ? NameplateTheme.PlateHoverEdge : NameplateTheme.PlateEdge,
+            };
     }
 
     // The accent is the supporter-reward surface: one authored colour living on the EQUIP manager, which
@@ -878,22 +1073,23 @@ public sealed class NameplateManager : UserRootComponent
             return;
 
         var user = _user;
-        string tag = user == null || user.IsDestroyed ? string.Empty : user.GroupTag.Value ?? string.Empty;
-        string iconHash = user == null || user.IsDestroyed ? string.Empty : user.GroupIconHash.Value ?? string.Empty;
-        string groupId = user == null || user.IsDestroyed ? string.Empty : user.GroupId.Value ?? string.Empty;
+        bool here = user != null && !user.IsDestroyed;
+        string tag = here ? user!.GroupTag.Value ?? string.Empty : string.Empty;
+        string iconHash = here ? user!.GroupIconHash.Value ?? string.Empty : string.Empty;
+        string bannerHash = here ? user!.GroupBannerHash.Value ?? string.Empty : string.Empty;
+        string groupId = here ? user!.GroupId.Value ?? string.Empty : string.Empty;
 
-        // Nothing to say, no card. A group id with neither a tag nor an icon would draw an empty coloured
-        // stub over somebody's head, which is worse than no card at all.
+        // Nothing to say, no strip. A group id with no tag, icon or banner would draw an empty coloured
+        // stub over somebody's head, which is worse than nothing.
         bool active = ShowGroupCard.Value
             && groupId.Length > 0
-            && (tag.Length > 0 || iconHash.Length > 0);
+            && (tag.Length > 0 || iconHash.Length > 0 || bannerHash.Length > 0);
 
         if (active != _cardActive)
         {
             _cardActive = active;
             card.ActiveSelf.Value = active;
-            // The status dot sits above whatever the card takes, so its placement is stale the moment the
-            // card appears or goes.
+            // Everything stacked over the plate steps over the strip, so it moves when the strip comes or goes.
             MarkLayoutDirty();
         }
         if (!active)
@@ -903,6 +1099,19 @@ public sealed class NameplateManager : UserRootComponent
         var fill = CompositeGroupFill(groupColor);
         if (_groupCardMesh != null && !_groupCardMesh.IsDestroyed)
             _groupCardMesh.Color = fill;
+
+        bool banner = bannerHash.Length > 0;
+        if (banner)
+            PointBannerAt(bannerHash);
+        else
+            DropBanner();
+        if (banner != _bannerWanted)
+        {
+            _bannerWanted = banner;
+            _cardLaidOutFor = new float2(-1f, -1f);
+        }
+        if (_groupChipSlot != null && !_groupChipSlot.IsDestroyed && _groupChipSlot.ActiveSelf.Value != banner)
+            _groupChipSlot.ActiveSelf.Value = banner;
 
         bool showIcon = iconHash.Length > 0;
         if (showIcon)
@@ -916,8 +1125,8 @@ public sealed class NameplateManager : UserRootComponent
             if (showTag)
             {
                 _groupTag.Text.Value = tag;
-                _groupTag.Size.Value = TextSize.Value * GroupTagScale;
-                _groupTag.Color.Value = InkFor(fill);
+                // white on the dark chip over a picture, the plate's own ink rule on a colour strip
+                _groupTag.Color.Value = banner ? color.White : InkFor(fill);
                 _groupTag.MaxViewDistance.Value = MathF.Max(0f, MaxViewDistance.Value);
             }
             if (_groupTag.Slot != null && _groupTag.Slot.ActiveSelf.Value != showTag)
@@ -943,6 +1152,88 @@ public sealed class NameplateManager : UserRootComponent
             _cardLaidOutFor = new float2(-1f, -1f);
         }
         ApplyViewDistance();
+    }
+
+    // The banner arrives on its own time. Until it does the strip shows the group's colour, and the picture
+    // goes on the moment it is in, cropped to cover the strip.
+    private void TryShowBanner()
+    {
+        if (!_bannerWanted || _bannerShown)
+            return;
+        var texture = _groupBannerProvider?.Asset;
+        if (texture == null || texture.Width <= 0 || texture.Height <= 0
+            || _groupBannerMaterial == null || _groupBannerMaterial.IsDestroyed
+            || _groupCardRenderer == null || _groupCardRenderer.IsDestroyed)
+            return;
+
+        FitBanner();
+        _groupCardRenderer.Material.Target = _groupBannerMaterial;
+        _bannerShown = true;
+    }
+
+    // Cover: the picture fills the strip and what overflows is cut evenly from both ends.
+    private void FitBanner()
+    {
+        var texture = _groupBannerProvider?.Asset;
+        if (texture == null || texture.Width <= 0 || texture.Height <= 0 || _groupBannerMaterial == null || _groupBannerMaterial.IsDestroyed)
+            return;
+        float picture = texture.Width / (float)texture.Height;
+        var scale = picture > _stripAspect
+            ? new float2(_stripAspect / picture, 1f)
+            : new float2(1f, picture / _stripAspect);
+        _groupBannerMaterial.TextureScale.Value = scale;
+        _groupBannerMaterial.TextureOffset.Value = (float2.One - scale) * 0.5f;
+    }
+
+    private void DropBanner()
+    {
+        _cardBannerUrl = string.Empty;
+        ShowColourStrip();
+    }
+
+    private void ShowColourStrip()
+    {
+        if (!_bannerShown)
+            return;
+        _bannerShown = false;
+        if (_groupCardRenderer != null && !_groupCardRenderer.IsDestroyed && _theme?.PlateMaterial != null)
+            _groupCardRenderer.Material.Target = _theme.PlateMaterial;
+    }
+
+    // Retargeted like the icon's, never replaced.
+    private void PointBannerAt(string hash)
+    {
+        var host = _groupCard;
+        if (host == null || host.IsDestroyed)
+            return;
+
+        string url = Nexus.Cloud.Cdn.ServiceConfig.Current.GetContentUrl(hash);
+        if (_groupBannerProvider != null && !_groupBannerProvider.IsDestroyed
+            && string.Equals(url, _cardBannerUrl, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        if (_groupBannerProvider == null || _groupBannerProvider.IsDestroyed)
+        {
+            var slot = host.AddSlot("BannerAsset");
+            slot.ActiveSelf.Value = false;
+            _groupBannerProvider = slot.AttachComponent<Lumora.Core.Assets.ImageProvider>();
+            if (_groupBannerMaterial != null && !_groupBannerMaterial.IsDestroyed)
+                _groupBannerMaterial.Texture.Target = _groupBannerProvider;
+        }
+
+        // a new picture shows the colour until it is in, never the last group's picture
+        ShowColourStrip();
+        _cardBannerUrl = url;
+        try
+        {
+            _groupBannerProvider.URL.Value = new Uri(url);
+        }
+        catch (UriFormatException)
+        {
+            _cardBannerUrl = string.Empty;
+        }
     }
 
     private static bool IsGroupStaff(string? role)
@@ -1022,58 +1313,116 @@ public sealed class NameplateManager : UserRootComponent
     private static float Luminance(in color value)
         => 0.2126f * value.r + 0.7152f * value.g + 0.0722f * value.b;
 
-    // How much room the card takes off the plate's top edge. Everything that stacks above the plate - the
-    // badge row and the status dot - steps over this rather than over the card's own geometry.
-    private float GroupCardOffset => _cardActive ? GroupCardHeight + RowGap : 0f;
+    // How much room the strip takes off the plate's top edge. Everything that stacks above the plate - the
+    // badge row and the status dot - steps over this rather than over the strip's own geometry.
+    private float GroupCardOffset => _cardActive ? _cardHeight + GroupCardGap + RowGap : 0f;
 
-    // Content runs left to right at a fixed height, so the only thing that has to wait on shaping is the
-    // tag's own width. Same deal as the name: TextRenderer fills RenderedSize during meshing, so this runs
-    // again for free once that number lands and never again after.
-    private void LayoutGroupCard(float panelHeight)
+    // The strip's size follows the plate's height only, so it is the same strip over every name. Its
+    // contents wait on the tag's shaping like the name does.
+    private void LayoutGroupCard(float panelWidth, float panelHeight)
     {
         var card = _groupCard;
         if (!_cardActive || card == null || card.IsDestroyed || _groupCardMesh == null || _groupCardMesh.IsDestroyed)
             return;
 
+        // narrower than the plate under it, in a banner's shape, the shape kept within reason on a short name
+        float height = panelHeight * BannerHeightRatio;
+        float width = System.Math.Clamp(panelWidth * BannerWidthRatio, height * BannerMinAspect, height * BannerAspect);
+        _cardHeight = height;
+
+        float chipHeight = height * BannerChipHeightRatio;
+        float icon = chipHeight * 0.72f;
+        float dot = chipHeight * 0.3f;
+
         float tagWidth = 0f;
         if (_cardTagShown && _groupTag != null && !_groupTag.IsDestroyed)
         {
+            // The tag is sized to the chip, and a long one comes down until it fits the strip with the mark
+            // and the dot beside it. A size change reshapes, so the layout waits a frame for the new width.
+            float room = width - BannerChipInset * 2f - BannerChipPad * 2f
+                - (_cardIconShown ? icon + GroupContentGap : 0f) - (_cardDotShown ? dot + GroupContentGap : 0f);
+            float wanted = chipHeight * BannerTagScale;
             var shaped = _groupTag.RenderedSize;
             if (shaped.x <= 0f)
+            {
+                if (MathF.Abs(_groupTag.Size.Value - wanted) > wanted * 0.01f && _groupTag.Size.Value > wanted)
+                    _groupTag.Size.Value = wanted;
                 return;   // still shaping; the next update lays it out
+            }
+            float size = _groupTag.Size.Value;
+            float target = MathF.Min(wanted, size * room / shaped.x);
+            if (MathF.Abs(size - target) > size * 0.01f)
+            {
+                _groupTag.Size.Value = target;
+                _cardLaidOutFor = new float2(-1f, -1f);
+                return;
+            }
             tagWidth = shaped.x;
         }
 
-        var signature = new float2(tagWidth, panelHeight);
+        var signature = new float2(tagWidth + (_bannerWanted ? 1000f : 0f) + width * 10000f, panelHeight);
         if ((signature - _cardLaidOutFor).LengthSquared < 1e-8f)
             return;
         _cardLaidOutFor = signature;
 
+        _groupCardMesh.Size.Value = new float2(width, height);
+        _stripAspect = width / height;
+        if (_bannerShown)
+            FitBanner();
+        _groupCardMesh.CornerRadius.Value = height * PanelRadiusRatio;
+        _groupCardMesh.BottomCornerRadius.Value = height * PanelRadiusRatio;
+        card.LocalPosition.Value = new float3(0f, panelHeight * 0.5f + GroupCardGap + height * 0.5f, 0f);
+        if (_groupIconMesh != null && !_groupIconMesh.IsDestroyed)
+        {
+            _groupIconMesh.Size.Value = new float2(icon, icon);
+            _groupIconMesh.CornerRadius.Value = icon * ChipRadiusRatio;
+        }
+        if (_groupDotMesh != null && !_groupDotMesh.IsDestroyed)
+        {
+            _groupDotMesh.Size.Value = new float2(dot, dot);
+            _groupDotMesh.CornerRadius.Value = dot * 0.5f;
+        }
+
         float content = 0f;
         if (_cardIconShown)
-            content += GroupIconSize;
+            content += icon;
         if (_cardTagShown)
             content += (content > 0f ? GroupContentGap : 0f) + tagWidth;
         if (_cardDotShown)
-            content += (content > 0f ? GroupContentGap : 0f) + GroupDotSize;
+            content += (content > 0f ? GroupContentGap : 0f) + dot;
 
-        float width = content + PanelPadX;
-        _groupCardMesh.Size.Value = new float2(width, GroupCardHeight);
-        card.LocalPosition.Value = new float3(0f, panelHeight * 0.5f + GroupCardGap + GroupCardHeight * 0.5f, 0f);
+        // Over a picture the mark and tag ride a chip at the strip's left; on a plain colour they sit centred.
+        float cursor;
+        if (_bannerWanted)
+        {
+            float chipWidth = MathF.Min(content + BannerChipPad * 2f, width - BannerChipInset * 2f);
+            float chipLeft = -width * 0.5f + BannerChipInset;
+            if (_groupChipMesh != null && !_groupChipMesh.IsDestroyed)
+            {
+                _groupChipMesh.Size.Value = new float2(chipWidth, chipHeight);
+                _groupChipMesh.CornerRadius.Value = chipHeight * PanelRadiusRatio;
+            }
+            if (_groupChipSlot != null && !_groupChipSlot.IsDestroyed)
+                _groupChipSlot.LocalPosition.Value = new float3(chipLeft + chipWidth * 0.5f, 0f, StripChipDepth);
+            cursor = chipLeft + BannerChipPad;
+        }
+        else
+        {
+            cursor = -content * 0.5f;
+        }
 
-        float cursor = -content * 0.5f;
         if (_cardIconShown && _groupIconSlot != null && !_groupIconSlot.IsDestroyed)
         {
-            _groupIconSlot.LocalPosition.Value = new float3(cursor + GroupIconSize * 0.5f, 0f, ChipDepth);
-            cursor += GroupIconSize + GroupContentGap;
+            _groupIconSlot.LocalPosition.Value = new float3(cursor + icon * 0.5f, 0f, CardMarkDepth);
+            cursor += icon + GroupContentGap;
         }
         if (_cardTagShown && _groupTag?.Slot != null && !_groupTag.Slot.IsDestroyed)
         {
-            _groupTag.Slot.LocalPosition.Value = new float3(cursor + tagWidth * 0.5f, 0f, 0f);
+            _groupTag.Slot.LocalPosition.Value = new float3(cursor + tagWidth * 0.5f, 0f, StripTextDepth);
             cursor += tagWidth + GroupContentGap;
         }
         if (_cardDotShown && _groupDotSlot != null && !_groupDotSlot.IsDestroyed)
-            _groupDotSlot.LocalPosition.Value = new float3(cursor + GroupDotSize * 0.5f, 0f, ChipDepth);
+            _groupDotSlot.LocalPosition.Value = new float3(cursor + dot * 0.5f, 0f, CardMarkDepth);
     }
 
     private static bool SameBadges(List<NameplateBadge> a, List<NameplateBadge> b)
@@ -1109,7 +1458,9 @@ public sealed class NameplateManager : UserRootComponent
 
         // The card runs on its own guard: its width waits on the TAG shaping, which lands on a different
         // frame from the name's, and the name not having moved is no reason to leave the card unplaced.
-        LayoutGroupCard(panelHeight);
+        // The staff tab waits on its word the same way.
+        LayoutGroupCard(MathF.Max(size.x, BadgeRowSpan()) + PanelPadX, panelHeight);
+        LayoutStaffTab(panelHeight);
 
         if ((size - _laidOutFor).LengthSquared < 1e-8f)
             return;
@@ -1160,6 +1511,37 @@ public sealed class NameplateManager : UserRootComponent
             positioner.VerticalOffset.Value = HeightOffset.Value;
     }
 
+    private void LayoutStaffTab(float panelHeight)
+    {
+        var tab = _staffTab;
+        var word = _staffTabWord;
+        if (tab == null || tab.IsDestroyed || !tab.ActiveSelf.Value || word == null || word.IsDestroyed
+            || _staffTabMesh == null || _staffTabMesh.IsDestroyed)
+        {
+            return;
+        }
+
+        float height = MathF.Max(0.001f, TextSize.Value) * StaffTabHeightRatio;
+        float wordSize = height * StaffTabTextRatio;
+        if (word.Size.Value != wordSize)
+        {
+            word.Size.Value = wordSize;
+            return;   // reshapes; the next update lays it out
+        }
+        var shaped = word.RenderedSize;
+        if (shaped.x <= 0f)
+            return;
+
+        var signature = new float2(shaped.x, panelHeight);
+        if ((signature - _tabLaidOutFor).LengthSquared < 1e-8f)
+            return;
+        _tabLaidOutFor = signature;
+
+        _staffTabMesh.Size.Value = new float2(shaped.x + height * StaffTabPadRatio, height);
+        _staffTabMesh.CornerRadius.Value = height * 0.5f;
+        tab.LocalPosition.Value = new float3(0f, -panelHeight * 0.5f, ChipDepth);
+    }
+
     // The row is centred over the name, one RowGap of daylight off the plate's top edge, and it steps over
     // the group card when there is one. Slot order is registry order, which is host, role, voice, live by Order.
     private void SpreadBadgeRow(float panelHeight)
@@ -1197,10 +1579,13 @@ public sealed class NameplateManager : UserRootComponent
                 _user.UserName.Changed -= _userChanged;
                 _user.IsPresent.Changed -= _userChanged;
                 _user.IsLive.Changed -= _userChanged;
+                _user.Capture.Changed -= _userChanged;
                 _user.AccountId.Changed -= _userChanged;
                 _user.IsSupporter.Changed -= _userChanged;
                 _user.SupporterColor.Changed -= _userChanged;
+                _user.SupporterStyle.Changed -= _userChanged;
                 _user.IsStaff.Changed -= _userChanged;
+                _user.AccountKind.Changed -= _userChanged;
             }
             if (_groupChanged != null)
             {
@@ -1208,6 +1593,7 @@ public sealed class NameplateManager : UserRootComponent
                 _user.GroupTag.Changed -= _groupChanged;
                 _user.GroupName.Changed -= _groupChanged;
                 _user.GroupIconHash.Changed -= _groupChanged;
+                _user.GroupBannerHash.Changed -= _groupChanged;
                 _user.GroupRole.Changed -= _groupChanged;
                 _user.GroupColor.Changed -= _groupChanged;
             }

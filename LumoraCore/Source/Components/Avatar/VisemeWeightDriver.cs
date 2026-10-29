@@ -21,7 +21,7 @@ public sealed class VisemeWeightDriver : Component
     public readonly SyncFieldList<string> ShapeNames = new();
     public readonly Sync<bool> ExactShapes = new();
 
-    // Name tokens per viseme (lowercased). A blendshape matches if its name contains any token.
+    // Name tokens per viseme (lowercased). A blendshape matches if any token stands in its name (HasToken).
     private static readonly Dictionary<Viseme, string[]> Keywords = new()
     {
         { Viseme.Silence, new[] { "sil", "viseme_sil" } },
@@ -42,8 +42,19 @@ public sealed class VisemeWeightDriver : Component
         { Viseme.Laughter, new[] { "laugh" } },
     };
 
+    // A face authored with the bare viseme codes calls its shapes nothing more than "AA", "PP" or "sil", which
+    // none of the tokens above find. Matched on the whole name only: two letters inside a longer name are not a
+    // viseme. -xlinka
+    private static readonly Dictionary<string, Viseme> Codes = new(StringComparer.Ordinal)
+    {
+        ["sil"] = Viseme.Silence, ["pp"] = Viseme.PP, ["ff"] = Viseme.FF, ["th"] = Viseme.TH, ["dd"] = Viseme.DD,
+        ["kk"] = Viseme.KK, ["ch"] = Viseme.CH, ["ss"] = Viseme.SS, ["nn"] = Viseme.NN, ["rr"] = Viseme.RR,
+        ["aa"] = Viseme.AA, ["e"] = Viseme.E, ["ee"] = Viseme.E, ["ih"] = Viseme.IH, ["oh"] = Viseme.OH, ["ou"] = Viseme.OU,
+    };
+
     private readonly List<(SkinnedMeshRenderer Renderer, int Index, Viseme V)> _targets = new();
     private bool _resolved;
+    private float _retry;
     private readonly AvatarFaceWearer _wearer = new();
 
     public override void OnInit()
@@ -70,7 +81,11 @@ public sealed class VisemeWeightDriver : Component
         }
 
         if (!_resolved)
-            ResolveTargets();
+        {
+            _retry -= delta;
+            if (_retry <= 0f)
+                ResolveTargets();
+        }
         if (_targets.Count == 0)
             return;
 
@@ -83,6 +98,7 @@ public sealed class VisemeWeightDriver : Component
             if (renderer == null || renderer.IsDestroyed || !renderer.OwnsBlendShape(index, this))
             {
                 _resolved = false; // mesh went away or our claim was lost; rescan next frame
+                _retry = 0f;
                 return;
             }
             // No source / silence -> 0 -> mouth closed.
@@ -100,6 +116,7 @@ public sealed class VisemeWeightDriver : Component
         }
         _targets.Clear();
         _resolved = false;
+        _retry = 0f;
     }
 
     public override void OnAwake()
@@ -124,11 +141,15 @@ public sealed class VisemeWeightDriver : Component
         base.OnDestroy();
     }
 
-    // The voice this mouth follows, which the animator reads through us as well.
+    // The voice this mouth follows, which the animator reads through us as well. A mouth on the face mesh listens
+    // to the voice wherever the avatar keeps it, not only below itself.
     private void EnsureSource()
     {
-        if ((Source.Target == null || Source.Target.IsDestroyed)
-            && (Slot.GetComponentInChildren<LipSyncAnalyzer>() ?? Slot.GetComponent<LipSyncAnalyzer>()) is { } found)
+        if (Source.Target != null && !Source.Target.IsDestroyed)
+            return;
+        var found = Slot.GetComponentInChildren<LipSyncAnalyzer>() ?? Slot.GetComponent<LipSyncAnalyzer>()
+            ?? Slot.GetComponentInParents<AvatarForm>()?.Slot.GetComponentInChildren<LipSyncAnalyzer>();
+        if (found != null)
             Source.Target = found;
     }
 
@@ -137,6 +158,9 @@ public sealed class VisemeWeightDriver : Component
         _targets.Clear();
         EnsureSource();
 
+        // A named shape whose mesh has not loaded its shapes yet is looked for again in a moment. Settling on
+        // nothing kept the mouth shut for good whenever it was worn before its mesh arrived. -xlinka
+        bool missing = false;
         var named = new HashSet<Viseme>();
         var mesh = ShapeMesh.Target;
         if (mesh != null && !mesh.IsDestroyed)
@@ -147,6 +171,8 @@ public sealed class VisemeWeightDriver : Component
                 if (string.IsNullOrEmpty(shape))
                     continue;
                 int index = mesh.GetBlendShapeIndex(shape);
+                if (index < 0 && mesh.BlendShapeCount == 0)
+                    missing = true;
                 if (index >= 0 && mesh.ClaimBlendShape(index, this, SkinnedMeshRenderer.BlendShapePriorityViseme))
                 {
                     _targets.Add((mesh, index, (Viseme)v));
@@ -154,10 +180,11 @@ public sealed class VisemeWeightDriver : Component
                 }
             }
         }
+        _retry = 1f;
 
         if (ExactShapes.Value)
         {
-            _resolved = true;
+            _resolved = !missing;
             return;
         }
 
@@ -172,29 +199,30 @@ public sealed class VisemeWeightDriver : Component
                     continue;
                 var lower = name.ToLowerInvariant();
 
-                foreach (var kv in Keywords)
+                // One viseme per blendshape: the whole-name code, else the first viseme a token finds.
+                Viseme? found = Codes.TryGetValue(lower.Trim(), out var code) ? code : null;
+                if (found == null)
                 {
-                    bool match = false;
-                    foreach (var token in kv.Value)
+                    foreach (var kv in Keywords)
                     {
-                        if (lower.Contains(token))
+                        foreach (var token in kv.Value)
                         {
-                            match = true;
-                            break;
+                            if (FaceShapes.HasToken(lower, token))
+                            {
+                                found = kv.Key;
+                                break;
+                            }
                         }
-                    }
-                    if (match && named.Contains(kv.Key))
-                        break;
-                    if (match)
-                    {
-                        // Claim the shape so the catch-all expression driver leaves it alone (one owner per shape).
-                        if (renderer.ClaimBlendShape(i, this, SkinnedMeshRenderer.BlendShapePriorityViseme))
-                            _targets.Add((renderer, i, kv.Key));
-                        break; // one viseme per blendshape
+                        if (found != null)
+                            break;
                     }
                 }
+                // Claim the shape so the catch-all expression driver leaves it alone (one owner per shape).
+                if (found is { } viseme && !named.Contains(viseme)
+                    && renderer.ClaimBlendShape(i, this, SkinnedMeshRenderer.BlendShapePriorityViseme))
+                    _targets.Add((renderer, i, viseme));
             }
         }
-        _resolved = true;
+        _resolved = !missing;
     }
 }

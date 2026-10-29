@@ -34,6 +34,16 @@ public sealed class EyeGazeDriver : Component
     // turn the eyeball a second time on top of the bone.
     public readonly Sync<bool> ExactEyes = new();
 
+    // Brief looks the avatar gives now and then while nothing else holds its eyes: degrees toward its left (x) and
+    // up (y), how often against the others, and how long each is held (x to y seconds). One is tried every
+    // GlanceInterval seconds and taken with GlanceChance; it stays inside the cone and the eye limits, and the
+    // idle saccades go on once it has been held.
+    public readonly SyncFieldList<float2> GlanceAngles = new();
+    public readonly SyncFieldList<float> GlanceWeights = new();
+    public readonly SyncFieldList<float2> GlanceDurations = new();
+    public readonly Sync<float> GlanceChance = new();
+    public readonly Sync<float> GlanceInterval = new();
+
     // Where the eyes look up and down this frame, -1 as far down as they go to 1 as far up.
     public float LookPitch { get; private set; }
 
@@ -56,6 +66,7 @@ public sealed class EyeGazeDriver : Component
     private float _timer;
     private float _next = 1.5f;
     private float _curYaw, _curPitch, _tgtYaw, _tgtPitch; // radians
+    private float _glanceClock;
 
     public override void OnInit()
     {
@@ -103,7 +114,10 @@ public sealed class EyeGazeDriver : Component
         else
         {
             _timer += delta;
-            if (_timer >= _next)
+            if (TryGlance(delta))
+            {
+            }
+            else if (_timer >= _next)
             {
                 _timer = 0f;
                 float span = MathF.Max(0f, SaccadeMaxInterval.Value - SaccadeMinInterval.Value);
@@ -130,6 +144,46 @@ public sealed class EyeGazeDriver : Component
 
         if (hasLook)
             DriveLook(_curYaw, _curPitch, left, right);
+    }
+
+    // A glance when one is due and the dice say so, weighted among the avatar's own; true when one starts.
+    private bool TryGlance(float delta)
+    {
+        int count = System.Math.Min(GlanceAngles.Count, GlanceWeights.Count);
+        if (count == 0 || GlanceInterval.Value <= 0f)
+            return false;
+        _glanceClock -= delta;
+        if (_glanceClock > 0f)
+            return false;
+        _glanceClock += GlanceInterval.Value;
+        if (_rng.NextDouble() >= GlanceChance.Value)
+            return false;
+
+        float total = 0f;
+        for (int i = 0; i < count; i++)
+            total += MathF.Max(GlanceWeights[i], 0f);
+        if (total <= 0f)
+            return false;
+        float pick = (float)_rng.NextDouble() * total;
+        int chosen = count - 1;
+        for (int i = 0; i < count; i++)
+        {
+            pick -= MathF.Max(GlanceWeights[i], 0f);
+            if (pick <= 0f)
+            {
+                chosen = i;
+                break;
+            }
+        }
+
+        var angle = GlanceAngles[chosen];
+        var hold = chosen < GlanceDurations.Count ? GlanceDurations[chosen] : new float2(0.5f, 2f);
+        _tgtYaw = ClampYaw(angle.x * Deg2Rad);
+        _tgtPitch = ClampPitch(angle.y * Deg2Rad);
+        _timer = 0f;
+        _next = hold.x + (float)_rng.NextDouble() * MathF.Max(0f, hold.y - hold.x);
+        _glanceClock = _next;
+        return true;
     }
 
     // Radians one eye may turn one way: 0 up, 1 down, 2 left, 3 right.

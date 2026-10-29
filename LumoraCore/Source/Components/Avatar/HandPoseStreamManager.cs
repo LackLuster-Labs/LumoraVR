@@ -130,9 +130,11 @@ public class HandPoseStreamManager : UserRootComponent, IHandPoseSourceComponent
                 s.FullFrameMax = new floatQ(1f, 1f, 1f, 1f);
                 s.SetInterpolation();
                 s.SetUpdatePeriod(StreamPeriod, 0);
+                // Fingers ride with the face, not with the voice, so they can be sent less often to whoever is far off.
+                s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup;
             });
-            _leftTracking = user.GetStreamOrAdd<BoolValueStream>(LeftTrackingName, s => s.SetUpdatePeriod(StreamPeriod, 0));
-            _rightTracking = user.GetStreamOrAdd<BoolValueStream>(RightTrackingName, s => s.SetUpdatePeriod(StreamPeriod, 0));
+            _leftTracking = user.GetStreamOrAdd<BoolValueStream>(LeftTrackingName, s => { s.SetUpdatePeriod(StreamPeriod, 0); s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup; });
+            _rightTracking = user.GetStreamOrAdd<BoolValueStream>(RightTrackingName, s => { s.SetUpdatePeriod(StreamPeriod, 0); s.Group = Lumora.Core.Networking.Session.StreamInterest.PoseGroup; });
         }
         else
         {

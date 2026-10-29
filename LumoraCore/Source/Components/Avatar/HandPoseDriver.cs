@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Collections.Generic;
 using Lumora.Core.Components.Interaction;
 using Lumora.Core.Input;
 using Lumora.Core.Math;
@@ -41,6 +42,11 @@ public class HandPoseDriver : UserRootComponent
 
     // The idle-to-fist blend this hand's tool grip rides on; its weight is driven from here.
     public readonly SyncRef<HandPoseBlend> GripBlend = null!;
+
+    // Saves need the rest pose even for bones missing from the bind table. -xlinka
+    protected readonly SyncRefList<Slot> _restBones = new();
+    protected readonly SyncRefList<Slot> _restParents = new();
+    protected readonly SyncFieldList<floatQ> _restRotations = new();
 
     private sealed class Segment
     {
@@ -92,6 +98,7 @@ public class HandPoseDriver : UserRootComponent
     private bool _rigMetacarpals = true;
     private double _nextBindCheck = double.NegativeInfinity;
     private double _nextAssignAttempt = double.NegativeInfinity;
+    private double _assignedAt = double.NegativeInfinity;
     // The rigs above or below this slot as last searched, and the structure they were searched in: a hand on
     // a body with no rig, or on a quadruped, looked for them again every frame.
     private int _rigsSearchedAt = -1;
@@ -125,7 +132,16 @@ public class HandPoseDriver : UserRootComponent
         base.OnUpdate(delta);
 
         if (_assigned && BindingStale())
+        {
+            // A binding gone stale the moment it was made, a bone something else already drives so its drive
+            // never takes, was made and dropped again every frame: fifteen drives and a rest pose search a hand,
+            // on a few hands of a crowd. It waits a second before the next try, as a failed one does. -xlinka
+            double now = World?.Time.TotalTime ?? 0.0;
+            bool churned = now - _assignedAt < 1.0;
             ReleaseDrives();
+            if (churned)
+                _nextAssignAttempt = now + 1.0;
+        }
         if (!_assigned)
         {
             if ((World?.Time.TotalTime ?? 0.0) >= _nextAssignAttempt)
@@ -138,7 +154,25 @@ public class HandPoseDriver : UserRootComponent
         }
 
         UpdateGripWeight(delta);
-        DrivePose();
+        if (!PoseWaits())
+            DrivePose();
+    }
+
+    // Somebody else's fingers far off or behind the viewer are posed every few frames: thirty bones a pair of
+    // hands, and from twenty metres a hand is a few pixels. Close by and in front they follow every frame. -xlinka
+    private Slot? _lodRoot;
+    private ulong _lodRootAt = ulong.MaxValue;
+
+    private bool PoseWaits()
+    {
+        ulong frame = World?.Time.UpdateIndex ?? 0;
+        if (_lodRootAt == ulong.MaxValue || frame - _lodRootAt > 60 || frame < _lodRootAt)
+        {
+            _lodRoot = AvatarViewLod.RootOf(Slot);
+            _lodRootAt = frame;
+        }
+        var view = AvatarViewLod.Look(_lodRoot);
+        return view.Level != AvatarViewLod.Level.Full && !view.RunsThisFrame(frame);
     }
 
     public override void OnDestroy()
@@ -181,8 +215,9 @@ public class HandPoseDriver : UserRootComponent
 
         _rig = rig;
         _handRoot = handRoot;
+        var skeletonRest = SkeletonRest(rig, side);
         foreach (var finger in HandPoseHelper.Fingers)
-            AssignFinger(rig, finger, side);
+            AssignFinger(rig, finger, side, skeletonRest);
 
         if (!ComputeCoordinateCompensation())
         {
@@ -190,11 +225,20 @@ public class HandPoseDriver : UserRootComponent
             _nextAssignAttempt = (World?.Time.TotalTime ?? 0.0) + 1.0;
             return;
         }
+        try
+        {
+            StoreRest();
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Binding can continue while the rest fields are read-only. -xlinka
+        }
         _assigned = true;
+        _assignedAt = World?.Time.TotalTime ?? 0.0;
         _handReset = false;
     }
 
-    private void AssignFinger(HumanoidRig rig, FingerType finger, Chirality side)
+    private void AssignFinger(HumanoidRig rig, FingerType finger, Chirality side, Dictionary<Slot, floatQ>? skeletonRest)
     {
         var slots = _fingers[(int)finger].Segments;
         for (var type = FingerSegmentType.Metacarpal; type <= FingerSegmentType.Distal; type++)
@@ -207,17 +251,118 @@ public class HandPoseDriver : UserRootComponent
             if (bone == null || bone.IsDestroyed)
                 continue;
 
+            var rest = TryStoredRest(bone, out var stored) ? stored
+                : skeletonRest != null && skeletonRest.TryGetValue(bone, out var bound)
+                    ? bound : bone.LocalRotation.Value;
             var drive = FieldDrive<floatQ>.CreateLocal(this);
             drive.LocalValueOnly = true;
             drive.DriveTarget(bone.LocalRotation);
+            // The compensation is measured off the hand as it stands, so it has to stand at rest first.
+            drive.SetValue(rest);
             slots[(int)type] = new Segment
             {
                 Bone = bone,
                 Node = node,
                 Drive = drive,
-                RestLocalRotation = bone.LocalRotation.Value,
+                RestLocalRotation = rest,
             };
         }
+    }
+
+    // This hand's finger bones at rest as the skeleton keeps them: the pose the mesh is bound in, which saves
+    // and replicates with the avatar. The bones themselves cannot say. Their drives are local, but the field
+    // still saves and still goes out in a joiner's full state, so an avatar saved, copied or joined while worn
+    // comes back with its fingers held in a pose. Bound on that, every segment with no joint past it to aim at
+    // (a distal with no tip bone) kept the bend for good: fingertips hooked back or sideways in every pose. A
+    // rest kept against a bone further up than the parent is in another space; that bone keeps its current
+    // rotation. -xlinka
+    private static Dictionary<Slot, floatQ>? SkeletonRest(HumanoidRig rig, Chirality side)
+    {
+        var wanted = new HashSet<Slot>();
+        foreach (var finger in HandPoseHelper.Fingers)
+        {
+            for (var type = FingerSegmentType.Metacarpal; type <= FingerSegmentType.Distal; type++)
+            {
+                if (!finger.IsValidFinger(type))
+                    continue;
+                var bone = rig.TryGetBone(finger.ComposeFinger(type, side));
+                if (bone != null && !bone.IsDestroyed)
+                    wanted.Add(bone);
+            }
+        }
+        if (wanted.Count == 0 || rig.Slot == null)
+            return null;
+
+        Dictionary<Slot, floatQ>? rest = null;
+        foreach (var skeleton in rig.Slot.GetComponentsInChildren<SkeletonBuilder>())
+        {
+            int count = System.Math.Min(skeleton.BoneSlots.Count, skeleton.RestPoseTransforms.Count);
+            for (int i = 0; i < count; i++)
+            {
+                var bone = skeleton.BoneSlots[i];
+                if (bone == null || !wanted.Contains(bone) || (rest != null && rest.ContainsKey(bone)))
+                    continue;
+                var transform = skeleton.RestPoseTransforms[i];
+                if (!transform.IsFinite)
+                    continue;
+                transform.Decompose(out var position, out var rotation, out _);
+                var local = bone.LocalPosition.Value;
+                if ((position - local).LengthSquared > local.LengthSquared * 1e-4f + 1e-12f)
+                    continue;
+                rest ??= new Dictionary<Slot, floatQ>();
+                rest[bone] = rotation.Normalized;
+            }
+        }
+        return rest;
+    }
+
+    private bool TryStoredRest(Slot bone, out floatQ rotation)
+    {
+        int count = System.Math.Min(_restBones.Count, System.Math.Min(_restParents.Count, _restRotations.Count));
+        for (int i = 0; i < count; i++)
+        {
+            if (_restBones[i] == bone && _restParents[i] == bone.Parent)
+            {
+                rotation = _restRotations[i];
+                float length = floatQ.Dot(rotation, rotation);
+                return float.IsFinite(length) && length > 0.5f;
+            }
+        }
+        rotation = floatQ.Identity;
+        return false;
+    }
+
+    private void StoreRest()
+    {
+        if (World == null || !(World.IsAuthority || Slot.IsUnderLocalUser || Slot.IsMintedHere))
+            return;
+        // These lists can arrive in separate sync batches. -xlinka
+        if (_restBones.Count != _restParents.Count || _restBones.Count != _restRotations.Count)
+            return;
+        foreach (var finger in _fingers)
+            foreach (var segment in finger.Segments)
+            {
+                if (segment == null || TryStoredRest(segment.Bone, out _))
+                    continue;
+                int index = -1;
+                for (int i = 0; i < _restBones.Count; i++)
+                    if (_restBones[i] == segment.Bone)
+                    {
+                        index = i;
+                        break;
+                    }
+                if (index >= 0 && index < _restParents.Count && index < _restRotations.Count)
+                {
+                    _restParents[index] = segment.Bone.Parent;
+                    _restRotations[index] = segment.RestLocalRotation;
+                }
+                else
+                {
+                    _restBones.Add(segment.Bone);
+                    _restParents.Add(segment.Bone.Parent);
+                    _restRotations.Add(segment.RestLocalRotation);
+                }
+            }
     }
 
     // A bound bone gone, or the rig now naming a different slot for one of the nodes, means rebind.
@@ -250,6 +395,10 @@ public class HandPoseDriver : UserRootComponent
                     continue;
                 var bone = _rig.TryGetBone(fingerType.ComposeFinger(type, side));
                 if (!ReferenceEquals(bone, finger[type]?.Bone))
+                    return true;
+                // Rest data can arrive after the bone map. -xlinka
+                if (bone != null && finger[type] is { } segment && TryStoredRest(bone, out var stored)
+                    && 1f - MathF.Abs(floatQ.Dot(stored, segment.RestLocalRotation)) > 1e-5f)
                     return true;
             }
         }
@@ -394,11 +543,16 @@ public class HandPoseDriver : UserRootComponent
         float3 chain = float3.Zero;
         bool tipNamed = false;
 
-        var next = Neighbor(bone, downward: true);
+        var next = NextKeyed(segment, out bool keyedTip);
+        if (next == null || (next.GlobalPosition - bone.GlobalPosition).LengthSquared < 1e-10f)
+        {
+            next = Neighbor(bone, downward: true);
+            keyedTip = false;
+        }
         if (next != null)
         {
             string name = next.SlotName.Value?.ToLowerInvariant() ?? string.Empty;
-            tipNamed = name.Contains("end") || name.Contains("tip");
+            tipNamed = keyedTip || name.Contains("end") || name.Contains("tip");
             chain = next.GlobalPosition - bone.GlobalPosition;
         }
 
@@ -422,6 +576,33 @@ public class HandPoseDriver : UserRootComponent
 
         float3 frameUp = isThumb ? (isLeft ? right : -right) : up;
         segment.Compensation = HandPoseHelper.FrameRotation(forward, frameUp).Inverse;
+    }
+
+    // The finger's next bone as the rig keys it, its tip included, when it hangs under this one. The
+    // child search below has to guess and gives up on any bone with a second child, which garments
+    // linked onto the fingers and helper bones parked on a joint both add; it then aimed the bone from
+    // the joint above (Zee's fingers 14 to 16 degrees off, Mayu's thumb 28). -xlinka
+    private Slot? NextKeyed(Segment segment, out bool isTip)
+    {
+        isTip = false;
+        var rig = _rig;
+        if (rig == null)
+            return null;
+        var finger = segment.Node.GetFingerType();
+        var side = segment.Node.GetChirality();
+        for (var type = segment.Node.GetFingerSegmentType() + 1; type <= FingerSegmentType.Tip; type++)
+        {
+            if (!finger.IsValidFinger(type))
+                continue;
+            var next = rig.TryGetBone(finger.ComposeFinger(type, side));
+            if (next == null || next.IsDestroyed)
+                continue;
+            if (!next.IsDescendantOf(segment.Bone))
+                return null;
+            isTip = type == FingerSegmentType.Tip;
+            return next;
+        }
+        return null;
     }
 
     private static Slot? Neighbor(Slot start, bool downward)

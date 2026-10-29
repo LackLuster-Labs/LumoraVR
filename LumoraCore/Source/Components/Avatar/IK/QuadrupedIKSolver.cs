@@ -252,6 +252,7 @@ public sealed class QuadrupedIKSolver
     {
         _rig = rig;
         _captured = false;
+        _hasLeft = false;
         if (rig == null || rig.IsDestroyed)
             return;
 
@@ -449,6 +450,52 @@ public sealed class QuadrupedIKSolver
     }
 
     public void ResetToDefaultPose() => FixTransforms();
+
+    // What the last solve left on every bone, so a later look can tell this solver's writes from a write that
+    // came from somewhere else.
+    private float3[] _leftPos = Array.Empty<float3>();
+    private floatQ[] _leftRot = Array.Empty<floatQ>();
+    private bool _hasLeft;
+
+    private void RecordLeft()
+    {
+        if (_leftPos.Length != _bones.Count)
+        {
+            _leftPos = new float3[_bones.Count];
+            _leftRot = new floatQ[_bones.Count];
+        }
+        for (int i = 0; i < _bones.Count; i++)
+        {
+            var b = _bones[i];
+            if (b == null || b.IsDestroyed)
+                continue;
+            _leftPos[i] = b.LocalPosition.Value;
+            _leftRot[i] = b.LocalRotation.Value;
+        }
+        _hasLeft = true;
+    }
+
+    // Bones still holding what the last solve left go back to rest; a bone written since keeps that write, so a
+    // re-capture takes it as the new rest.
+    public void ReturnUntouchedToRest()
+    {
+        if (!_hasLeft || _leftPos.Length != _bones.Count)
+        {
+            FixTransforms();
+            return;
+        }
+        for (int i = 0; i < _bones.Count; i++)
+        {
+            var b = _bones[i];
+            if (b == null || b.IsDestroyed)
+                continue;
+            if (b.LocalPosition.Value == _leftPos[i] && _bindLocalPos.TryGetValue(b, out var p))
+                b.LocalPosition.SetValueSilently(p, change: true);
+            if (b.LocalRotation.Value == _leftRot[i] && _bindLocalRot.TryGetValue(b, out var r))
+                b.LocalRotation.SetValueSilently(r, change: true);
+        }
+        _hasLeft = false;
+    }
 
     // PER-FRAME
 
@@ -990,6 +1037,7 @@ public sealed class QuadrupedIKSolver
 
         for (int i = 0; i < QuadLimb.Count; i++)
             SolveLimb(ref _limbs[i], paws[i]);
+        RecordLeft();
     }
 
     // Unequal segment lengths impose a minimum reach even at maximum flexion. Keep the body above

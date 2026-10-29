@@ -51,11 +51,14 @@ public class DiscardOnDequip : Component, IAvatarEquipReceiver
         _wasEquipped = equipped;
     }
 
+    // On while its socket still names it. A socket the wearer gave to their avatar's own part at the same moment
+    // the authority filled it leaves the piece pointing at a socket that holds something else. -xlinka
     private bool PieceEquipped()
     {
         foreach (var component in Slot.Components)
         {
-            if (component is IAvatarEquippable equippable && equippable.IsEquipped)
+            if (component is IAvatarEquippable equippable && equippable.IsEquipped
+                && ReferenceEquals(equippable.CurrentSocket?.Equipped.Target, equippable))
                 return true;
         }
         return false;

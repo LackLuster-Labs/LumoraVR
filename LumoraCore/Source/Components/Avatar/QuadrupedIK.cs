@@ -108,13 +108,38 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
     private readonly SyncRef<Slot> _rearLeftPawProxy = new();
     private readonly SyncRef<Slot> _rearRightPawProxy = new();
 
+    // Bumped by the wearer's machine each time its equip puts a rest pose on the bones with real writes; every
+    // other machine re-captures its own copy's rest when it sees it move.
+    private readonly Sync<int> _restRevision = new();
+
+    // The rest pose, said once by the machine that first wears the avatar: every bone the solve writes, as it
+    // stands once the equip has put the rest on (see ReleaseBoneDrives). Every machine puts it on before it
+    // captures, so the wearer's copy, everyone else's copy and a saved copy all stand on one rest. Four legs used
+    // to keep no rest of their own: each machine took whatever its bones held, which was the package's saved pose
+    // on one, a dynamic chain's sag on another, and on a copy saved while worn, a crouch. -xlinka
+    private readonly SyncRefList<Slot> _restBones = new();
+    private readonly SyncArray<float3> _restPositions = null!;
+    private readonly SyncArray<floatQ> _restRotations = null!;
+
+    // How far down the wearer is, said by the wearer's machine. The crouch reads the head against the calibrated
+    // height of the person in the headset, which only their machine knows: everyone else read it against their
+    // own height and stood the animal at a different height on every screen. Sent only when it moves a step, so
+    // a still wearer sends nothing. -xlinka
+    private readonly Sync<float> _wearerCrouch = new();
+    private float _shownCrouch = 1f;
+    private const float CrouchSendStep = 0.02f;
+
     private bool _isInitialized;
     private bool _suspendSolve;
     private bool _wasWorn;
+    private bool _setUpHere;
     private AvatarForm? _form;
 
     private readonly QuadrupedIKSolver.LimbTarget[] _pawTargets = new QuadrupedIKSolver.LimbTarget[QuadLimb.Count];
     private readonly float3[] _homePoints = new float3[QuadLimb.Count];
+    private readonly float3[] _homeDelta = new float3[QuadLimb.Count];
+    private readonly float3[] _lastHome = new float3[QuadLimb.Count];
+    private bool _hasLastHome;
     private readonly float3[] _limbRoots = new float3[QuadLimb.Count];
     private readonly float[] _limbReach = new float[QuadLimb.Count];
     private readonly Slot?[] _pawProxies = new Slot?[QuadLimb.Count];
@@ -172,6 +197,7 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         base.OnInit();
 
         IKEnabled.Value = true;
+        _wearerCrouch.Value = 1f;
         UseProceduralGait.Value = true;
         PawIKWeight.Value = 1f;
         BodyLength.Value = 0f;
@@ -191,7 +217,7 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         SidewaysStrideRatio.Value = 0.5f;
         BackwardsStrideRatio.Value = 0.75f;
         MaxLegStretch.Value = 0.92f;
-        MaxStepVelocity.Value = 6f;
+        MaxStepVelocity.Value = 12f;
         BodyBob.Value = 0f;
         StanceWidth.Value = 1f;
         GroundConformScale.Value = 1f;
@@ -217,6 +243,10 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
             BodyBob.Value = 0f;
         if (MathF.Abs(StepPrediction.Value - 0.12f) < 1e-6f)
             StepPrediction.Value = 0f;
+        // A walk on the desktop is 5 m/s at the wearer's size, and a gait capped at 6 read anything faster as 6:
+        // the paws landed short of a body that kept going and were dragged a metre a stride. -xlinka
+        if (MathF.Abs(MaxStepVelocity.Value - 6f) < 1e-6f)
+            MaxStepVelocity.Value = 12f;
     }
 
     public bool SetupFromAvatar(UserRoot userRoot, bool equipTracking = true)
@@ -268,6 +298,7 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         Skeleton.Target = skeleton;
         Rig.Target = rig;
         UserRoot.Target = userRoot;
+        _setUpHere = true;
 
         EnsureProxies();
         EnsureSolver();
@@ -360,6 +391,20 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         return false;
     }
 
+    // The head and the four paws: the drivers this solver reads, and the only ones on four legs that belong
+    // in a socket.
+    internal bool OwnsPoseDriver(AvatarPoseDriver driver)
+        => driver != null
+           && (ReferenceEquals(_headNode.Target, driver)
+               || ReferenceEquals(_frontLeftPawNode.Target, driver) || ReferenceEquals(_frontRightPawNode.Target, driver)
+               || ReferenceEquals(_rearLeftPawNode.Target, driver) || ReferenceEquals(_rearRightPawNode.Target, driver));
+
+    // What the equip pairing leaves out of the sockets: a paw the gait places, and once this solver has its own
+    // drivers, every driver that is not one of them. The sweep removes those where this machine may; the ones it
+    // may not remove stay out of the sockets just the same.
+    internal bool KeepsOutOfSockets(AvatarPoseDriver driver)
+        => IsProceduralPawProxy(driver) || (_headNode.Target != null && !OwnsPoseDriver(driver));
+
     private float EffectiveBodyLength()
         => BodyLength.Value > 0f ? BodyLength.Value : MathF.Max(_solver.RestBodyLength, 0.1f);
 
@@ -372,6 +417,9 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         CaptureRestStance(rig);
         _gait.Bind(World, UserRoot.Target?.Slot);
         _gait.Reset();
+        _hasLastHome = false;
+        _hasBodyCentre = false;
+        _bodySpeed = 0f;
     }
 
     // Runs right after the solver's Initialize, while the bones still sit in the pose it just stored
@@ -752,11 +800,15 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
                 keep.Add(_pawNodes[i]!);
         }
 
+        // One this machine may not remove, on an avatar worn in place by someone who may write it but not
+        // delete from it, stays where it is: the equip pairing leaves it out of the sockets either way.
         int swept = 0;
         foreach (var driver in new System.Collections.Generic.List<AvatarPoseDriver>(
                      avatarSlot.GetComponentsInChildren<AvatarPoseDriver>()))
         {
-            if (driver == null || driver.IsDestroyed || keep.Contains(driver))
+            if (driver == null || driver.IsDestroyed || keep.Contains(driver) || OwnsPoseDriver(driver))
+                continue;
+            if (driver.Slot?.MayRemoveComponentQuietly(driver) != true)
                 continue;
             driver.Destroy();
             swept++;
@@ -775,6 +827,10 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         // a CopyGlobalTransform, the solver left them level at 0.663/0.660, and by the next gait tick the
         // right one had been copied down to 0.391. Only copiers that target a bone this rig owns are
         // removed; anything on a non-rig slot is not ours to touch.
+        //
+        // Someone wearing another person's avatar in place may write it but not delete from it, and the first
+        // delete here used to throw the equip out half way. A copier this machine may not remove lets go of
+        // its bone instead: every channel off, so the bone is free for the solver exactly as if it were gone.
         // -xlinka
         var rig = Rig.Target;
         if (rig == null || rig.IsDestroyed)
@@ -788,13 +844,18 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
             {
                 if (copier == null || copier.IsDestroyed)
                     continue;
-                copier.Destroy();
+                if (copier.Slot?.MayRemoveComponentQuietly(copier) == true)
+                    copier.Destroy();
+                else if (copier.HoldsAnyChannel)
+                    copier.LetGo();
+                else
+                    continue;
                 copiers++;
             }
         }
 
         if (copiers > 0)
-            LumoraLogger.Debug($"QuadrupedIK: removed {copiers} CopyGlobalTransform(s) from rig bones; "
+            LumoraLogger.Debug($"QuadrupedIK: took {copiers} CopyGlobalTransform(s) off rig bones; "
                            + "they were re-posing bones the solver had just placed");
     }
 
@@ -857,13 +918,184 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
     // animal measured 0.47 with its forelegs spread wider than the author left them.
     //
     // Same rule the rest of this file already follows: exactly one thing may drive a bone, and on four
-    // legs that is this solver. -xlinka
-    private void ReleaseBoneDrives()
+    // legs that is this solver. The rest put back is the stored one, else the mesh's bind pose, else the
+    // authored stance; false only while a mesh whose bind pose would be the rest is still loading and mayWait
+    // is set, and the caller asks again next frame. -xlinka
+    private bool ReleaseBoneDrives(bool mayWait)
     {
         var rig = Rig.Target;
         if (rig == null || rig.IsDestroyed)
-            return;
+            return true;
 
+        ReleaseDriveLinks(rig);
+
+        if (ApplyRestPose())
+        {
+            LumoraLogger.Debug($"QuadrupedIK: stored rest put back on {_restBones.Count} bone(s)");
+        }
+        else if (ApplyBindPose(rig, out bool meshPending) is int bound && bound > 0)
+        {
+            LumoraLogger.Debug($"QuadrupedIK: rest taken from the mesh bind pose on {bound} bone(s)");
+        }
+        else if (meshPending && mayWait)
+        {
+            return false;
+        }
+        else
+        {
+            // Releasing a link stops the next write; it does not undo the ones already made. The bones are
+            // sitting wherever the orphaned drivers left them, so put the authored stance back before the
+            // rest capture measures anything.
+            int restored = rig.RestoreAuthoredPose();
+            if (restored > 0)
+                LumoraLogger.Debug($"QuadrupedIK: restored the authored pose on {restored} bone(s)");
+
+            SymmetriseGirdles(rig);
+        }
+
+        // Said once as real writes, the whole rig: a bone a local-only driver held reads its value here and
+        // nowhere else, and a set that changes nothing is never sent. Every machine then captures the same rest.
+        foreach (var bone in rig.GetPoseBones())
+        {
+            if (bone == null || bone.IsDestroyed || bone.LocalPosition.IsDriven || bone.LocalRotation.IsDriven)
+                continue;
+            bone.LocalPosition.ForceSet(bone.LocalPosition.Value);
+            bone.LocalRotation.ForceSet(bone.LocalRotation.Value);
+        }
+        return true;
+    }
+
+    // The pose the animal was MODELLED standing in, read off its skinned mesh's bind pose.
+    //
+    // A packaged animal arrives in whatever pose its legs were last driven into, and that is not one pose: the
+    // copy imported here, a copy loaded from a save and the same avatar on another machine each held different
+    // leg turns, so each captured a different rest - the rear toes ten centimetres up on one, the body a hand
+    // lower on another. The bind pose is the same everywhere and is the one pose the mesh was built in, all four
+    // paws on its floor. Used only when it IS a standing pose: the lowest paw or toe bone of each leg within a
+    // tenth of a leg of one plane. -xlinka
+    private int ApplyBindPose(QuadrupedRig rig, out bool meshPending)
+    {
+        meshPending = false;
+        var bindWorld = new System.Collections.Generic.Dictionary<Slot, float4x4>();
+        foreach (var renderer in Slot.GetComponentsInChildren<SkinnedMeshRenderer>())
+        {
+            if (renderer == null || renderer.IsDestroyed || renderer.Slot == null || renderer.MeshAsset.Target == null)
+                continue;
+            var mesh = renderer.MeshAsset.Asset;
+            if (mesh == null)
+            {
+                meshPending = true;
+                continue;
+            }
+            int count = System.Math.Min(mesh.BoneCount, renderer.Bones.Count);
+            var toWorld = renderer.Slot.LocalToWorld;
+            for (int i = 0; i < count; i++)
+            {
+                var bone = renderer.Bones[i];
+                if (bone != null && !bone.IsDestroyed && !bindWorld.ContainsKey(bone))
+                    bindWorld[bone] = toWorld * mesh.GetBoneBindPose(i).Inverse;
+            }
+        }
+        if (bindWorld.Count == 0)
+            return 0;
+
+        float lowest = float.MaxValue, highest = float.MinValue, longest = 0f;
+        for (int i = 0; i < QuadLimb.Count; i++)
+        {
+            var id = (QuadLimbId)i;
+            float sole = float.MaxValue;
+            for (int seg = QuadLimb.SegPaw; seg <= QuadLimb.SegToe; seg++)
+            {
+                var bone = rig.TryGetLimbBone(id, seg);
+                if (bone != null && bindWorld.TryGetValue(bone, out var m))
+                    sole = MathF.Min(sole, m.MultiplyPoint(float3.Zero).y);
+            }
+            var top = rig.TryGetLimbBone(id, QuadLimb.SegUpper);
+            if (sole == float.MaxValue || top == null || !bindWorld.TryGetValue(top, out var topBind))
+                return 0;
+            longest = MathF.Max(longest, topBind.MultiplyPoint(float3.Zero).y - sole);
+            lowest = MathF.Min(lowest, sole);
+            highest = MathF.Max(highest, sole);
+        }
+        if (longest <= 1e-4f || highest - lowest > longest * 0.1f)
+            return 0;
+
+        int applied = 0;
+        foreach (var bone in rig.GetPoseBones())
+        {
+            var parent = bone.Parent;
+            if (parent == null || bone.LocalRotation.IsDriven
+                || !bindWorld.TryGetValue(bone, out var world) || !bindWorld.TryGetValue(parent, out var parentWorld))
+                continue;
+            (parentWorld.Inverse * world).Decompose(out _, out floatQ local, out _);
+            bone.LocalRotation.Value = local.Normalized;
+            applied++;
+        }
+        return applied;
+    }
+
+    private bool HasRestPose
+    {
+        get
+        {
+            int count = _restBones.Count;
+            return count > 0 && _restPositions.Count == count && _restRotations.Count == count;
+        }
+    }
+
+    // The stored rest back on the bones, on this machine only. False when none is stored.
+    private bool ApplyRestPose()
+    {
+        if (!HasRestPose)
+            return false;
+        for (int i = 0; i < _restBones.Count; i++)
+        {
+            var bone = _restBones[i];
+            if (bone == null || bone.IsDestroyed || bone.LocalPosition.IsDriven || bone.LocalRotation.IsDriven)
+                continue;
+            bone.LocalPosition.SetValueSilently(_restPositions[i], change: true);
+            bone.LocalRotation.SetValueSilently(_restRotations[i], change: true);
+        }
+        return true;
+    }
+
+    // From the bones as the capture just took them, once, by a machine that owns the avatar: the one that made it
+    // or the session's authority. Someone wearing another person's avatar in place may move its bones but not
+    // write its arrays; for them the authority stores what it captured from the bones they sent. A refusal half
+    // way leaves the arrays uneven, which HasRestPose reads as none stored.
+    private void StoreRestPose()
+    {
+        if (HasRestPose || !_solver.IsReady || World == null || !(World.IsAuthority || Slot.IsMintedHere))
+            return;
+        var bones = _solver.DrivenBones;
+        try
+        {
+            // Only an uneven leftover is cleared: a clear is a destroy, and someone wearing another person's
+            // avatar in place may add to it but not destroy in it.
+            if (_restBones.Count > 0)
+                _restBones.Clear();
+            if (_restPositions.Count > 0)
+                _restPositions.Clear();
+            if (_restRotations.Count > 0)
+                _restRotations.Clear();
+            for (int i = 0; i < bones.Count; i++)
+            {
+                var bone = bones[i];
+                if (bone == null || bone.IsDestroyed)
+                    continue;
+                _restBones.Add(bone);
+                _restPositions.Add(bone.LocalPosition.Value);
+                _restRotations.Add(bone.LocalRotation.Value);
+            }
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    // The link half of the above, which is this machine's own state and writes nothing anyone else sees.
+    private static void ReleaseDriveLinks(QuadrupedRig rig)
+    {
         int freed = 0;
         foreach (var bone in rig.GetPoseBones())
         {
@@ -887,15 +1119,70 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         if (freed > 0)
             LumoraLogger.Debug($"QuadrupedIK: released {freed} drive link(s) off the rig's bones; "
                            + "the solver owns them now");
+    }
 
-        // Releasing a link stops the next write; it does not undo the ones already made. The bones are
-        // sitting wherever the orphaned drivers left them, so put the authored stance back before the
-        // rest capture measures anything.
-        int restored = rig.RestoreAuthoredPose();
-        if (restored > 0)
-            LumoraLogger.Debug($"QuadrupedIK: restored the authored pose on {restored} bone(s)");
+    // Somebody else's four legs, solved on this machine.
+    //
+    // The wearer's machine sets the solver up at equip and writes the bones on its own copy only, so every other
+    // machine has to solve its own copy, the way two legs start late on a replicated rig. Nothing started it here:
+    // the setup ran only inside the equip, and the equip runs only on the wearer's machine, so to everyone else a
+    // worn animal slid across the floor in whatever pose it was put on in. The wearer's equip says the rest once
+    // with real writes and bumps the rest revision with them; this waits a few frames past the revision it sees,
+    // so the bones that came in the same batch have landed, and captures that. A wearer that never bumps it gets
+    // a capture after OtherWearerMaxWait. Nothing here writes a synced value. -xlinka
+    private int _otherWearerWait = -1;
+    private int _otherWearerQuiet;
+    private int _otherWearerRevision;
+    private int _seenRestRevision = int.MinValue;
+    private const int OtherWearerQuietFrames = 10;
+    private const int OtherWearerMaxWait = 180;
 
-        SymmetriseGirdles(rig);
+    private void StartForOtherWearer()
+    {
+        if (_setUpHere)
+            return;
+        var userRoot = UserRoot.Target;
+        var rig = Rig.Target;
+        if (userRoot == null || userRoot.IsDestroyed || rig == null || rig.IsDestroyed || Slot.ActiveUserRoot != userRoot)
+            return;
+        int revision = _restRevision.Value;
+        if (_isInitialized && revision == _seenRestRevision)
+            return;
+        var skeleton = Skeleton.Target;
+        if (skeleton == null || !skeleton.IsBuilt.Value || !rig.IsQuadruped)
+            return;
+
+        if (_otherWearerWait < 0)
+        {
+            // A rest that moved under a running solve: what the solve wrote goes back to the rest it had, and
+            // what the wearer's machine rewrote since stays as it was sent.
+            if (_isInitialized)
+                _solver.ReturnUntouchedToRest();
+            _isInitialized = false;
+            _otherWearerWait = 0;
+            _otherWearerQuiet = 0;
+            _otherWearerRevision = revision;
+        }
+
+        _otherWearerWait++;
+        _otherWearerQuiet = revision == _otherWearerRevision ? _otherWearerQuiet + 1 : 0;
+        _otherWearerRevision = revision;
+        bool said = revision > 0 && _otherWearerQuiet >= OtherWearerQuietFrames;
+        if (!said && _otherWearerWait < OtherWearerMaxWait)
+            return;
+
+        _seenRestRevision = revision;
+        _otherWearerWait = -1;
+        ReleaseDriveLinks(rig);
+        ApplyRestPose();
+        _grounding.Reset();
+        EnsureSolver();
+        CaptureViewOffset();
+        MeasureSoleOffset();
+        _isInitialized = _solver.IsReady;
+        StoreRestPose();
+        LumoraLogger.Debug($"QuadrupedIK: solving another wearer's copy here at rest revision {revision}, "
+                       + $"bodyLength={_solver.RestBodyLength:F3}");
     }
 
     private float _measuredSoleOffset;
@@ -950,13 +1237,87 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
             scanned += count;
         }
         if (scanned == 0 || lowestVertex == float.MaxValue)
+        {
+            MeasureSoleOffsetFromBind(rig);
             return;
+        }
 
         float offset = lowestBone - lowestVertex;
         float cap = MathF.Max(_solver.RestPelvisStandHeight, _solver.RestChestStandHeight) * 0.15f;
         _measuredSoleOffset = System.Math.Clamp(offset, 0f, MathF.Max(cap, 0f));
         LumoraLogger.Debug($"QuadrupedIK: sole offset measured {offset:F3} from {scanned} vertices "
                        + $"(lowest bone {lowestBone:F3}, lowest vertex {lowestVertex:F3}), using {_measuredSoleOffset:F3}");
+    }
+
+    // A mesh that travels as an asset has no vertex list on the renderer, so the scan above found nothing and every
+    // packaged animal stood on its toe BONES with its pads under the floor: on a real one the toes sit 4 mesh units
+    // above the sole, nine centimetres at its size. The asset still knows where the sole is - the bottom of its
+    // bounds - and where each toe stood when it was modelled, its bind pose. The two are in the same space, and the
+    // gap between them is the pad. Until the asset has loaded it is measured again every half second. -xlinka
+    private bool _solePending;
+    private int _soleRetryAt;
+
+    private void MeasureSoleOffsetFromBind(QuadrupedRig rig)
+    {
+        _solePending = false;
+        float best = 0f;
+        bool any = false;
+        foreach (var renderer in Slot.GetComponentsInChildren<SkinnedMeshRenderer>())
+        {
+            if (renderer == null || renderer.IsDestroyed || renderer.Slot == null)
+                continue;
+            var mesh = renderer.MeshAsset.Target != null ? renderer.MeshAsset.Asset : null;
+            if (renderer.MeshAsset.Target != null && mesh == null)
+            {
+                _solePending = true;
+                continue;
+            }
+            if (mesh == null || mesh.BoneCount == 0 || mesh.VertexCount == 0)
+                continue;
+
+            float lowestBind = float.MaxValue;
+            for (int i = 0; i < QuadLimb.Count; i++)
+            {
+                for (int seg = QuadLimb.SegPaw; seg <= QuadLimb.SegToe; seg++)
+                {
+                    var bone = rig.TryGetLimbBone((QuadLimbId)i, seg);
+                    if (bone == null)
+                        continue;
+                    int index = renderer.Bones.IndexOf(bone);
+                    if (index < 0 || index >= mesh.BoneCount)
+                        continue;
+                    float y = mesh.GetBoneBindPose(index).Inverse.MultiplyPoint(float3.Zero).y;
+                    lowestBind = MathF.Min(lowestBind, y);
+                }
+            }
+            if (lowestBind == float.MaxValue)
+                continue;
+            float pad = (lowestBind - mesh.Bounds.Min.y) * renderer.Slot.GlobalScale.y;
+            if (!float.IsFinite(pad))
+                continue;
+            best = any ? MathF.Max(best, pad) : pad;
+            any = true;
+        }
+        if (!any)
+            return;
+
+        // Kept at the size the stance was captured at, like every other captured length; StanceScale carries it.
+        float cap = MathF.Max(_solver.RestPelvisStandHeight, _solver.RestChestStandHeight) * 0.15f;
+        float live = System.Math.Clamp(best, 0f, MathF.Max(cap, 0f));
+        _measuredSoleOffset = live / MathF.Max(StanceScale, 1e-3f);
+        LumoraLogger.Debug($"QuadrupedIK: sole offset {best:F3} from the mesh bind pose, using {live:F3}");
+    }
+
+    private void RetrySoleOffset()
+    {
+        if (!_solePending || World == null)
+            return;
+        int frame = (int)(World.Time.UpdateIndex & 0x7fffffff);
+        if (frame < _soleRetryAt)
+            return;
+        _soleRetryAt = frame + 36;
+        if (Rig.Target is { IsDestroyed: false } rig)
+            MeasureSoleOffsetFromBind(rig);
     }
 
     private double _postSolveLogAt;
@@ -1123,14 +1484,24 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
     // Retry rather than wait a fixed longer time, because "settled" is not a duration; it is a
     // property, and RestLooksCollapsed can test for it directly. -xlinka
     private const int MaxRestCaptureAttempts = 90;
+    private const int MaxBindWait = 60;
+    private bool _restPlaced;
 
     private void RecaptureUntilSane(int attempt, int revision)
     {
         if (IsDestroyed || revision != _equipRevision || UserRoot.Target == null)
             return;
 
-        if (attempt == 0)
-            ReleaseBoneDrives();
+        if (attempt == 0 || !_restPlaced)
+        {
+            // Waits a while for a mesh still loading, since its bind pose is the rest.
+            _restPlaced = ReleaseBoneDrives(mayWait: attempt < MaxBindWait);
+            if (!_restPlaced)
+            {
+                Slot.RunInUpdates(1, () => RecaptureUntilSane(attempt + 1, revision));
+                return;
+            }
+        }
         if (attempt == 0 || attempt == 1 || attempt == 10)
             Rig.Target?.LogGirdleSpan($"capture-attempt-{attempt}");
 
@@ -1139,7 +1510,9 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
 
         if (_solver.IsReady && !_solver.RestLooksCollapsed)
         {
-            _suspendSolve = false;
+            StoreRestPose();
+            _restRevision.Value++;
+            ResumeOnceSent(revision, 0);
             MeasureSoleOffset();
             LogLimbConstraintsOnce();
             if (attempt > 0)
@@ -1150,13 +1523,44 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
 
         if (attempt >= MaxRestCaptureAttempts)
         {
-            _suspendSolve = false;
+            StoreRestPose();
+            _restRevision.Value++;
+            ResumeOnceSent(revision, 0);
             LumoraLogger.Warn($"QuadrupedIK: rest pose still looks collapsed after {attempt} captures "
                             + $"(bodyLength={_solver.RestBodyLength:F3}); solving on it anyway");
             return;
         }
 
         Slot.RunInUpdates(1, () => RecaptureUntilSane(attempt + 1, revision));
+    }
+
+    // The rest said at equip goes out on the next sync, and what goes out is what the field holds THEN, not what
+    // it held when it was set. A solve in between sent its own pose to every other machine as the rest, and they
+    // captured an animal half way through a crouch. So the solve waits until the bones have gone out. -xlinka
+    private const int MaxSendWait = 20;
+
+    private void ResumeOnceSent(int revision, int waited)
+    {
+        if (IsDestroyed || revision != _equipRevision)
+            return;
+        if (waited < MaxSendWait && RestStillUnsent())
+        {
+            Slot.RunInUpdates(1, () => ResumeOnceSent(revision, waited + 1));
+            return;
+        }
+        _suspendSolve = false;
+    }
+
+    private bool RestStillUnsent()
+    {
+        var bones = _solver.DrivenBones;
+        for (int i = 0; i < bones.Count; i++)
+        {
+            var bone = bones[i];
+            if (bone != null && !bone.IsDestroyed && (bone.LocalPosition.IsSyncDirty || bone.LocalRotation.IsSyncDirty))
+                return true;
+        }
+        return false;
     }
 
     public void OnDequip(AvatarSocket slot)
@@ -1166,6 +1570,7 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         _solver.ResetToDefaultPose();
         CommitBonePose();
         _gait.Reset();
+        _setUpHere = false;
         UserRoot.Target = null!;
         LumoraLogger.Debug($"QuadrupedIK: dequipped from {slot.Node.Value}");
     }
@@ -1197,6 +1602,12 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         {
             using (World?.DataModelPermissions?.EnterSystemBypass())
                 _solver.ResetToDefaultPose();
+        }
+        // A copy solved for someone else captures afresh when it is next worn.
+        if (!worn && !_setUpHere)
+        {
+            _isInitialized = false;
+            _otherWearerWait = -1;
         }
     }
 
@@ -1231,8 +1642,18 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
     {
         base.OnUpdate(delta);
         TrackWearer();
-        if (!CanRun() || _suspendSolve)
+        using (World?.DataModelPermissions?.EnterSystemBypass())
+            StartForOtherWearer();
+        float frameDelta = MathF.Max(World?.Time.Delta ?? 0f, 0f);
+        if (!CanRun() || _suspendSolve || SolveWaits())
+        {
+            _heldDelta += frameDelta;
             return;
+        }
+        ulong solveFrame = World?.Time.UpdateIndex ?? 0;
+        _solveDelta = solveFrame - _lastSolveFrame <= 16 ? _heldDelta + frameDelta : frameDelta;
+        _heldDelta = 0f;
+        _lastSolveFrame = solveFrame;
 
         using var bypass = World?.DataModelPermissions?.EnterSystemBypass();
         if (UseProceduralGait.Value && Rig.Target is { IsDestroyed: false } rig)
@@ -1240,9 +1661,30 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         SolveBody();
     }
 
+    // Somebody else's four legs are solved on the avatar's pose frames like two are (AvatarIK.SolveWaits), each
+    // solve stepping the gait by the frames it sat out. -xlinka
+    private Slot? _lodRoot;
+    private ulong _lodRootAt = ulong.MaxValue;
+    private float _solveDelta = 1f / 60f;
+    private float _heldDelta;
+    private ulong _lastSolveFrame;
+
+    private bool SolveWaits()
+    {
+        if (IsUnderLocalUser)
+            return false;
+        ulong frame = World?.Time.UpdateIndex ?? 0;
+        if (_lodRootAt == ulong.MaxValue || frame - _lodRootAt > 60 || frame < _lodRootAt)
+        {
+            _lodRoot = AvatarViewLod.RootOf(Slot);
+            _lodRootAt = frame;
+        }
+        return !AvatarViewLod.Look(_lodRoot).PoseFrame(frame);
+    }
+
     private void TickGait(QuadrupedRig rig)
     {
-        float dt = World!.Time.Delta;
+        float dt = _solveDelta;
         if (dt <= 0f)
             return;
 
@@ -1285,7 +1727,7 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         float3 pelvisRef = restStance ? bodySlot!.LocalPointToGlobal(_restPelvisLocal) : rearCentre;
         // Live measured length over captured, NOT EffectiveBodyLength: an author override of BodyLength
         // scales the gait thresholds and must not stretch the authored stance with it.
-        float stanceScale = restStance ? MathF.Max(_solver.RestBodyLength, 0.05f) / _restStanceBodyLength : 1f;
+        float stanceScale = restStance ? StanceScale : 1f;
         float width = MathF.Max(StanceWidth.Value, 0.1f);
         float stretchLimit = MathF.Max(MaxLegStretch.Value, 0.5f);
 
@@ -1325,11 +1767,22 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
 
             }
             _homePoints[i] = home;
+            float3 moved = _hasLastHome ? home - _lastHome[i] : float3.Zero;
+            moved.y = 0f;
+            _homeDelta[i] = moved;
+            _lastHome[i] = home;
         }
+        _hasLastHome = true;
 
         // Velocity is measured off the body-fixed references too, so a scapula swinging does not read
         // as the animal moving.
         float3 bodyCentre = restStance ? (chestRef + pelvisRef) * 0.5f : (frontCentre + rearCentre) * 0.5f;
+        float3 travelled = _hasBodyCentre ? bodyCentre - _lastBodyCentre : float3.Zero;
+        travelled.y = 0f;
+        _lastBodyCentre = bodyCentre;
+        _hasBodyCentre = true;
+        float instantSpeed = MathF.Min(travelled.Length / dt, 100f);
+        _bodySpeed += (instantSpeed - _bodySpeed) * (1f - MathF.Exp(-dt * 8f));
 
         var input = new QuadGaitInput
         {
@@ -1347,12 +1800,14 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
             // A save from before these existed loads them as 0; that is the biped default, not "no stride".
             SidewaysRatio = SidewaysStrideRatio.Value > 0f ? System.Math.Clamp(SidewaysStrideRatio.Value, 0.1f, 1f) : 0.5f,
             BackwardsRatio = BackwardsStrideRatio.Value > 0f ? System.Math.Clamp(BackwardsStrideRatio.Value, 0.1f, 1f) : 0.75f,
-            MaxStepVelocity = MathF.Max(MaxStepVelocity.Value, 0.1f),
+            // Metres a second at the wearer's own size, like the walk it has to keep up with.
+            MaxStepVelocity = MathF.Max(MaxStepVelocity.Value, 0.1f) * MathF.Max(UserRoot.Target?.GlobalScale ?? 1f, 0.01f),
             GroundY = groundY,
             Grounded = _grounding.Grounded,
             RootDelta = _grounding.RootDelta,
             Mode = GaitMode.Value,
             Home = _homePoints,
+            HomeDelta = _homeDelta,
             LimbRoots = _limbRoots,
             LimbReach = _limbReach,
             Proxies = _pawProxies,
@@ -1399,7 +1854,8 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         // Keep the joint cone and the crouch floor in step: a cone that cannot fold as far as the crouch
         // asks makes the legs straighten and stretch instead of bending.
         _solver.MinLimbFoldScale = System.Math.Clamp(MinCrouchScale.Value, 0.05f, 1f) * StandExtension;
-        _solver.SoleOffset = SoleOffset.Value > 1e-4f ? SoleOffset.Value : _measuredSoleOffset;
+        RetrySoleOffset();
+        _solver.SoleOffset = SoleOffset.Value > 1e-4f ? SoleOffset.Value : _measuredSoleOffset * StanceScale;
         _solver.MaxStretch = MathF.Max(LimbStretch.Value, 1f);
         _solver.BendGoalWeight = BendGoalWeight.Value;
         _solver.SpineStiffness = SpineStiffness.Value;
@@ -1434,7 +1890,7 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
             swinging++;
         }
         float bob = swinging > 0 ? MathF.Min(BodyBob.Value, 0.01f) * EffectiveBodyLength() * (lift / swinging) : 0f;
-        _bodyBobOffset = float3.Lerp(_bodyBobOffset, float3.Up * bob, 1f - MathF.Exp(-World!.Time.Delta * 8f));
+        _bodyBobOffset = float3.Lerp(_bodyBobOffset, float3.Up * bob, 1f - MathF.Exp(-_solveDelta * 8f));
 
         _solver.LocomotionOffset = _bodyBobOffset;
         _solver.Solve(_pawTargets, in head, in chassis);
@@ -1569,7 +2025,7 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         // Measured against the CALIBRATED user height rather than a standing pose captured at equip,
         // which is the same reason the biped path gives: equipping while already crouched would
         // otherwise bake the crouch in as the new standing height. -xlinka
-        float crouch = standing ? 1f : ResolveCrouchScale();
+        float crouch = standing ? 1f : CrouchHere();
         // Stand no taller than the legs can stand WITH BEND.
         //
         // The rest stand heights are read from the authored pose, and this fox is authored on straight
@@ -1578,8 +2034,9 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         // measured at 98% of reach with the fourth at 60%, purely because that one leg is 7% longer.
         // A standing animal keeps its legs bent. Cap each girdle's stand height at a fraction of its
         // pair's shorter leg so every home is reachable with slack to spare. -xlinka
-        float chestStand = MathF.Min(_solver.RestChestStandHeight, StandCapFor(QuadLimbId.FrontLeft, QuadLimbId.FrontRight)) * crouch;
-        float pelvisStand = MathF.Min(_solver.RestPelvisStandHeight, StandCapFor(QuadLimbId.RearLeft, QuadLimbId.RearRight)) * crouch;
+        float move = standing ? 0f : MoveBlend;
+        float chestStand = MathF.Min(_solver.RestChestStandHeight, StandCapFor(QuadLimbId.FrontLeft, QuadLimbId.FrontRight, move)) * crouch;
+        float pelvisStand = MathF.Min(_solver.RestPelvisStandHeight, StandCapFor(QuadLimbId.RearLeft, QuadLimbId.RearRight, move)) * crouch;
 
         float comp = System.Math.Clamp(HeightCompensation.Value, 0f, 1f);
         // BeginFrame remeasures these anchors in the current root frame. Limb-root midpoints
@@ -1596,6 +2053,23 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         chassis.FrontRoll = _grounding.Grounded ? _gait.GirdleRoll(front: true, frontTrack) * gain : 0f;
         chassis.RearRoll = _grounding.Grounded ? _gait.GirdleRoll(front: false, rearTrack) * gain : 0f;
         return chassis;
+    }
+
+    // The wearer's machine measures and says it; every other machine eases toward what was said.
+    private float CrouchHere()
+    {
+        if (_setUpHere)
+        {
+            float measured = ResolveCrouchScale();
+            float said = _wearerCrouch.Value;
+            if (MathF.Abs(measured - said) >= CrouchSendStep || (measured >= 1f && said < 1f))
+                _wearerCrouch.Value = measured;
+            _shownCrouch = measured;
+            return measured;
+        }
+        float target = System.Math.Clamp(_wearerCrouch.Value > 0f ? _wearerCrouch.Value : 1f, 0.05f, 1f);
+        _shownCrouch += (target - _shownCrouch) * (1f - MathF.Exp(-_solveDelta * 10f));
+        return _shownCrouch;
     }
 
     // How far down the wearer has crouched, as a fraction of their standing height.
@@ -1618,7 +2092,8 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         if (userHeight < 0.5f)
             return 1f;
 
-        float headAboveRoot = userRoot.TrackingSpaceSlot.GlobalPointToLocal(headSlot.GlobalPosition).y;
+        // Seated mode's lift is in the space's own offset, which this frame leaves out.
+        float headAboveRoot = userRoot.TrackingSpaceSlot.GlobalPointToLocal(headSlot.GlobalPosition).y + userRoot.SeatedLift.Value;
 
         float raw = System.Math.Clamp(headAboveRoot / userHeight, 0f, 1f);
         float floor = System.Math.Clamp(MinCrouchScale.Value, 0.05f, 1f);
@@ -1635,7 +2110,26 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
     // into a stalking crouch (0.80/0.85). This sits between, on the standing side. -xlinka
     private const float StandExtension = 0.82f;
 
-    private float StandCapFor(QuadLimbId a, QuadLimbId b)
+    // Standing still, an animal stands as it was modelled, up to this extension; on the move it comes down to
+    // StandExtension so its legs have the reach a stride needs. Capping a standing dog at 0.82 crouched it a
+    // third of a metre below the pose its mesh was built in, every leg folded like a cat about to pounce.
+    private const float IdleExtensionMax = 0.95f;
+
+    // 0 standing, 1 from a body length a second, which is a walk.
+    private float MoveBlend
+    {
+        get
+        {
+            float length = EffectiveBodyLength();
+            return length > 1e-4f ? System.Math.Clamp(_bodySpeed / length, 0f, 1f) : 0f;
+        }
+    }
+
+    private float _bodySpeed;
+    private float3 _lastBodyCentre;
+    private bool _hasBodyCentre;
+
+    private float StandCapFor(QuadLimbId a, QuadLimbId b, float move)
     {
         float shortest = float.MaxValue;
         if (_solver.TryGetLimbInfo(a, out _, out float la, out _) && la > 1e-4f)
@@ -1646,10 +2140,23 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
             return float.MaxValue;
 
         // The cap is on the ROOT, and the chassis drives the spine bone under it: subtract the rest
-        // gap so that the root, not the anchor, lands at StandExtension of the leg.
+        // gap so that the root, not the anchor, lands at StandExtension of the leg. The leg ends at the paw
+        // BONE, which stands its clearance above the sole the height is measured from; leaving that out stood
+        // every animal lower by its pad and paw. -xlinka
         int g = QuadLimb.IsFront(a) ? 0 : 1;
-        return MathF.Max(shortest * StandExtension - _rootAboveAnchor[g], 0.05f);
+        float rest = MathF.Min(_restReachRatio[(int)a], _restReachRatio[(int)b]);
+        float idle = System.Math.Clamp(rest, StandExtension, IdleExtensionMax);
+        float extension = idle + (StandExtension - idle) * System.Math.Clamp(move, 0f, 1f);
+        float clearance = (_solver.PawGroundClearance[(int)a] + _solver.PawGroundClearance[(int)b]) * 0.5f;
+        return MathF.Max(shortest * extension + clearance - _rootAboveAnchor[g] * StanceScale, 0.05f);
     }
+
+    // Live body length over the one the stance was captured at. The capture runs inside the equip, before the
+    // avatar's own user scale lands and before any later rescale, so every captured length is carried by this:
+    // the wearer captured a dog at half the size it stood at, its root gap went in unscaled, and its legs stood
+    // straighter on the wearer's screen than on everyone else's. -xlinka
+    private float StanceScale
+        => _restStanceBodyLength > 0f ? MathF.Max(_solver.RestBodyLength, 0.05f) / _restStanceBodyLength : 1f;
 
     private QuadrupedIKSolver.HeadTarget BuildHeadTarget()
     {
@@ -1716,9 +2223,16 @@ public class QuadrupedIK : Component, IAvatarEquipReceiver
         }
 
         // Exactly one solver. Sweep any AvatarIK off this subtree before attaching, for the reason the
-        // studio path already documents about two AvatarIKs fighting.
+        // studio path already documents about two AvatarIKs fighting. One this machine may not remove, on an
+        // avatar worn in place by someone who may write it but not delete from it, is switched off instead: a
+        // switched-off AvatarIK never solves, and the equip pairing ignores it beside a quadruped solver.
         foreach (var stray in new System.Collections.Generic.List<AvatarIK>(avatarSlot.GetComponentsInChildren<AvatarIK>()))
-            stray.Destroy();
+        {
+            if (stray.Slot?.MayRemoveComponentQuietly(stray) == true)
+                stray.Destroy();
+            else if (stray.Enabled.Value)
+                stray.Enabled.Value = false;
+        }
 
         var ik = avatarSlot.GetComponent<QuadrupedIK>() ?? avatarSlot.AttachComponent<QuadrupedIK>();
         ik.Skeleton.Target = skeleton;

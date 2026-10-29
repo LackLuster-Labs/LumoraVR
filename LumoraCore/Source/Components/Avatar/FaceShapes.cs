@@ -38,4 +38,34 @@ internal static class FaceShapes
         }
         return -1;
     }
+
+    // A token is its own part of the name, not letters inside a longer word: "_ch" finds "mouth_ch" and "vrc.v_ch"
+    // but not "exp_cheshire", "_th" not "tail_thin", "_ou" not "jowls_outer". Whole words ("laugh") and single kana
+    // match anywhere. Shared by every face driver that guesses shapes by name. -xlinka
+    public static bool HasToken(string name, string token)
+    {
+        if (token.Length == 0)
+            return false;
+        if (!char.IsAscii(token[0]) || (token.Length > 3 && !token.Contains('_')))
+            return name.Contains(token, StringComparison.Ordinal);
+        for (int at = name.IndexOf(token, StringComparison.Ordinal); at >= 0; at = name.IndexOf(token, at + 1, StringComparison.Ordinal))
+        {
+            int end = at + token.Length;
+            bool startsClean = !char.IsAsciiLetter(token[0]) || at == 0 || !char.IsAsciiLetter(name[at - 1]);
+            bool endsClean = end == name.Length || !char.IsAsciiLetter(name[end]);
+            if (startsClean && endsClean)
+                return true;
+        }
+        return false;
+    }
+
+    public static bool HasAnyToken(string name, string[] tokens)
+    {
+        foreach (var token in tokens)
+        {
+            if (HasToken(name, token))
+                return true;
+        }
+        return false;
+    }
 }

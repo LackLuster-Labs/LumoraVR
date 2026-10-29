@@ -110,6 +110,7 @@ public static class NameplateBadgeRegistry
         Register(new LiveBadgeSource());
         Register(new SupporterBadgeSource());
         Register(new StaffBadgeSource());
+        Register(new BotBadgeSource());
     }
 
     public static void Register(INameplateBadgeSource source)
@@ -224,6 +225,10 @@ public static class NameplateBadgeColors
     // the same colour.
     public static readonly color Live = new color(1f, 0.08f, 0.06f, 1f).ToLinear();
 
+    // An account that is not a person: a cool teal no role, voice or tier chip wears. The People window
+    // marks bots in the same colour.
+    public static readonly color Bot = new color(0.30f, 0.80f, 0.86f, 1f).ToLinear();
+
     // Keyed on the gate's role identifiers, not the words on screen (see RoleLabels).
     public static color ForRole(string? roleName) => roleName switch
     {
@@ -336,32 +341,54 @@ internal sealed class VoiceBadgeSource : INameplateBadgeSource
 // Streaming, recording or showing a camera on their screen, as their own machine reports it: anyone in
 // the room can end up in that picture, so it rides over the name for as long as it is true. The word is
 // drawn in the icon rather than set in the plate font because four letters do not fit the square chip at
-// any size that reads. -xlinka
+// any size that reads.
+//
+// One chip, the strongest thing true: LIVE for a stream or the camera on their screen, REC for a recording
+// the streaming program confirmed. -xlinka
 internal sealed class LiveBadgeSource : INameplateBadgeSource
 {
     public void CollectBadges(in NameplateBadgeContext context, List<NameplateBadge> output)
     {
         var user = context.User;
-        if (user == null || user.IsDestroyed || !user.IsLive.Value)
+        if (user == null || user.IsDestroyed)
             return;
 
-        output.Add(NameplateBadge.Icon("live", "live", NameplateBadgeColors.Live, 3));
+        var capture = user.Capture.Value;
+        if (user.IsLive.Value || capture == Photos.CaptureState.Streaming)
+            output.Add(NameplateBadge.Icon("live", "live", NameplateBadgeColors.Live, 3));
+        else if (capture == Photos.CaptureState.Recording)
+            output.Add(NameplateBadge.Icon("live", "rec", NameplateBadgeColors.Live, 3));
     }
 }
 
 // Someone who keeps the lights on, as the accounts service says and the host wrote down: never something
-// a peer can claim for itself. The chip takes their tier's colour when it has one. -xlinka
+// a peer can claim for itself. The chip takes their tier's colour when it has one. Staff do not wear it:
+// the staff ring outranks any tier, and a tier colour beside it would only argue with it. -xlinka
 internal sealed class SupporterBadgeSource : INameplateBadgeSource
 {
     public void CollectBadges(in NameplateBadgeContext context, List<NameplateBadge> output)
     {
         var user = context.User;
-        if (user == null || user.IsDestroyed || user.IsGuest || !user.IsSupporter.Value)
+        if (user == null || user.IsDestroyed || user.IsGuest || !user.IsSupporter.Value || user.IsStaff.Value)
             return;
 
         var tint = user.SupporterColor.Value;
         output.Add(NameplateBadge.Letter("supporter", "\u2665",
             tint.a > 0f ? tint : NameplateTheme.SupporterAccent, 4));
+    }
+}
+
+// A bot or server login, as the accounts service has the account and the host wrote down. First in the row:
+// before anything else on the plate, a viewer should know there is no person behind it. -xlinka
+internal sealed class BotBadgeSource : INameplateBadgeSource
+{
+    public void CollectBadges(in NameplateBadgeContext context, List<NameplateBadge> output)
+    {
+        var user = context.User;
+        if (user == null || user.IsDestroyed || user.IsGuest || !user.IsBot)
+            return;
+
+        output.Add(NameplateBadge.Icon("bot", "bot", NameplateBadgeColors.Bot, -2));
     }
 }
 
