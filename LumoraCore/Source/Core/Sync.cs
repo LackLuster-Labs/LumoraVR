@@ -120,6 +120,7 @@ public abstract class SyncField<T> : ConflictingSyncElement, IField<T>
         try
         {
             _value = value;
+            Version++;
 
             if (sync && GenerateSyncData)
             {
@@ -210,6 +211,7 @@ public abstract class SyncField<T> : ConflictingSyncElement, IField<T>
         if (SyncCoder.Equals(_value, value))
             return true;
         _value = value;
+        Version++;
         WasChanged = true;
         if (GenerateSyncData)
             InvalidateSyncElement();
@@ -231,6 +233,7 @@ public abstract class SyncField<T> : ConflictingSyncElement, IField<T>
         if (SyncCoder.Equals(_value, value)) return;
 
         _value = value;
+        Version++;
         WasChanged = true;
 
         if (GenerateSyncData)
@@ -249,6 +252,7 @@ public abstract class SyncField<T> : ConflictingSyncElement, IField<T>
         if (SyncCoder.Equals(_value, value)) return;
 
         _value = value;
+        Version++;
         WasChanged = true;
 
         ValueChanged();

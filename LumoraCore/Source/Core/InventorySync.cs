@@ -26,9 +26,13 @@ public readonly struct InventorySyncStatus
     public readonly int Variants;
     public readonly bool OutOfSpace;
     public readonly string? LastError;
+    // Saves are held until the account's email is verified.
+    public readonly bool WaitingForEmail;
 
-    public InventorySyncStatus(int pending, int syncing, int failed, int percent, int variants, bool outOfSpace, string? lastError)
+    public InventorySyncStatus(int pending, int syncing, int failed, int percent, int variants, bool outOfSpace, string? lastError,
+        bool waitingForEmail = false)
     {
+        WaitingForEmail = waitingForEmail;
         Pending = pending;
         Syncing = syncing;
         Failed = failed;
@@ -39,7 +43,7 @@ public readonly struct InventorySyncStatus
     }
 
     // Worth drawing in the warning color: storage is full, or saves are parked and nothing else is moving.
-    public bool IsProblem => OutOfSpace || (Variants == 0 && Pending + Syncing == 0 && Failed > 0);
+    public bool IsProblem => OutOfSpace || (WaitingForEmail && Pending > 0) || (Variants == 0 && Pending + Syncing == 0 && Failed > 0);
 }
 
 // Saves go up from here. Inventory keeps every save on this machine first, as a file and a row of the
@@ -53,6 +57,14 @@ public static class InventorySync
 {
     public const string Table = "inventory";
     private const string PictureExtension = ".jpg";
+    private const string ClearPictureExtension = ".png";
+
+    // A world's picture is a JPEG of the view; an item's is a PNG with a clear ground. Each is filed and sent
+    // as what it is, so nothing that trusts the name decodes it wrong.
+    private static string PictureExtensionOf(byte[] picture)
+        => picture.Length >= 8 && picture[0] == 0x89 && picture[1] == 0x50 && picture[2] == 0x4E && picture[3] == 0x47
+            ? ClearPictureExtension
+            : PictureExtension;
 
     private static readonly TimeSpan[] Backoff =
     {
@@ -88,6 +100,13 @@ public static class InventorySync
     // The room the service last gave the account, and whose.
     private static string? _roomOf;
     private static long _room;
+    // What the last save that went up without all of its parts has to tell the person, until a screen shows it.
+    private static string? _notice;
+    // The inventory service refused a save because the account's email is not verified: nothing is tried until a read
+    // of the account says it is, so a queue of saves never knocks on the same closed door one after another.
+    private static bool _emailHeld;
+    // Parts the service lists as missing that this run already tried to put back, each once.
+    private static readonly HashSet<string> Repairing = new(StringComparer.Ordinal);
 
     // Anything changed: a save came or went, one moved on, a byte went up. Raised off the main thread.
     public static event Action? Changed;
@@ -145,7 +164,8 @@ public static class InventorySync
                         }
                     }
                 }
-                return new InventorySyncStatus(pending, syncing, failed, syncing > 0 ? _percent : -1, _variants, full, lastFailed?.LastError);
+                return new InventorySyncStatus(pending, syncing, failed, syncing > 0 ? _percent : -1, _variants, full, lastFailed?.LastError,
+                    _emailHeld);
             }
         }
     }
@@ -153,6 +173,8 @@ public static class InventorySync
     // The status line, worded the way the inventory screen shows it.
     public static string Describe(in InventorySyncStatus status)
     {
+        if (status.WaitingForEmail && status.Pending + status.Syncing > 0)
+            return AccountEmailLocale.SyncWaiting.Resolve();
         if (status.OutOfSpace)
             return "Out of space";
         if (status.Variants > 0)
@@ -166,6 +188,60 @@ public static class InventorySync
         if (status.Failed > 0)
             return $"Sync error: {status.LastError ?? "a save did not go up"}";
         return "All synced";
+    }
+
+    // The note a save that went up without all of its parts left, once: whoever shows it takes it.
+    public static string? TakeNotice() => Interlocked.Exchange(ref _notice, null);
+
+    // Parts one of the account's own items lists that the service no longer has, put back from this machine in
+    // the background when it has a copy, the asset database's or the download cache's. No save is needed: the
+    // item already lists them and only the bytes are gone. Each hash is tried once a run, so a listing that
+    // keeps naming one never loops; a listing read after any came back no longer shows the item broken. -xlinka
+    internal static void Repair(IReadOnlyList<string> parts)
+    {
+        var service = _service;
+        var db = Engine.Current?.LocalDB;
+        if (service == null || !service.SignedIn || db == null || parts.Count == 0 || AccountEmail.SavesHeld)
+            return;
+        var fresh = new List<string>(parts.Count);
+        lock (Gate)
+        {
+            foreach (var hash in parts)
+            {
+                if (Repairing.Add(hash))
+                    fresh.Add(hash);
+            }
+        }
+        if (fresh.Count == 0)
+            return;
+        var cache = Engine.Current?.ContentCache;
+        _ = Task.Run(async () =>
+        {
+            int back = 0;
+            foreach (var hash in fresh)
+            {
+                try
+                {
+                    var (bytes, extension, _) = await CloudAssetPacker.LocalCopyAsync(db, cache, hash).ConfigureAwait(false);
+                    if (bytes == null)
+                        continue;
+                    var answer = await service.UploadAsync(hash, bytes, extension, null, CancellationToken.None).ConfigureAwait(false);
+                    if (answer.Success)
+                        back++;
+                    else
+                        LumoraLogger.Warn($"Inventory: a missing part ({hash}) did not go back up: {answer.Message ?? ((int)answer.Status).ToString()}");
+                }
+                catch (Exception ex)
+                {
+                    LumoraLogger.Warn($"Inventory: a missing part ({hash}) could not be put back: {ex.Message}");
+                }
+            }
+            if (back == 0)
+                return;
+            LumoraLogger.Log($"Inventory: put back {back} missing part(s) from this machine.");
+            NoteStorage();
+            Bump();
+        });
     }
 
     public static void Attach(LumoraClient client) => Use(new LumoraInventoryService(client));
@@ -214,6 +290,22 @@ public static class InventorySync
 
     // A parked save, or one waiting out a failure, sent again now.
     public static void Retry(string id) => RetryWhere(row => row.Id == id);
+
+    // The account's email is verified now, or the account changed: what waited on it goes up.
+    internal static void EmailCleared()
+    {
+        bool was;
+        lock (Gate)
+        {
+            was = _emailHeld;
+            _emailHeld = false;
+        }
+        if (!was)
+            return;
+        LumoraLogger.Log("Inventory: the email is verified; the saves that waited go up now.");
+        Signal();
+        RaiseChanged();
+    }
 
     public static void RetryAll() => RetryWhere(_ => true);
 
@@ -270,12 +362,12 @@ public static class InventorySync
     // A save, kept on this machine and nowhere else yet: the tree becomes a file of the local database, a
     // row says what it is, and the queue is woken. Nothing here waits on the network, so a save works the
     // same with no connection at all. Off the caller's thread, which is the world's. -xlinka
-    internal static Task<InventoryResult> SaveAsync(DataTreeDictionary tree, string extension, string name, string kind, string? folderId,
-        byte[]? picture, string? mode)
-        => Task.Run(() => SaveHereAsync(tree, extension, name, kind, folderId, picture, mode));
+    internal static Task<InventoryResult> SaveAsync(DataTreeDictionary tree, string extension, string name, string kind, InventoryPlace place,
+        byte[]? picture, string? mode, string? itemId = null)
+        => Task.Run(() => SaveHereAsync(tree, extension, name, kind, place, picture, mode, itemId));
 
-    private static async Task<InventoryResult> SaveHereAsync(DataTreeDictionary tree, string extension, string name, string kind, string? folderId,
-        byte[]? picture, string? mode)
+    private static async Task<InventoryResult> SaveHereAsync(DataTreeDictionary tree, string extension, string name, string kind, InventoryPlace place,
+        byte[]? picture, string? mode, string? itemId)
     {
         var service = _service;
         if (service == null || !service.SignedIn)
@@ -283,10 +375,29 @@ public static class InventorySync
         var account = Account ?? service.Account;
         if (account == null)
             return InventoryResult.Failure("Still signing in. Try again in a moment.");
+        // Refused here rather than kept on this machine: a save the service will not take until the email is verified
+        // would only pile up. Offline, or before the first read lands, it is kept as ever and waits in the queue.
+        await AccountEmail.EnsureKnownAsync(TimeSpan.FromSeconds(4)).ConfigureAwait(false);
+        if (AccountEmail.SavesHeld && (AccountEmail.Account == null || AccountEmail.Account == account))
+            return new InventoryResult(false, AccountEmailLocale.SaveRefused.Resolve()) { Code = AccountEmail.NotVerifiedCode };
         var db = Engine.Current?.LocalDB;
         if (db == null || await Task.WhenAny(db.Ready, Task.Delay(ReadyWait)).ConfigureAwait(false) != db.Ready)
             return InventoryResult.Failure("The local cache isn't up yet.");
         Load(db);
+        string? owner = string.IsNullOrEmpty(place.OwnerId) || place.OwnerId == account ? null : place.OwnerId;
+        string? folderId = place.FolderId;
+
+        // Over an item: a save of it still here is stopped and held, then replaced, so nothing it does after
+        // can write its stored row back. It keeps the name and folder the item has now. -xlinka
+        InventoryRow? previous = null;
+        if (itemId != null)
+        {
+            previous = await HoldAsync(itemId).ConfigureAwait(false);
+            if (previous != null)
+                (name, folderId, owner) = (previous.Name, previous.Folder, previous.Owner);
+            else
+                (name, folderId) = await ListedAsAsync(service, itemId, name, folderId, owner).ConfigureAwait(false);
+        }
 
         List<string> missing;
         long localBytes;
@@ -298,23 +409,31 @@ public static class InventorySync
         }
         catch (Exception ex)
         {
+            if (previous != null)
+                Release(previous);
             return InventoryResult.Failure($"Couldn't pack \"{name}\": {ex.Message}");
         }
+        InventoryRow row;
         await Keeping.WaitAsync().ConfigureAwait(false);
         try
         {
             var uri = await db.SaveAssetAsync(bytes, extension).ConfigureAwait(false);
             if (uri == null)
-                return InventoryResult.Failure($"Couldn't keep \"{name}\" on this machine.");
-            string? thumbnail = picture == null ? null : await db.SaveAssetAsync(picture, PictureExtension).ConfigureAwait(false);
-
-            var row = new InventoryRow
             {
-                Id = Guid.NewGuid().ToString(),
+                if (previous != null)
+                    Release(previous);
+                return InventoryResult.Failure($"Couldn't keep \"{name}\" on this machine.");
+            }
+            string? thumbnail = picture == null ? null : await db.SaveAssetAsync(picture, PictureExtensionOf(picture)).ConfigureAwait(false);
+
+            row = new InventoryRow
+            {
+                Id = itemId ?? Guid.NewGuid().ToString(),
                 Account = account,
                 Name = name,
                 Kind = kind,
                 Folder = string.IsNullOrEmpty(folderId) ? Inventory.Root : folderId!,
+                Owner = owner,
                 Mode = mode,
                 LocalUri = uri,
                 ThumbnailUri = thumbnail,
@@ -326,25 +445,63 @@ public static class InventorySync
             };
             if (!await db.PutRowAsync(Table, row.Id, row.ToFields()).ConfigureAwait(false))
             {
-                // Told it failed, so a later write of the index must not carry it after all.
-                await db.DeleteRowAsync(Table, row.Id).ConfigureAwait(false);
+                // Told it failed, so a later write of the index must not carry it after all. A save it was to
+                // replace is written back as it was.
+                if (previous != null)
+                {
+                    await PersistAsync(previous).ConfigureAwait(false);
+                    Release(previous);
+                }
+                else
+                    await db.DeleteRowAsync(Table, row.Id).ConfigureAwait(false);
                 return InventoryResult.Failure($"Couldn't keep \"{name}\" on this machine.");
             }
             lock (Gate)
             {
                 if (ReferenceEquals(_db, db))
                     Rows[row.Id] = row;
+                if (previous != null)
+                {
+                    previous.Gone = true;
+                    previous.Held = false;
+                }
             }
         }
         finally
         {
             Keeping.Release();
         }
+        if (previous != null)
+            await DropCopiesAsync(db, previous).ConfigureAwait(false);
         Bump();
         Signal();
         if (missing.Count > 0)
             LumoraLogger.Warn($"Inventory: \"{name}\" saved without {missing.Count} file(s) missing on this machine: {string.Join("; ", missing)}");
-        return InventoryResult.Success(missing.Count == 0 ? $"Saved \"{name}\", syncing in the background." : Inventory.LeftOut(name, missing));
+        return InventoryResult.Success(missing.Count == 0 ? $"Saved \"{name}\"{Inventory.SyncingTail}" : Inventory.LeftOut(name, missing), row.Id);
+    }
+
+    // The name and folder an item on the service has now, looked for where it was, so a save over it keeps a
+    // rename made since. Not found there, or not answered, it goes where it was.
+    private static async Task<(string name, string? folderId)> ListedAsAsync(IInventoryService service, string itemId, string name, string? folderId,
+        string? owner)
+    {
+        try
+        {
+            var listed = await service.ListAsync(string.IsNullOrEmpty(folderId) ? Inventory.Root : folderId!, owner).ConfigureAwait(false);
+            if (!listed.Failed && listed.Data != null)
+            {
+                foreach (var item in listed.Data.Items)
+                {
+                    if (string.Equals(item.Id, itemId, StringComparison.Ordinal))
+                        return (item.Name, item.FolderId ?? Inventory.Root);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Warn($"Inventory: couldn't look up \"{name}\" before saving over it: {ex.Message}");
+        }
+        return (name, folderId);
     }
 
     // LISTING
@@ -352,11 +509,14 @@ public static class InventorySync
     // Lays the signed in account's saves that are not on the service yet over a listing of one folder.
     // A save the service lists already shows once: as the service has it once it is done going up, as it
     // is here while it still has changes to send. -xlinka
-    internal static void MergeInto(InventoryListing listing, string folderId)
-        => Merge(listing, row => string.Equals(row.Folder, folderId, StringComparison.Ordinal));
+    internal static void MergeInto(InventoryListing listing, string folderId, string? ownerId = null)
+        => Merge(listing, row => row.GoesTo(ownerId) && string.Equals(row.Folder, folderId, StringComparison.Ordinal));
 
-    internal static void MergeSearch(InventoryListing listing, string query)
-        => Merge(listing, row => row.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
+    internal static void MergeSearch(InventoryListing listing, string query, string? ownerId = null)
+        => Merge(listing, row => row.GoesTo(ownerId) && row.Name.Contains(query, StringComparison.OrdinalIgnoreCase));
+
+    // A listing read before a share or unshare is out of date: the badges it drew changed.
+    internal static void Touch() => Bump();
 
     private static void Merge(InventoryListing listing, Func<InventoryRow, bool> wanted)
     {
@@ -481,6 +641,23 @@ public static class InventorySync
             await DeleteAsync(id).ConfigureAwait(false);
     }
 
+    // The folder went into another on the service (a merge), so the saves here that were going into it go there
+    // instead of being refused for a folder that is gone.
+    internal static async Task RefolderAsync(string folderId, string intoId)
+    {
+        var ids = new List<string>();
+        lock (Gate)
+        {
+            foreach (var row in Rows.Values)
+            {
+                if (row.Account == _account && row.Folder == folderId)
+                    ids.Add(row.Id);
+            }
+        }
+        foreach (var id in ids)
+            await MoveAsync(id, intoId, string.Empty).ConfigureAwait(false);
+    }
+
     // Takes a save out of the queue's hands for an edit: an upload of it under way is stopped and waited
     // for, and the queue leaves the row alone until Release. Null when there is no such save here, or it
     // is on the service by the time the upload stopped. -xlinka
@@ -539,6 +716,8 @@ public static class InventorySync
         {
             stop = _run;
             _account = null;
+            _notice = null;
+            _emailHeld = false;
             _run = null;
             if (service != null && service.SignedIn)
                 _run = run = new CancellationTokenSource();
@@ -680,6 +859,8 @@ public static class InventorySync
     private static InventoryRow? Head(string account, out TimeSpan wait)
     {
         wait = Timeout.InfiniteTimeSpan;
+        if (_emailHeld)
+            return null;
         InventoryRow? head = null;
         foreach (var row in Rows.Values)
         {
@@ -731,6 +912,8 @@ public static class InventorySync
             if (halt.IsCancellationRequested && outcome.Kind != OutcomeKind.Done)
                 outcome = Outcome.Cancelled;
             Apply(row, outcome);
+            if (outcome.Kind == OutcomeKind.Held)
+                AccountEmail.Refused(saves: true, joins: false);
             await PersistAsync(row).ConfigureAwait(false);
             if (outcome.Kind == OutcomeKind.Done)
                 await DropCopiesAsync(db, row).ConfigureAwait(false);
@@ -777,11 +960,15 @@ public static class InventorySync
         var sink = new Sink(service);
         var problems = new List<string>();
         var dropped = new List<string>();
-        var manifest = await CloudAssetPacker.PackAsync(tree, sink, db, sink.MissingAsync, problems, dropped, ct).ConfigureAwait(false);
+        var lost = new List<string>();
+        var manifest = await CloudAssetPacker.PackAsync(tree, sink, db, sink.MissingAsync, problems, dropped, ct, lost,
+            Engine.Current?.ContentCache).ConfigureAwait(false);
         if (problems.Count > 0)
             return sink.Verdict(Inventory.NotUploaded(row.Name, problems));
         if (dropped.Count > 0)
             LumoraLogger.Warn($"Inventory: \"{row.Name}\" goes up without {dropped.Count} file(s) missing on this machine: {string.Join("; ", dropped)}");
+        if (lost.Count > 0)
+            LumoraLogger.Warn($"Inventory: \"{row.Name}\" goes up naming {lost.Count} part(s) missing on the server and on this machine: {string.Join("; ", lost)}");
 
         var entries = new List<AssetManifestEntry>(manifest.Count);
         foreach (var entry in manifest)
@@ -799,7 +986,7 @@ public static class InventorySync
             var picture = await db.ReadAssetBytesAsync(row.ThumbnailUri!).ConfigureAwait(false);
             if (picture != null)
             {
-                var (shot, shotError) = await sink.StoreAsync(picture, ".jpg", ct).ConfigureAwait(false);
+                var (shot, shotError) = await sink.StoreAsync(picture, PictureExtensionOf(picture), ct).ConfigureAwait(false);
                 if (shot == null)
                     return sink.Verdict(shotError ?? "Its picture did not go up.");
                 thumbnail = shot;
@@ -810,11 +997,13 @@ public static class InventorySync
         // From the item on nothing is cut off halfway: an edit that comes in now waits for the answer, so the
         // service never holds an item this machine believes it does not.
         var put = await PutAsync(service, row, packed.LongLength, hash, thumbnail, entries).ConfigureAwait(false);
+        if (!put.Success && put.Error == AccountEmail.NotVerifiedCode)
+            return Outcome.Held(put.Message ?? AccountEmailLocale.SaveRefused.Resolve());
         if (!put.Success)
             return Verdict(put, "The item was refused.");
 
         Inventory.Keep(hash, packed, row.IsWorld);
-        return Outcome.Done(hash);
+        return Outcome.Done(hash, lost.Count == 0 ? null : InventoryPartsLocale.Lost(row.Name, lost.Count).Resolve());
     }
 
     private static async Task<ApiResponse> PutAsync(IInventoryService service, InventoryRow row, long size, string hash, string? thumbnail,
@@ -823,7 +1012,33 @@ public static class InventorySync
         lock (Gate)
             row.Sent = true;
         var answer = await service.PutItemAsync(row.Id, row.Name, row.Kind, row.Folder, hash, thumbnail, size, row.Mode, entries,
-            CancellationToken.None).ConfigureAwait(false);
+            row.Owner, CancellationToken.None).ConfigureAwait(false);
+        // A service that does not know pictures yet keeps one as an object.
+        if (answer.Status == HttpStatusCode.BadRequest && answer.Error == "bad-kind" && row.Kind == Inventory.ImageKind)
+        {
+            lock (Gate)
+                row.Kind = Inventory.ObjectKind;
+            Bump();
+            answer = await service.PutItemAsync(row.Id, row.Name, row.Kind, row.Folder, hash, thumbnail, size, row.Mode, entries,
+                row.Owner, CancellationToken.None).ConfigureAwait(false);
+        }
+        if (answer.Error == AccountEmail.NotVerifiedCode)
+            return answer;
+        // Saved into someone else's folder that stopped letting this account in before the save got there (unshared,
+        // taken down to view only, out of the group, no storage set for it there): it lands at the top of the
+        // account's own inventory instead of being lost. -xlinka
+        if (answer.Status == HttpStatusCode.Forbidden && !string.IsNullOrEmpty(row.Owner))
+        {
+            LumoraLogger.Warn($"Inventory: \"{row.Name}\" can no longer go where it was saved, so it goes in at the top of your inventory.");
+            lock (Gate)
+            {
+                row.Owner = null;
+                row.Folder = Inventory.Root;
+            }
+            Bump();
+            return await service.PutItemAsync(row.Id, row.Name, row.Kind, Inventory.Root, hash, thumbnail, size, row.Mode, entries,
+                null, CancellationToken.None).ConfigureAwait(false);
+        }
         if (answer.Status != HttpStatusCode.NotFound || (answer.Error != null && answer.Error != "folder") || row.Folder == Inventory.Root)
             return answer;
         // The folder went away, deleted on another computer say: the save lands at the top rather than nowhere.
@@ -832,7 +1047,7 @@ public static class InventorySync
             row.Folder = Inventory.Root;
         Bump();
         return await service.PutItemAsync(row.Id, row.Name, row.Kind, Inventory.Root, hash, thumbnail, size, row.Mode, entries,
-            CancellationToken.None).ConfigureAwait(false);
+            row.Owner, CancellationToken.None).ConfigureAwait(false);
     }
 
     // The variants of every texture the save took up, made on this machine and stored beside it, each once
@@ -840,7 +1055,11 @@ public static class InventorySync
     // a texture someone else put up first (only its first uploader may register them), or a variant that
     // will not go up leaves the save with fewer, which costs nothing that matters: a machine that loads the
     // save makes its own. So nothing here decides how the try ends, and it gets a sink of its own whose
-    // refusals count for nothing. -xlinka
+    // refusals count for nothing.
+    //
+    // Several textures go at once: a texture's turn is mostly round trips waiting on the service, one after
+    // another, and a ladder one still has to make waits for the two generation workers whatever this does.
+    // -xlinka
     private static async Task<List<AssetManifestEntry>> VariantsAsync(IInventoryService service, LocalDB db, List<CloudAssetEntry> manifest,
         CancellationToken ct)
     {
@@ -852,36 +1071,45 @@ public static class InventorySync
             if (entry.Type == "texture" && !string.IsNullOrEmpty(entry.LocalUri))
                 textures.Add(entry);
         }
+        var sent = new IReadOnlyList<CloudAssetEntry>?[textures.Count];
+        int left = textures.Count;
+        SetVariants(left);
         try
         {
-            for (int i = 0; i < textures.Count; i++)
+            var options = new ParallelOptions { MaxDegreeOfParallelism = CloudAssetPacker.UploadWidth, CancellationToken = ct };
+            await Parallel.ForEachAsync(System.Linq.Enumerable.Range(0, textures.Count), options, async (i, token) =>
             {
-                SetVariants(textures.Count - i);
-                IReadOnlyList<CloudAssetEntry> entries;
                 try
                 {
-                    entries = await CloudVariantUploader.UploadAsync(db, textures[i].LocalUri, textures[i].Hash, sink, ct).ConfigureAwait(false);
+                    sent[i] = await CloudVariantUploader.UploadAsync(db, textures[i].LocalUri, textures[i].Hash, sink, token).ConfigureAwait(false);
                 }
                 catch (NotImplementedException)
                 {
-                    continue;
                 }
-                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                catch (OperationCanceledException) when (token.IsCancellationRequested)
                 {
-                    break;
+                    throw;
                 }
                 catch (Exception ex)
                 {
                     LumoraLogger.Warn($"Inventory: the variants of \"{textures[i].Name}\" did not go up: {ex.Message}");
-                    continue;
                 }
-                foreach (var entry in entries)
-                    made.Add(Listed(entry, "variant"));
-            }
+                SetVariants(Interlocked.Decrement(ref left));
+            }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
         }
         finally
         {
             SetVariants(0);
+        }
+        foreach (var entries in sent)
+        {
+            if (entries == null)
+                continue;
+            foreach (var entry in entries)
+                made.Add(Listed(entry, "variant"));
         }
         return made;
     }
@@ -899,6 +1127,7 @@ public static class InventorySync
     {
         string name;
         int attempts;
+        bool firstHold = false;
         lock (Gate)
         {
             name = row.Name;
@@ -921,9 +1150,18 @@ public static class InventorySync
                     row.LastError = null;
                     row.OutOfSpace = false;
                     row.NextAttemptUtc = DateTime.MinValue;
+                    if (outcome.Message != null)
+                        _notice = outcome.Message;
                     break;
                 case OutcomeKind.Cancelled:
                     row.State = InventoryRowState.Pending;
+                    break;
+                case OutcomeKind.Held:
+                    row.State = InventoryRowState.Pending;
+                    row.LastError = outcome.Message;
+                    row.NextAttemptUtc = DateTime.MinValue;
+                    firstHold = !_emailHeld;
+                    _emailHeld = true;
                     break;
                 case OutcomeKind.Retry:
                     row.State = InventoryRowState.Pending;
@@ -951,6 +1189,9 @@ public static class InventorySync
             case OutcomeKind.Refused:
             case OutcomeKind.NoRoom:
                 LumoraLogger.Warn($"Inventory: \"{name}\" is parked: {outcome.Message}");
+                break;
+            case OutcomeKind.Held when firstHold:
+                LumoraLogger.Log("Inventory: saves wait until this account's email is verified; nothing goes up meanwhile.");
                 break;
         }
     }
@@ -990,15 +1231,19 @@ public static class InventorySync
     private static async Task ForgetAsync(InventoryRow row)
     {
         LocalDB? db;
+        bool replaced;
         lock (Gate)
         {
             row.Gone = true;
             row.Held = false;
-            if (Rows.TryGetValue(row.Id, out var live) && ReferenceEquals(live, row))
+            bool listed = Rows.TryGetValue(row.Id, out var live);
+            if (listed && ReferenceEquals(live, row))
                 Rows.Remove(row.Id);
+            // A save over the same item holds the stored row now.
+            replaced = listed && !ReferenceEquals(live, row);
             db = _db;
         }
-        if (db != null)
+        if (db != null && !replaced)
             await db.DeleteRowAsync(Table, row.Id).ConfigureAwait(false);
     }
 
@@ -1012,7 +1257,8 @@ public static class InventorySync
         {
             if (!Needed(db, row, row.LocalUri) && KeptAs(db, row.LocalUri, Inventory.ExtensionFor(row.Kind)))
                 await db.DeleteAssetAsync(row.LocalUri).ConfigureAwait(false);
-            if (row.ThumbnailUri is { } picture && !Needed(db, row, picture) && KeptAs(db, picture, PictureExtension))
+            if (row.ThumbnailUri is { } picture && !Needed(db, row, picture)
+                && (KeptAs(db, picture, PictureExtension) || KeptAs(db, picture, ClearPictureExtension)))
                 await db.DeleteAssetAsync(picture).ConfigureAwait(false);
         }
         catch (Exception ex)
@@ -1043,7 +1289,7 @@ public static class InventorySync
     }
 
     private static bool KeptAs(LocalDB db, string uri, string extension)
-        => string.Equals(Path.GetExtension(db.GetFilePath(uri)), extension, StringComparison.OrdinalIgnoreCase);
+        => string.Equals(db.GetExtension(uri), extension, StringComparison.OrdinalIgnoreCase);
 
     private static void SetVariants(int count)
     {
@@ -1107,6 +1353,8 @@ public static class InventorySync
     private static OutcomeKind Classify(ApiResponse answer)
     {
         int code = (int)answer.Status;
+        if (answer.Error == AccountEmail.NotVerifiedCode)
+            return OutcomeKind.Held;
         if (code == 413)
             return OutcomeKind.NoRoom;
         if (code == 0 || code == 408 || code == 429 || code >= 500)
@@ -1124,6 +1372,7 @@ public static class InventorySync
         Retry,
         Refused,
         NoRoom,
+        Held,
     }
 
     private readonly struct Outcome
@@ -1140,9 +1389,11 @@ public static class InventorySync
         }
 
         public static Outcome Cancelled => new(OutcomeKind.Cancelled, null, null);
-        public static Outcome Done(string hash) => new(OutcomeKind.Done, null, hash);
+        // A note is for the person: the save went up, but not whole.
+        public static Outcome Done(string hash, string? note = null) => new(OutcomeKind.Done, note, hash);
         public static Outcome Retry(string message) => new(OutcomeKind.Retry, message, null);
         public static Outcome Refused(string message) => new(OutcomeKind.Refused, message, null);
+        public static Outcome Held(string message) => new(OutcomeKind.Held, message, null);
         public static Outcome Of(OutcomeKind kind, string message) => new(kind, message, null);
     }
 
@@ -1154,6 +1405,8 @@ public static class InventorySync
         private readonly IInventoryService _service;
         private readonly object _gate = new();
         private ApiResponse? _failure;
+        public long Total;
+        public long Done;
 
         public Sink(IInventoryService service) => _service = service;
 
@@ -1166,7 +1419,7 @@ public static class InventorySync
         public async Task<(string? Hash, string? Error)> StoreAsync(byte[] bytes, string extension, CancellationToken ct)
         {
             var hash = ContentHash.FromBytes(bytes);
-            var answer = await _service.UploadAsync(hash, bytes, extension, new Sent(bytes.LongLength), ct).ConfigureAwait(false);
+            var answer = await _service.UploadAsync(hash, bytes, extension, new Sent(this, bytes.LongLength), ct).ConfigureAwait(false);
             if (answer.Success)
                 return (hash, null);
             Note(answer);
@@ -1217,18 +1470,32 @@ public static class InventorySync
 
         private static int Grave(ApiResponse answer) => Classify(answer) switch
         {
+            OutcomeKind.Held => 4,
             OutcomeKind.NoRoom => 3,
             OutcomeKind.Refused => 2,
             _ => 1,
         };
     }
 
+    // One blob's part of what its sink has going up. Blobs go several at once, so the percent is of all of
+    // them together, never of whichever one reported last.
     private sealed class Sent : IProgress<long>
     {
-        private readonly long _total;
+        private readonly Sink _sink;
+        private long _reported;
 
-        public Sent(long total) => _total = total;
+        public Sent(Sink sink, long total)
+        {
+            _sink = sink;
+            Interlocked.Add(ref sink.Total, total);
+        }
 
-        public void Report(long value) => SetPercent(_total <= 0 ? 100 : (int)System.Math.Clamp(value * 100 / _total, 0, 100));
+        public void Report(long value)
+        {
+            long step = value - Interlocked.Exchange(ref _reported, value);
+            long sent = Interlocked.Add(ref _sink.Done, step);
+            long total = Interlocked.Read(ref _sink.Total);
+            SetPercent(total <= 0 ? 100 : (int)System.Math.Clamp(sent * 100 / total, 0, 100));
+        }
     }
 }

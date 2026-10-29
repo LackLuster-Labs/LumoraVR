@@ -26,6 +26,10 @@ public abstract class ContainerWorker<C> : Worker where C : ComponentBase<C>
 
     public bool IsInInitPhase { get; protected set; }
 
+    // While a peer's removal of components here is being decoded: that it is, and whose it is.
+    internal bool RemovingComponentsByDecode => componentCollection.IsLoading;
+    internal User? ComponentRemovalSender => componentCollection.DecodingRemovalSender;
+
     public event Action<C>? ComponentAdded;
     public event Action<C>? ComponentRemoved;
 
@@ -238,7 +242,7 @@ public abstract class ContainerWorker<C> : Worker where C : ComponentBase<C>
         if (component == null)
             return false;
 
-        if (RefuseConfigRemoval(component))
+        if (RefuseConfigRemoval(component) || RefusedInsideReplicatedDestroy(component.ReferenceID))
             return false;
 
         return componentCollection.Remove(component.ReferenceID);
@@ -256,9 +260,23 @@ public abstract class ContainerWorker<C> : Worker where C : ComponentBase<C>
     internal bool MayRemoveComponent(C component)
         => component != null && componentCollection.MayRemove(component.ReferenceID);
 
+    internal bool MayRemoveComponentBy(C component, User actor)
+        => component != null && componentCollection.MayRemoveQuietly(component.ReferenceID, actor, unscoped: true);
+
+    internal bool MayRemoveComponentQuietly(C component)
+        => component != null && Slot.MayTakeOut(componentCollection, component.ReferenceID);
+
+    // A removal some other peer's destroy set off on this machine, which the peer it speaks for may not make:
+    // left alone, like a slot in the same spot (see Slot.Destroy).
+    private bool RefusedInsideReplicatedDestroy(in RefID id)
+        => Slot.InsideReplicatedDestroy && !IsLocalElement && componentCollection.ContainsKey(id)
+            && !Slot.MayTakeOut(componentCollection, id);
+
     public bool RemoveComponent(RefID id)
     {
         if (componentCollection.TryGetValue(id, out var existing) && RefuseConfigRemoval(existing))
+            return false;
+        if (RefusedInsideReplicatedDestroy(id))
             return false;
 
         return componentCollection.Remove(id);

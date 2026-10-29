@@ -18,9 +18,9 @@ namespace Lumora.Core;
 // pulled and merged, then whatever this machine has that is newer is pushed back. A change made here is
 // pushed a moment later, and once more on the way out so the last one is not lost to a closing window.
 //
-// What follows the account is declared in one place: the preferences EngineSettings lists, and every
-// site decision of WebAccess. Everything else in the settings store stays on this machine, the saved
-// sign-in above all. -xlinka
+// What follows the account is declared in one place: the preferences EngineSettings lists, every site
+// decision of WebAccess, the signed in account's favourites and their model import answers. Everything else
+// in the settings store stays on this machine, the saved sign-in above all. -xlinka
 public static class AccountSettings
 {
     public const string WebAccessSites = "WebAccess.Sites.";
@@ -33,8 +33,12 @@ public static class AccountSettings
     private static Timer? _pushTimer;
     private static bool _quietFailure;
 
+    // A sync after a sign in has had its go, whether or not it reached the account. Off the main thread.
+    public static event Action? Pulled;
+
     public static bool Follows(string key)
-        => key.StartsWith(WebAccessSites, StringComparison.Ordinal) || EngineSettings.FollowsAccount(key);
+        => key.StartsWith(WebAccessSites, StringComparison.Ordinal) || EngineSettings.FollowsAccount(key) || Favourites.Follows(key)
+           || Components.Import.ModelImportPreferences.Follows(key);
 
     public static void Attach(LumoraClient client)
     {
@@ -88,6 +92,8 @@ public static class AccountSettings
         await Gate.WaitAsync().ConfigureAwait(false);
         try
         {
+            // Favourite keys carry the account, so it has to be known before they land or they are refused.
+            await Favourites.KnowAccountAsync(client).ConfigureAwait(false);
             var pulled = await client.GetAccountSettings().ConfigureAwait(false);
             if (!pulled.Success || pulled.Data == null)
             {
@@ -103,6 +109,7 @@ public static class AccountSettings
         finally
         {
             Gate.Release();
+            Pulled?.Invoke();
         }
     }
 

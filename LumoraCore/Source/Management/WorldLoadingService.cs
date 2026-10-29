@@ -24,6 +24,13 @@ public class WorldLoadingOperation
     public bool IsFailed { get; internal set; }
     public string? ErrorMessage { get; internal set; }
     public bool IsCancelled { get; internal set; }
+    // Waiting on the account, not the network: its email is not verified, so the join never started or the host
+    // turned it away for that. The loading panel says so; WorldLoadingService.Resume carries on with the same addresses.
+    public bool IsHeld { get; internal set; }
+    // The host was the one that said no, rather than this side before connecting.
+    public bool HeldByHost { get; internal set; }
+    internal bool FocusWhenReady { get; set; }
+    internal int Attempt { get; set; }
 
     internal TaskCompletionSource<World> CompletionSource { get; } = new();
 
@@ -50,6 +57,7 @@ public enum WorldLoadingPhase
 public class WorldLoadingService
 {
     private readonly Engine _engine;
+    private readonly object _gate = new();
     private WorldLoadingOperation _currentOperation = null!;
 
     public event Action<WorldLoadingOperation> OnLoadingProgress = null!;
@@ -60,9 +68,17 @@ public class WorldLoadingService
 
     public event Action<WorldLoadingOperation> OnLoadingFailed = null!;
 
+    // A join stopped to wait for a verified email; see WorldLoadingOperation.IsHeld.
+    public event Action<WorldLoadingOperation> OnLoadingHeld = null!;
+
     public WorldLoadingOperation CurrentOperation => _currentOperation;
 
-    public bool IsLoading => _currentOperation != null && !_currentOperation.IsComplete && !_currentOperation.IsFailed;
+    // A held join is not loading anything: another join may start, and replaces it.
+    public bool IsLoading => _currentOperation != null && !_currentOperation.IsComplete && !_currentOperation.IsFailed
+        && !_currentOperation.IsHeld;
+
+    public WorldLoadingOperation? HeldOperation
+        => _currentOperation is { IsHeld: true, IsCancelled: false } held ? held : null;
 
     public WorldLoadingService(Engine engine)
     {
@@ -107,22 +123,100 @@ public class WorldLoadingService
             Addresses = uris,
             Phase = WorldLoadingPhase.Connecting,
             Progress = 0f,
-            StatusMessage = "Connecting..."
+            StatusMessage = "Connecting...",
+            FocusWhenReady = focusWhenReady,
         };
 
-        _currentOperation = operation;
+        WorldLoadingOperation? replaced;
+        lock (_gate)
+        {
+            replaced = _currentOperation is { IsHeld: true } waiting ? waiting : null;
+            _currentOperation = operation;
+        }
+        replaced?.Cancel();
 
-        OnLoadingStarted?.Invoke(operation);
+        // Every join funnels through here (browser, invites, orbs and portals, links, Discord), so this is the one
+        // check. A read already in hand holds it before anything shows; one still out is waited on in the load.
+        if (AccountEmail.Known && AccountEmail.JoinsHeld)
+        {
+            Hold(operation, byHost: false);
+            return operation;
+        }
 
-        _ = LoadWorldAsync(operation, focusWhenReady);
-
+        Start(operation);
         return operation;
     }
 
-    private async Task LoadWorldAsync(WorldLoadingOperation operation, bool focusWhenReady)
+    // Carries a held join on with the same name and addresses, checking the account again first.
+    public bool Resume(WorldLoadingOperation operation)
     {
+        lock (_gate)
+        {
+            if (operation == null || !operation.IsHeld || operation.IsCancelled || !ReferenceEquals(_currentOperation, operation))
+                return false;
+            operation.IsHeld = false;
+            operation.HeldByHost = false;
+        }
+        LumoraLogger.Log($"WorldLoadingService: '{operation.WorldName}' carries on");
+        operation.Phase = WorldLoadingPhase.Connecting;
+        operation.Progress = 0f;
+        operation.StatusMessage = "Connecting...";
+        Start(operation);
+        return true;
+    }
+
+    // Lets a held join go: nothing was loading, so nothing is left behind.
+    public void Drop(WorldLoadingOperation operation)
+    {
+        if (operation == null)
+            return;
+        operation.Cancel();
+        lock (_gate)
+        {
+            if (ReferenceEquals(_currentOperation, operation))
+                _currentOperation = null!;
+        }
+    }
+
+    private void Start(WorldLoadingOperation operation)
+    {
+        int attempt;
+        lock (_gate)
+            attempt = ++operation.Attempt;
+        OnLoadingStarted?.Invoke(operation);
+        _ = LoadWorldAsync(operation, attempt);
+    }
+
+    private void Hold(WorldLoadingOperation operation, bool byHost)
+    {
+        lock (_gate)
+        {
+            if (operation.IsCancelled || !ReferenceEquals(_currentOperation, operation))
+                return;
+            operation.IsHeld = true;
+            operation.HeldByHost = byHost;
+        }
+        operation.World = null!;
+        operation.Phase = WorldLoadingPhase.Connecting;
+        operation.Progress = 0f;
+        operation.StatusMessage = EmailJoinGate.Refusal;
+        LumoraLogger.Log($"WorldLoadingService: join of '{operation.WorldName}' held, the account's email is not verified ({(byHost ? "the host said" : "known here")})");
+        OnLoadingHeld?.Invoke(operation);
+    }
+
+    private async Task LoadWorldAsync(WorldLoadingOperation operation, int attempt)
+    {
+        bool focusWhenReady = operation.FocusWhenReady;
         try
         {
+            if (await EmailJoinGate.HoldsAsync())
+            {
+                Hold(operation, byHost: false);
+                return;
+            }
+            if (operation.IsCancelled)
+                return;
+
             LumoraLogger.Log($"WorldLoadingService: Starting load for '{operation.WorldName}' at {operation.Address}");
 
             UpdateProgress(operation, WorldLoadingPhase.Connecting, 0.05f, "Connecting to server...");
@@ -184,8 +278,17 @@ public class WorldLoadingService
 
             if (world.State != World.WorldState.Running)
             {
-                FailOperation(operation, $"World failed to load (state: {world.State})");
+                var state = world.State;
+                string reason = world.InitializationFailureReason;
                 world.Dispose();
+                if (state == World.WorldState.Failed && await EmailJoinGate.RefusedForEmailAsync(reason))
+                {
+                    Hold(operation, byHost: true);
+                    return;
+                }
+                FailOperation(operation, state == World.WorldState.Failed && !string.IsNullOrWhiteSpace(reason)
+                    ? Security.Integrity.BuildRefusals.Localize(reason)
+                    : $"World failed to load (state: {state})");
                 return;
             }
 
@@ -231,9 +334,11 @@ public class WorldLoadingService
         }
         finally
         {
-            if (_currentOperation == operation)
+            lock (_gate)
             {
-                _currentOperation = null!;
+                // A held join stays current for the panel, and a resumed one belongs to the run that resumed it.
+                if (_currentOperation == operation && !operation.IsHeld && operation.Attempt == attempt)
+                    _currentOperation = null!;
             }
         }
     }
@@ -265,6 +370,8 @@ public class WorldLoadingService
         if (operation.IsComplete || operation.IsFailed || operation.IsCancelled)
             return;
 
+        // Failed is the load's to report once it sees the state: a refusal over the email holds the join
+        // rather than failing it, and only the load can wait on the account to tell which it was.
         switch (newState)
         {
             case World.WorldState.WaitingForJoinGrant:
@@ -277,12 +384,6 @@ public class WorldLoadingService
 
             case World.WorldState.Running:
                 UpdateProgress(operation, WorldLoadingPhase.InitializingWorld, 0.95f, "Finalizing...");
-                break;
-
-            case World.WorldState.Failed:
-                FailOperation(operation, string.IsNullOrWhiteSpace(operation.World?.InitializationFailureReason)
-                    ? "World initialization failed"
-                    : operation.World.InitializationFailureReason);
                 break;
         }
     }
@@ -298,6 +399,9 @@ public class WorldLoadingService
 
     private void FailOperation(WorldLoadingOperation operation, string error)
     {
+        // Once: a second call would put a vaguer reason over the one the person should read.
+        if (operation.IsFailed || operation.IsCancelled)
+            return;
         operation.IsFailed = true;
         operation.ErrorMessage = error;
         operation.StatusMessage = $"Failed: {error}";

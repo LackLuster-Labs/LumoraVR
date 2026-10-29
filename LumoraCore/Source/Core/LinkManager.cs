@@ -169,7 +169,8 @@ public class LinkManager
         target.Link(link);
         link.GrantLink();
 
-        if (World?.IsAuthority == true && RefIDConstants.IsValidUserByte(link.ReferenceID.GetUserByte()))
+        if (World?.IsAuthority == true && (RefIDConstants.IsValidUserByte(link.ReferenceID.GetUserByte())
+            || (link.ReferenceID.GetUserByte() == RefIDConstants.AUTHORITY_BYTE && LeansOnConsent(link, target))))
         {
             lock (_pendingLock)
                 _userGrants.Add(link);
@@ -236,16 +237,61 @@ public class LinkManager
             return true;
 
         byte authorByte = link.ReferenceID.GetUserByte();
+        if (authorByte == RefIDConstants.AUTHORITY_BYTE)
+            return AuthorityMayReach(link, target);
         if (!RefIDConstants.IsValidUserByte(authorByte))
             return true;
 
         foreach (var user in world.GetAllUsers())
         {
             if (user.HoldsByte(authorByte))
-                return MayWrite(user, target);
+                return OwnWiring(link, target) || MayWrite(user, target);
         }
         return false;
     }
+
+    // A link that is part of the very object it drives, the object now in somebody's hands or body: a panel's
+    // own tint drivers while someone holds the panel, a gadget's own drives while someone wears it. Those are
+    // the object working, not its author reaching into that person, the same as a world script inside a worn
+    // object (the nearest object root holds both, below the user root, never their body machinery). Without
+    // this every recheck tore the drivers out of a panel the moment somebody else picked it up. -xlinka
+    private static bool OwnWiring(ILinkRef link, ILinkable target)
+    {
+        if (link is not IWorldElement linkElement || target is not IWorldElement targetElement)
+            return false;
+        if (ObjectBoundary.SharedRoot(linkElement, targetElement) is not { ActiveUserRoot: not null })
+            return false;
+        Lumora.Warden.IPermissionTarget gateTarget = targetElement;
+        return !gateTarget.IsWearerMachinery;
+    }
+
+    // The authority's byte holds world content and whatever the host makes by hand, and the two look the same. Neither
+    // reaches into a person: a link that is itself part of that person (a worn avatar's own drivers, something they
+    // let in) may, and otherwise only with that person's yes to the host, never on their root itself. -xlinka
+    private bool AuthorityMayReach(ILinkRef link, ILinkable target)
+    {
+        if (!ReachesPerson(link, target, out var person, out var targetSlot))
+            return true;
+        return !ReferenceEquals(targetSlot, person!.Root?.Slot)
+            && Networking.Session.SessionEditConsent.Allows(person, World?.LocalUser);
+    }
+
+    // Whether an authority link reaches into a person from outside them. A world prop someone is holding stays
+    // world content to the world's own wiring; the grab rules are what keep it in their hand.
+    private static bool ReachesPerson(ILinkRef link, ILinkable target, out User? person, out Slot? targetSlot)
+    {
+        targetSlot = ObjectBoundary.SlotOf(target as IWorldElement);
+        person = targetSlot?.ActiveUserRoot?.ActiveUser;
+        if (person == null || person.IsDestroyed || targetSlot == null)
+            return false;
+        if (ReferenceEquals(ObjectBoundary.SlotOf(link as IWorldElement)?.ActiveUserRoot?.ActiveUser, person))
+            return false;
+        Lumora.Warden.IPermissionTarget held = targetSlot;
+        return !(targetSlot.ReferenceID.IsAuthorityID && held.IsCarriedBy(person));
+    }
+
+    // Whether a granted authority link leaned on a person's yes, so a yes taken back is asked again.
+    private static bool LeansOnConsent(ILinkRef link, ILinkable target) => ReachesPerson(link, target, out _, out _);
 
     private bool MayWrite(User? user, ILinkable target)
     {
@@ -268,7 +314,9 @@ public class LinkManager
             target is IField ? DataModelPermissionSurface.Field : DataModelPermissionSurface.SyncElement,
             DataModelPermissionAction.Write | DataModelPermissionAction.Replicate,
             isNetwork: true);
-        return permissions.Authorize(request, out _);
+        // Asked quietly: a grant recheck asks this of every live link, and the one refusal worth counting is
+        // the inbound claim, which ValidateLinkWrite reports once itself.
+        return permissions.Allows(request);
     }
 
     // Authority-side check for an inbound write to a link member, run before the write is applied. The
@@ -331,9 +379,12 @@ public class LinkManager
 
         // The link's author has to be allowed to write what it reaches for, drive or hook alike. See
         // AuthorMayLink for why the link is the author's hand on the target.
-        if (!MayWrite(sender, target))
+        if (!OwnWiring(link, target) && !MayWrite(sender, target))
         {
-            World?.DataModelPermissions?.ReportDenial(sender, DataModelDenialKind.ForeignWrite, "link to a target the sender may not write");
+            // A target that just went into or out of somebody's hands was not theirs when the claim was sent.
+            bool stale = ObjectBoundary.SlotOf(target as IWorldElement) is { ChangedHandsRecently: true };
+            World?.DataModelPermissions?.ReportDenial(sender, stale ? DataModelDenialKind.StaleView : DataModelDenialKind.ForeignWrite,
+                "link to a target the sender may not write");
             return MessageValidity.Conflict;
         }
 

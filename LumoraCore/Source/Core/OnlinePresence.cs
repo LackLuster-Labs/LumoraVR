@@ -96,7 +96,8 @@ public static class OnlinePresence
         }
     }
 
-    private static string PlatformName(Platform platform) => platform switch
+    // The same names go out with the account's presence.
+    internal static string PlatformName(Platform platform) => platform switch
     {
         Platform.Windows => "windows",
         Platform.Linux => "linux",

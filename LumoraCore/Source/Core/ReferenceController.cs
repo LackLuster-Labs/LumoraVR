@@ -368,15 +368,31 @@ public class ReferenceController : IDisposable
     // the host's default is the world's byte, where the freeze would refuse the host its own thing's parts.
     // Opens nothing on a client, in a world being built, or inside any explicit context (a decode, a load,
     // a script's range, a local block). -xlinka
+    //
+    // A joiner's things get the same on the host: what the host builds into one of them with no context of
+    // its own (an avatar's hitboxes refitted while nobody wears it, a world script's additions) is a part of
+    // that thing and lands in the host's range of the joiner's byte. Minted in the world's byte it
+    // was world content inside a guest's item, which the guest's delete could not take with it, so every
+    // peer was left with those parts standing at the world root. Only while that joiner is in the session.
+    // -xlinka
     public AllocationScope InheritedAllocationScope(in RefID parentId)
     {
         if (_allocationStack.Count != 0 || _currentAllocation.UserByte != RefIDConstants.AUTHORITY_BYTE)
             return default;
-        byte own = World.HostItemByte;
-        if (own == 0 || parentId.GetUserByte() != own)
+        byte parentByte = parentId.GetUserByte();
+        if (!RefIDConstants.IsValidUserByte(parentByte))
             return default;
-        return OwnedAllocationScope(own);
+        byte own = World.HostItemByte;
+        if (own != 0 && parentByte == own)
+            return OwnedAllocationScope(own);
+        if (!World.IsAuthority || World.LocalUser?.HoldsByte(parentByte) != false || !HasScriptRoom(parentByte)
+            || World.UserHoldingByte(parentByte) == null)
+            return default;
+        return ScriptAllocationScope(parentByte);
     }
+
+    private bool HasScriptRoom(byte userByte)
+        => _scriptFence[userByte] != 0 && _scriptPosition[userByte] < RefID.MaxPosition - RefIDConstants.USER_JOIN_HEADROOM;
 
     public void SetScriptFence(byte userByte, ulong position)
     {

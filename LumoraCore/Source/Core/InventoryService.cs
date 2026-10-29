@@ -27,9 +27,10 @@ public interface IInventoryService
     // The service answers again after a spell without a connection.
     event Action? BackOnline;
 
-    Task<ApiResponse<FolderContents>> ListAsync(string folderId);
+    // ownerId null is the account's own inventory, else a group's or a sharer's.
+    Task<ApiResponse<FolderContents>> ListAsync(string folderId, string? ownerId = null);
 
-    Task<ApiResponse<FolderContents>> SearchAsync(string query);
+    Task<ApiResponse<FolderContents>> SearchAsync(string query, string? ownerId = null);
 
     // Which of these blobs the store does not have.
     Task<ApiResponse<List<string>>> MissingAsync(IReadOnlyList<string> hashes, CancellationToken ct);
@@ -42,9 +43,10 @@ public interface IInventoryService
 
     Task<ApiResponse> RegisterVariantAsync(string baseHash, string variantId, string resultHash, long size, CancellationToken ct);
 
-    // The item made or replaced whole under the id this machine chose for it.
+    // The item made or replaced whole under the id this machine chose for it, in ownerId's inventory (null for
+    // the account's own).
     Task<ApiResponse> PutItemAsync(string itemId, string name, string kind, string folderId, string fileHash, string? thumbnailHash,
-        long fileBytes, string? worldMode, IReadOnlyList<AssetManifestEntry> manifest, CancellationToken ct);
+        long fileBytes, string? worldMode, IReadOnlyList<AssetManifestEntry> manifest, string? ownerId, CancellationToken ct);
 
     Task<ApiResponse> DeleteItemAsync(string itemId);
 }
@@ -80,9 +82,9 @@ public sealed class LumoraInventoryService : IInventoryService
         return id.Success && !string.IsNullOrEmpty(id.Data) ? id.Data : null;
     }
 
-    public Task<ApiResponse<FolderContents>> ListAsync(string folderId) => _client.GetFolderContents(folderId);
+    public Task<ApiResponse<FolderContents>> ListAsync(string folderId, string? ownerId = null) => _client.GetFolderContents(folderId, ownerId);
 
-    public Task<ApiResponse<FolderContents>> SearchAsync(string query) => _client.SearchInventory(query);
+    public Task<ApiResponse<FolderContents>> SearchAsync(string query, string? ownerId = null) => _client.SearchInventory(query, ownerId);
 
     public Task<ApiResponse<List<string>>> MissingAsync(IReadOnlyList<string> hashes, CancellationToken ct) => _client.MissingContent(hashes, ct);
 
@@ -100,8 +102,8 @@ public sealed class LumoraInventoryService : IInventoryService
         => await _client.RegisterVariant(baseHash, variantId, resultHash, size, ct).ConfigureAwait(false);
 
     public async Task<ApiResponse> PutItemAsync(string itemId, string name, string kind, string folderId, string fileHash, string? thumbnailHash,
-        long fileBytes, string? worldMode, IReadOnlyList<AssetManifestEntry> manifest, CancellationToken ct)
-        => await _client.UpsertInventoryItem(itemId, fileHash, name, kind, folderId, thumbnailHash, fileBytes, worldMode, manifest, ct).ConfigureAwait(false);
+        long fileBytes, string? worldMode, IReadOnlyList<AssetManifestEntry> manifest, string? ownerId, CancellationToken ct)
+        => await _client.UpsertInventoryItem(itemId, fileHash, name, kind, folderId, thumbnailHash, fileBytes, worldMode, manifest, ct, ownerId).ConfigureAwait(false);
 
     public Task<ApiResponse> DeleteItemAsync(string itemId) => _client.DeleteInventoryItem(itemId);
 

@@ -14,6 +14,17 @@ public sealed class ReferenceTranslator
     private readonly Dictionary<Guid, RefID> _globalToLocal = new();
     private readonly Dictionary<RefID, Guid> _localToGlobal = new();
     private Dictionary<Guid, List<ISyncRef>> _pendingRequests = new();
+    private readonly bool _numbered;
+
+    public ReferenceTranslator()
+    {
+    }
+
+    private ReferenceTranslator(bool numbered) => _numbered = numbered;
+
+    // Ids made from the RefIDs themselves rather than fresh GUIDs, so two saves of an unchanged world come
+    // out byte for byte the same. For telling whether anything changed; a file wants fresh ids.
+    public static ReferenceTranslator Numbered() => new(numbered: true);
 
     public bool HasLocal(RefID local) => _localToGlobal.ContainsKey(local);
     public bool HasGlobal(Guid global) => _globalToLocal.ContainsKey(global);
@@ -25,9 +36,16 @@ public sealed class ReferenceTranslator
             throw new InvalidOperationException("Cannot fetch a null reference.");
         if (_localToGlobal.TryGetValue(local, out var existing))
             return existing;
-        var global = Guid.NewGuid();
+        var global = _numbered ? FromRefID(local) : Guid.NewGuid();
         Associate(local, global);
         return global;
+    }
+
+    private static Guid FromRefID(RefID local)
+    {
+        Span<byte> bytes = stackalloc byte[16];
+        BitConverter.TryWriteBytes(bytes, local.RawValue);
+        return new Guid(bytes);
     }
 
     // load: bind a rebuilt element's local RefID to its saved GUID and resolve any waiters

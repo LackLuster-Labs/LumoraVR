@@ -18,6 +18,7 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
     private const int DefaultCapacity = 4;
     private const byte ModeFullSnapshot = 0;
     private const byte ModeSparseValues = 1;
+    private const byte ModeAppended = 2;
 
     private T[] _items = Array.Empty<T>();
     private int _count;
@@ -26,6 +27,34 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
     // Value-only changes use sparse encoding with per-index dirty tracking.
     private bool _structureChanged;
     private HashSet<int>? _dirtyIndices;
+
+    // A window that has only grown at the end goes out as the new tail alone. Something that grows a
+    // little at a time (a stroke being drawn, a log) would otherwise resend everything it holds on every
+    // tick, which turns a long one into a flood. -xlinka
+    private bool _appendOnly;
+    private int _appendBase;
+
+    private void NoteAppend(int countBefore)
+    {
+        if (_structureChanged)
+            return;
+        if (_appendOnly)
+            return;
+        if (_dirtyIndices is { Count: > 0 })
+        {
+            NoteStructureChange();
+            return;
+        }
+        _appendOnly = true;
+        _appendBase = countBefore;
+    }
+
+    private void NoteStructureChange()
+    {
+        _structureChanged = true;
+        _appendOnly = false;
+        _dirtyIndices?.Clear();
+    }
 
     public int Count
     {
@@ -59,7 +88,13 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
             try
             {
                 _items[index] = value;
-                if (!_structureChanged)
+                if (_appendOnly)
+                {
+                    // inside the new tail it goes out with the tail anyway
+                    if (index < _appendBase)
+                        NoteStructureChange();
+                }
+                else if (!_structureChanged)
                     (_dirtyIndices ??= new HashSet<int>()).Add(index);
                 InvalidateSyncElement();
             }
@@ -83,9 +118,8 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
         {
             EnsureCapacity(_count + 1);
             int idx = _count;
+            NoteAppend(_count);
             _items[_count++] = item;
-            _structureChanged = true;
-            _dirtyIndices?.Clear();
             InvalidateSyncElement();
             BlockModification();
             try
@@ -121,8 +155,7 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
             }
             if (_count > startIdx)
             {
-                _structureChanged = true;
-                _dirtyIndices?.Clear();
+                NoteAppend(startIdx);
                 InvalidateSyncElement();
                 BlockModification();
                 try
@@ -155,8 +188,7 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
                 Array.Copy(_items, index, _items, index + 1, _count - index);
             _items[index] = item;
             _count++;
-            _structureChanged = true;
-            _dirtyIndices?.Clear();
+            NoteStructureChange();
             InvalidateSyncElement();
             BlockModification();
             try
@@ -186,8 +218,7 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
             if (index < _count)
                 Array.Copy(_items, index + 1, _items, index, _count - index);
             _items[_count] = default!;
-            _structureChanged = true;
-            _dirtyIndices?.Clear();
+            NoteStructureChange();
             InvalidateSyncElement();
             BlockModification();
             try
@@ -242,8 +273,7 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
             int old = _count;
             Array.Clear(_items, 0, _count);
             _count = 0;
-            _structureChanged = true;
-            _dirtyIndices?.Clear();
+            NoteStructureChange();
             InvalidateSyncElement();
             BlockModification();
             try
@@ -330,6 +360,15 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
 
     protected override void InternalEncodeDelta(BinaryWriter writer, BinaryMessageBatch outboundMessage)
     {
+        if (_appendOnly && !_structureChanged && _appendBase <= _count)
+        {
+            writer.Write(ModeAppended);
+            writer.Write7BitEncoded((ulong)_appendBase);
+            writer.Write7BitEncoded((ulong)(_count - _appendBase));
+            for (int i = _appendBase; i < _count; i++)
+                SyncCoder.Encode(writer, _items[i]);
+            return;
+        }
         // Structure changed (add/remove/insert/clear): send full snapshot inside delta slot
         if (_structureChanged || _dirtyIndices == null || _dirtyIndices.Count == 0)
         {
@@ -357,6 +396,31 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
         if (mode == ModeFullSnapshot)
         {
             InternalDecodeFull(reader, inboundMessage);
+            return;
+        }
+        if (mode == ModeAppended)
+        {
+            // A tail that does not start where ours ends was cut against a different array: refused whole,
+            // which asks for the element again rather than gluing it on in the wrong place.
+            ReadAndCheckDeltaBaseCount(reader, _count);
+            int added = (int)reader.Read7BitEncoded();
+            if (added <= 0)
+                return;
+            int start = _count;
+            EnsureCapacity(_count + added);
+            for (int i = 0; i < added; i++)
+                _items[start + i] = SyncCoder.Decode<T>(reader);
+            _count += added;
+            BlockModification();
+            try
+            {
+                ElementsAdded?.Invoke(this, start, added);
+                DataWritten?.Invoke(this, start, added);
+            }
+            finally
+            {
+                UnblockModification();
+            }
             return;
         }
         // Sparse: apply value updates at individual indices
@@ -402,6 +466,21 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
                 return MessageValidity.Conflict;
             }
 
+            if (mode == ModeAppended)
+            {
+                if (!AuthorizeDataModelMutation(
+                        DataModelPermissionAction.Write | DataModelPermissionAction.CollectionAdd | DataModelPermissionAction.CollectionResize | DataModelPermissionAction.Replicate,
+                        DataModelPermissionSurface.Array,
+                        syncMessage.SenderUser,
+                        isNetwork: true,
+                        index: _count,
+                        throwOnError: false))
+                {
+                    return MessageValidity.Conflict;
+                }
+                return MessageValidity.Valid;
+            }
+
             int changedCount = (int)reader.Read7BitEncoded();
             for (int i = 0; i < changedCount; i++)
             {
@@ -437,6 +516,7 @@ public class SyncArray<T> : ConflictingSyncElement, IEnumerable<T>, ISyncMemberC
     protected override void InternalClearDirty()
     {
         _structureChanged = false;
+        _appendOnly = false;
         _dirtyIndices?.Clear();
     }
 

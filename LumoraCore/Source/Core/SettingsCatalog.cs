@@ -2,6 +2,7 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Collections.Generic;
 
 namespace Lumora.Core;
 
@@ -56,16 +57,42 @@ public readonly struct SettingRange
         => value <= (int)Min ? (int)Min : System.Math.Clamp(value, (int)Floor, (int)Max);
 }
 
+// One value out of a fixed set, declared once the same way: the setter and the load clamp to it and the
+// row offers exactly it, so a choice cannot offer what the engine refuses or refuse what it offers.
+// Anything outside the set, an old save's or a newer build's, comes back as the default. -xlinka
+public readonly struct SettingChoice<T> where T : struct, Enum
+{
+    private readonly T[] _options;
+    public readonly T Default;
+
+    public SettingChoice(T fallback, params T[] options)
+    {
+        Default = fallback;
+        _options = options;
+    }
+
+    public IReadOnlyList<T> Options => _options;
+
+    public int IndexOf(T value) => Array.IndexOf(_options, value);
+
+    public T Clamp(T value) => IndexOf(value) >= 0 ? value : Default;
+
+    public T At(int index) => index >= 0 && index < _options.Length ? _options[index] : Default;
+}
+
 // Every bounded engine setting. Named rather than keyed by string so a typo is a compile error instead
 // of a silently unbounded slider. -xlinka
 public static class SettingsCatalog
 {
     public static readonly SettingRange MouseSensitivity = new(0.05f, 10f, 0.01f);
     public static readonly SettingRange MouseSmoothing = new(0f, 0.95f, 0.01f);
+    public static readonly SettingRange StickLookSpeed = new(0.25f, 3f, 0.05f);
     public static readonly SettingRange LaserSmoothing = new(0f, 1f, 0.05f);
     public static readonly SettingRange HapticsStrength = new(0f, 1f, 0.05f);
     public static readonly SettingRange NoclipSpeed = new(1f, 30f, 0.5f);
     public static readonly SettingRange UserHeight = new(0.5f, 2.5f, 0.01f);
+    // 0 until measured, then the headset's height over the floor while sitting. Measured, never a slider.
+    public static readonly SettingRange SeatedHeadHeight = new(0f, 2.5f);
     // One shape for every volume: a normalized gain in 5% steps. Finer than that is a step nobody can
     // hear and a slider nobody can land on.
     public static readonly SettingRange MasterVolume = new(0f, 1f, 0.05f);
@@ -102,19 +129,21 @@ public static class SettingsCatalog
     public static readonly SettingRange Upscaler = new(0f, 2f);
     public static readonly SettingRange LodBias = new(0.25f, 4f, 0.05f);
     public static readonly SettingRange ShadowDistanceScale = new(0.25f, 4f, 0.05f);
+    // Metres past which other people's avatars stop casting shadows, and past which they stop drawing at all.
+    // 0 is never; anything above it is at least the floor, so an avatar never vanishes at arm's length.
+    public static readonly SettingRange AvatarShadowDistance = new(0f, 60f, 1f, 3f);
+    public static readonly SettingRange AvatarDrawDistance = new(0f, 300f, 5f, 10f);
+    // Metres past which other avatars are pictures, and how many of the nearest are never one; 0 is never and everyone.
+    public static readonly SettingRange AvatarStandInDistance = new(0f, 150f, 5f, 10f);
+    public static readonly SettingRange AvatarFullDetailCount = new(0f, 64f, 1f, 2f);
     // Point and spot lights casting at once, desktop and headset alike. Sixteen is already past the
     // renderer's own cap of 64 shadow passes a frame, which is about ten point lights.
     public static readonly SettingRange ShadowedLights = new(0f, 16f, 1f);
     // Updates a second for a moving thing's shadow; 0 is every frame, otherwise at least 5.
     public static readonly SettingRange MovingShadowRate = new(0f, 60f, 5f, 5f);
-    public static readonly SettingRange Exposure = new(1f, 16f, 0.5f);
     public static readonly SettingRange Bloom = new(0f, 2f, 0.05f);
     // Off at 0. The renderer takes the strength on a wider scale; the applier maps it.
     public static readonly SettingRange AmbientOcclusion = new(0f, 1f, 0.05f);
-    // 1 is the untouched image on both. Contrast past 1.5 crushes the shadows the tonemapper just
-    // saved, and saturation at 0 is a legitimate greyscale.
-    public static readonly SettingRange Contrast = new(0.5f, 1.5f, 0.05f);
-    public static readonly SettingRange Saturation = new(0f, 2f, 0.05f);
     public static readonly SettingRange SnapTurnAngle = new(10f, 90f, 5f);
     public static readonly SettingRange PhotoTimerSeconds = new(2f, 30f, 1f);
     public static readonly SettingRange SmoothTurnSpeed = new(30f, 360f, 5f);
@@ -138,6 +167,19 @@ public static class SettingsCatalog
     // ceiling is far past anything a session pulls down.
     public static readonly SettingRange AssetCacheGigabytes = new(1f, 200f, 1f);
 
+    // Off (any free port), or a first port with room above it for the worlds hosted after it.
+    public static readonly SettingRange HostingPort = new(0f, 65504f, 0f, 1024f);
+
     // How bright the desktop page draws the screen. Floored so the picture can never be dimmed away.
     public static readonly SettingRange DesktopBrightness = new(0.2f, 1f, 0.05f);
+
+    // Who can join a world you host before you change it: the levels the Session screen offers an ordinary
+    // world, Private unless picked otherwise.
+    public static readonly SettingChoice<World.WorldAccessLevel> DefaultJoinLevel = new(World.WorldAccessLevel.Private,
+        World.WorldAccessLevel.Private, World.WorldAccessLevel.LAN, World.WorldAccessLevel.Contacts,
+        World.WorldAccessLevel.ContactsPlus, World.WorldAccessLevel.Anyone);
+
+    // The same for a world hosted for a group, kept by the group rather than by you: members only, or anyone.
+    public static readonly SettingChoice<World.WorldAccessLevel> GroupJoinLevel = new(World.WorldAccessLevel.GroupMembers,
+        World.WorldAccessLevel.GroupMembers, World.WorldAccessLevel.GroupPublic);
 }

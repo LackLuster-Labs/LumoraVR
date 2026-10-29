@@ -3,6 +3,7 @@
 
 using System;
 using System.Collections.Generic;
+using Lumora.Core.Assets;
 using Lumora.Core.Networking.Sync;
 
 namespace Lumora.Core.Persistence;
@@ -26,6 +27,32 @@ public sealed class SaveControl
     // graph save uses this to null out references pointing outside the saved subtree (and its
     // collected dependencies), keeping the produced graph self-contained.
     public Func<RefID, RefID>? ReferenceFilter { get; set; }
+
+    // Slots a save leaves out whole, and asset components it leaves out unless something it does write points at
+    // them: what a world save may not carry, another account's protected objects and the files only they use.
+    private HashSet<Slot>? _leftOutSlots;
+    private HashSet<Component>? _leftOutAssets;
+
+    // call before ReserveSubtreeIdentities
+    public void LeaveOut(HashSet<Slot> slots, HashSet<Component> assets)
+    {
+        _leftOutSlots = slots;
+        _leftOutAssets = assets;
+    }
+
+    public bool LeavesOut(Slot slot) => _leftOutSlots != null && _leftOutSlots.Contains(slot);
+
+    public bool LeavesOut(Component component)
+        => _leftOutAssets != null && _leftOutAssets.Contains(component)
+            && !(component is IAssetProvider provider && _referencedAssets != null && _referencedAssets.Contains(provider));
+
+    // The object a save was asked for is written whether or not it is kept with its world: a panel kept out of
+    // world saves still goes into an inventory whole, its own components with it. Its own children, and
+    // everything else, by their persistence as ever. -xlinka
+    public bool Writes(Slot slot) => slot.IsPersistent || ReferenceEquals(slot, SaveRoot);
+
+    public bool Writes(Component component)
+        => component.IsPersistent || component.Persistent && component.Slot != null && ReferenceEquals(component.Slot, SaveRoot);
 
     public SaveControl(IWorldElement saveRoot, ReferenceTranslator referenceTranslator)
     {
@@ -61,14 +88,14 @@ public sealed class SaveControl
     // call once, before saving
     public void ReserveSubtreeIdentities(Slot root)
     {
-        if (root == null || !root.IsPersistent)
+        if (root == null || !Writes(root) || LeavesOut(root))
             return;
 
         ReserveWorkerIdentities(root);
 
         foreach (var component in root.Components)
         {
-            if (component != null && component.IsPersistent)
+            if (component != null && Writes(component))
                 ReserveWorkerIdentities(component);
         }
 
@@ -115,6 +142,8 @@ public sealed class SaveControl
                 // The raw RefID, not the resolved target: it is exactly what SyncRef.Save writes, and it
                 // costs no registry lookup.
                 Reserve(syncRef.Value);
+                if (_referencedAssets != null && syncRef.Target is IAssetProvider asset)
+                    _referencedAssets.Add(asset);
                 break;
             default:
                 // Lists, sync objects and composite entries: a texture on a material's property is a
@@ -123,6 +152,102 @@ public sealed class SaveControl
                     ReserveMemberIdentities(child);
                 break;
         }
+    }
+
+    // ASSETS THE TREE DOES NOT HOLD
+    // A world save writes the persistent tree and nothing else, but a persistent surface can wear a material
+    // that lives where the save never goes: an orb seated in a tool someone is holding (users are not saved),
+    // an orb parked by an undoable delete, anything on a non-persistent slot. Every one of those references
+    // loaded back empty. The reserve walk already visits every reference the save writes, so it notes the
+    // providers they point at, and the save writes the ones its tree does not hold beside it. -xlinka
+    private HashSet<IAssetProvider>? _referencedAssets;
+
+    // call before ReserveSubtreeIdentities
+    public void TrackReferencedAssets() => _referencedAssets ??= new HashSet<IAssetProvider>();
+
+    // What a save of root has to write beside its tree: the tracked providers it does not write, the unwritten
+    // providers those point at in turn (a kept material needs its texture too), and whole the slots a kept asset
+    // is nothing without (a shader graph's nodes). A kept asset living in a carried slot goes with that slot.
+    // Both lists come out ordered by RefID so an unchanged world hashes the same.
+    public void CollectUnsavedAssets(Slot root, List<Component> kept, List<Slot> carried)
+    {
+        if (_referencedAssets == null || root == null)
+            return;
+
+        var carriedSaved = new HashSet<Slot>();
+        var seen = new HashSet<Component>();
+        var queue = new Queue<Component>();
+
+        bool Written(Component component)
+            => component.IsDestroyed || component.IsLocalElement
+            || (component.IsPersistent && (carriedSaved.Contains(component.Slot) || SlotWrittenUnder(component.Slot, root)));
+
+        void Consider(IWorldElement? element)
+        {
+            if (element is IAssetProvider and Component component && !Written(component) && seen.Add(component))
+                queue.Enqueue(component);
+        }
+
+        void ConsiderReferencesOf(Worker worker)
+        {
+            for (int i = 0; i < worker.SyncMemberCount; i++)
+            {
+                if (worker.GetSyncMember(i) is not { } member)
+                    continue;
+                foreach (var target in Worker.CollectMemberReferences(member, assetRefOnly: true, persistentOnly: false))
+                    Consider(target);
+            }
+        }
+
+        foreach (var asset in _referencedAssets)
+            Consider(asset);
+
+        while (queue.Count > 0)
+        {
+            var component = queue.Dequeue();
+            kept.Add(component);
+            ConsiderReferencesOf(component);
+            if (component is not IAssetSlotDependencies carrier)
+                continue;
+            foreach (var slot in carrier.SlotDependencies)
+            {
+                if (slot == null || slot.IsDestroyed || slot.IsLocalElement || !slot.IsPersistent
+                    || carriedSaved.Contains(slot) || SlotWrittenUnder(slot, root))
+                    continue;
+                var subtree = new HashSet<Slot>();
+                slot.GenerateSavedHierarchy(subtree);
+                carried.RemoveAll(subtree.Contains);
+                carried.Add(slot);
+                carriedSaved.UnionWith(subtree);
+                foreach (var held in subtree)
+                {
+                    ConsiderReferencesOf(held);
+                    foreach (var inner in held.Components)
+                    {
+                        if (inner.IsPersistent)
+                            ConsiderReferencesOf(inner);
+                    }
+                }
+            }
+        }
+
+        kept.RemoveAll(component => component.IsPersistent && carriedSaved.Contains(component.Slot));
+        kept.Sort(ByRefID);
+        carried.Sort(ByRefID);
+    }
+
+    private static int ByRefID(IWorldElement a, IWorldElement b) => a.ReferenceID.RawValue.CompareTo(b.ReferenceID.RawValue);
+
+    // Whether a save of root writes this slot: it hangs from root down a line of persistent, shared slots.
+    private static bool SlotWrittenUnder(Slot? slot, Slot root)
+    {
+        while (slot != null && !ReferenceEquals(slot, root))
+        {
+            if (slot.IsLocalElement || !slot.IsPersistent)
+                return false;
+            slot = slot.Parent;
+        }
+        return slot != null;
     }
 
     private void Reserve(RefID target)

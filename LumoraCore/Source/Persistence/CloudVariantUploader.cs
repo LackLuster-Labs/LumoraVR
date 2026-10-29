@@ -39,16 +39,17 @@ public static class CloudVariantUploader
     // has not made yet, stores each with its metadata and registers them against baseHash. The stored
     // blobs come back for the item's manifest, so they count toward its owner's storage.
     //
-    // The service is asked first. Once any variant of the texture is registered, the first registration
-    // of an id stays and readers use it, so nothing is made and nothing is sent. Otherwise each variant
+    // The service is asked first. Registered rungs stay as they are; missing rungs of the current encoding
+    // are filled in, including when an older encoding is already registered. Otherwise each variant
     // is registered before it is stored, and only a 404 (the service lacks the blob) stores it and
     // registers again. A 403 means someone else uploaded the texture first and only they may register
     // its variants, so nothing more of it goes.
     //
     // The base is already up, so a variant that does not make it only costs its readers the original:
-    // it is logged and the rest still go. They go one at a time, read from the database as they are
-    // sent, sidecar first and then the rungs smallest first, the order a reader wants them in.
-    // Cancellation stops it between variants with the usual OperationCanceledException. -xlinka
+    // it is logged and the rest still go. The sidecar goes first, alone, since a reader wants it before any
+    // rung and its answer says whether this account may send the rest; then the rungs all go together,
+    // each read from the database as it is sent. Cancellation stops it with the usual
+    // OperationCanceledException. -xlinka
     public static async Task<IReadOnlyList<CloudAssetEntry>> UploadAsync(LocalDB db, string localUri, string baseHash, ICloudUploadSink sink,
         CancellationToken ct)
     {
@@ -58,7 +59,9 @@ public static class CloudVariantUploader
         ct.ThrowIfCancellationRequested();
 
         var listed = await sink.ListVariantsAsync(baseHash, ct).ConfigureAwait(false);
-        if (listed is { Count: > 0 })
+        var known = await TextureVariantStore.TryLoadMetadataAsync(db, localUri).ConfigureAwait(false);
+        if (known != null && listed != null && System.Linq.Enumerable.Contains(listed, TextureVariantStore.MetadataSuffix)
+            && System.Linq.Enumerable.All(TextureVariantStore.UploadPlan(known), id => System.Linq.Enumerable.Contains(listed, id.Identifier)))
             return sent;
         ct.ThrowIfCancellationRequested();
 
@@ -69,24 +72,28 @@ public static class CloudVariantUploader
             return sent;
         }
 
-        var wanted = new List<(string Id, string? Uri, string Extension)>
+        var (sidecar, refused) = await SendAsync(db, TextureVariantStore.GetMetadataUri(localUri), baseHash, TextureVariantStore.MetadataSuffix,
+            TextureVariantStore.MetadataExtension, sink, ct).ConfigureAwait(false);
+        if (refused)
         {
-            (TextureVariantStore.MetadataSuffix, TextureVariantStore.GetMetadataUri(localUri), TextureVariantStore.MetadataExtension),
-        };
-        foreach (var id in TextureVariantStore.UploadPlan(metadata))
-            wanted.Add((id.Identifier, TextureVariantStore.GetVariantUri(localUri, id), TextureVariantStore.VariantExtension));
+            Logging.Logger.Debug($"CloudVariantUploader: {Short(baseHash)} was first uploaded by another account, so this machine sends none of its variants");
+            return sent;
+        }
+        if (sidecar != null)
+            sent.Add(sidecar);
+        ct.ThrowIfCancellationRequested();
 
-        foreach (var (variantId, uri, extension) in wanted)
+        var rungs = new List<Task<(CloudAssetEntry? Entry, bool Refused)>>();
+        foreach (var id in TextureVariantStore.UploadPlan(metadata))
         {
-            ct.ThrowIfCancellationRequested();
-            var (entry, refused) = await SendAsync(db, uri, baseHash, variantId, extension, sink, ct).ConfigureAwait(false);
+            if (listed != null && System.Linq.Enumerable.Contains(listed, id.Identifier))
+                continue;
+            rungs.Add(SendAsync(db, TextureVariantStore.GetVariantUri(localUri, id), baseHash, id.Identifier, TextureVariantStore.VariantExtension, sink, ct));
+        }
+        foreach (var (entry, _) in await Task.WhenAll(rungs).ConfigureAwait(false))
+        {
             if (entry != null)
                 sent.Add(entry);
-            if (refused)
-            {
-                Logging.Logger.Debug($"CloudVariantUploader: {Short(baseHash)} was first uploaded by another account, so this machine sends none of its variants");
-                break;
-            }
         }
         return sent;
     }

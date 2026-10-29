@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using System.Threading.Tasks;
 using Lumora.Core;
 using Lumora.Core.Helpers;
+using Lumora.Core.Localization;
 using Lumora.Core.Networking.Session;
 using Lumora.Core.Templates;
 using Lumora.Nexus.Cloud;
@@ -270,17 +271,43 @@ public class WorldManager : IDisposable
     }
 
     // Everything of the setup after the template, for both the one-call build and the staged one.
-    private static void FinishSessionSetup(World w, Action<World>? init, WorldMode mode, GroupHosting? group)
+    private static void FinishSessionSetup(World w, Action<World>? init, WorldMode mode, GroupHosting? group,
+        World.WorldAccessLevel? access = null)
     {
         init?.Invoke(w);
         // A NEW world gets the host-picked mode; a world LOADED by init (e.g. a saved world)
         // already has its WorldSettings (with its own mode) - don't create a second one or
         // clobber the saved mode. Set before StartRunning so the permission preset applies.
-        if (w.RootSlot?.GetComponent<WorldSettings>() == null)
+        // Settings the template build attached by reading the mode early are still defaults, so they
+        // take the host's pick too; otherwise a Social or Event host came up Builder. -xlinka
+        var settings = w.RootSlot?.GetComponent<WorldSettings>();
+        if (settings == null || settings.SeededByEngine)
             w.Mode = mode;
         // Advertise the world's mode in the session listing so the browser can tag it.
         WorldModePermissions.StampModeTag(w.Session?.Metadata?.Tags, w.Mode);
+        if (group == null && access.HasValue)
+            SeedAccessLevel(w, access.Value);
         ApplyGroupHosting(w, group);
+    }
+
+    // The join level a world is hosted at, written before it runs for the same reason the group's is: the
+    // live handler would re-advertise mid-create. The session's start only knows four visibilities, so
+    // Friends+ needs this to land as itself, and a saved world needs it over the level its file carried.
+    // The listing is moved to match when it is not already there. -xlinka
+    private static void SeedAccessLevel(World w, World.WorldAccessLevel level)
+    {
+        var config = w?.Configuration;
+        if (w == null || config == null)
+            return;
+
+        var visibility = WorldSettings.ToVisibility(level);
+        using (w.EnterConfigEdit())
+        {
+            config.AccessLevel.Value = level;
+            config.IsPublic.Value = visibility == SessionVisibility.Public;
+        }
+        if (w.Session?.Metadata is { } metadata && metadata.Visibility != visibility)
+            w.Session.SetVisibility(visibility);
     }
 
     // The group half of hosting, applied here so it lands next to the mode tag and before the world runs.
@@ -320,13 +347,17 @@ public class WorldManager : IDisposable
     // A group world always registers publicly, whichever group tier it is on: the browser's Groups filter
     // is how a member finds it and the door is what keeps everybody else out. Group+ is not offered by
     // anything that calls this, because with no contacts system it would be the same world as members
-    // only wearing a different word. -xlinka
-    public World HostNewWorld(string templateName, string worldName, SessionVisibility visibility, int maxUsers,
+    // only wearing a different word.
+    //
+    // The access level is the create form's pick, which starts out at the account's default join level. A group
+    // world takes the group's tier from the hosting record instead. -xlinka
+    public World HostNewWorld(string templateName, string worldName, World.WorldAccessLevel access, int maxUsers,
         WorldMode mode = WorldMode.Builder, GroupHosting? group = null)
     {
-        ushort port = (ushort)(SimpleIpHelpers.GetAvailablePortUdp(10) ?? 6000);
-        var announced = group != null ? SessionVisibility.Public : visibility;
-        var world = StartTemplateSession(worldName, port, LocalHostName, templateName, announced, System.Math.Max(1, maxUsers), mode, group);
+        ushort port = SimpleIpHelpers.HostingPortUdp();
+        access = SettingsCatalog.DefaultJoinLevel.Clamp(access);
+        var announced = group != null ? SessionVisibility.Public : WorldSettings.ToVisibility(access);
+        var world = StartTemplateSession(worldName, port, LocalHostName, templateName, announced, System.Math.Max(1, maxUsers), mode, group, access);
         if (world != null)
             SwitchToWorld(world);
         return world!;
@@ -336,14 +367,14 @@ public class WorldManager : IDisposable
     // saved world is loaded, so hosting one never freezes the frame it was asked for in. The mode and group
     // setup land after the last step, still before the world runs. -xlinka
     private World StartTemplateSession(string name, ushort port, string hostUserName, string templateName,
-        SessionVisibility visibility, int maxUsers, WorldMode mode, GroupHosting? group)
+        SessionVisibility visibility, int maxUsers, WorldMode mode, GroupHosting? group, World.WorldAccessLevel access)
     {
         try
         {
             LumoraLogger.Log($"WorldManager: Starting session '{name}' on port {port} with template '{templateName}', visibility {visibility}, max {maxUsers}, mode {mode}");
 
             var world = World.StartSessionDeferred(_engine, name, port, hostUserName, visibility, maxUsers, () => true,
-                (w, _) => WorldTemplates.ApplyTemplateStaged(w, templateName, () => FinishSessionSetup(w, null, mode, group)));
+                (w, _) => WorldTemplates.ApplyTemplateStaged(w, templateName, () => FinishSessionSetup(w, null, mode, group, access)));
 
             AddWorld(world);
 
@@ -358,19 +389,34 @@ public class WorldManager : IDisposable
     }
 
     // Builds it into a blank world (so a template's default content isn't duplicated) and loads the save; the
-    // world's mode comes from the file. Returns the new world, or null on failure.
-    public World OpenSavedWorld(string path, string worldName = null!)
+    // world's mode comes from the file. Returns the new world, or null on failure. A save that is not a cloud
+    // record (a file on this machine) loses another account's sealed objects on the way in.
+    //
+    // Opening a save hosts a new session of it, so it opens at the account's default join level unless the
+    // caller names one (the favourite home stays private, as the home does). The level the file was saved at
+    // was never what the listing said anyway: it opened unlisted whatever the Session screen showed. A save
+    // made while hosted for a group keeps its own, because opening it here is not hosting it for the group.
+    // -xlinka
+    public World OpenSavedWorld(string path, string worldName = null!, bool fromCloudRecord = false,
+        World.WorldAccessLevel? access = null)
     {
         if (string.IsNullOrEmpty(path) || !System.IO.File.Exists(path))
             return null!;
 
         var name = string.IsNullOrEmpty(worldName) ? System.IO.Path.GetFileNameWithoutExtension(path) : worldName;
-        ushort port = (ushort)(SimpleIpHelpers.GetAvailablePortUdp(10) ?? 6000);
+        var level = SettingsCatalog.DefaultJoinLevel.Clamp(access ?? EngineSettings.DefaultJoinLevel);
+        ushort port = SimpleIpHelpers.HostingPortUdp();
         // Read + decompress + parse on a task, integrate on the world thread once it lands.
         var world = StartSessionDeferred(name, port, LocalHostName, "", SessionVisibility.Private,
             16,
             () => Persistence.WorldStorage.ReadTree(path),
-            (w, tree) => Persistence.WorldStorage.IntegrateTreeStaged(w, tree, path));
+            (w, tree) => Persistence.WorldStorage.IntegrateTreeStaged(w, tree, path, loaded =>
+            {
+                if (loaded && !fromCloudRecord)
+                    Security.ItemSeals.DropForeignOnLoad(w.RootSlot);
+                if (string.IsNullOrEmpty(w.Configuration?.HostGroupId.Value))
+                    SeedAccessLevel(w, level);
+            }));
         if (world != null)
             SwitchToWorld(world);
         return world!;
@@ -386,6 +432,12 @@ public class WorldManager : IDisposable
     // works for any registered manager - which is why Discord Ask-to-Join hands us the whole URI.
     public World JoinSession(string name, Uri uri)
     {
+        // The loading service holds such a join on its panel; this bare path has no panel, so it only refuses.
+        if (AccountEmail.JoinsHeld)
+        {
+            LumoraLogger.Warn($"WorldManager: not joining {uri}, the account's email is not verified");
+            return null!;
+        }
         try
         {
             LumoraLogger.Log($"WorldManager: Joining session {uri}");
@@ -403,6 +455,11 @@ public class WorldManager : IDisposable
 
     public async Task<World> JoinSessionAsync(string name, string address, ushort port)
     {
+        if (await EmailJoinGate.HoldsAsync())
+        {
+            LumoraLogger.Warn($"WorldManager: not joining {address}:{port}, the account's email is not verified");
+            return null!;
+        }
         try
         {
             LumoraLogger.Log($"WorldManager: Joining session at {address}:{port}");
@@ -458,6 +515,14 @@ public class WorldManager : IDisposable
         }
     }
 
+    // Leaves a joined world the way a lost connection would: focus goes home first, then the world closes.
+    public void LeaveWorld(World world)
+    {
+        if (world == null || world.IsDestroyed || IsLocalHome(world))
+            return;
+        OnWorldDisconnected(world);
+    }
+
     private void OnWorldDisconnected(World disconnectedWorld)
     {
         LumoraLogger.Log($"WorldManager: World '{disconnectedWorld.WorldName.Value}' disconnected");
@@ -496,10 +561,33 @@ public class WorldManager : IDisposable
         DestroyWorld(disconnectedWorld);
     }
 
+    // The home is where every closed world sends you and what the userspace was set up against, so it stays
+    // open for the whole run. Shutdown disposes it directly and never comes through here. -xlinka
+    public static bool IsLocalHome(World? world)
+        => world != null && world.WorldName?.Value == "LocalHome";
+
+    // Only the words change: lookups and the saved home still go by WorldName "LocalHome". -xlinka
+    public static readonly LocaleText LocalHomeTitle = "World.Local".AsLocale("Local");
+
+    public static string DisplayName(World? world)
+    {
+        if (world == null)
+            return string.Empty;
+        if (IsLocalHome(world))
+            return LocalHomeTitle.Resolve();
+        string? name = world.WorldName?.Value;
+        return string.IsNullOrEmpty(name) ? world.Name : name;
+    }
+
     public void DestroyWorld(World world)
     {
         if (world == null)
             return;
+        if (IsLocalHome(world) && !world.IsDisposed)
+        {
+            LumoraLogger.Warn("WorldManager: The local home cannot be closed");
+            return;
+        }
 
         lock (_destroyWorlds)
         {

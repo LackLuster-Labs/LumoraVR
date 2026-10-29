@@ -143,9 +143,16 @@ public class Engine : IDisposable
     public LumoraClient? CDNClient { get; private set; }
     public ContentCache? ContentCache { get; private set; }
 
+    // The signed-in account's friends, requests, blocks and chats. Null until the service is set up.
+    public Lumora.Core.Social.ISocialService? Social { get; set; }
+
     private Action<Lumora.Nexus.Cloud.Cdn.RepresentedGroupInfo?>? _representedGroupChanged;
     private Action? _accountIdentityChanged;
+    private Action<World>? _worldFocused;
     private int _accountRefresh;
+
+    // Work handed to the update from any thread. See RunOnUpdate.
+    private readonly System.Collections.Concurrent.ConcurrentQueue<Action> _updateWork = new();
 
     // The account this machine is signed into, as the accounts service shows it to everyone else. Null
     // while signed out, and until the first answer lands after a sign in.
@@ -224,7 +231,7 @@ public class Engine : IDisposable
     // Environment.OSVersion.Platform above cannot answer this: it reports Unix for Linux AND for
     // Android, which is precisely the distinction anything platform-gated needs. The core has no way to
     // ask the renderer, so the renderer tells it, the same way the texture cache is told which block
-    // formats this device has. Defaults to the desktop case so a harness with no platform layer behaves
+    // formats this device has. Defaults to the desktop case so a test with no platform layer behaves
     // as it always did. -xlinka
     public static Lumora.Core.Platform CurrentPlatform { get; set; } = Lumora.Core.Platform.Windows;
 
@@ -385,6 +392,7 @@ public class Engine : IDisposable
     // the session directory advertises a placeholder version. -xlinka
     private static void WireNexus()
     {
+        Persistence.LocalEncryption.WireSealedStorage();
         NexusRuntime.AppVersion = EngineVersion.VersionString;
         NexusLog.EnableDebug = LumoraLogger.EnableDebug;
         NexusLog.Sink = (level, message) =>
@@ -412,6 +420,9 @@ public class Engine : IDisposable
         EngineWarmUp.Start();
 
         WireNexus();
+        // Looks at every assembly on a worker while the rest starts, so the build identity is ready before anyone
+        // hosts or joins.
+        Security.Integrity.GameIntegrity.Start();
 
         LumoraLogger.Log("=====================================");
         LumoraLogger.Log($"Lumora Engine v{EngineVersion.VersionString}");
@@ -454,12 +465,26 @@ public class Engine : IDisposable
             {
                 var deviceId = Environment.MachineName;
                 CDNClient = new LumoraClient(deviceId, "LumoraVR", EngineVersion.VersionString);
+                CDNClient.BuildProvider = () => Security.Integrity.BuildIdentity.TryGetHash(out var build) ? build : null;
+                Security.Integrity.IntegrityGuard.Attach(this);
                 AccountSettings.Attach(CDNClient);
+                Favourites.Attach(CDNClient);
+                FavouriteAvatar.Attach();
+                FavouriteHome.Attach();
+                FavouriteTrees.Attach(FavouriteKind.Inspector);
+                FavouriteKeyboard.Attach();
                 InventorySync.Attach(CDNClient);
+                AccountEmail.Attach(CDNClient);
                 OnlinePresence.Attach(CDNClient);
+                // Friends, requests, blocks and chats follow the account in through the client, and where this
+                // machine is goes out for its friends from whichever world has focus. -xlinka
+                var platform = OnlinePresence.PlatformName(CurrentPlatform);
+                Social = new Lumora.Core.Social.SocialService(new Lumora.Core.Social.CloudSocialBackend(CDNClient), RunOnUpdate,
+                    mode => Lumora.Core.Social.PresenceReporter.Build(WorldManager?.FocusedWorld, mode, platform));
                 var cachePath = Lumora.Core.Persistence.PathResolver.Resolve("Cache");
                 ContentCache = new ContentCache(CDNClient, cachePath);
                 AssetCacheBudget.Start();
+                CacheSealing.Start();
                 await Task.CompletedTask;
             }, cancellationToken);
 
@@ -494,6 +519,14 @@ public class Engine : IDisposable
                 _accountIdentityChanged = OnAccountIdentityChanged;
                 CDNClient.AccountIdentityChanged += _accountIdentityChanged;
             }
+            if (Social is Lumora.Core.Social.SocialService social && WorldManager != null)
+            {
+                _worldFocused = _ => social.ReportPresenceSoon();
+                WorldManager.WorldFocused += _worldFocused;
+            }
+
+            // The mark over this user's name while the streaming program records or streams, off the frame.
+            Photos.CaptureWatch.Start(RunOnUpdate);
 
             LumoraLogger.Log("Post-initialization setup...");
             ProcessStartupArguments();
@@ -583,7 +616,7 @@ public class Engine : IDisposable
 
         if (_localHomePort is null)
         {
-            _localHomePort = SimpleIpHelpers.GetAvailablePortUdp(10) ?? 6000;
+            _localHomePort = SimpleIpHelpers.HostingPortUdp();
         }
 
         // Load the saved home if one exists (build it into a blank world so the template's default
@@ -601,12 +634,18 @@ public class Engine : IDisposable
                     if (loaded)
                     {
                         Templates.LocalHomeWorldTemplate.RemoveRetired(w);
-                        return;
+                        Security.ItemSeals.DropForeignOnLoad(w.RootSlot);
                     }
-                    LumoraLogger.Warn("Engine: LocalHome save failed to load; falling back to template.");
-                    WorldTemplates.ApplyTemplate(w, "LocalHome");
+                    else
+                    {
+                        LumoraLogger.Warn("Engine: LocalHome save failed to load; falling back to template.");
+                        WorldTemplates.ApplyTemplate(w, "LocalHome");
+                    }
+                    // The home as it opened is what Exit and Save compares against.
+                    w.MarkContentSavedWhenSettled();
                 }))
-            : WorldManager?.StartSession("LocalHome", (ushort)_localHomePort.Value, GetHostUserName(), "LocalHome", null!);
+            : WorldManager?.StartSession("LocalHome", (ushort)_localHomePort.Value, GetHostUserName(), "LocalHome",
+                w => w.MarkContentSavedWhenSettled());
         if (world == null)
         {
             LumoraLogger.Error("Engine: Failed to start LocalHome session.");
@@ -661,6 +700,8 @@ public class Engine : IDisposable
                 }
                 if (!string.IsNullOrEmpty(id))
                 {
+                    // The account's own seals then check without a round trip.
+                    Security.SealCloud.Directory?.Prefetch(id);
                     var answer = await client.GetPlatformUserAsync(id);
                     if (answer.Success)
                         card = AccountCard.From(answer.Data);
@@ -744,74 +785,6 @@ public class Engine : IDisposable
             LumoraLogger.Warn($"Engine: join of {uri} not started, another join is still in progress");
     }
 
-    // Join via NAT punch-through: punch a hole to the session host through the relay
-    // server, then connect directly to the resolved endpoint.
-    public void JoinNatServer(string identifier)
-    {
-        if (string.IsNullOrWhiteSpace(identifier))
-        {
-            LumoraLogger.Warn("Engine: NAT join called with an empty session identifier.");
-            return;
-        }
-
-        var addr = Networking.Session.Session.SessionServerAddress;
-        var port = Networking.Session.Session.SessionServerPort;
-        LumoraLogger.Log($"Engine: NAT punch join for session '{identifier}' via {addr}:{port}");
-
-        var client = new SessionServerClient(addr, port);
-        var joined = false;
-
-        client.OnNATPunchSuccess += ep =>
-        {
-            if (joined) return;
-            joined = true;
-
-            LumoraLogger.Log($"Engine: NAT punch succeeded -> {ep}; connecting directly.");
-            var wm = WorldManager;
-
-            // The punch callback runs on the client's poll task; hop to the main
-            // update thread to create/join the world.
-            var punched = new UriBuilder("lnl", ep.Address.ToString(), ep.Port).Uri;
-            var hop = wm?.FocusedWorld ?? wm?.UserspaceWorld;
-            if (hop != null && !hop.IsDestroyed)
-                hop.RunSynchronously(() => JoinThroughLoader("RemoteWorld", punched));
-            else
-                JoinThroughLoader("RemoteWorld", punched);
-
-            // Hold the punch socket open briefly so the NAT mapping stays warm while
-            // the direct connection establishes, then release it. (Hard NATs that
-            // can't reuse the hole for a fresh socket fall back to relay.)
-            _ = Task.Delay(5000).ContinueWith(_ => client.Dispose(), TaskScheduler.Default);
-        };
-
-        _ = client.RequestNATPunchAsync(identifier).ContinueWith(t =>
-        {
-            if (t.IsFaulted)
-                LumoraLogger.Warn($"Engine: NAT punch request failed: {t.Exception?.GetBaseException().Message}");
-        }, TaskScheduler.Default);
-    }
-
-    // Join via relay server: tunnel the session through the relay when a direct or
-    // punched path isn't available.
-    public void JoinNatServerRelay(string identifier)
-    {
-        if (string.IsNullOrWhiteSpace(identifier))
-        {
-            LumoraLogger.Warn("Engine: Relay join called with an empty session identifier.");
-            return;
-        }
-
-        // Make sure the relay transport is available (Register dedups by type).
-        NetworkManagerRegistry.Register(new Networking.RelayNetworkManager());
-
-        var addr = Networking.Session.Session.SessionServerAddress;
-        var port = Networking.Session.Session.SessionServerPort;
-        LumoraLogger.Log($"Engine: relay join for session '{identifier}' via {addr}:{port}");
-
-        var relayUri = new Uri($"{Networking.RelayNetworkManager.SCHEME}://relay/{Uri.EscapeDataString(identifier)}");
-        JoinThroughLoader("RemoteWorld", relayUri);
-    }
-
     #endregion
 
     #region Update Loop
@@ -840,6 +813,7 @@ public class Engine : IDisposable
             double msInput = Lap();
 
             CoroutineManager?.Update((float)delta);
+            RunQueuedUpdateWork();
             double msCoroutines = Lap();
 
             // Before the worlds: an output folds the group volumes into its own gain while it builds
@@ -848,6 +822,8 @@ public class Engine : IDisposable
 
             WorldManager?.Update(delta);
             double msWorlds = Lap();
+
+            EngineSettings.SaveIfDue();
 
             ProcessFixedUpdates(delta);
             InputInterface?.SyncTrackingSpaceToFocusedLocalUser();
@@ -895,6 +871,31 @@ public class Engine : IDisposable
     }
 
     public EnginePhaseProfile LastEnginePhases { get; private set; }
+
+    // Runs the action on the engine's update, from whatever thread asks: once a frame, after the coroutines and
+    // before the worlds update, so what it changes in the dash shows the same frame. Whatever is queued when a
+    // pass begins runs in it; anything that work queues waits for the next frame rather than spinning this
+    // one. Nothing runs while the engine is not running. -xlinka
+    public void RunOnUpdate(Action action)
+    {
+        if (action != null)
+            _updateWork.Enqueue(action);
+    }
+
+    private void RunQueuedUpdateWork()
+    {
+        for (int count = _updateWork.Count; count > 0 && _updateWork.TryDequeue(out var action); count--)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                LumoraLogger.Error($"Engine: queued update work failed: {ex}");
+            }
+        }
+    }
 
     private void ProcessFixedUpdates(double delta)
     {
@@ -979,15 +980,32 @@ public class Engine : IDisposable
             CDNClient.AccountIdentityChanged -= _accountIdentityChanged;
             _accountIdentityChanged = null;
         }
+        if (WorldManager != null && _worldFocused != null)
+        {
+            WorldManager.WorldFocused -= _worldFocused;
+            _worldFocused = null;
+        }
+
+        DisposeSubsystem("CaptureWatch", Photos.CaptureWatch.Stop);
+
+        // Every way out comes through here, the window's own close button included, so this is where the
+        // last setting lands on disk and the account hears of it, before the client it goes through is gone.
+        DisposeSubsystem("Settings", () =>
+        {
+            EngineSettings.Commit();
+            AccountSettings.Flush(TimeSpan.FromSeconds(3));
+        });
 
         // Dispose in reverse initialization order
         DisposeSubsystem("WorldManager", () => { WorldManager?.Dispose(); WorldManager = null!; });
         DisposeSubsystem("AudioSystem", () => { AudioSystem?.Dispose(); AudioSystem = null!; });
         DisposeSubsystem("AudioManager", () => { AudioManager.Dispose(); });
+        // The live feed and the presence reports stop before the client they go through.
+        DisposeSubsystem("Social", () => { (Social as IDisposable)?.Dispose(); Social = null; });
         // The queue stops before the client it sends through goes; what it had not sent waits for next run.
         DisposeSubsystem("InventorySync", () => InventorySync.Use(null));
         DisposeSubsystem("OnlinePresence", OnlinePresence.Stop);
-        DisposeSubsystem("ContentCache", () => { AssetCacheBudget.Stop(); ContentCache?.Dispose(); ContentCache = null; CDNClient?.Dispose(); CDNClient = null; });
+        DisposeSubsystem("ContentCache", () => { AssetCacheBudget.Stop(); CacheSealing.Stop(); ContentCache?.Dispose(); ContentCache = null; CDNClient?.Dispose(); CDNClient = null; });
         DisposeSubsystem("AssetManager", () => { AssetManager?.Dispose(); AssetManager = null!; });
         DisposeSubsystem("CoroutineManager", () => { CoroutineManager?.Dispose(); CoroutineManager = null!; });
         DisposeSubsystem("InputInterface", () => { InputInterface?.Dispose(); InputInterface = null!; });

@@ -43,7 +43,12 @@ public static class EngineWarmUp
         }
         catch (Exception ex)
         {
-            LumoraLogger.Warn($"Warm-up stopped early: {ex.Message}");
+            // A static constructor or a reflection call fails as "Exception has been thrown by the target of an
+            // invocation", which names nothing; the inner one says what broke and where (seen on a Frame 10-30).
+            var cause = ex;
+            while (cause is System.Reflection.TargetInvocationException or TypeInitializationException && cause.InnerException != null)
+                cause = cause.InnerException;
+            LumoraLogger.Warn($"Warm-up stopped early: {cause.GetType().Name}: {cause.Message}\n{cause.StackTrace}");
         }
     }
 }

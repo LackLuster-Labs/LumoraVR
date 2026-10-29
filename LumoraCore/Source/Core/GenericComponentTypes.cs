@@ -73,6 +73,18 @@ public static class GenericComponentTypes
         typeof(int4),
         typeof(BoundingBox),
         typeof(float3x3),
+        typeof(int2),
+        typeof(int3),
+        typeof(bool2),
+        typeof(bool3),
+        typeof(bool4),
+        typeof(float2x2),
+        typeof(float4x4),
+        typeof(Rect),
+        typeof(SphericalHarmonicsL2),
+        typeof(char),
+        typeof(decimal),
+        typeof(DateTime),
     };
 
     // Every enum a component actually declares a Sync field of.

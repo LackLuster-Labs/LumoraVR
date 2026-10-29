@@ -122,6 +122,7 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
     public readonly Sync<string> GroupTag = new();
     public readonly Sync<string> GroupName = new();
     public readonly Sync<string> GroupIconHash = new();
+    public readonly Sync<string> GroupBannerHash = new();
     public readonly Sync<string> GroupRole = new();
     public readonly Sync<Math.color> GroupColor = new();
 
@@ -134,10 +135,24 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
     public readonly Sync<bool> IsSupporter = new();
     public readonly Sync<string> SupporterTier = new();
     public readonly Sync<Math.color> SupporterColor = new();
+    // How the tier's name tag moves ("Animated"), empty for a still one. The game keeps no list of tiers:
+    // the tier file on the accounts service says which ones move.
+    public readonly Sync<string> SupporterStyle = new();
     // Set by the accounts service's staff on the account record, never by anybody in a session.
     public readonly Sync<bool> IsStaff = new();
     public readonly UserStreamStorage userStreams = new();
     public readonly Sync<uint> streamConfiguration = new();
+    // This user's own peer asking for a new body: theirs is gone or broken, or they pressed Respawn. The
+    // host builds one and clears it. Kept last so every member before it keeps its place on the wire.
+    public readonly Sync<bool> RespawnRequest = new();
+    // What this user's own machine sees of the streaming program on it, for the mark over their name. Only that machine writes it, the same as IsLive. Last for the same reason as the one above.
+    public readonly Sync<Photos.CaptureState> Capture = new();
+    // This user's own machine in the world's chat: whether they are typing a line now, and their last few lines,
+    // each with its number (ChatText packs them). Several lines, not one, so a line sent while the one before
+    // is still on its way never writes over it before anybody read it. Only that machine writes either. Last
+    // for the same reason as the two above. -xlinka
+    public readonly Sync<bool> ChatTyping = new();
+    public readonly Sync<string> ChatLog = new();
 
     // Network statistics (non-synced)
     public ulong SentBytes { get; set; }
@@ -222,6 +237,10 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
 
     string? IPermissionActor.AccountKey => AccountId?.Value;
 
+    // This user's own yes, read off the record only their machine writes.
+    bool IPermissionActor.AllowsEditsBy(IPermissionActor other)
+        => other != null && Networking.Session.SessionEditConsent.Allows(this, other.Id);
+
     // Host side, from the proven account's record. Null clears the card, which is also what a signed-out
     // or guest user carries. Every write is equality-gated: a Sync field has no gate of its own
     // and this runs on every world the local user is in whenever the cloud client re-reads the profile, so
@@ -232,6 +251,7 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
         SetIfChanged(GroupTag, group?.Tag ?? string.Empty);
         SetIfChanged(GroupName, group?.Name ?? string.Empty);
         SetIfChanged(GroupIconHash, group?.IconHash ?? string.Empty);
+        SetIfChanged(GroupBannerHash, group?.BannerHash ?? string.Empty);
         SetIfChanged(GroupRole, group?.Role ?? string.Empty);
 
         var tint = ParseGroupColor(group?.Color);
@@ -259,8 +279,10 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
         var supporterColor = card?.SupporterColor ?? default;
         if (!SupporterColor.Value.Equals(supporterColor))
             SupporterColor.Value = supporterColor;
+        SetIfChanged(SupporterStyle, card?.SupporterStyle ?? string.Empty);
         if (IsStaff.Value != (card?.IsStaff ?? false))
             IsStaff.Value = card?.IsStaff ?? false;
+        SetIfChanged(AccountKind, card?.AccountKind ?? string.Empty);
         ApplyRepresentedGroup(card?.Group);
     }
 
@@ -419,6 +441,27 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
         }
     }
 
+    // Someone this machine's account blocked: unseen and unheard here, and only here. Off the social
+    // service's snapshot, so it holds whichever world they turn up in and lifts the moment they are unblocked.
+    public bool IsBlockedByMe
+    {
+        get
+        {
+            var account = AccountId?.Value;
+            return !string.IsNullOrEmpty(account) && !IsLocal && Engine.Current?.Social?.IsBlocked(account) == true;
+        }
+    }
+
+    // On this machine's account's friends list, off the same snapshot.
+    public bool IsFriendOfMine
+    {
+        get
+        {
+            var account = AccountId?.Value;
+            return !string.IsNullOrEmpty(account) && !IsLocal && Engine.Current?.Social?.IsFriend(account) == true;
+        }
+    }
+
     public bool IsAudioLocallyBlocked
     {
         get
@@ -444,9 +487,41 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
     private Components.UserRoot _root = null!;
     public readonly SyncRef<Components.UserRoot> UserRootRef = new();
 
+    // INVITES THROUGH THE SESSION
+    //
+    // InviteAsks is this user's own machine asking the host to let accounts in: numbered lines, the last few,
+    // shaped like ChatLog. InviteBook is only ever filled on the host's own user: each account the host let in
+    // by invite and until when, and the asks it turned down, so an asker can see how its ask went. The door
+    // reads the book on the host and nothing else; a joiner saying it was invited counts for nothing. Both sit
+    // after every other member so the rest keep their places on the wire. -xlinka
+    public readonly Sync<string> InviteAsks = new();
+    public readonly Sync<string> InviteBook = new();
+
+    // What kind of account this user proved: a person ("User"), or a bot or server login, as the accounts
+    // service has it on the record. Host written with the rest of the card, empty on a guest. Last so every
+    // member before it keeps its place on the wire. -xlinka
+    public readonly Sync<string> AccountKind = new();
+
+    // EDITING SOMEBODY ELSE
+    //
+    // EditAsks is this user's own machine asking people in the session to let it edit them: numbered lines, the last
+    // few, each naming whom it asks. EditGrants is this user's own answers: whom they let change their body, their
+    // avatar and what they hold for this session, and whom they turned down until when. Only this user's machine
+    // writes either, and every peer's gate reads EditGrants, so what an asker claims counts for nothing. Last so every
+    // member before them keeps its place on the wire. -xlinka
+    public readonly Sync<string> EditAsks = new();
+    public readonly Sync<string> EditGrants = new();
+
+    public bool IsBot => Nexus.Cloud.Cdn.AccountKinds.IsBot(AccountKind.Value);
+
+    // On the host and for yourself it is the root registered here; for everyone else on a guest it is the one
+    // the reference names, as long as that root says it is theirs. Without the fallback a guest saw no other
+    // user's body at all: no head to measure voices from, no one to face, a mirror of just yourself. -xlinka
     public Components.UserRoot Root
     {
-        get => _root;
+        get => _root ?? (UserRootRef.Target is { IsDestroyed: false } named && ReferenceEquals(named.TargetUser.Target, this)
+            ? named
+            : null!);
         set
         {
             if (World?.IsAuthority == true || World?.LocalUser == this)
@@ -503,11 +578,14 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
             IsSupporter.MarkHostOnly();
             SupporterTier.MarkHostOnly();
             SupporterColor.MarkHostOnly();
+            SupporterStyle.MarkHostOnly();
             IsStaff.MarkHostOnly();
+            AccountKind.MarkHostOnly();
             GroupId.MarkHostOnly();
             GroupTag.MarkHostOnly();
             GroupName.MarkHostOnly();
             GroupIconHash.MarkHostOnly();
+            GroupBannerHash.MarkHostOnly();
             GroupRole.MarkHostOnly();
             GroupColor.MarkHostOnly();
             PacketLoss.MarkHostOnly();
@@ -516,6 +594,45 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
             StreamMessages.MarkHostOnly();
             ControlMessages.MarkHostOnly();
             IsLagging.MarkHostOnly();
+            // what a machine says about itself: nobody else's peer may say it for them
+            IsLive.MarkOwnUserOnly();
+            Capture.MarkOwnUserOnly();
+            ChatTyping.MarkOwnUserOnly();
+            ChatLog.MarkOwnUserOnly();
+            InviteAsks.MarkOwnUserOnly();
+            InviteBook.MarkOwnUserOnly();
+            EditAsks.MarkOwnUserOnly();
+            EditGrants.MarkOwnUserOnly();
+            // What a user reports about themselves, or asks for themselves. The host still writes them where it
+            // must (a moderation mute, clamping a voice cap, clearing a respawn ask): host writes are local and
+            // never judged by these rules. A guest writing them on someone else's record was allowed under a
+            // Builder role, which let anyone mute, unmute or respawn anyone. -xlinka
+            IsMuted.MarkOwnUserOnly();
+            voiceMode.MarkOwnUserOnly();
+            RespawnRequest.MarkOwnUserOnly();
+            Ping.MarkOwnUserOnly();
+            IsPresent.MarkOwnUserOnly();
+            PresentInWorld.MarkOwnUserOnly();
+            PresentInHeadset.MarkOwnUserOnly();
+            VRActive.MarkOwnUserOnly();
+            FPS.MarkOwnUserOnly();
+            HeadDevice.MarkOwnUserOnly();
+            UserPlatform.MarkOwnUserOnly();
+            DownloadSpeed.MarkOwnUserOnly();
+            UploadSpeed.MarkOwnUserOnly();
+            DownloadedBytes.MarkOwnUserOnly();
+            UploadedBytes.MarkOwnUserOnly();
+            DownloadSpeedMax.MarkOwnUserOnly();
+            UploadSpeedMax.MarkOwnUserOnly();
+            EngineVersion.MarkOwnUserOnly();
+            RuntimeVersion.MarkOwnUserOnly();
+            DashOpen.MarkOwnUserOnly();
+            ViewMode.MarkOwnUserOnly();
+            PrimaryHand.MarkOwnUserOnly();
+            streamConfiguration.MarkOwnUserOnly();
+            // a guest may name its own body and nobody else's: the host binds whatever root this names
+            UserRootRef.CheckRemoteSets((sender, _, root) => root != null && ReferenceEquals(sender, this)
+                && ReferenceEquals(root.TargetUser.Target, this));
 
             EndInitializationStageForMembers();
 
@@ -538,6 +655,10 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
             userStreams.OnElementRemoved += OnStreamRemoved;
 
             UserRootRef.OnTargetChange += OnUserRootRefChanged;
+            RespawnRequest.OnChanged += _ => OnRespawnRequested();
+            InviteAsks.OnChanged += _ => OnInviteAsked();
+            EditAsks.OnChanged += _ => Networking.Session.SessionEditConsent.AsksChanged(this);
+            EditGrants.OnChanged += _ => Networking.Session.SessionEditConsent.GrantsChanged(this);
 
             // Only create tracking streams on authority - clients receive them via sync
             if (world.IsAuthority)
@@ -625,8 +746,9 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
             return;
         }
         LumoraLogger.Log($"Banning user '{UserName.Value}'");
-        Security.BanManager.TempBan(UserID.Value, MachineID.Value);
-        Security.BanManager.AddBan(UserName.Value, UserID.Value, MachineID.Value, World.WorldName.Value);
+        // held by the proven account (empty for a guest) and the machine; UserID is only this session's slot
+        Security.BanManager.TempBan(AccountId.Value, MachineID.Value);
+        Security.BanManager.AddBan(UserName.Value, AccountId.Value, MachineID.Value, World.WorldName.Value);
         World.RemoveUser(this);
     }
 
@@ -855,6 +977,34 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
         base.Dispose();
     }
 
+    private void OnRespawnRequested()
+    {
+        var world = World;
+        if (!RespawnRequest.Value || world == null || !world.IsAuthority || IsDestroyed)
+            return;
+        world.RunSynchronously(() =>
+        {
+            if (IsDestroyed || !RespawnRequest.Value)
+                return;
+            world.RespawnUser(this);
+            using (world.DataModelPermissions?.EnterSystemBypass())
+                RespawnRequest.Value = false;
+        });
+    }
+
+    // The host answers asks in its own update, never inside the sync write that brought them.
+    private void OnInviteAsked()
+    {
+        var world = World;
+        if (world == null || !world.IsAuthority || IsDestroyed || world.LocalUser == this)
+            return;
+        world.RunSynchronously(() =>
+        {
+            if (!IsDestroyed)
+                Networking.Session.SessionInvites.TakeAsks(world, this);
+        });
+    }
+
     private void OnUserRootRefChanged(SyncRef<Components.UserRoot> syncRef)
     {
         var userRoot = syncRef.Target;
@@ -872,10 +1022,12 @@ public class User : ContainerWorker<UserComponent>, ISyncObject, IDisposable, IP
         // Clients should not modify synced references during callbacks.
         if (World?.IsAuthority == true)
         {
-            if (userRoot.ActiveUser != null && userRoot.ActiveUser != this)
+            // Someone else's body, still in use, is never handed over: that would give this user the run of it.
+            if (userRoot.ActiveUser is { IsDestroyed: false } other && other != this)
             {
                 LumoraLogger.Warn(
-                    $"User: UserRootRef points to UserRoot owned by '{userRoot.ActiveUser.UserName.Value ?? "(null)"}', rebinding to '{UserName.Value ?? "(null)"}'");
+                    $"User: UserRootRef of '{UserName.Value ?? "(null)"}' names the root of '{other.UserName.Value ?? "(null)"}', refused");
+                return;
             }
 
             userRoot.Initialize(this);

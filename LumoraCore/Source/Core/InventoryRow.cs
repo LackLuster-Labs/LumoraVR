@@ -27,6 +27,9 @@ public sealed class InventoryRow
     // Avatar, Object or World.
     public string Kind = "";
     public string Folder = Inventory.Root;
+    // Whose inventory it goes into: null for the account's own, else a group's id or the account whose shared
+    // folder it was saved into.
+    public string? Owner;
     // The mode a world was saved in.
     public string? Mode;
     // The saved tree and the world's picture, as files of the local database.
@@ -57,7 +60,14 @@ public sealed class InventoryRow
     // How the inventory lists it before the service does. The hashes are the local files' own, so a
     // world's picture is the same picture under the same name once it has gone up.
     internal InventoryEntry ToEntry() => new(Id, Name, IsWorld ? InventoryEntryKind.World : InventoryEntryKind.Item, SavedUtc, Size, 0,
-        IsWorld ? Mode ?? string.Empty : Kind, KeyOf(LocalUri), ThumbnailUri == null ? null : KeyOf(ThumbnailUri), Folder, null);
+        IsWorld ? Mode ?? string.Empty : Kind, KeyOf(LocalUri), ThumbnailUri == null ? null : KeyOf(ThumbnailUri), Folder, null)
+    {
+        OwnerId = Owner,
+    };
+
+    // Whether it goes into the inventory a listing is of; null is the account's own either way.
+    internal bool GoesTo(string? ownerId)
+        => string.IsNullOrEmpty(Owner) ? string.IsNullOrEmpty(ownerId) || ownerId == Account : string.Equals(Owner, ownerId, StringComparison.Ordinal);
 
     private static string KeyOf(string localUri)
     {
@@ -84,6 +94,8 @@ public sealed class InventoryRow
         };
         if (Mode != null)
             fields["mode"] = Mode;
+        if (!string.IsNullOrEmpty(Owner))
+            fields["owner"] = Owner!;
         if (ThumbnailUri != null)
             fields["thumbnail"] = ThumbnailUri;
         if (LastError != null)
@@ -105,9 +117,11 @@ public sealed class InventoryRow
         {
             Id = id,
             Account = Text("account"),
-            Name = Text("name"),
+            // A save kept by an older build may carry markup or a slash the service refuses.
+            Name = Inventory.CleanName(Text("name")),
             Kind = Text("kind"),
             Folder = string.IsNullOrEmpty(Text("folder")) ? Inventory.Root : Text("folder"),
+            Owner = Maybe("owner"),
             Mode = Maybe("mode"),
             LocalUri = Text("local"),
             ThumbnailUri = Maybe("thumbnail"),

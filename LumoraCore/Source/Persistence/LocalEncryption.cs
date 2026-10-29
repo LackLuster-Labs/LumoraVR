@@ -9,17 +9,9 @@ using LumoraLogger = Lumora.Core.Logging.Logger;
 
 namespace Lumora.Core.Persistence;
 
-/// <summary>
-/// Encrypts local persistence blobs (saved worlds, inventory items, cached assets) at rest with
-/// AES-256-GCM. GCM is authenticated, so a tampered file fails to decrypt instead of silently
-/// loading altered data - you can't edit the ciphertext and have it accepted.
-///
-/// A single random master key encrypts the blobs; the master key is held at rest by a pluggable
-/// <see cref="ISecretSealer"/>. The default sealer binds it to this machine + user account so a copied
-/// vault won't open elsewhere; a platform layer can replace <see cref="Sealer"/> with an OS keystore
-/// (e.g. DPAPI / libsecret) for stronger protection without changing any storage code. Truly
-/// non-extractable keys for shared/published content require a server-issued key (a cloud concern).
-/// </summary>
+// Saved worlds, inventory items and the records store, encrypted at rest with AES-256-GCM: an edited file fails
+// to decrypt instead of loading altered data. One random master key encrypts the blobs, and Sealer holds that
+// key at rest: bound to this machine and account by default, in the OS keystore once the platform layer sets one.
 public static class LocalEncryption
 {
     // "LVE1" magic so loaders can accept both encrypted and plain (legacy / local-home) blobs.
@@ -31,15 +23,13 @@ public static class LocalEncryption
     private static readonly object _lock = new();
     private static byte[]? _masterKey;
 
-    /// <summary>How the master key is sealed at rest. Swap for an OS-keystore sealer on the platform layer.</summary>
     public static ISecretSealer Sealer { get; set; } = new DerivedKeySealer();
 
-    /// <summary>True if the blob carries our encryption header (vs a plain/legacy blob).</summary>
     public static bool IsEncrypted(byte[]? data)
         => data != null && data.Length >= Magic.Length
            && data[0] == Magic[0] && data[1] == Magic[1] && data[2] == Magic[2] && data[3] == Magic[3];
 
-    /// <summary>Encrypt a blob: [magic][nonce][tag][ciphertext].</summary>
+    // [magic][nonce][tag][ciphertext]
     public static byte[] Encrypt(byte[] plaintext)
     {
         var key = MasterKey();
@@ -59,7 +49,7 @@ public static class LocalEncryption
         return output;
     }
 
-    /// <summary>Decrypt a blob; plain (non-encrypted) blobs pass through unchanged. Throws on tamper.</summary>
+    // A plain blob passes through unchanged; an edited one throws.
     public static byte[] Decrypt(byte[] data)
     {
         if (!IsEncrypted(data))
@@ -79,6 +69,10 @@ public static class LocalEncryption
             gcm.Decrypt(nonce, cipher, tag, plain);   // AuthenticationTagMismatchException on tamper
         return plain;
     }
+
+    // Cache files are sealed by LumoraNexus, which sits below this assembly; it gets its keys derived from this
+    // master. Idempotent, called by whatever touches the caches first. -xlinka
+    public static void WireSealedStorage() => Lumora.Nexus.Storage.SealedKeys.Source ??= MasterKey;
 
     private static byte[] MasterKey()
     {
@@ -128,19 +122,14 @@ public static class LocalEncryption
         => Lumora.Core.Persistence.PathResolver.Resolve("vault.key");
 }
 
-/// <summary>Seals/unseals the master key at rest. Implement with an OS keystore for stronger protection.</summary>
 public interface ISecretSealer
 {
     byte[] Seal(byte[] secret);
     byte[] Unseal(byte[] sealed_);
 }
 
-/// <summary>
-/// Default sealer: wraps the secret with a key derived (PBKDF2-SHA256) from this machine + user account
-/// plus a per-install random salt. Anti-copy (a stolen vault.key won't open on another machine/user),
-/// but not a hardened secret store - it can be recomputed by anything running as this user. For that,
-/// replace with an OS-keystore sealer.
-/// </summary>
+// Wraps the secret with a PBKDF2-SHA256 key from this machine and account plus a per-install salt: a copied
+// vault.key won't open anywhere else, but anything running as this user can work the key out again.
 public sealed class DerivedKeySealer : ISecretSealer
 {
     private const int SaltLen = 16;

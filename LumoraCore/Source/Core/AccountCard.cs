@@ -20,7 +20,9 @@ public sealed record AccountCard(
     string SupporterTier,
     color SupporterColor,
     bool IsStaff = false,
-    RepresentedGroupInfo? Group = null)
+    RepresentedGroupInfo? Group = null,
+    string SupporterStyle = "",
+    string AccountKind = AccountKinds.User)
 {
     public const int MaxNameLength = 32;
 
@@ -50,8 +52,12 @@ public sealed record AccountCard(
             supporter ? Clip(tier) : string.Empty,
             supporter ? ParseHex(info.SupporterColor) : default,
             info.IsStaff,
-            UsableGroup(info.RepresentedGroup));
+            UsableGroup(info.RepresentedGroup),
+            supporter ? Clip(info.SupporterStyle ?? string.Empty) : string.Empty,
+            AccountKinds.IsBot(info.AccountKind?.Trim()) ? Clip(info.AccountKind!.Trim()) : AccountKinds.User);
     }
+
+    public bool IsBot => AccountKinds.IsBot(AccountKind);
 
     // A guest is named after the machine key it proved at the door, so the same machine reads the same
     // in every session. The '#' is a character no account name may hold, which is what keeps a guest from

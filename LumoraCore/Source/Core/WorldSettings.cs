@@ -35,6 +35,10 @@ public sealed class WorldSettings : Component
     [Group("Mode")]
     public readonly Sync<WorldMode> Mode = new();
 
+    // Attached by the engine on a first read rather than brought by a world, so it still holds the defaults
+    // and the mode a host picks replaces them. -xlinka
+    internal bool SeededByEngine;
+
     public readonly Sync<bool> MobileFriendly = new();
     public readonly Sync<bool> EditMode = new();
     [Group("Session")]
@@ -45,6 +49,12 @@ public sealed class WorldSettings : Component
     public readonly Sync<bool> CleanupUnusedAssets = new();
     public readonly Sync<float> AssetCleanupInterval = new();
     [Group("Info")]
+    // The name the host gave the session. The host seeds it at start and renames through it; every peer's
+    // world takes it from here, so guests see a rename. Empty keeps the name the world was opened under.
+    public readonly Sync<string> SessionName = new();
+    // The session's directory id, seeded by the host at start, so a guest that came in on an address without
+    // one still knows which session it is in and its friends can be sent there.
+    public readonly Sync<string> SessionId = new();
     public readonly Sync<string> Description = new();
     [Group("Persistence")]
     public readonly Sync<bool> EnablePersistence = new();
@@ -90,6 +100,8 @@ public sealed class WorldSettings : Component
         MaxAFKMinutes.Value = 30;
         CleanupUnusedAssets.Value = true;
         AssetCleanupInterval.Value = 300f;
+        SessionName.Value = string.Empty;
+        SessionId.Value = string.Empty;
         Description.Value = string.Empty;
         EnablePersistence.Value = false;
         AutoSaveInterval.Value = 0f;
@@ -115,6 +127,17 @@ public sealed class WorldSettings : Component
                 element.MarkConfigLocked();
             }
         }
+
+        // The home stays Private whoever writes the level: the Session screen, a script or an engine path. -xlinka
+        AccessLevel.LocalFilter = (level, _) => KeepHomePrivate(level);
+    }
+
+    private World.WorldAccessLevel KeepHomePrivate(World.WorldAccessLevel level)
+    {
+        if (level == World.WorldAccessLevel.Private || !Management.WorldManager.IsLocalHome(World))
+            return level;
+        Logging.Logger.Warn($"WorldSettings: the local world stays private, access {level} refused");
+        return World.WorldAccessLevel.Private;
     }
 
     public override void OnStart()
@@ -140,6 +163,11 @@ public sealed class WorldSettings : Component
         if (World != null && World.IsAuthority && NetworkTickRate.Value <= 0)
             NetworkTickRate.Value = DefaultTickRate;
 
+        // A load writes members past the filter, so a home saved on another level comes back Private here. -xlinka
+        if (World != null && World.IsAuthority && AccessLevel.Value != World.WorldAccessLevel.Private
+            && Management.WorldManager.IsLocalHome(World))
+            AccessLevel.Value = World.WorldAccessLevel.Private;
+
         // Push the session rate into the sync manager on the MAIN thread. The sync loop reads its
         // cached copy off-thread every idle wait; reaching into the data model from there to resolve
         // a component would race the main thread's attaches. -xlinka
@@ -152,11 +180,17 @@ public sealed class WorldSettings : Component
         // world and it is completely invisible from the client side. The mode value is host-authored and
         // replicated, so applying it locally only ever makes a guest agree with the host sooner. -xlinka
         if (World != null)
+        {
             WorldModePermissions.Apply(World, Mode.Value);
+            StampModeTag();
+        }
         Mode.OnChanged += _ =>
         {
             if (World != null)
+            {
                 WorldModePermissions.Apply(World, Mode.Value);
+                StampModeTag();
+            }
         };
 
         // Access level is host-authoritative LIVE state: when the host changes it at runtime, re-advertise
@@ -175,6 +209,53 @@ public sealed class WorldSettings : Component
                 IsPublic.Value = visibility == SessionVisibility.Public;
             World.Session?.SetVisibility(visibility);
         };
+
+        ApplySessionName();
+        SessionName.OnChanged += _ => ApplySessionName();
+        ApplySessionId();
+        SessionId.OnChanged += _ => ApplySessionId();
+    }
+
+    // The listing's mode tag follows the mode itself. Hosting stamps it before a saved world's own settings are in,
+    // so a Social or Event save opened again was listed as a Builder world. -xlinka
+    private void StampModeTag()
+    {
+        var world = World;
+        var session = world?.Session;
+        if (world is not { IsAuthority: true } || session?.Metadata?.Tags is not { } tags
+            || tags.Contains(WorldModePermissions.ModeTag(Mode.Value)))
+            return;
+        session.UpdateMetadata(metadata => WorldModePermissions.StampModeTag(metadata.Tags, Mode.Value));
+    }
+
+    // A guest's world was opened as "Unknown"; it takes the host's id once that arrives.
+    private void ApplySessionId()
+    {
+        var world = World;
+        string id = SessionId.Value ?? string.Empty;
+        if (world != null && !world.IsAuthority && SessionIdentifier.IsValid(id) && world.SessionID.Value != id)
+            world.SessionID.Value = id;
+    }
+
+    // On the host the listing follows too: the LAN beacon at once, the directory on its next heartbeat. Bans
+    // are kept per world name, so a rename carries this world's bans over to the new one. -xlinka
+    private void ApplySessionName()
+    {
+        var world = World;
+        string name = SessionName.Value?.Trim() ?? string.Empty;
+        if (world == null || name.Length == 0)
+            return;
+        string old = world.WorldName.Value ?? string.Empty;
+        if (!string.Equals(old, name, System.StringComparison.Ordinal))
+        {
+            if (world.IsAuthority)
+                Security.BanManager.CopyWorldBans(old, name);
+            world.WorldName.Value = name;
+        }
+        var session = world.Session;
+        if (world.IsAuthority && session?.Metadata != null
+            && !string.Equals(session.Metadata.Name, name, System.StringComparison.Ordinal))
+            session.UpdateMetadata(metadata => metadata.Name = name);
     }
 
     private void PublishTickRate()

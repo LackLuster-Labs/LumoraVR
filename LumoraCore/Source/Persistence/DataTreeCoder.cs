@@ -68,6 +68,45 @@ public static class DataTreeCoder
         Reg(v => Components(((int4)v).x, ((int4)v).y, ((int4)v).z, ((int4)v).w),
             n => { var l = List(n); return new int4(I(l, 0), I(l, 1), I(l, 2), I(l, 3)); });
 
+        // The rest of the math types. Rect replicated and had no save coder, so a UI material's clip rect
+        // came back empty from every save; the others had neither and could not be a value component's
+        // type at all. SyncCoder carries the same set. -xlinka
+        Reg(v => Components(((int2)v).x, ((int2)v).y),
+            n => { var l = List(n); return new int2(I(l, 0), I(l, 1)); });
+        Reg(v => Components(((int3)v).x, ((int3)v).y, ((int3)v).z),
+            n => { var l = List(n); return new int3(I(l, 0), I(l, 1), I(l, 2)); });
+        Reg(v => Bools(((bool2)v).x, ((bool2)v).y),
+            n => { var l = List(n); return new bool2(B(l, 0), B(l, 1)); });
+        Reg(v => Bools(((bool3)v).x, ((bool3)v).y, ((bool3)v).z),
+            n => { var l = List(n); return new bool3(B(l, 0), B(l, 1), B(l, 2)); });
+        Reg(v => Bools(((bool4)v).x, ((bool4)v).y, ((bool4)v).z, ((bool4)v).w),
+            n => { var l = List(n); return new bool4(B(l, 0), B(l, 1), B(l, 2), B(l, 3)); });
+        Reg(v => Components(((Rect)v).x, ((Rect)v).y, ((Rect)v).width, ((Rect)v).height),
+            n => { var l = List(n); return new Rect(F(l, 0), F(l, 1), F(l, 2), F(l, 3)); });
+        Reg(v => { var m = (float2x2)v; return Components(m.c0.x, m.c0.y, m.c1.x, m.c1.y); },
+            n => { var l = List(n); return new float2x2(new float2(F(l, 0), F(l, 1)), new float2(F(l, 2), F(l, 3))); });
+        // Nine RGB coefficients in order, three floats each.
+        Reg(v =>
+            {
+                var sh = (SphericalHarmonicsL2)v;
+                var parts = new float[SphericalHarmonicsL2.Count * 3];
+                for (int i = 0; i < SphericalHarmonicsL2.Count; i++)
+                {
+                    parts[i * 3] = sh[i].x;
+                    parts[i * 3 + 1] = sh[i].y;
+                    parts[i * 3 + 2] = sh[i].z;
+                }
+                return Components(parts);
+            },
+            n =>
+            {
+                var l = List(n);
+                var sh = default(SphericalHarmonicsL2);
+                for (int i = 0; i < SphericalHarmonicsL2.Count && i * 3 + 2 < l.Count; i++)
+                    sh[i] = new float3(F(l, i * 3), F(l, i * 3 + 1), F(l, i * 3 + 2));
+                return sh;
+            });
+
         // Nine floats, column by column, as float3x3 stores them.
         Reg(v =>
             {
@@ -83,6 +122,23 @@ public static class DataTreeCoder
                     new float3(F(l, 6), F(l, 7), F(l, 8)));
             });
 
+        // Sixteen floats, column by column, as float4x4 stores them. It replicates, so it has to save too.
+        Reg(v =>
+            {
+                var m = (float4x4)v;
+                return Components(m.c0.x, m.c0.y, m.c0.z, m.c0.w, m.c1.x, m.c1.y, m.c1.z, m.c1.w,
+                    m.c2.x, m.c2.y, m.c2.z, m.c2.w, m.c3.x, m.c3.y, m.c3.z, m.c3.w);
+            },
+            n =>
+            {
+                var l = List(n);
+                return new float4x4(
+                    new float4(F(l, 0), F(l, 1), F(l, 2), F(l, 3)),
+                    new float4(F(l, 4), F(l, 5), F(l, 6), F(l, 7)),
+                    new float4(F(l, 8), F(l, 9), F(l, 10), F(l, 11)),
+                    new float4(F(l, 12), F(l, 13), F(l, 14), F(l, 15)));
+            });
+
         // Nullable float saves as the plain value or a null leaf (Encode already writes null for a
         // null box, so only the decode side needs to know). An avatar's optional clip planes ride on
         // this; without it Sync<float?> replicated fine and threw the moment the avatar was saved.
@@ -92,6 +148,17 @@ public static class DataTreeCoder
 
     private static int I(DataTreeList list, int index)
         => index < list.Count ? ((DataTreeValue)list[index]).Extract<int>() : 0;
+
+    private static bool B(DataTreeList list, int index)
+        => index < list.Count && ((DataTreeValue)list[index]).Extract<bool>();
+
+    private static DataTreeList Bools(params bool[] components)
+    {
+        var list = new DataTreeList();
+        foreach (var c in components)
+            list.Add(new DataTreeValue(c));
+        return list;
+    }
 
     public static bool IsSupported(Type type)
         => type.IsEnum || Encoders.ContainsKey(type);

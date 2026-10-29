@@ -59,6 +59,22 @@ public interface IWorldElement : IPermissionTarget
 		_ => null
 	};
 
+	IPermissionTarget? IPermissionTarget.SharedObjectRoot(IPermissionTarget other)
+		=> ObjectBoundary.SharedRoot(this, other as IWorldElement);
+
+	bool IPermissionTarget.IsWearerMachinery => ObjectBoundary.IsWearerMachinery(this);
+
+	bool IPermissionTarget.IsUiState => this is SyncElement { IsUiState: true };
+
+	bool IPermissionTarget.IsInside(IPermissionTarget other)
+	{
+		var slot = ObjectBoundary.SlotOf(this);
+		var top = ObjectBoundary.SlotOf(other as IWorldElement);
+		return slot != null && top != null && (ReferenceEquals(slot, top) || slot.IsDescendantOf(top));
+	}
+
+	bool IPermissionTarget.ChangedHandsRecently => ObjectBoundary.SlotOf(this) is { ChangedHandsRecently: true };
+
 	// The nearest no-copy marker at or above this element. Walks up through the component's slot and then
 	// the slot lineage, so marking a container protects everything inside it without every child carrying
 	// its own marker. Only ever asked on an explicit save/export, never on a per-write path. -xlinka

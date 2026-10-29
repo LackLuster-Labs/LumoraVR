@@ -39,5 +39,9 @@ internal static class LocalUserReport
         bool live = Photos.LiveStatus.IsLive;
         if (user.IsLive.Value != live)
             user.IsLive.Value = live;
+
+        var capture = Photos.CaptureWatch.State;
+        if (user.Capture.Value != capture)
+            user.Capture.Value = capture;
     }
 }

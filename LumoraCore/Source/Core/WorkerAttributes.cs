@@ -89,3 +89,12 @@ public sealed class HideInInspectorAttribute : Attribute
 public sealed class SyncMethodAttribute : Attribute
 {
 }
+
+// Opens a public void method that takes nothing to Loom's Call Method. Only for a method that changes its own
+// component's synced state and nothing else: the script is judged by the gate as able to change the component
+// before the call, and every write inside it is its author's. Nothing that makes or removes things, touches
+// someone's body, another component, a file or this machine's own settings. -xlinka
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = false, Inherited = true)]
+public sealed class ScriptMethodAttribute : Attribute
+{
+}

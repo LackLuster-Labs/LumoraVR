@@ -24,6 +24,8 @@ public class HookManager : IDisposable
     // already done, naming no holder at all. -xlinka
     private volatile Thread? _lockingThread;
     private volatile LockOwner _lock;
+    // Takes held by the holding thread; touched only while holding.
+    private int _depth;
 
     public World Owner { get; private set; }
     public LockOwner Lock => _lock;
@@ -79,40 +81,39 @@ public class HookManager : IDisposable
     }
 
     // Waits if another thread holds the lock.
-    public void DataModelLock(Thread ownerThread)
-    {
-        Monitor.Enter(_lockObj);
-        _lockingThread = ownerThread;
-        _lock = LockOwner.DataModel;
-    }
+    public void DataModelLock(Thread ownerThread) => Take(ownerThread, LockOwner.DataModel);
 
-    public void DataModelUnlock()
-    {
-        if (_lock != LockOwner.DataModel)
-        {
-            return; // Silently ignore if not locked by DataModel
-        }
-        _lock = LockOwner.None;
-        _lockingThread = null;
-        Monitor.Exit(_lockObj);
-    }
+    public void DataModelUnlock() => Release(LockOwner.DataModel);
 
     // Waits if another thread holds the lock.
-    public void ImplementerLock(Thread ownerThread)
+    public void ImplementerLock(Thread ownerThread) => Take(ownerThread, LockOwner.Implementer);
+
+    public void ImplementerUnlock() => Release(LockOwner.Implementer);
+
+    // The holder can take the world again (an update pumped from inside an update), so every take gets one
+    // exit and only the outermost release hands the world back. Releasing on the owner flag alone let the
+    // inner release clear the flag, the outer one was then ignored, and the world thread kept the monitor for
+    // good: the sync thread waited on it forever and that peer never sent or applied another change. -xlinka
+    private void Take(Thread ownerThread, LockOwner kind)
     {
         Monitor.Enter(_lockObj);
+        if (_depth++ > 0)
+            return;
         _lockingThread = ownerThread;
-        _lock = LockOwner.Implementer;
+        _lock = kind;
     }
 
-    public void ImplementerUnlock()
+    // A release from a thread not holding it, or of the wrong kind at the outermost take, is ignored, so the
+    // sync loop's second release after a clean one stays harmless.
+    private void Release(LockOwner kind)
     {
-        if (_lock != LockOwner.Implementer)
+        if (!Monitor.IsEntered(_lockObj) || (_depth == 1 && _lock != kind))
+            return;
+        if (--_depth == 0)
         {
-            return; // Silently ignore if not locked by Implementer
+            _lock = LockOwner.None;
+            _lockingThread = null;
         }
-        _lock = LockOwner.None;
-        _lockingThread = null;
         Monitor.Exit(_lockObj);
     }
 

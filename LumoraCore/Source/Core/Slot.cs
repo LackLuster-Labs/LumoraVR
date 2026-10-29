@@ -197,6 +197,8 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
 
     bool IPermissionGrabSurface.AllowsGrab => GrabSurface?.AllowsGrab ?? false;
 
+    bool IPermissionGrabSurface.AllowsGrabBy(IPermissionActor actor) => GrabSurface?.AllowsGrabBy(actor) ?? false;
+
     // Forwarded to the grab component rather than answered here. These used to be hard-coded false/null,
     // which read as "unstealable and held by nobody" for every transform write in the engine. The slot is
     // where the pose and parent writes LAND, but the grab component is where the answer lives. -xlinka
@@ -320,6 +322,23 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
 
     public event Action<Slot> ActiveUserRootChanged = null!;
 
+    // When this slot last went into or out of somebody's root (picked up, put down, pinned, worn), in world
+    // seconds. A write about it that a peer sent before its machine saw the move lands after it, and the gate
+    // does not hold that against the peer for this long. -xlinka
+    private double _changedHandsAt = double.NegativeInfinity;
+
+    public const double ChangedHandsWindow = 5.0;
+
+    public bool ChangedHandsRecently => World is { } world && world.TotalTime - _changedHandsAt < ChangedHandsWindow;
+
+    // A slot made where it stands never changed hands: nobody could have written to it from outside first.
+    private void SetActiveUserRoot(UserRoot? root)
+    {
+        ActiveUserRoot = root!;
+        if (World is { } world && !IsInInitPhase)
+            _changedHandsAt = world.TotalTime;
+    }
+
     internal void RegisterUserRoot(UserRoot userRoot)
     {
         if (userRoot == null || userRoot == ActiveUserRoot)
@@ -334,7 +353,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             return;
         }
 
-        ActiveUserRoot = userRoot;
+        SetActiveUserRoot(userRoot);
         PropagateActiveUserRootToChildren();
         ActiveUserRootChanged?.Invoke(this);
     }
@@ -344,7 +363,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         if (userRoot == null || userRoot != ActiveUserRoot)
             return;
 
-        ActiveUserRoot = null!;
+        SetActiveUserRoot(null);
         PropagateActiveUserRootToChildren();
         ActiveUserRootChanged?.Invoke(this);
     }
@@ -359,7 +378,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         if (inherited == ActiveUserRoot)
             return;
 
-        ActiveUserRoot = inherited!;
+        SetActiveUserRoot(inherited);
         PropagateActiveUserRootToChildren();
         ActiveUserRootChanged?.Invoke(this);
     }
@@ -550,6 +569,11 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             return;
         }
 
+        // Nothing is hung on somebody else's body without their yes: the write is to this slot's own parent, so the
+        // gate never sees whose body it lands in unless asked here. Your own body may still sit in their seat. -xlinka
+        if (newParent != null && !IsInInitPhase && World?.DataModelPermissions is { } gate && !gate.AllowsPlacingUnder(this, newParent))
+            return;
+
         float3 globalPos = float3.Zero;
         floatQ globalRot = floatQ.Identity;
         float3 globalScale = float3.One;
@@ -649,6 +673,8 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
 
     private static void ActiveStateMoved() => System.Threading.Interlocked.Increment(ref s_activeEpoch);
 
+    internal static int ActiveEpoch => System.Threading.Volatile.Read(ref s_activeEpoch);
+
     // Moves whenever any slot anywhere goes under another parent or out of the tree: what a cached walk up
     // the tree checks before it trusts what it found.
     private static int s_hierarchyEpoch;
@@ -660,6 +686,11 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     private static int s_structureEpoch;
 
     internal static int StructureEpoch => System.Threading.Volatile.Read(ref s_structureEpoch);
+
+    // Moves whenever any slot's name or tag changes: what a cached search by name or tag checks as well.
+    private static int s_labelEpoch;
+
+    internal static int LabelEpoch => System.Threading.Volatile.Read(ref s_labelEpoch);
 
     public bool IsActive
     {
@@ -715,24 +746,61 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     // Drawn on no screen of this machine while set, though the slot stays active: its components run, its
     // colliders collide, and everyone else still sees it. The platform hides the slot's node, which takes
     // everything under it along. Whatever sets it takes it off again; never replicated, never saved. -xlinka
-    public bool IsLocallyHidden { get; private set; }
+    public bool IsLocallyHidden => _localHides != 0;
+
+    // Who is hiding it. An arriving avatar, a blocked person and a far one drawn as a picture each hide the same
+    // slot for their own reasons, and one letting go must not show it while another still wants it gone.
+    [System.Flags]
+    public enum LocalHide : byte
+    {
+        Other = 1,
+        StandIn = 2,
+    }
+
+    private LocalHide _localHides;
 
     // The platform draws this slot where its simulated body is, between physics steps too, so a position or
     // rotation write leaves the drawn node alone instead of queueing a flush. Whatever sets it clears it and
     // has the node take the slot's pose again. Never replicated, never saved.
     public bool NodePoseDriven { get; set; }
 
+    // Nothing the platform draws hangs off this slot or anything under it: a skeleton bone with no renderer or
+    // the like below it, carried to the skin by its skeleton. Its pose writes then queue no flush and its node is
+    // left where it was, cut loose from its parent; forty moving avatars pushed over two thousand bone poses a
+    // frame to nodes nothing read. Set by the skeleton that owns the bone, and clearing it writes the pose over
+    // in full. Never replicated, never saved. -xlinka
+    public bool NodePoseUnused
+    {
+        get => _nodePoseUnused;
+        set
+        {
+            if (_nodePoseUnused == value)
+                return;
+            _nodePoseUnused = value;
+            QueueHookUpdate();
+        }
+    }
+
+    private volatile bool _nodePoseUnused;
+
     // Every write of the local pose, counted. Something that writes the pose itself and wants to know whether
     // anything else did since compares this with the count after its own write.
     public int PoseWrites { get; private set; }
 
-    public void SetLocallyHidden(bool hidden)
+    public void SetLocallyHidden(bool hidden) => SetLocallyHidden(LocalHide.Other, hidden);
+
+    public void SetLocallyHidden(LocalHide reason, bool hidden)
     {
-        if (IsLocallyHidden == hidden)
+        var next = hidden ? _localHides | reason : _localHides & ~reason;
+        if (next == _localHides)
             return;
-        IsLocallyHidden = hidden;
-        QueueHookUpdate();
+        bool was = _localHides != 0;
+        _localHides = next;
+        if (was != (next != 0))
+            QueueHookUpdate();
     }
+
+    public bool IsLocallyHiddenFor(LocalHide reason) => (_localHides & reason) != 0;
 
     #endregion
 
@@ -1416,11 +1484,15 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         if (world == null || sender == null)
             return true;
 
+        // The person boundary, asked of the sender: nothing goes under somebody who has not said yes to them.
+        var permissions = world.DataModelPermissions;
+        if (newParent != null && permissions != null && !permissions.AllowsPlacingUnder(this, newParent, sender))
+            return false;
+
         byte senderByte = sender.AllocationID.Value;
         if (ReferenceID.GetUserByte() != senderByte)
             return true;
 
-        var permissions = world.DataModelPermissions;
         if (permissions == null || permissions.AllowsDomain(sender, DataModelPermissionDomain.Spawn))
             return true;
 
@@ -1459,21 +1531,22 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         {
             PoseWrites++;
             InvalidateTransformCache();
-            if (!NodePoseDriven)
+            if (!NodePoseDriven && !_nodePoseUnused)
                 QueueHookUpdate();
         };
         LocalRotation.OnChanged += _ =>
         {
             PoseWrites++;
             InvalidateTransformCache();
-            if (!NodePoseDriven)
+            if (!NodePoseDriven && !_nodePoseUnused)
                 QueueHookUpdate();
         };
         LocalScale.OnChanged += _ =>
         {
             PoseWrites++;
             InvalidateTransformCache();
-            QueueHookUpdate();
+            if (!_nodePoseUnused)
+                QueueHookUpdate();
         };
         ActiveSelf.OnChanged += _ =>
         {
@@ -1490,9 +1563,11 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         };
         Name.OnChanged += _ =>
         {
+            System.Threading.Interlocked.Increment(ref s_labelEpoch);
             OnNameChanged?.Invoke(this, Name.Value);
             OnChanged();
         };
+        Tag.OnChanged += static _ => System.Threading.Interlocked.Increment(ref s_labelEpoch);
         Persistent.OnChanged += _ =>
         {
             PersistentChanged?.Invoke(this);
@@ -2014,6 +2089,9 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     public T GetComponentInParents<T>(bool includeSelf = true) where T : Component
         => GetComponentInParent<T>(includeSelf);
 
+    // Plain loops over both child lists: the child iterator made an enumerator at every slot the walk passed
+    // through, so a search of a user root cost about fifteen kilobytes a call, and the undo history made one a
+    // frame. -xlinka
     public T GetComponentInChildren<T>(bool includeSelf = true) where T : Component
     {
         if (includeSelf)
@@ -2022,9 +2100,14 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             if (comp != null) return comp;
         }
 
-        foreach (var child in EnumerateAllChildren())
+        for (int i = 0; i < _children.Count; i++)
         {
-            var comp = child.GetComponentInChildren<T>(true);
+            var comp = _children[i].GetComponentInChildren<T>(true);
+            if (comp != null) return comp;
+        }
+        for (int i = 0; i < _localChildren.Count; i++)
+        {
+            var comp = _localChildren[i].GetComponentInChildren<T>(true);
             if (comp != null) return comp;
         }
 
@@ -2125,14 +2208,20 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     {
         if (excludeDisabled && !IsActive)
             return null!;
-        foreach (var comp in _components.OfType<T>())
+        for (int i = 0; i < _components.Count; i++)
         {
+            if (_components[i] is not T comp) continue;
             if (excludeDisabled && !comp.Enabled.Value) continue;
             if (filter == null || filter(comp)) return comp;
         }
-        foreach (var child in EnumerateAllChildren())
+        for (int i = 0; i < _children.Count; i++)
         {
-            var found = child.GetComponentInChildren<T>(filter, excludeDisabled);
+            var found = _children[i].GetComponentInChildren<T>(filter, excludeDisabled);
+            if (found != null) return found;
+        }
+        for (int i = 0; i < _localChildren.Count; i++)
+        {
+            var found = _localChildren[i].GetComponentInChildren<T>(filter, excludeDisabled);
             if (found != null) return found;
         }
         return null!;
@@ -2230,12 +2319,17 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     {
         if (includeSelf)
         {
-            foreach (var comp in _components.OfType<T>())
-                action(comp);
+            for (int i = 0; i < _components.Count; i++)
+            {
+                if (_components[i] is T comp)
+                    action(comp);
+            }
         }
 
-        foreach (var child in EnumerateAllChildren())
-            child.ForeachComponentInChildren(action, true);
+        for (int i = 0; i < _children.Count; i++)
+            _children[i].ForeachComponentInChildren(action, true);
+        for (int i = 0; i < _localChildren.Count; i++)
+            _localChildren[i].ForeachComponentInChildren(action, true);
     }
 
     #endregion
@@ -2259,7 +2353,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         var componentList = new DataTreeList();
         foreach (var component in Components)
         {
-            if (component == null || !component.IsPersistent)
+            if (component == null || !control.Writes(component) || control.LeavesOut(component))
                 continue;
             componentList.Add(WorkerSaveLoad.SaveWorker(component, control));
         }
@@ -2269,7 +2363,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         var childList = new DataTreeList();
         foreach (var child in Children)
         {
-            if (child == null || !child.IsPersistent)
+            if (child == null || !child.IsPersistent || control.LeavesOut(child))
                 continue;
             childList.Add(child.Save(control));
         }
@@ -2367,8 +2461,23 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     {
         if (set == null || !set.Add(this))
             return;
-        foreach (var child in EnumerateAllChildren())
-            child.GenerateHierarchy(set);
+        for (int i = 0; i < _children.Count; i++)
+            _children[i].GenerateHierarchy(set);
+        for (int i = 0; i < _localChildren.Count; i++)
+            _localChildren[i].GenerateHierarchy(set);
+    }
+
+    // The part of that a save writes: this slot and every child reached through persistent ones, the same
+    // walk Save makes. A local or non-persistent child and everything under it never reaches the file.
+    public void GenerateSavedHierarchy(HashSet<Slot> set)
+    {
+        if (set == null || !set.Add(this))
+            return;
+        for (int i = 0; i < _children.Count; i++)
+        {
+            if (_children[i].IsPersistent)
+                _children[i].GenerateSavedHierarchy(set);
+        }
     }
 
     // DEPENDENCIES
@@ -2392,13 +2501,13 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         return output;
     }
 
-    public List<Component> CollectAssetDependencies(bool includeNonPersistent = false)
+    public List<Component> CollectAssetDependencies()
     {
-        var rootHierarchy = new HashSet<Slot>();
-        GenerateHierarchy(rootHierarchy);
+        var savedHierarchy = new HashSet<Slot>();
+        GenerateSavedHierarchy(savedHierarchy);
 
         var output = new List<Component>();
-        CollectAssetDependencies(rootHierarchy, new HashSet<Component>(), output, includeNonPersistent);
+        CollectAssetDependencies(savedHierarchy, new HashSet<Component>(), output);
         return output;
     }
 
@@ -2428,8 +2537,10 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             assetDependencies = new List<Component>();
             slotDependencies = new List<Slot>();
             var seen = new HashSet<Component>();
-            CollectAssetDependencies(rootHierarchy, seen, assetDependencies, saveNonPersistent);
-            CollectAssetSlots(this, rootHierarchy, dependencyHierarchy, seen, assetDependencies, slotDependencies, saveNonPersistent);
+            var savedHierarchy = new HashSet<Slot>();
+            GenerateSavedHierarchy(savedHierarchy);
+            CollectAssetDependencies(savedHierarchy, seen, assetDependencies);
+            CollectAssetSlots(this, savedHierarchy, dependencyHierarchy, seen, assetDependencies, slotDependencies, saveNonPersistent);
         }
         else if (dependencyHandling == DependencyHandling.CollectAll)
         {
@@ -2510,21 +2621,35 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             AddReferenceableIds(inner, set);
     }
 
-    // Gather asset-provider (or PreserveWithAssets) components referenced from inside the subtree
-    // but living outside it, recursively (assets can reference other assets).
-    private static void CollectAssetDependencies(HashSet<Slot> rootHierarchy, HashSet<Component> seen,
-                                                 List<Component> output, bool saveNonPersistent)
+    // Gather asset-provider (or PreserveWithAssets) components that what the save writes points at but does not
+    // write itself, recursively (assets can reference other assets). Written is the test, not "lives under the
+    // root": a material on a non-persistent child sits inside and never reaches the file, and a surface the save
+    // writes needs its material however that material is flagged, so either way it travels as an asset. -xlinka
+    private static void CollectAssetDependencies(HashSet<Slot> savedHierarchy, HashSet<Component> seen,
+                                                 List<Component> output)
     {
-        foreach (var slot in rootHierarchy)
+        foreach (var slot in savedHierarchy)
+            CollectSavedAssetRefs(slot, savedHierarchy, seen, output);
+    }
+
+    private static void CollectSavedAssetRefs(Slot slot, HashSet<Slot> savedHierarchy, HashSet<Component> seen,
+                                              List<Component> output)
+    {
+        CollectWorkerAssetRefs(slot, savedHierarchy, seen, output);
+        foreach (var component in slot.Components)
         {
-            CollectWorkerAssetRefs(slot, rootHierarchy, seen, output, saveNonPersistent);
-            foreach (var component in slot.Components)
-                CollectWorkerAssetRefs(component, rootHierarchy, seen, output, saveNonPersistent);
+            if (component.Persistent)
+                CollectWorkerAssetRefs(component, savedHierarchy, seen, output);
         }
     }
 
-    private static void CollectWorkerAssetRefs(Worker worker, HashSet<Slot> rootHierarchy,
-        HashSet<Component> seen, List<Component> output, bool saveNonPersistent)
+    // A slot in the saved hierarchy is written, the save's own root too whatever its flag (SaveControl.Writes),
+    // so a component on one is written when its own flag says so.
+    private static bool WrittenWith(Component component, HashSet<Slot> savedHierarchy)
+        => component.Persistent && component.Slot != null && savedHierarchy.Contains(component.Slot);
+
+    private static void CollectWorkerAssetRefs(Worker worker, HashSet<Slot> savedHierarchy,
+        HashSet<Component> seen, List<Component> output)
     {
         // Lists and the entries inside them hold assets too: a renderer's materials, a material's textures.
         var referenced = new List<IWorldElement>();
@@ -2540,24 +2665,22 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
                 continue;
             if (target is not IAssetProvider && !target.PreserveWithAssets)
                 continue;
-            if (target.Slot != null && rootHierarchy.Contains(target.Slot))
-                continue; // already inside the saved subtree
-            if (!saveNonPersistent && !target.IsPersistent)
+            if (WrittenWith(target, savedHierarchy))
                 continue;
             if (!seen.Add(target))
                 continue;
             output.Add(target);
-            CollectWorkerAssetRefs(target, rootHierarchy, seen, output, saveNonPersistent);
+            CollectWorkerAssetRefs(target, savedHierarchy, seen, output);
         }
     }
 
     // A collected asset can need slots of its own to mean anything: a shader graph's material is made from the
     // nodes of its graph. Those slots travel whole beside the object as its dependencies, with whatever assets
     // they point at in turn. Never a slot the saved object already holds or hangs under. -xlinka
-    private static void CollectAssetSlots(Slot root, HashSet<Slot> rootHierarchy, HashSet<Slot> dependencyHierarchy,
+    private static void CollectAssetSlots(Slot root, HashSet<Slot> savedHierarchy, HashSet<Slot> dependencyHierarchy,
         HashSet<Component> seen, List<Component> assets, List<Slot> output, bool saveNonPersistent)
     {
-        var inside = new HashSet<Slot>(rootHierarchy);
+        var inside = new HashSet<Slot>(savedHierarchy);
         for (int i = 0; i < assets.Count; i++)
         {
             if (assets[i] is not IAssetSlotDependencies carrier)
@@ -2570,22 +2693,18 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
                     continue;
 
                 var subtree = new HashSet<Slot>();
-                slot.GenerateHierarchy(subtree);
+                slot.GenerateSavedHierarchy(subtree);
                 output.RemoveAll(existing => subtree.Contains(existing));
                 output.Add(slot);
                 inside.UnionWith(subtree);
                 dependencyHierarchy.UnionWith(subtree);
                 foreach (var carried in subtree)
-                {
-                    CollectWorkerAssetRefs(carried, inside, seen, assets, saveNonPersistent);
-                    foreach (var component in carried.Components)
-                        CollectWorkerAssetRefs(component, inside, seen, assets, saveNonPersistent);
-                }
+                    CollectSavedAssetRefs(carried, inside, seen, assets);
             }
         }
 
         // One that lives in a carried slot is saved with that slot, not a second time on its own.
-        assets.RemoveAll(asset => asset.Slot != null && dependencyHierarchy.Contains(asset.Slot));
+        assets.RemoveAll(asset => WrittenWith(asset, dependencyHierarchy));
     }
 
     private static void AddSlotReferenceableIds(Slot slot, HashSet<RefID> set)
@@ -2652,8 +2771,8 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         }
     }
 
-    // Any collected "Assets" are attached under assetsRoot (or a new child of the world root) so their
-    // references resolve. Intended for an empty target slot (e.g. parent.AddSlot().LoadObject(…)).
+    // Any collected "Assets" are attached under assetsRoot (or the object's own holder, ObjectAssetHolders) so
+    // their references resolve. Intended for an empty target slot (e.g. parent.AddSlot().LoadObject(…)).
     public void LoadObject(DataTreeDictionary node, Slot? assetsRoot = null, ReferenceTranslator? refTranslator = null)
     {
         if (IsDestroyed)
@@ -2691,32 +2810,13 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
 
             if (node.TryGetList("Dependencies") is { } dependencyList && dependencyList.Children.Count > 0)
             {
-                var dependencyHost = World.RootSlot.AddSlot(Name + " - Dependencies");
+                var dependencyHost = ObjectAssetHolders.For(this, ObjectAssetHolders.DependenciesName);
                 foreach (var entry in dependencyList.Children)
                     dependencyHost.AddSlot(string.Empty).Load(WithoutCutParent(entry), control);
             }
 
             if (node.TryGetList("Assets") is { } assetList && assetList.Children.Count > 0)
-            {
-                var host = assetsRoot ?? World.RootSlot.AddSlot(Name + " - Assets");
-                foreach (var entry in assetList.Children)
-                {
-                    var (typeName, data) = WorkerSaveLoad.ExtractWorker(entry, control);
-                    var type = WorkerManager.GetType(typeName);
-                    if (type == null || !typeof(Component).IsAssignableFrom(type))
-                    {
-                        Lumora.Core.Logging.Logger.Warn($"Slot.LoadObject: unknown asset component type '{typeName}', skipping.");
-                        continue;
-                    }
-                    if (!ComponentExecutionPolicy.CanAttach(type, host.World))
-                    {
-                        Lumora.Core.Logging.Logger.Warn($"Slot.LoadObject: skipped userspace-only asset '{typeName}'.");
-                        continue;
-                    }
-                    var component = host.AttachComponent(type, runOnAttachBehavior: false);
-                    component.Load(data, control);
-                }
-            }
+                (assetsRoot ?? ObjectAssetHolders.For(this, ObjectAssetHolders.AssetsName)).AttachSavedComponents(assetList, control);
         }
         finally
         {
@@ -2724,6 +2824,209 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             if (deferred)
                 World.EndDeferredHookCreation();
         }
+    }
+
+    // THE SAME LOAD OVER SEVERAL FRAMES.
+    //
+    // A big object taken out of an inventory went into the world in one call, every slot, component and value:
+    // a fifth of a second of one frame for an avatar, and more for a room. This puts it back a slot at a time, a
+    // few milliseconds of each frame, the way a saved world goes back. Nothing in it starts until the last slot
+    // is in: started on half a tree, a skeleton watched bones that were not there yet and went over them again
+    // as each one arrived. The object stays switched on throughout, since switching a whole avatar on at the end
+    // was a half-second frame of its own; each bite's platform nodes are made afterwards in budgeted bites, as
+    // for any big spawn, and once the object is whole its components start a budgeted few a frame.
+    //
+    // Small objects, or a world not running, load in one call as before. scope is entered around every bite
+    // (whose allocation it is). whenStarted hears this slot once its own values are in, which is when the caller
+    // may move it; whenDone hears it once the whole object is, or null when the load failed or the slot went
+    // away meanwhile. -xlinka
+    public void LoadObjectStaged(DataTreeDictionary node, Func<IDisposable?>? scope, Action<Slot>? whenStarted, Action<Slot?>? whenDone)
+    {
+        if (IsDestroyed)
+            throw new InvalidOperationException("Cannot LoadObject onto a destroyed slot.");
+        var world = World ?? throw new InvalidOperationException("Cannot LoadObject onto a slot that isn't in a world.");
+        if (world.State != World.WorldState.Running || CountSavedSlots(node) < DeferredSpawnSlotThreshold)
+        {
+            using (scope?.Invoke())
+                LoadObject(node);
+            whenStarted?.Invoke(this);
+            whenDone?.Invoke(this);
+            return;
+        }
+        new StagedObjectLoad(this, world, node, scope, whenStarted, whenDone).Bite();
+    }
+
+    private sealed class StagedObjectLoad
+    {
+        // A bite always gets this many slots in, so a load moves on in a frame that is already over.
+        private const int MinSlotsPerBite = 16;
+
+        private readonly Slot _root;
+        private readonly World _world;
+        private readonly DataTreeDictionary _node;
+        private readonly Func<IDisposable?>? _scope;
+        private readonly Action<Slot>? _whenStarted;
+        private readonly Action<Slot?>? _whenDone;
+        private readonly LoadControl _control;
+        private readonly Queue<(Slot Slot, DataTreeNode Node)> _later = new();
+        private readonly List<IUpdatable> _held = new();
+        private readonly Action _next;
+        private bool _begun;
+        private bool _treeDone;
+        private int _assetIndex;
+        private Slot? _assetsHost;
+
+        public StagedObjectLoad(Slot root, World world, DataTreeDictionary node, Func<IDisposable?>? scope, Action<Slot>? whenStarted, Action<Slot?>? whenDone)
+        {
+            _root = root;
+            _world = world;
+            _node = node;
+            _scope = scope;
+            _whenStarted = whenStarted;
+            _whenDone = whenDone;
+            _control = new LoadControl(world, new ReferenceTranslator());
+            _next = Bite;
+        }
+
+        public void Bite()
+        {
+            if (_world.IsDisposed)
+                return;
+            long started = System.Diagnostics.Stopwatch.GetTimestamp();
+            long until = started + World.StagedBudgetTicks;
+            bool first = !_begun;
+            bool done = false;
+            bool failed = false;
+            var updates = _world.UpdateManager;
+            _world.BeginDeferredHookCreation();
+            updates?.HoldStartups(_held);
+            try
+            {
+                using (_scope?.Invoke())
+                {
+                    if (first)
+                    {
+                        _begun = true;
+                        var originalParent = _root._parent;
+                        if (_node.TryGetDictionary("TypeVersions") is { } typeVersions)
+                            _control.LoadTypeVersions(typeVersions);
+                        if (_node.TryGetNode("Object") is { } objectNode)
+                            _root.LoadShallow(_root.WithoutCutParent(objectNode), _control, _later);
+                        if (originalParent != null && !ReferenceEquals(_root._parent, originalParent))
+                            _root.SetParent(originalParent, preserveGlobalTransform: false);
+                    }
+
+                    int ran = 0;
+                    while (_later.Count > 0 && !_root.IsDestroyed)
+                    {
+                        var (slot, child) = _later.Dequeue();
+                        if (!slot.IsDestroyed)
+                            slot.LoadShallow(child, _control, _later);
+                        if (++ran >= MinSlotsPerBite
+                            && (System.Diagnostics.Stopwatch.GetTimestamp() >= until || Engine.LoadAllowanceSpent(started, Engine.LoadShareAll)))
+                            break;
+                    }
+
+                    if ((_later.Count == 0 || _root.IsDestroyed) && !_treeDone)
+                    {
+                        _treeDone = true;
+                        if (!_root.IsDestroyed && _node.TryGetList("Dependencies") is { } dependencyList && dependencyList.Children.Count > 0)
+                        {
+                            var dependencyHost = ObjectAssetHolders.For(_root, ObjectAssetHolders.DependenciesName);
+                            foreach (var entry in dependencyList.Children)
+                                dependencyHost.AddSlot(string.Empty).Load(_root.WithoutCutParent(entry), _control);
+                        }
+                    }
+
+                    // A room carries its materials, meshes and pictures beside the tree, thousands of them: they go
+                    // in a bite at a time as well, after the last slot. -xlinka
+                    if (_treeDone && !_root.IsDestroyed && _node.TryGetList("Assets") is { } assetList && _assetIndex < assetList.Children.Count
+                        && System.Diagnostics.Stopwatch.GetTimestamp() < until)
+                    {
+                        _assetsHost ??= ObjectAssetHolders.For(_root, ObjectAssetHolders.AssetsName);
+                        _assetIndex = _assetsHost.AttachSavedComponents(assetList, _control, _assetIndex, until);
+                    }
+
+                    if (_treeDone && (_root.IsDestroyed || _node.TryGetList("Assets") is not { } assets || _assetIndex >= assets.Children.Count))
+                    {
+                        done = true;
+                        _control.FinishLoad();
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Lumora.Core.Logging.Logger.Error($"Slot.LoadObjectStaged: loading '{_root.Name}' failed: {ex.Message}");
+                failed = true;
+                if (!done)
+                {
+                    done = true;
+                    try { _control.FinishLoad(); } catch (Exception) { }
+                }
+            }
+            finally
+            {
+                updates?.EndStartupHold();
+                _world.EndDeferredHookCreation();
+                Engine.ChargeLoad(started);
+            }
+
+            if (first && !failed && !_root.IsDestroyed)
+                _whenStarted?.Invoke(_root);
+            if (!done)
+            {
+                _world.RunOnNextUpdate(_next);
+                return;
+            }
+            updates?.ReleaseStartups(_held);
+            _whenDone?.Invoke(failed || _root.IsDestroyed ? null : _root);
+        }
+    }
+
+    // Components saved on their own rather than as part of a slot: the assets a graph or a world carried beside
+    // its tree. Each is attached here and loaded.
+    internal void AttachSavedComponents(DataTreeList list, LoadControl control)
+        => AttachSavedComponents(list, control, 0, long.MaxValue);
+
+    // From entry start on, until the clock passes until (one entry at the least); the index to go on from.
+    internal int AttachSavedComponents(DataTreeList list, LoadControl control, int start, long until)
+    {
+        var entries = list.Children;
+        int i = start;
+        while (i < entries.Count)
+        {
+            var entry = entries[i++];
+            if (i - start > 1 && System.Diagnostics.Stopwatch.GetTimestamp() >= until)
+            {
+                i--;
+                break;
+            }
+            var (typeName, data) = WorkerSaveLoad.ExtractWorker(entry, control);
+            var type = WorkerManager.GetType(typeName);
+            if (type == null || !typeof(Component).IsAssignableFrom(type))
+            {
+                Lumora.Core.Logging.Logger.Warn($"Slot.AttachSavedComponents: unknown asset component type '{typeName}', skipping.");
+                continue;
+            }
+            if (!ComponentExecutionPolicy.CanAttach(type, World))
+            {
+                Lumora.Core.Logging.Logger.Warn($"Slot.AttachSavedComponents: skipped userspace-only asset '{typeName}'.");
+                continue;
+            }
+            var component = AttachComponent(type, runOnAttachBehavior: false);
+            component.Load(data, control);
+        }
+        return i;
+    }
+
+    // A slot written away from where it hangs, its parent not in the save: the parent reference is left out
+    // rather than written to resolve to nothing, and whoever loads it decides where it goes.
+    internal DataTreeNode SaveDetached(SaveControl control)
+    {
+        var node = Save(control);
+        if (node is DataTreeDictionary dictionary)
+            dictionary.Remove(GetSyncMemberName(IndexOfMember(ParentSlotRef)));
+        return node;
     }
 
     // The saved object's parent, and each dependency's, lay outside the save and were cut. Loading that empty
@@ -2783,6 +3086,8 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     public void SaveObjectToFile(string path, DependencyHandling dependencyHandling = DependencyHandling.CollectAssets,
                                  bool saveNonPersistent = false, bool encrypt = false)
     {
+        if (Security.ItemSeals.Refuses(this, Security.SealRule.Export, out var refusal))
+            throw new UnauthorizedAccessException($"'{Name.Value}' cannot be written to a file: {refusal}");
         var graph = SaveObject(dependencyHandling, saveNonPersistent);
         var bytes = graph.SaveToBytes();
         if (encrypt)
@@ -2840,6 +3145,10 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         {
             return AddLocalSlot(name);
         }
+
+        // A new child under somebody else's body is a change to it, the same as a reparent into it.
+        if (World.DataModelPermissions is { } gate && !gate.AllowsPlacingUnder(null, this))
+            throw new UnauthorizedAccessException("another person's body and what they hold are theirs to change; ask them first");
 
         using var inherited = refController.InheritedAllocationScope(ReferenceID);
         var slot = new Slot();
@@ -3044,6 +3353,22 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
 
     public Slot FindChild(string name, bool recursive = false, int maxDepth = -1)
     {
+        // One level down by name is most of the asks, several a frame for some of them; it needs neither a
+        // predicate nor an enumerator. Same order as the walk below: children, then local children. -xlinka
+        if (!recursive)
+        {
+            foreach (var child in _children)
+            {
+                if (child.Name.Value == name)
+                    return child;
+            }
+            foreach (var child in _localChildren)
+            {
+                if (child.Name.Value == name)
+                    return child;
+            }
+            return null!;
+        }
         return FindChild(s => s.Name.Value == name, recursive, maxDepth);
     }
 
@@ -3399,6 +3724,8 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         // the next line with no word about why. -xlinka
         if (RefuseOnRoot("duplicate", RootRefusalDuplicate))
             return null!;
+        if (RefusedBySeal())
+            return null!;
         newParent ??= _parent;
         if (newParent == null || World == null)
             return null!;
@@ -3456,6 +3783,16 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         }
 
         return clone;
+    }
+
+    // A copy is a copy whoever asks for it, the host and a script included: an account's seal in or over this
+    // object refuses everyone but its owner (Security.ItemSeals).
+    private bool RefusedBySeal()
+    {
+        if (!Security.ItemSeals.Refuses(this, Security.SealRule.SaveCopy, out var reason))
+            return false;
+        Logging.Logger.Log($"Slot: refused to duplicate '{Name.Value}': {reason}");
+        return true;
     }
 
     private void DemandCopyScope(World destination)
@@ -3620,6 +3957,12 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         // the tree that targets it can be relocated to the clone's member. Without
         // this a ref aimed at a field stays bound to the original's field.
         elementMap[source.ReferenceID] = target.ReferenceID;
+
+        // A member only the host may author is left for the host to fill on a guest's copy. Copied here it went
+        // out as this guest's write, the host refused it as a host-only write, and the few on one scripted avatar
+        // were enough to have the guest kicked for wearing a copy of it. -xlinka
+        if (target is ConflictingSyncElement { IsHostOnly: true } hostOnly && hostOnly.World?.IsAuthority == false)
+            return;
 
         // References (SyncRef and subclasses like AssetRef) are deferred, not bound
         // here: the target's clone may not exist yet. The transfer phase resolves
@@ -3804,7 +4147,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             Slot? clone = null;
             if (source != null && !source.IsDestroyed && source.World != null && parent != null && !parent.IsDestroyed
                 && !ReferenceEquals(parent, source) && !parent.IsDescendantOf(source) && !InsideAnother(source, sources)
-                && !source.RefuseOnRoot("duplicate", RootRefusalDuplicate))
+                && !source.RefuseOnRoot("duplicate", RootRefusalDuplicate) && !source.RefusedBySeal())
             {
                 clone = source.DuplicateStructure(parent, elementMap, slotPairs, componentPairs);
                 if (clone != null)
@@ -3930,6 +4273,78 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
 
     #region Destroy & Cleanup
 
+    // Applying another peer's destroy runs as the system, and whatever that sets off on this peer meanwhile
+    // (a prepare-destroy handler, anything else run inside it) destroying some other slot or component is
+    // judged as the peer that destroy speaks for: this peer on a client, where anything it destroys goes out
+    // as its own, and the sender on the host, where the bypass would otherwise hand a guest's destroy the
+    // host's reach. Under the bypass a client's handler took down something it did not own and sent it; the
+    // host refused it, counted it toward a kick and sent the slot back as an orphan. -xlinka
+    [ThreadStatic] private static int s_replicatedDestroyDepth;
+    [ThreadStatic] private static User? s_replicatedDestroyActor;
+    private static bool s_loggedNestedRefusal;
+
+    internal static bool InsideReplicatedDestroy => s_replicatedDestroyDepth > 0;
+
+    // Whether the actor this machine answers for right now may take a registry entry out: as things stand,
+    // or while a replicated destroy is being applied, as the peer it speaks for with the bypass set aside.
+    internal static bool MayTakeOut<T>(Networking.Sync.ReplicatedDictionary<RefID, T> collection, in RefID id)
+        where T : class, IWorldElement
+        => s_replicatedDestroyDepth == 0
+            ? collection.MayRemoveQuietly(id)
+            : s_replicatedDestroyActor is { } actor && collection.MayRemoveQuietly(id, actor, unscoped: true);
+
+    // Whether this destroy is one a replicated destroy set off and the peer it speaks for may not make.
+    // Logged once, at debug level: the slot is left as it is, and its owner's own destroy still reaches it.
+    private bool RefusedInsideReplicatedDestroy(World world)
+    {
+        if (s_replicatedDestroyDepth == 0 || IsLocalElement || world.SlotRegistry is not { } registry
+            || !registry.ContainsKey(ReferenceID) || MayTakeOut(registry, ReferenceID))
+            return false;
+        if (!s_loggedNestedRefusal)
+        {
+            s_loggedNestedRefusal = true;
+            Logging.Logger.Debug($"Slot.Destroy: '{Name.Value}' left alone; another peer's destroy set it off here and it is not {s_replicatedDestroyActor?.UserName.Value ?? "anyone"}'s to remove");
+        }
+        return true;
+    }
+
+    // What Destroy asks of the slot itself before it takes anything apart, asked without touching anything
+    // or saying a word: false for the world root, a protected slot, or a removal this actor may not make. An
+    // undoable delete asks it before parking, since parking is only a move and would go through where the
+    // destroy it stands for will not.
+    public bool MayDestroy()
+    {
+        if (IsDestroyed)
+            return false;
+        var world = World;
+        if (world == null || world.IsDisposed || world.IsDestroyed)
+            return true;
+        if (IsProtected)
+            return false;
+        if (IsLocalElement)
+            return true;
+        return world.SlotRegistry is not { IsLoading: false, IsInInitPhase: false } registry
+            || !registry.ContainsKey(ReferenceID) || registry.MayRemoveQuietly(ReferenceID);
+    }
+
+    // The same question asked for someone else, as they stand with no scope open: whether that user could
+    // take this down by hand.
+    internal bool MayBeDestroyedBy(User actor)
+    {
+        if (IsDestroyed || IsProtected || World is not { } world || world.IsDisposed || world.IsDestroyed)
+            return false;
+        return IsLocalElement || world.SlotRegistry is not { } registry || !registry.ContainsKey(ReferenceID)
+            || registry.MayRemoveQuietly(ReferenceID, actor, unscoped: true);
+    }
+
+    // Someone other than this machine's user holding it in place: a lever or hinge part, which a grab leaves
+    // where it hangs. A carried object hangs under its holder's hand, outside whatever it was taken from.
+    private static bool HeldByAnother(Slot slot)
+    {
+        var holder = ((IPermissionGrabSurface)slot).CurrentHolder;
+        return holder != null && !ReferenceEquals(holder, slot.World?.LocalUser);
+    }
+
     public void Destroy()
     {
         if (IsDestroyed) return;
@@ -3943,6 +4358,9 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             Logging.Logger.Warn($"Slot.Destroy: refusing to destroy protected slot '{Name.Value}' (RefID {ReferenceID})");
             return;
         }
+
+        if (!teardown && RefusedInsideReplicatedDestroy(World!))
+            return;
 
         // The slot's own removal is asked before anything is taken apart. Refused at the end, as it was, it
         // left the slot marked destroyed with its components stripped on this machine and still registered
@@ -3969,22 +4387,23 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
                 continue;
             // A person riding or sitting on what goes keeps the body: it is let down onto the world. A user
             // root goes only when it is destroyed itself.
-            if (!teardown && child.ActiveUserRoot is { IsDestroyed: false } body && ReferenceEquals(body.Slot, child))
+            if (!teardown && ((child.ActiveUserRoot is { IsDestroyed: false } body && ReferenceEquals(body.Slot, child))
+                || HeldByAnother(child)))
             {
-                MoveSurvivorOut(child, survivorParent, fromReplication: false);
+                MoveSurvivorOut(child, survivorParent, fromReplication: s_replicatedDestroyDepth > 0);
                 continue;
             }
-            if (teardown || child.IsLocalElement || registry == null || registry.MayRemove(child.ReferenceID))
+            if (teardown || child.IsLocalElement || registry == null || MayTakeOut(registry, child.ReferenceID))
                 child.Destroy();
             else
-                MoveSurvivorOut(child, survivorParent, fromReplication: false);
+                MoveSurvivorOut(child, survivorParent, fromReplication: s_replicatedDestroyDepth > 0);
         }
         foreach (var child in _localChildren.ToArray())
             child.Destroy();
 
         foreach (var component in _components.ToArray())
         {
-            if (teardown || IsLocalElement || MayRemoveComponent(component))
+            if (teardown || IsLocalElement || MayRemoveComponentQuietly(component))
             {
                 RemoveComponent(component);
             }
@@ -4014,12 +4433,28 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
     // sends a removal back out: every peer applies the same records, and an echo from a guest would read
     // as that guest destroying other people's things. Runs as the system, on state the authority has
     // already judged. -xlinka
-    internal void DestroyFromReplication()
+    internal void DestroyFromReplication(User? remover = null)
     {
         var world = World;
         if (IsDestroyed || IsProtected || world == null || world.IsDisposed)
             return;
 
+        var outerActor = s_replicatedDestroyActor;
+        s_replicatedDestroyActor = world.IsAuthority ? remover : world.LocalUser;
+        s_replicatedDestroyDepth++;
+        try
+        {
+            ApplyReplicatedDestroy(world);
+        }
+        finally
+        {
+            s_replicatedDestroyDepth--;
+            s_replicatedDestroyActor = outerActor;
+        }
+    }
+
+    private void ApplyReplicatedDestroy(World world)
+    {
         using var system = world.DataModelPermissions?.EnterSystemBypass();
         IsDestroyed = true;
         OnPrepareDestroy?.Invoke(this);
@@ -4092,7 +4527,7 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             using (world.DataModelPermissions?.EnterSystemBypass())
                 child.SetParent(newParent, preserveGlobalTransform: true);
         }
-        else if (!fromReplication && child.ParentSlotRef.IsWriteAllowed())
+        else if (!fromReplication && child.ParentSlotRef.IsWriteAllowedQuietly())
         {
             child.SetParent(newParent, preserveGlobalTransform: true);
         }
@@ -4102,9 +4537,68 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         }
     }
 
+    // An undoable delete parks the slot out of sight instead of destroying it, and what the destroy would
+    // leave standing went into the pen with the rest: a person riding it, something another person holds
+    // where it hangs, another user's thing the actor may not take down. These are what a park has to let
+    // out first. False when one of them can only be let out by some other machine (another person's body,
+    // a hold, a slot this one may not write): a park is a plain move nobody else answers, where a destroy is
+    // answered by every peer, so the caller destroys for real then. -xlinka
+    internal bool CollectParkSurvivors(List<Slot> into)
+    {
+        into.Clear();
+        CollectSurvivors(this, into);
+        bool authority = World?.IsAuthority == true;
+        foreach (var survivor in into)
+        {
+            bool movable = survivor.ActiveUserRoot is { IsDestroyed: false } body && ReferenceEquals(body.Slot, survivor)
+                ? body.ActiveUser is { IsLocal: true }
+                : authority || (!HeldByAnother(survivor) && survivor.ParentSlotRef.IsWriteAllowedQuietly());
+            if (!movable)
+            {
+                into.Clear();
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void CollectSurvivors(Slot slot, List<Slot> into)
+    {
+        var registry = slot.World?.SlotRegistry;
+        foreach (var child in slot._children)
+        {
+            if (child.IsDestroyed || child.IsLocalElement || !ReferenceEquals(child._parent, slot))
+                continue;
+            if ((child.ActiveUserRoot is { IsDestroyed: false } body && ReferenceEquals(body.Slot, child))
+                || HeldByAnother(child) || (registry != null && !MayTakeOut(registry, child.ReferenceID)))
+                into.Add(child);
+            else
+                CollectSurvivors(child, into);
+        }
+    }
+
+    // Out to the world root, moved the way a destroy moves what it leaves standing.
+    internal static void LetOut(Slot survivor) => MoveSurvivorOut(survivor, survivor.World?.RootSlot, fromReplication: false);
+
+    // And back again on undo, written the same way: as the system on the authority, else only where this
+    // machine may write it.
+    internal static void HangBack(Slot survivor, Slot parent, float3 position, floatQ rotation, float3 scale)
+    {
+        var world = survivor.World;
+        bool authority = world?.IsAuthority == true;
+        if (!authority && !survivor.ParentSlotRef.IsWriteAllowedQuietly())
+            return;
+        using (authority ? world!.DataModelPermissions?.EnterSystemBypass() : default)
+        {
+            survivor.SetParent(parent, preserveGlobalTransform: false);
+            survivor.LocalPosition.Value = position;
+            survivor.LocalRotation.Value = rotation;
+            survivor.LocalScale.Value = scale;
+        }
+    }
+
     // Surviving providers keep their slots, which get reparented under relocateAssets (created under the world
-    // root as "<name> - Assets" when null, the same shape the object loaders use); everything else is
-    // destroyed.
+    // root as "<name> - Assets" when null); everything else is destroyed.
     public void DestroyPreservingAssets(Slot? relocateAssets = null, ISlotStripRecorder? recorder = null)
     {
         if (RefuseOnRoot("destroy keeping assets", RootRefusalStrip))
@@ -4113,6 +4607,10 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
             return;
         if (relocateAssets != null && (relocateAssets == this || relocateAssets.IsDescendantOf(this)))
             return;
+        // Asked before the strip, as Destroy asks it: refused at the end, the strip had already taken the
+        // components off on this machine.
+        if (!MayDestroy())
+            throw new UnauthorizedAccessException("datamodel mutation denied: destroying this slot");
 
         var hierarchy = new HashSet<Slot>();
         GenerateHierarchy(hierarchy);
@@ -4130,6 +4628,25 @@ public class Slot : ContainerWorker<Component>, IImplementable<IHook<Slot>>, ICh
         var externallyReferenced = new Dictionary<IAssetProvider, bool>();
         StripNonAssetComponents(hierarchy, externallyReferenced, recorder);
         RelocateOrDestroyEmpty(GetRelocationTarget, recorder);
+    }
+
+    // The question DestroyPreservingAssets acts on, asked without touching anything: does something outside
+    // this subtree still wear an asset that lives in it.
+    public bool HasAssetsReferencedOutside()
+    {
+        var hierarchy = new HashSet<Slot>();
+        GenerateHierarchy(hierarchy);
+        var memo = new Dictionary<IAssetProvider, bool>();
+        foreach (var slot in hierarchy)
+        {
+            foreach (var component in slot.Components)
+            {
+                if (component is IAssetProvider provider && !component.IsDestroyed
+                    && IsExternallyReferenced(provider, hierarchy, memo))
+                    return true;
+            }
+        }
+        return false;
     }
 
     // Bottom-up: drop every component that is not an externally-referenced asset provider.

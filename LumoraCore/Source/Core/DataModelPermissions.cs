@@ -73,7 +73,7 @@ internal sealed class SessionPermissionEnforcement : IPermissionEnforcement
         // TEMP, not durable. A denial score is evidence of a bad session, not of a person who should never
         // come back, and a wrong durable ban is a lot harder to undo than a wrong temp one. The host bans
         // properly through the session screen if it wants that. -xlinka
-        Security.BanManager.TempBan(user.UserID.Value, user.MachineID.Value);
+        Security.BanManager.TempBan(user.AccountId.Value, user.MachineID.Value);
         Kick(actor, reason);
     }
 }
@@ -165,7 +165,7 @@ public sealed class DataModelPermissionController
     // byte but never the author's root or host status.
     public IDisposable EnterActor(IPermissionActor? actor) => _engine.EnterActor(actor);
 
-    public IDisposable EnterSystemBypass() => _engine.EnterSystemBypass();
+    public Lumora.Warden.PermissionEngine.BypassScope EnterSystemBypass() => _engine.EnterSystemBypass();
 
     // For the world's OWN authored logic acting on world content while the world is frozen - an authored
     // button driving an authored light in a Social world. Pass the component doing the asking: the scope
@@ -173,6 +173,11 @@ public sealed class DataModelPermissionController
     // mutation of an AUTHORITY-AUTHORED target on the AUTHORITY and nothing else; every other gate still
     // runs. Reach for this instead of EnterSystemBypass, which skips the lot.
     public IDisposable EnterAuthoredContentScope(IWorldElement? source) => _engine.EnterAuthoredContentScope(source);
+
+    // The authority keeping a shared panel up (rebuilding its rows, refreshing what they show) while somebody
+    // holds it or has it pinned. Pass the component doing its upkeep: only what sits on its slot or below gets
+    // past the person boundary, and only on the authority. Everything else the gate asks still runs.
+    public Lumora.Warden.PermissionEngine.UpkeepScope EnterUiUpkeep(IWorldElement? source) => _engine.EnterUpkeepScope(source);
 
     public void AddRule(IDataModelPermissionRule rule) => _engine.AddRule(rule);
 
@@ -395,7 +400,7 @@ public sealed class DataModelPermissionController
 
     public double DenialScore(User? actor) => _engine.DenialScoreOf(actor);
 
-    // Seconds, monotonic. Only the denial ledger reads it; settable so a harness can drive decay without
+    // Seconds, monotonic. Only the denial ledger reads it; settable so a test can drive decay without
     // sleeping through a real minute. Null restores the real clock.
     public Func<double>? Clock
     {
@@ -403,7 +408,7 @@ public sealed class DataModelPermissionController
         set => _engine.Clock = value;
     }
 
-    // Where a violation escalation lands. Wired to the session at construction; swappable so a harness can
+    // Where a violation escalation lands. Wired to the session at construction; swappable so a test can
     // watch what the gate decided without a peer actually being kicked.
     public IPermissionEnforcement? Enforcement
     {
@@ -423,6 +428,35 @@ public sealed class DataModelPermissionController
         {
             reason = $"permission check failed: {ex.Message}";
             LumoraLogger.Error($"Datamodel permission check threw, denying: {ex}");
+            return false;
+        }
+    }
+
+    // Authorize asked quietly, as things stand or with no scope open. Fails closed the same way.
+    public bool Allows(in DataModelPermissionRequest request, bool unscoped = false)
+    {
+        try
+        {
+            return unscoped ? _engine.AllowsUnscoped(in request) : _engine.Allows(in request);
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Error($"Datamodel permission check threw, denying: {ex}");
+            return false;
+        }
+    }
+
+    // The person boundary for putting a slot under parent: a new child, or a reparent. sender is set for a move that
+    // came over the wire and is asked on the host; null asks for whoever this thread acts as. Fails closed.
+    public bool AllowsPlacingUnder(Slot? placed, Slot? parent, User? sender = null)
+    {
+        try
+        {
+            return _engine.AllowsPlacingUnder(sender, placed, parent, isNetwork: sender != null);
+        }
+        catch (Exception ex)
+        {
+            LumoraLogger.Error($"Datamodel placement check threw, denying: {ex}");
             return false;
         }
     }

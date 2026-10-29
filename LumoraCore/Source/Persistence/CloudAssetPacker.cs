@@ -37,6 +37,14 @@ public static class CloudAssetPacker
     public const string ManifestKey = "CloudAssets";
     public const string CloudScheme = "lumora";
 
+    // How many files a sync sends at once. Each one is a few round trips that mostly wait on the service,
+    // so one at a time left a fast line idle. -xlinka
+    public const int UploadWidth = 8;
+
+    // Files up to this size go up ahead and together; bigger ones go one at a time, so a save of a few
+    // large videos never holds them all in memory at once.
+    private const long AheadLimit = 32L * 1024 * 1024;
+
     // Uploads every local:// asset the tree references, rewrites the URLs, and writes the manifest into
     // the tree. Returns the manifest. The upload is handed in: a file to the hash it was stored under, or
     // no hash and why not.
@@ -55,15 +63,23 @@ public static class CloudAssetPacker
             try { size = new FileInfo(path).Length; } catch { }
             return (hash, size, error);
         }, db);
-        return PackAsync(root, packing, problems, dropped, null);
+        return PackAsync(root, packing, problems, dropped, null, null, null, 1, default);
     }
 
     // The same through a sink, the way the inventory sync sends a save up. Every file is read through the
     // asset database, so one kept encrypted on this machine goes up as its plain bytes, and before anything
-    // is sent the store is asked once which of the files it lacks: the others are not sent at all. -xlinka
+    // is sent the store is asked once which of the files it lacks: the others are not sent at all.
+    //
+    // The parts the tree already names by cloud address, from whatever it was spawned or copied from, go in
+    // the same question and on the same list. The list is all the store keeps an item's files by, so a part
+    // left off it is deleted once nothing else lists it, and a save of a spawned copy used to list none of
+    // its parts. A part the store lacks goes up again from this machine's copy, the asset database's or the
+    // download cache's. One this machine has no copy of either stays named and listed, the save goes up
+    // anyway, and it is named in lost: the inventory shows the item as broken until a machine that has the
+    // part saves it again. -xlinka
     public static Task<List<CloudAssetEntry>> PackAsync(DataTreeDictionary root, ICloudUploadSink sink, LocalDB db,
         Func<IReadOnlyList<string>, CancellationToken, Task<IReadOnlyCollection<string>?>>? missing, List<string>? problems,
-        List<string>? dropped, CancellationToken ct)
+        List<string>? dropped, CancellationToken ct, List<string>? lost = null, ContentCache? cache = null)
     {
         var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var packing = new Packing(async (source, path) =>
@@ -75,33 +91,67 @@ public static class CloudAssetPacker
             var hash = ContentHash.FromBytes(bytes);
             if (present.Contains(hash))
                 return (hash, bytes.LongLength, null);
-            var (stored, error) = await sink.StoreAsync(bytes, Path.GetExtension(path) ?? string.Empty, ct).ConfigureAwait(false);
+            var (stored, error) = await sink.StoreAsync(bytes, db.GetExtension(source), ct).ConfigureAwait(false);
             return (stored, bytes.LongLength, error);
-        }, db);
-        return PackAsync(root, packing, problems, dropped, missing == null ? null : async found =>
+        }, db) { Cache = cache, CompactTextures = true, Token = ct };
+        return PackAsync(root, packing, problems, dropped, lost, missing == null ? null : async asked =>
         {
-            // A record is filed under the hash of its bytes, so the question needs no reading; the
-            // upload still hashes what it reads, and only an answer for that hash skips a file.
-            var asked = new List<string>();
-            var seen = new HashSet<string>(StringComparer.Ordinal);
-            foreach (var uri in found)
-            {
-                var key = uri.Substring(uri.IndexOf('/', 8) + 1);
-                if (IsContentHash(key) && seen.Add(key))
-                    asked.Add(key);
-            }
-            if (asked.Count == 0)
-                return;
             var lacking = await missing(asked, ct).ConfigureAwait(false);
             if (lacking == null)
-                return;
+                return null;
             var gone = new HashSet<string>(lacking, StringComparer.OrdinalIgnoreCase);
             foreach (var key in asked)
             {
                 if (!gone.Contains(key))
                     present.Add(key);
             }
-        });
+            return gone;
+        }, async hash =>
+        {
+            ct.ThrowIfCancellationRequested();
+            var (bytes, extension, localUri) = await LocalCopyAsync(db, cache, hash, ct).ConfigureAwait(false);
+            if (bytes == null)
+                return Restore.NotHere;
+            var (stored, error) = await sink.StoreAsync(bytes, extension, ct).ConfigureAwait(false);
+            return stored == null
+                ? Restore.Refused(error ?? "no answer")
+                : new Restore(true, bytes.LongLength, extension, localUri, null);
+        }, UploadWidth, ct);
+    }
+
+    // This machine's copy of a part the store keeps: the asset database's record of its hash, else the download
+    // cache's file. Only bytes that hash to the name count. The extension is the one the record was filed under,
+    // none for the cache, which keeps no names; the address is the record's, which the variants are made from.
+    public static async Task<(byte[]? Bytes, string Extension, string? LocalUri)> LocalCopyAsync(LocalDB? db, ContentCache? cache,
+        string hash, CancellationToken ct = default)
+    {
+        hash = hash.ToLowerInvariant();
+        if (db?.UriForHash(hash) is { } uri)
+        {
+            var bytes = await db.ReadAssetBytesAsync(uri).ConfigureAwait(false);
+            if (bytes != null && ContentHash.FromBytes(bytes) == hash)
+                return (bytes, KnownExtension(db.GetExtension(uri)), uri);
+        }
+        if (cache != null && await cache.GetCached(hash, ct).ConfigureAwait(false) is { } cached)
+            return (cached, string.Empty, null);
+        return (null, string.Empty, null);
+    }
+
+    // What a fetch files a blob under when its list does not say.
+    private const string UnknownExtension = ".bin";
+
+    private static string KnownExtension(string? path)
+    {
+        var extension = string.IsNullOrEmpty(path) ? string.Empty : Path.GetExtension(path) ?? string.Empty;
+        return string.Equals(extension, UnknownExtension, StringComparison.OrdinalIgnoreCase) ? string.Empty : extension;
+    }
+
+    // What putting back one part the store lost came to: no copy here, back up from one, or a copy here the
+    // store would not take.
+    private readonly record struct Restore(bool Here, long Size, string Extension, string? LocalUri, string? Error)
+    {
+        public static Restore NotHere => new(false, 0, string.Empty, null, null);
+        public static Restore Refused(string error) => new(true, 0, string.Empty, null, error);
     }
 
     // A save's files as this machine sees them: the ones it no longer has, named the way the person saving
@@ -145,10 +195,20 @@ public static class CloudAssetPacker
             {
                 continue;
             }
-            if (value.Kind != GraphValueKind.String || !IsLocalAddress(value.String))
+            if (value.Kind != GraphValueKind.String)
+                continue;
+            var where = node != null ? $"a file named on the node \"{node}\"" : "a file named on a script node";
+            // One typed in by cloud address is a part of the save from before, kept as it is.
+            if (IsCloudAddress(value.String))
+            {
+                packing.Cloud.Add(value.String!);
+                packing.NameIn(value.String!, where);
+                continue;
+            }
+            if (!IsLocalAddress(value.String))
                 continue;
             constants.Add((entry, value.String!));
-            packing.NameIn(value.String!, node != null ? $"a file named on the node \"{node}\"" : "a file named on a script node");
+            packing.NameIn(value.String!, where);
         }
 
         foreach (var uri in locals)
@@ -158,18 +218,72 @@ public static class CloudAssetPacker
         return (locals, constants);
     }
 
+    // ask answers which of the hashes it is handed the store lacks, null when it could not say; restore puts
+    // one the store lacks back from this machine. Without them nothing is asked and nothing put back, and the
+    // parts the tree names by cloud address are only listed.
     private static async Task<List<CloudAssetEntry>> PackAsync(DataTreeDictionary root, Packing packing, List<string>? problems,
-        List<string>? dropped, Func<IReadOnlyList<string>, Task>? beforeUpload)
+        List<string>? dropped, List<string>? lost, Func<IReadOnlyList<string>, Task<IReadOnlyCollection<string>?>>? ask,
+        Func<string, Task<Restore>>? restore, int width, CancellationToken ct)
     {
+        var earlier = new Dictionary<string, CloudAssetEntry>(StringComparer.Ordinal);
+        foreach (var entry in ReadManifest(root))
+        {
+            if (PartOf(entry.Hash) is { } part)
+                earlier.TryAdd(part, entry);
+        }
         var (locals, constants) = await FindAsync(root, packing).ConfigureAwait(false);
-        if (beforeUpload != null)
-            await beforeUpload(packing.Found).ConfigureAwait(false);
+        var stored = await StoredPartsAsync(root, packing, earlier.Keys).ConfigureAwait(false);
+
+        // One question for the lot. A record is filed under the hash of its bytes, so the question needs no
+        // reading; the upload still hashes what it reads, and only an answer for that hash skips a file.
+        HashSet<string>? absent = null;
+        if (ask != null)
+        {
+            var asked = new List<string>();
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var uri in packing.Found)
+            {
+                var source = packing.SourceOf(uri);
+                var key = source.Substring(source.IndexOf('/', 8) + 1);
+                if (IsContentHash(key) && seen.Add(key))
+                    asked.Add(key);
+            }
+            foreach (var (hash, _) in stored)
+            {
+                if (seen.Add(hash))
+                    asked.Add(hash);
+            }
+            if (asked.Count > 0 && await ask(asked).ConfigureAwait(false) is { } lacking)
+                absent = new HashSet<string>(lacking, StringComparer.OrdinalIgnoreCase);
+        }
+        if (width > 1)
+            await packing.StoreAheadAsync(width, ct).ConfigureAwait(false);
         foreach (var uri in locals)
             await packing.UploadAsync(uri).ConfigureAwait(false);
         foreach (var (_, uri) in constants)
             await packing.UploadAsync(uri).ConfigureAwait(false);
 
-        if (packing.Problems.Count > 0 || packing.Missing.Count > 0)
+        // Parts the store lost go back one at a time: it only happens to a save whose parts were cleaned away,
+        // and a few big ones read at once would sit in memory together.
+        var restored = new Dictionary<string, Restore>(StringComparer.Ordinal);
+        var stranded = new List<(string Hash, string Uri)>();
+        if (absent != null && restore != null)
+        {
+            foreach (var (hash, uri) in stored)
+            {
+                if (!absent.Contains(hash))
+                    continue;
+                var back = await restore(hash).ConfigureAwait(false);
+                if (!back.Here)
+                    stranded.Add((hash, uri));
+                else if (back.Error != null)
+                    packing.Problems.Add((uri, $"is missing on the server and did not go up again: {back.Error}"));
+                else
+                    restored[hash] = back;
+            }
+        }
+
+        if (packing.Problems.Count > 0 || packing.Missing.Count > 0 || stranded.Count > 0)
         {
             var uses = new Dictionary<string, string>(StringComparer.Ordinal);
             DescribeUses(root, null, null, uses);
@@ -179,6 +293,10 @@ public static class CloudAssetPacker
                 return new List<CloudAssetEntry>();
             foreach (var uri in packing.Missing)
                 dropped?.Add(packing.NameOf(uri, uses));
+            foreach (var (hash, uri) in stranded)
+                lost?.Add(earlier.TryGetValue(hash, out var was) && was.Name.Length > 0 && !string.Equals(was.Name, hash, StringComparison.OrdinalIgnoreCase)
+                    ? was.Name + was.Extension
+                    : packing.NameOf(uri, uses));
         }
 
         var gone = new HashSet<string>(packing.Missing, StringComparer.Ordinal);
@@ -215,7 +333,31 @@ public static class CloudAssetPacker
         if (byUri.Count > 0)
             Rewrite(root, uri => byUri.TryGetValue(uri, out var hash) ? new Uri($"{CloudScheme}:///{hash}") : null);
 
-        var manifest = packing.Manifest;
+        // What went up now, then every part from before, each hash once.
+        var manifest = new List<CloudAssetEntry>(packing.Manifest);
+        var listed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var entry in manifest)
+            listed.Add(entry.Hash);
+        Dictionary<string, LocalAssetRecord>? records = null;
+        foreach (var (hash, _) in stored)
+        {
+            if (!listed.Add(hash))
+                continue;
+            records ??= packing.Records();
+            var entry = Describe(hash, earlier, records, packing.Cache);
+            if (restored.TryGetValue(hash, out var back))
+            {
+                entry.SizeBytes = back.Size;
+                if (entry.Extension.Length == 0 && back.Extension.Length > 0)
+                {
+                    entry.Extension = back.Extension;
+                    entry.Type = TypeOf(back.Extension);
+                }
+                entry.LocalUri = back.LocalUri ?? string.Empty;
+            }
+            manifest.Add(entry);
+        }
+
         var list = new DataTreeList();
         foreach (var entry in manifest)
         {
@@ -253,6 +395,70 @@ public static class CloudAssetPacker
         return manifest;
     }
 
+    // Every part the tree names by cloud address, there before this save: its URLs, the script constants
+    // FindAsync met, what the stored scripts among them name in turn when this machine has them to read, and
+    // what the tree's own earlier list carried. Built-in files are the build's own, never missing and never
+    // counted. Each hash once, lowercase, with the address it was first met under.
+    private static async Task<List<(string Hash, string Uri)>> StoredPartsAsync(DataTreeDictionary root, Packing packing,
+        IEnumerable<string> listedBefore)
+    {
+        var addresses = new List<string>();
+        CollectUrls(root, CloudScheme, addresses);
+        addresses.AddRange(packing.Cloud);
+        foreach (var hash in listedBefore)
+            addresses.Add($"{CloudScheme}:///{hash}");
+        var parts = new List<(string Hash, string Uri)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        // Grows while it is walked: a stored script read here adds what it names.
+        for (int i = 0; i < addresses.Count; i++)
+        {
+            var hash = PartOf(HashOf(addresses[i]));
+            if (hash == null || !seen.Add(hash) || Assets.BuiltinAssetRegistry.ResUriFor(hash) != null)
+                continue;
+            parts.Add((hash, addresses[i]));
+            await packing.ReadStoredScriptAsync(hash, addresses[i], addresses).ConfigureAwait(false);
+        }
+        return parts;
+    }
+
+    // A part from before as its earlier list described it, else as this machine's copy does: the extension it
+    // was filed under, so a machine that fetches it files it the same way, and its plain size. With no copy
+    // here the size stays 0; the store measures what it keeps on its own and never reads this one.
+    private static CloudAssetEntry Describe(string hash, Dictionary<string, CloudAssetEntry> earlier,
+        Dictionary<string, LocalAssetRecord> records, ContentCache? cache)
+    {
+        if (earlier.TryGetValue(hash, out var was))
+            return new CloudAssetEntry { Hash = hash, Name = was.Name, Extension = was.Extension, Type = was.Type, SizeBytes = was.SizeBytes };
+        var entry = new CloudAssetEntry { Hash = hash, Name = hash };
+        if (records.TryGetValue(hash, out var record) && File.Exists(record.FilePath))
+        {
+            entry.Extension = KnownExtension(LocalDB.ExtensionOf(record));
+            entry.Type = TypeOf(entry.Extension);
+            entry.SizeBytes = record.FileSize > 0 ? record.FileSize : 0;
+            var original = record.OriginalFileName;
+            if (!string.IsNullOrEmpty(original) && !original.StartsWith(hash, StringComparison.OrdinalIgnoreCase))
+                entry.Name = Path.GetFileNameWithoutExtension(original);
+        }
+        else if (cache != null && cache.LengthOf(hash) is var length && length > 0)
+        {
+            entry.SizeBytes = length;
+        }
+        return entry;
+    }
+
+    // A cloud part's hash the way the store names it, or null for anything that is not a content hash.
+    private static string? PartOf(string? hash)
+    {
+        if (string.IsNullOrEmpty(hash))
+            return null;
+        var key = hash.ToLowerInvariant();
+        return IsContentHash(key) ? key : null;
+    }
+
+    // A whole value that names a stored part by its cloud address.
+    private static bool IsCloudAddress(string? text)
+        => !string.IsNullOrEmpty(text) && text.StartsWith(CloudScheme + ":", StringComparison.Ordinal) && PartOf(HashOf(text)) != null;
+
     // Brings every asset the tree names into the local database, skipping the ones already there. A
     // texture whose uploader registered its variants comes down as its sidecar and the smallest rung a
     // load starts on instead of the original: the load puts that up at once and fetches a bigger rung,
@@ -285,25 +491,38 @@ public static class CloudAssetPacker
         }
 
         int fetched = 0;
-        foreach (var hash in wanted)
+        // Independent assets fill the connection together. One refusal must not prevent the other parts
+        // from arriving; diagnostics are collected under the same lock for parallel failures. -xlinka
+        var failures = new List<string>();
+        await Parallel.ForEachAsync(wanted, new ParallelOptions { MaxDegreeOfParallelism = Engine.UseConstrainedResources ? 2 : UploadWidth }, async (hash, _) =>
         {
-            if (db.Exists($"local://cloud/{hash}"))
-                continue;
-            if (textures.Contains(hash) && await CloudVariants.PrefetchAsync(db, hash, source).ConfigureAwait(false))
+            try
             {
-                fetched++;
-                continue;
+                if (db.Exists($"local://cloud/{hash}"))
+                    return;
+                if (textures.Contains(hash) && await CloudVariants.PrefetchAsync(db, hash, source).ConfigureAwait(false))
+                {
+                    Interlocked.Increment(ref fetched);
+                    return;
+                }
+                var (data, error) = await source.FetchAsync(hash).ConfigureAwait(false);
+                if (data == null)
+                {
+                    lock (failures) failures.Add($"could not fetch {hash}: {error ?? "no answer"}");
+                    return;
+                }
+                var ext = extensions.TryGetValue(hash, out var known) && !string.IsNullOrEmpty(known) ? known : UnknownExtension;
+                if (await db.SaveAssetAsync(data, ext, received: true).ConfigureAwait(false) != null)
+                    Interlocked.Increment(ref fetched);
+                else
+                    lock (failures) failures.Add($"could not store {hash}");
             }
-            var (data, error) = await source.FetchAsync(hash).ConfigureAwait(false);
-            if (data == null)
+            catch (Exception ex)
             {
-                problems?.Add($"could not fetch {hash}: {error ?? "no answer"}");
-                continue;
+                lock (failures) failures.Add($"could not fetch {hash}: {ex.Message}");
             }
-            var ext = extensions.TryGetValue(hash, out var known) && !string.IsNullOrEmpty(known) ? known : ".bin";
-            await db.SaveAssetAsync(data, ext, received: true).ConfigureAwait(false);
-            fetched++;
-        }
+        }).ConfigureAwait(false);
+        problems?.AddRange(failures);
         return fetched;
     }
 
@@ -554,8 +773,10 @@ public static class CloudAssetPacker
         private readonly Func<string, string, Task<(string? Hash, long Size, string? Error)>> _store;
         private readonly LocalDB? _db;
         private readonly Dictionary<string, string?> _files = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _sources = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ScriptGraph> _graphs = new(StringComparer.Ordinal);
         private readonly Dictionary<string, string> _namedIn = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, (string? Hash, long Size, string? Error)> _ahead = new(StringComparer.Ordinal);
 
         public readonly Dictionary<string, string?> Hashes = new(StringComparer.Ordinal);
         public readonly List<CloudAssetEntry> Manifest = new();
@@ -565,6 +786,16 @@ public static class CloudAssetPacker
         public readonly List<string> Missing = new();
         public readonly List<string> Found = new();
 
+        // Cloud addresses typed into script nodes, open or stored here: parts of the save from before.
+        public readonly List<string> Cloud = new();
+
+        // The download cache, where a part fetched for a load and never filed may still be.
+        public ContentCache? Cache { get; init; }
+        public bool CompactTextures { get; init; }
+        public CancellationToken Token { get; init; }
+
+        public string SourceOf(string uri) => _sources.TryGetValue(uri, out var source) ? source : uri;
+
         public Packing(Func<string, string, Task<(string? Hash, long Size, string? Error)>> store, LocalDB? db)
         {
             _store = store;
@@ -572,6 +803,52 @@ public static class CloudAssetPacker
         }
 
         public void NameIn(string uri, string where) => _namedIn.TryAdd(uri, where);
+
+        // This machine's asset records by hash, read once.
+        public Dictionary<string, LocalAssetRecord> Records()
+        {
+            var records = new Dictionary<string, LocalAssetRecord>(StringComparer.OrdinalIgnoreCase);
+            if (_db == null)
+                return records;
+            foreach (var record in _db.GetAllRecords())
+            {
+                if (!string.IsNullOrEmpty(record.Hash))
+                    records.TryAdd(record.Hash, record);
+            }
+            return records;
+        }
+
+        // A stored script met by its cloud address, when this machine has it to read: the cloud addresses on its
+        // nodes are parts of the save as well.
+        public async Task ReadStoredScriptAsync(string hash, string address, List<string> into)
+        {
+            if (_db?.UriForHash(hash) is not { } uri
+                || !string.Equals(_db.GetExtension(uri), ScriptGraphAsset.Extension, StringComparison.OrdinalIgnoreCase))
+                return;
+            var bytes = await _db.ReadAssetBytesAsync(uri).ConfigureAwait(false);
+            if (bytes == null)
+                return;
+            ScriptGraph graph;
+            try
+            {
+                graph = ScriptGraph.Parse(bytes);
+            }
+            catch (GraphFormatException)
+            {
+                return;
+            }
+            foreach (var node in graph.Nodes)
+            {
+                foreach (var value in node.Values.Values)
+                {
+                    if (value.Kind == GraphValueKind.String && IsCloudAddress(value.String))
+                    {
+                        into.Add(value.String!);
+                        NameIn(value.String!, address);
+                    }
+                }
+            }
+        }
 
         // What the files this machine has weigh on disk, each file once.
         public long FoundBytes()
@@ -605,11 +882,21 @@ public static class CloudAssetPacker
                 Missing.Add(uri);
                 return;
             }
+            if (CompactTextures && _db != null)
+            {
+                var source = await TextureStorage.ForTransferAsync(_db, uri, Token).ConfigureAwait(false);
+                if (source != uri)
+                {
+                    _sources[uri] = source;
+                    path = _db.GetFilePath(source);
+                    _db.Keep(source);
+                }
+            }
             _files[uri] = path;
             Found.Add(uri);
             // A save names it, so it stays on this machine whatever brought it here.
             _db?.Keep(uri);
-            if (!string.Equals(Path.GetExtension(path), ScriptGraphAsset.Extension, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(_db!.GetExtension(SourceOf(uri)), ScriptGraphAsset.Extension, StringComparison.OrdinalIgnoreCase))
                 return;
 
             var bytes = await _db!.ReadAssetBytesAsync(uri).ConfigureAwait(false);
@@ -629,8 +916,15 @@ public static class CloudAssetPacker
             {
                 foreach (var value in node.Values.Values)
                 {
-                    if (value.Kind == GraphValueKind.String && IsLocalAddress(value.String))
+                    if (value.Kind != GraphValueKind.String)
+                        continue;
+                    if (IsLocalAddress(value.String))
                         named.Add(value.String!);
+                    else if (IsCloudAddress(value.String))
+                    {
+                        Cloud.Add(value.String!);
+                        NameIn(value.String!, uri);
+                    }
                 }
             }
             if (named.Count == 0)
@@ -641,6 +935,34 @@ public static class CloudAssetPacker
                 NameIn(inner, uri);
                 await FindAsync(inner).ConfigureAwait(false);
             }
+        }
+
+        // The plain files of the save stored ahead, several at once. A stored script that names files of its
+        // own still goes in turn, once what it names is up, and so does anything over the size limit.
+        public async Task StoreAheadAsync(int width, CancellationToken ct)
+        {
+            var plain = new List<(string Uri, string Path)>();
+            foreach (var uri in Found)
+            {
+                if (_graphs.ContainsKey(uri) || !_files.TryGetValue(uri, out var path) || path == null)
+                    continue;
+                try
+                {
+                    if (new FileInfo(path).Length <= AheadLimit)
+                        plain.Add((uri, path));
+                }
+                catch (IOException)
+                {
+                }
+            }
+            if (plain.Count < 2)
+                return;
+            var stored = new (string? Hash, long Size, string? Error)[plain.Count];
+            var options = new ParallelOptions { MaxDegreeOfParallelism = width, CancellationToken = ct };
+            await Parallel.ForEachAsync(System.Linq.Enumerable.Range(0, plain.Count), options,
+                async (i, _) => stored[i] = await _store(SourceOf(plain[i].Uri), plain[i].Path).ConfigureAwait(false)).ConfigureAwait(false);
+            for (int i = 0; i < plain.Count; i++)
+                _ahead[plain[i].Uri] = stored[i];
         }
 
         // Uploads what a URL names and answers its hash, or null with the problem noted. A stored script graph
@@ -654,7 +976,7 @@ public static class CloudAssetPacker
             if (!_files.TryGetValue(uri, out var path) || path == null)
                 return null;
 
-            var source = uri;
+            var source = SourceOf(uri);
             if (_graphs.TryGetValue(uri, out var graph))
             {
                 foreach (var node in graph.Nodes)
@@ -688,18 +1010,21 @@ public static class CloudAssetPacker
                 source = restored!;
             }
 
-            var (stored, size, error) = await _store(source, path).ConfigureAwait(false);
+            var (stored, size, error) = !_graphs.ContainsKey(uri) && _ahead.TryGetValue(uri, out var ahead)
+                ? ahead
+                : await _store(source, path).ConfigureAwait(false);
             if (stored == null)
             {
                 Problems.Add((uri, $"did not upload: {error ?? "no answer"}"));
                 return null;
             }
             Hashes[uri] = stored;
-            var extension = Path.GetExtension(path) ?? string.Empty;
+            // From the record, not the file: a sealed file's name is a random id with no extension.
+            var extension = _db?.GetExtension(source) ?? Path.GetExtension(path) ?? string.Empty;
             Manifest.Add(new CloudAssetEntry
             {
                 Hash = stored,
-                Name = Path.GetFileNameWithoutExtension(path) ?? stored,
+                Name = _db?.GetStoredName(source) ?? Path.GetFileNameWithoutExtension(path) ?? stored,
                 Extension = extension,
                 Type = TypeOf(extension),
                 SizeBytes = size,
@@ -718,7 +1043,7 @@ public static class CloudAssetPacker
                 return $"the file on {place}";
             if (_namedIn.TryGetValue(uri, out var namer) && depth < 8)
             {
-                if (!IsLocalAddress(namer))
+                if (!IsLocalAddress(namer) && !IsCloudAddress(namer))
                     return namer;
                 return $"a file named in the script on {(uses.TryGetValue(namer, out var script) ? script : NameOf(namer, uses, depth + 1))}";
             }

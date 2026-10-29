@@ -178,7 +178,7 @@ public class World : IPermissionWorldFacts
 	// backlog in a single update - that is the startup flush that stalls the first frames and has tripped a
 	// driver-level race on the first 3D frame. While a backlog exists the drain takes one time-boxed bite per
 	// update; the moment it comes up empty the flag clears for good and RunSynchronously is back to its
-	// same-frame semantics. The minimum action count keeps small worlds (and the harnesses) draining in one
+	// same-frame semantics. The minimum action count keeps small worlds (and tests) draining in one
 	// go regardless of how slow the machine is. -xlinka
 	private const double StartupDrainBudgetMs = 4.0;
 	private const int StartupDrainMinActions = 64;
@@ -401,25 +401,73 @@ public class World : IPermissionWorldFacts
 	// at use-site, so a stale entry can't produce a wrong hit. A target moved across worlds re-registers via
 	// its re-init (same caveat as the collider registry). -xlinka
 	private readonly HashSet<Components.Interaction.IInteractionTarget> _interactionTargets = new();
+	private Components.Interaction.IInteractionTarget[]? _interactionTargetArray;
 
 	public void RegisterInteractionTarget(Components.Interaction.IInteractionTarget target)
 	{
-		if (target != null)
-			_interactionTargets.Add(target);
+		if (target != null && _interactionTargets.Add(target))
+		{
+			_interactionTargetArray = null;
+			_liveInteractionTargets = null;
+		}
 	}
 
 	public void UnregisterInteractionTarget(Components.Interaction.IInteractionTarget target)
 	{
-		if (target != null)
-			_interactionTargets.Remove(target);
+		if (target != null && _interactionTargets.Remove(target))
+		{
+			_interactionTargetArray = null;
+			_liveInteractionTargets = null;
+		}
 	}
 
-	// Copy the live interaction targets into a caller-provided (reusable) buffer - allocation-free. -xlinka
+	// Copy the live interaction targets into a caller-provided (reusable) buffer. The set is copied out once each
+	// time it changes and handed over in one block after that: every laser and every fingertip asks for it each
+	// frame. -xlinka
 	public void CopyInteractionTargetsTo(List<Components.Interaction.IInteractionTarget> buffer)
 	{
 		buffer.Clear();
-		foreach (var t in _interactionTargets)
-			buffer.Add(t);
+		buffer.AddRange(InteractionTargetArray());
+	}
+
+	private Components.Interaction.IInteractionTarget[] InteractionTargetArray()
+	{
+		var array = _interactionTargetArray;
+		if (array == null)
+		{
+			array = new Components.Interaction.IInteractionTarget[_interactionTargets.Count];
+			_interactionTargets.CopyTo(array);
+			_interactionTargetArray = array;
+		}
+		return array;
+	}
+
+	// Only the targets whose slots are on, for the asks that skip the rest anyway (a beam, a fingertip). Made again
+	// when the set changes or any slot anywhere is switched; most of a crowded world's targets sit under switched-off
+	// slots, and every beam walked past them every frame. -xlinka
+	private Components.Interaction.IInteractionTarget[]? _liveInteractionTargets;
+	private int _liveTargetsEpoch;
+	private readonly List<Components.Interaction.IInteractionTarget> _liveScratch = new();
+
+	public void CopyLiveInteractionTargetsTo(List<Components.Interaction.IInteractionTarget> buffer)
+	{
+		int epoch = Slot.ActiveEpoch;
+		var live = _liveInteractionTargets;
+		if (live == null || epoch != _liveTargetsEpoch)
+		{
+			_liveScratch.Clear();
+			foreach (var target in InteractionTargetArray())
+			{
+				if (target is Component { IsDestroyed: false, Slot: { IsActive: true } })
+					_liveScratch.Add(target);
+			}
+			live = _liveScratch.ToArray();
+			_liveScratch.Clear();
+			_liveInteractionTargets = live;
+			_liveTargetsEpoch = epoch;
+		}
+		buffer.Clear();
+		buffer.AddRange(live);
 	}
 
 	public Sync<string> WorldName { get; private set; }
@@ -599,6 +647,7 @@ public class World : IPermissionWorldFacts
 				// runs its constructor-seeded defaults through members the lock covers. -xlinka
 				using var configEdit = WorldConfigEdit.Enter();
 				settings = root.AttachComponent<WorldSettings>();
+				settings.SeededByEngine = true;
 			}
 			return settings!;
 		}
@@ -637,6 +686,14 @@ public class World : IPermissionWorldFacts
 	IPermissionActor? IPermissionWorldFacts.LocalActor => LocalUser;
 
 	IPermissionTarget? IPermissionWorldFacts.SlotRegistry => SlotRegistryElement;
+
+	IPermissionTarget? IPermissionWorldFacts.FindTarget(ulong id)
+		=> ReferenceController?.GetObjectOrNull(new RefID(id)) as IPermissionTarget
+			?? (s_leavingSlot is { } leaving && leaving.ReferenceID.RawValue == id ? leaving : null);
+
+	// The slot whose registry entry is being removed right now on this thread. It is already out of the id table
+	// by then, and the gate still has to see whose body it was part of. -xlinka
+	[ThreadStatic] private static Slot? s_leavingSlot;
 
 	// The delta batch the authority is validating right now, or null. Set by SyncController for the length
 	// of ValidateDeltaMessages and read only by BatchClaimsGrab. It exists because a grab is authored as
@@ -699,17 +756,80 @@ public class World : IPermissionWorldFacts
 
 	private const int WorldFormatVersion = 1;
 
-	public DataTreeDictionary SaveWorld()
+	public DataTreeDictionary SaveWorld() => SaveWorld(new ReferenceTranslator());
+
+	// What SaveWorld writes, as a hash, with references numbered from their RefIDs so an unchanged world
+	// hashes the same every time. Equal hashes mean saving would write nothing new.
+	public byte[] ContentHash()
+		=> System.Security.Cryptography.SHA256.HashData(DataTreeConverter.SaveToBytes(SaveWorld(ReferenceTranslator.Numbered())));
+
+	// The hash of what the world held when it was last saved or opened. Null until one is taken, which reads
+	// as unsaved, so a world nobody took one for keeps its save on offer.
+	private byte[]? _savedContent;
+
+	public void MarkContentSaved() => _savedContent = ContentHash();
+
+	// The baseline for a world just opened, taken once it has run a moment: its first update still attaches
+	// and settles things of its own (a spawn's assembler, a mesh's bounds), which would otherwise read as a
+	// change nobody made. A save that lands first has taken its own and this one stands down.
+	public void MarkContentSavedWhenSettled()
+		=> RunInSeconds(2f, () =>
+		{
+			if (_savedContent == null && !IsDisposed)
+				MarkContentSaved();
+		});
+
+	// Whether a save now would write anything the last save or open did not; a change undone again counts as
+	// nothing. Hashes the whole world, so it is for an occasional check, not every frame. A world still
+	// loading has nothing to save yet.
+	public bool HasUnsavedChanges()
+		=> !IsSessionStartPending && (_savedContent == null || !ContentHash().AsSpan().SequenceEqual(_savedContent));
+
+	// The inventory item this world was opened from or last saved as, so Save changes writes over it. Only
+	// this machine knows it, and only for the account that owns the item. -xlinka
+	public string? SavedItemId { get; set; }
+	public string? SavedItemAccount { get; set; }
+	public string? SavedItemName { get; set; }
+	public string? SavedItemFolder { get; set; }
+	// The group or sharer the item belongs to, null when it is the account's own.
+	public string? SavedItemOwner { get; set; }
+
+	private DataTreeDictionary SaveWorld(ReferenceTranslator translator)
 	{
-		var translator = new ReferenceTranslator();
 		var control = new SaveControl(RootSlot, translator);
+
+		// Another account's protected objects stay out of a save made by this one, broken ones too.
+		Security.ItemSeals.LeaveOutOfWorldSave(this, control);
 
 		// Claim an identity for every member the tree points at before any of it serializes. Without
 		// this a plain reference resolves on load only when its target happened to be written first.
+		control.TrackReferencedAssets();
 		control.ReserveSubtreeIdentities(RootSlot);
+		var kept = new List<Component>();
+		var carried = new List<Slot>();
+		control.CollectUnsavedAssets(RootSlot, kept, carried);
+		foreach (var slot in carried)
+			control.ReserveSubtreeIdentities(slot);
+		foreach (var asset in kept)
+			control.ReserveWorkerIdentities(asset);
 
 		// Save the tree first so type versions are collected before they're stored.
 		var rootNode = RootSlot.Save(control);
+
+		DataTreeList? carriedNode = null;
+		if (carried.Count > 0)
+		{
+			carriedNode = new DataTreeList();
+			foreach (var slot in carried)
+				carriedNode.Add(slot.SaveDetached(control));
+		}
+		DataTreeList? keptNode = null;
+		if (kept.Count > 0)
+		{
+			keptNode = new DataTreeList();
+			foreach (var asset in kept)
+				keptNode.Add(WorkerSaveLoad.SaveWorker(asset, control));
+		}
 
 		var dictionary = new DataTreeDictionary();
 		dictionary.Add("FormatVersion", WorldFormatVersion);
@@ -722,7 +842,34 @@ public class World : IPermissionWorldFacts
 		// World settings persist as the WorldSettings component on the root slot (part of rootNode),
 		// so there's no separate "Config" blob.
 		dictionary.Add("Root", rootNode);
+		if (carriedNode != null)
+			dictionary.Add(KeptSlotsKey, carriedNode);
+		if (keptNode != null)
+			dictionary.Add(KeptAssetsKey, keptNode);
 		return dictionary;
+	}
+
+	// Assets the tree pointed at without holding them (see SaveControl.CollectUnsavedAssets), and the slots
+	// they need, go back under one slot at the root. From there they are ordinary content, so the next save
+	// writes them with the rest.
+	private const string KeptAssetsKey = "Assets";
+	private const string KeptSlotsKey = "Dependencies";
+	private const string KeptAssetsSlotName = "Kept Assets";
+
+	private void LoadKeptAssets(DataTreeDictionary dictionary, LoadControl control)
+	{
+		var slots = dictionary.TryGetList(KeptSlotsKey);
+		var assets = dictionary.TryGetList(KeptAssetsKey);
+		if ((slots?.Children.Count ?? 0) == 0 && (assets?.Children.Count ?? 0) == 0)
+			return;
+		var holder = RootSlot.FindChildOrAdd(KeptAssetsSlotName);
+		if (slots != null)
+		{
+			foreach (var entry in slots.Children)
+				holder.AddSlot(string.Empty).Load(entry, control);
+		}
+		if (assets != null)
+			holder.AttachSavedComponents(assets, control);
 	}
 
 	// The whole load runs inside the config edit scope. The two config components install their own
@@ -745,6 +892,7 @@ public class World : IPermissionWorldFacts
 
 			if (dictionary.TryGetNode("Root") is { } rootNode)
 				RootSlot.Load(rootNode, control);
+			LoadKeptAssets(dictionary, control);
 
 			// The WorldSettings component (with the persisted Mode) is now loaded under the root. If
 			// we loaded into an already-running authority world, re-apply the mode's permission preset
@@ -851,6 +999,7 @@ public class World : IPermissionWorldFacts
 				}
 				if (later.Count > 0)
 					return false;
+				LoadKeptAssets(dictionary, control);
 				if (_state == WorldState.Running && IsAuthority)
 				{
 					WorldModePermissions.Apply(this, Mode);
@@ -1034,6 +1183,20 @@ public class World : IPermissionWorldFacts
 
 	private void CompleteSessionStart(string name, ushort port, string hostUserName, SessionVisibility visibility)
 	{
+		// Seeded after the content is in, so the name it was hosted under wins over one a loaded save carried:
+		// the world, the listing and every guest then say the same thing. -xlinka
+		if (!string.IsNullOrWhiteSpace(name) && Configuration is { } config)
+		{
+			using (WorldConfigEdit.Enter())
+				config.SessionName.Value = name;
+		}
+		// Always this session's, over whatever id a loaded save carried from the last time it was hosted.
+		if (Configuration is { } settings)
+		{
+			using (WorldConfigEdit.Enter())
+				settings.SessionId.Value = _session?.Metadata?.SessionId ?? string.Empty;
+		}
+
 		// Now create the host user (triggers OnUserJoined after SimpleUserSpawn is ready)
 		CreateHostUser(hostUserName);
 
@@ -1335,7 +1498,16 @@ public class World : IPermissionWorldFacts
 
 		if (!slot.IsLocalElement)
 		{
-			_slotCollection?.Remove(slot.ReferenceID);
+			var outer = s_leavingSlot;
+			s_leavingSlot = slot;
+			try
+			{
+				_slotCollection?.Remove(slot.ReferenceID);
+			}
+			finally
+			{
+				s_leavingSlot = outer;
+			}
 		}
 
 		if (!string.IsNullOrEmpty(slot.Tag.Value))
@@ -1452,7 +1624,7 @@ public class World : IPermissionWorldFacts
 
 		// Reject banned users (host-authoritative). Never ban-check our own/host user.
 		if (IsAuthority && LocalUser != null && user != LocalUser
-			&& Security.BanManager.IsBanned(user.UserID?.Value, user.MachineID?.Value, WorldName?.Value))
+			&& Security.BanManager.IsBanned(user.AccountId?.Value, user.MachineID?.Value, WorldName?.Value))
 		{
 			LumoraLogger.Warn($"Rejecting banned user '{user.UserName.Value}'");
 			return;
@@ -1541,13 +1713,20 @@ public class World : IPermissionWorldFacts
 
 		lock (_users)
 		{
-			if (_users.Remove(user))
+			bool removed = _users.Remove(user);
+			if (removed)
 				_rosterChanges.Enqueue((user, false));
 			System.Threading.Volatile.Write(ref _userCount, _users.Count);
 			ReferenceController?.UnregisterObject(user.ReferenceID);
 
+			bool listed;
 			using (EnterUserListScope())
-				_userCollection?.Remove(user.ReferenceID);
+				listed = _userCollection?.Remove(user.ReferenceID) ?? false;
+
+			// The user list hands its removal straight back here (UnregisterUser), so every leave came through
+			// twice and every user-left listener heard it twice. Only the call that took the user out goes on.
+			if (!removed && !listed)
+				return;
 
 			LumoraLogger.Log($"User removed from world: {user.UserName.Value}");
 
@@ -1772,6 +1951,22 @@ public class World : IPermissionWorldFacts
 		}
 	}
 
+	// The user in the session an allocation byte is handed to, joined on it or minting its items in it.
+	internal User? UserHoldingByte(byte userByte)
+	{
+		if (!RefIDConstants.IsValidUserByte(userByte))
+			return null;
+		lock (_users)
+		{
+			for (int i = 0; i < _users.Count; i++)
+			{
+				if (_users[i].HoldsByte(userByte))
+					return _users[i];
+			}
+		}
+		return null;
+	}
+
 	// Same snapshot into a list the caller owns. The allocating overload above is fine for a one-off UI
 	// pass and is an allocation per frame per caller for anything that runs every frame. -xlinka
 	public void GetAllUsers(List<User> target)
@@ -1841,7 +2036,7 @@ public class World : IPermissionWorldFacts
 		var userRefId = ReferenceController.PeekID();
 		var hostUser = new User();
 		// The host names itself the way it names a joiner: the account it is signed into, or a guest name
-		// from its machine key. Only a world with no engine behind it (a bare harness) keeps the label it
+		// from its machine key. Only a world with no engine behind it (a bare test) keeps the label it
 		// was handed. -xlinka
 		var engine = Engine.Current;
 		if (engine != null)
@@ -1958,9 +2153,11 @@ public class World : IPermissionWorldFacts
 	// in SessionSyncManager before SetLocalUser.
 	public void OnJoinGrantReceived()
 	{
-		if (_state == WorldState.WaitingForJoinGrant)
+		lock (_joinGrantGate)
 		{
-			StartDataModelInit();
+			_joinGrantSeen = true;
+			if (_state == WorldState.WaitingForJoinGrant)
+				StartDataModelInit();
 		}
 
 		// The full-state batch (data channel) can be applied BEFORE this JoinGrant (control channel) sets the
@@ -2092,6 +2289,13 @@ public class World : IPermissionWorldFacts
 		OnStateChanged?.Invoke(oldState, _state);
 	}
 
+	// The grant and the wait for it meet here from two threads: the grant on the session's sync thread the moment it
+	// arrives, the wait wherever the join resumed after starting the session, which in the engine is the main thread
+	// at the end of a frame. A host that answered within a long frame had its grant handled before anything waited,
+	// and the wait that came after it waited for good. Whichever comes second now moves the join on. -xlinka
+	private readonly object _joinGrantGate = new();
+	private bool _joinGrantSeen;
+
 	public void WaitForJoinGrant()
 	{
 		if (IsAuthority)
@@ -2100,11 +2304,24 @@ public class World : IPermissionWorldFacts
 			return;
 		}
 
-		var oldState = _state;
-		_initState = InitializationState.WaitingForJoinGrant;
-		_state = WorldState.WaitingForJoinGrant;
-		LumoraLogger.Debug("Waiting for join grant");
-		OnStateChanged?.Invoke(oldState, _state);
+		lock (_joinGrantGate)
+		{
+			// Turned down already (the joiner itself saw other game files in the host's challenge, on the sync thread,
+			// before this wait began): a failed join stays failed instead of waiting out the timeout.
+			if (_initState == InitializationState.Failed)
+				return;
+			if (_joinGrantSeen)
+			{
+				LumoraLogger.Debug("Join grant already in - straight to data model init");
+				StartDataModelInit();
+				return;
+			}
+			var oldState = _state;
+			_initState = InitializationState.WaitingForJoinGrant;
+			_state = WorldState.WaitingForJoinGrant;
+			LumoraLogger.Debug("Waiting for join grant");
+			OnStateChanged?.Invoke(oldState, _state);
+		}
 	}
 
 	public void StartDataModelInit()
@@ -2215,6 +2432,32 @@ public class World : IPermissionWorldFacts
 	// inside the same drain and the whole count burned off in the update that scheduled it: every
 	// "in ten updates" retry in the engine was running immediately. Same list shape as the seconds timer,
 	// ticked once per update in the same place. -xlinka
+	// Work run every update after the components and before the moved-slot events and the hooks, on the world
+	// thread: a pass that looks at many things at once (AvatarColliderPass) instead of each of them listening on its
+	// own. -xlinka
+	private readonly List<Action> _framePasses = new();
+
+	internal void AddFramePass(Action pass)
+	{
+		if (pass != null)
+			_framePasses.Add(pass);
+	}
+
+	private void RunFramePasses()
+	{
+		for (int i = 0; i < _framePasses.Count; i++)
+		{
+			try
+			{
+				_framePasses[i]();
+			}
+			catch (Exception ex)
+			{
+				LumoraLogger.Error($"World: frame pass failed: {ex.Message}");
+			}
+		}
+	}
+
 	public void RunInUpdates(int updateCount, Action action)
 	{
 		if (IsDisposed || action == null) return;
@@ -2690,7 +2933,7 @@ public class World : IPermissionWorldFacts
 		if (total > _slowWorstMs)
 		{
 			_slowWorstMs = total;
-			string who = DescribeWorstPhase(sync, comp, change, hooks);
+			string who = DescribeWorstPhase(sync, comp, change, hooks, pre);
 			_slowWorstDetail = $"sync={sync:F0} pre={pre:F0} scripts={scripts:F0} comp={comp:F0} change={change:F0} hooks={hooks:F0} end={end:F0}"
 				+ (who.Length > 0 ? $" [{who}]" : "");
 		}
@@ -2707,12 +2950,37 @@ public class World : IPermissionWorldFacts
 	// the next SlowAttributionFrames frames. So the first stall of a burst shows phases and the rest
 	// show names. -xlinka
 	private const int SlowAttributionFrames = 600;
-	private string DescribeWorstPhase(double sync, double comp, double change, double hooks)
+
+	// The pre phase is seven steps under one number; a slow one says which. Timestamps only, every frame.
+	private static readonly string[] PrePartNames = { "fetch queue and world events", "streams", "type registration", "input", "coroutines", "physics", "link grants" };
+	private readonly double[] _preParts = new double[7];
+
+	private void PrePart(int part, ref long since)
+	{
+		long now = System.Diagnostics.Stopwatch.GetTimestamp();
+		_preParts[part] = (now - since) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+		since = now;
+	}
+
+	private string DescribePreCost()
+	{
+		int worst = 0;
+		for (int i = 1; i < _preParts.Length; i++)
+		{
+			if (_preParts[i] > _preParts[worst])
+				worst = i;
+		}
+		return _preParts[worst] < 0.5 ? "" : $"{PrePartNames[worst]} {_preParts[worst]:F0}ms";
+	}
+
+	private string DescribeWorstPhase(double sync, double comp, double change, double hooks, double pre = 0)
 	{
 		_updateManager?.ArmAttribution(SlowAttributionFrames);
-		double top = System.Math.Max(System.Math.Max(sync, comp), System.Math.Max(change, hooks));
+		double top = System.Math.Max(System.Math.Max(System.Math.Max(sync, comp), System.Math.Max(change, hooks)), pre);
 		if (top <= 0)
 			return "";
+		if (top == pre)
+			return DescribePreCost();
 		if (top == hooks)
 			return _updateManager?.DescribeHookCost() ?? "";
 		if (top == comp)
@@ -2731,11 +2999,38 @@ public class World : IPermissionWorldFacts
 	}
 
 	private long _userStateAt;
+	private readonly LocalBodyWatch _bodyWatch = new();
 	private ulong _trafficReceived, _trafficSent, _downloaded, _uploaded;
 
 	// What only this machine knows about its own user, written once a second when it changes: whether it is
 	// in VR and wearing the headset, what it shows on, its round trip to the host and its traffic in this
 	// session. Everyone else reads these; nobody else can know them. -xlinka
+	// The Respawn action for this peer's own user: a fresh body from the host, whatever state this one is in.
+	public void RequestLocalRespawn()
+	{
+		var user = LocalUser;
+		if (user != null && !IsUserspace)
+			_bodyWatch.AskNow(this, user);
+	}
+
+	// The host's half of a respawn. A world with no spawn point left gets one at its root, so a user who
+	// lost their body is never stuck without one because somebody deleted the spawner too. -xlinka
+	public void RespawnUser(User user)
+	{
+		if (!IsAuthority || user == null || user.IsDestroyed || IsUserspace)
+			return;
+		var spawner = RootSlot?.GetComponentInChildren<Components.SimpleUserSpawn>();
+		if (spawner == null)
+		{
+			using (DataModelPermissions?.EnterSystemBypass())
+			{
+				var slot = RootSlot!.AddSlot("User Spawn");
+				spawner = slot.AttachComponent<Components.SimpleUserSpawn>();
+			}
+		}
+		spawner.Respawn(user);
+	}
+
 	private void UpdateLocalUserState(User user)
 	{
 		long now = System.Diagnostics.Stopwatch.GetTimestamp();
@@ -2817,6 +3112,10 @@ public class World : IPermissionWorldFacts
 
 			if (localUser != null)
 				UpdateLocalUserState(localUser);
+			if (localUser != null && !IsUserspace && _state == WorldState.Running)
+				_bodyWatch.Update(this, localUser);
+			if (localUser != null && !IsUserspace && _state == WorldState.Running && Time.UpdateIndex % 36 == 0)
+				Networking.Session.SessionEditConsent.Upkeep(this);
 			if (IsAuthority)
 				UserLinkStats.Refresh(this);
 
@@ -2841,37 +3140,45 @@ public class World : IPermissionWorldFacts
 			DrainLoadBacklog();
 			double msSync = Lap();
 
+			long _pre = _ts;
 			Networking.AssetFetcher.ProcessQueue();
 
 			RunWorldEvents();
+			PrePart(0, ref _pre);
 
 			// Streams before anything reads one. A stream's own tick is where an interpolated value
 			// lands on this frame's number and where an audio ring gets resized, so a component that
 			// reads a stream in its update has to run after this, not alongside it. -xlinka
 			_updateManager?.UpdateStreams();
+			PrePart(1, ref _pre);
 
 			// Register any newly used worker types (authority only)
 			if (IsAuthority)
 			{
 				Workers?.RegisterTypes();
 			}
+			PrePart(2, ref _pre);
 
 			if (_focus == WorldFocus.Focused)
 			{
 				ProcessInput((float)scaledDelta);
 			}
+			PrePart(3, ref _pre);
 
 			UpdateCoroutines((float)scaledDelta);
+			PrePart(4, ref _pre);
 
 			// The bodies still moving bring their last physics step into the data model before anything reads
 			// a pose this frame.
 			Physics.Step();
+			PrePart(5, ref _pre);
 
 			// Hand out link grants before anything reads a drive. A link whose target resolved since the
 			// last frame (arrived over the wire, finished loading, or was freed by another driver letting
 			// go) becomes active here, so a component reading IsLinkValid in its update sees the settled
 			// answer instead of lagging a frame behind. -xlinka
 			LinkManager?.GrantLinks();
+			PrePart(6, ref _pre);
 			double msPre = Lap();
 
 			// The script phase: after grants, so a script reads settled drives; before components, so its
@@ -2884,6 +3191,8 @@ public class World : IPermissionWorldFacts
 
 			_updateManager?.RunChangeApplications();
 			double msChange = Lap();
+
+			RunFramePasses();
 
 			// Fire deferred WorldTransformChanged events. Before hooks, so a handler
 			// that re-drives a transform gets pushed to the engine this same frame.
@@ -3170,6 +3479,7 @@ public class World : IPermissionWorldFacts
 		if (!Persistence.WorldStorage.SaveToFile(this, path, encrypt))
 			return false;
 		NotifyWorldSaved(path);
+		MarkContentSaved();
 		return true;
 	}
 

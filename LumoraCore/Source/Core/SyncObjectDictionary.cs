@@ -9,21 +9,13 @@ using Lumora.Core.Persistence;
 
 namespace Lumora.Core;
 
-/// <summary>
-/// A keyed, network-synchronized collection of world-element members: each value is a real sub-worker
-/// with its own RefID that syncs and persists itself (contrast with <see cref="SyncValueDictionary{TKey,TValue}"/>,
-/// which stores plain values). Implemented as an element list of key/value entry elements - values are
-/// created by the collection (<see cref="Add(TKey)"/>), and a missing key returns null. Lookups scan the
-/// entries, so this suits modest keyed collections rather than very large maps.
-/// </summary>
+// Each value is a sub-worker with its own RefID that syncs and persists itself; SyncValueDictionary is
+// the one for plain values. The collection creates the values (Add), and a missing key reads as null.
+// Lookups scan the entries, so keep it to modest sizes, not big maps.
 public class SyncObjectDictionary<TKey, TValue> : SyncList<SyncObjectDictionary<TKey, TValue>.Entry>
     where TKey : notnull
     where TValue : class, ISyncMember, new()
 {
-    /// <summary>
-    /// One key/value pair. A composite element whose key field and value element each sync and persist
-    /// themselves; the container carries no payload of its own (same idiom as other composite elements).
-    /// </summary>
     public sealed class Entry : SyncElement, ISyncMemberCopy
     {
         public override SyncMemberType MemberType => SyncMemberType.Object;
@@ -76,7 +68,6 @@ public class SyncObjectDictionary<TKey, TValue> : SyncList<SyncObjectDictionary<
         }
     }
 
-    /// <summary>Get the value for a key, or create a new value element if the key is absent.</summary>
     public TValue GetOrAdd(TKey key)
     {
         var existing = FindEntry(key);
@@ -85,8 +76,6 @@ public class SyncObjectDictionary<TKey, TValue> : SyncList<SyncObjectDictionary<
         return Add(key);
     }
 
-    /// <summary>Add a new value element under <paramref name="key"/>. If the key already exists, returns
-    /// the existing value rather than creating a duplicate.</summary>
     public TValue Add(TKey key)
     {
         var existing = FindEntry(key);
@@ -136,11 +125,16 @@ public class SyncObjectDictionary<TKey, TValue> : SyncList<SyncObjectDictionary<
         }
     }
 
+    // By index: Elements hands out a new wrapper and enumerator every time, and a rig's bone lookup runs here
+    // two dozen times a frame for every avatar in the room. -xlinka
+    // Count takes the read check once for the whole scan, as enumerating did.
     private Entry? FindEntry(TKey key)
     {
-        foreach (var entry in Elements)
+        int count = Count;
+        var list = (ISyncList)this;
+        for (int i = 0; i < count; i++)
         {
-            if (EqualityComparer<TKey>.Default.Equals(entry.Key.Value, key))
+            if (list.GetElement(i) is Entry entry && EqualityComparer<TKey>.Default.Equals(entry.Key.Value, key))
                 return entry;
         }
         return null;

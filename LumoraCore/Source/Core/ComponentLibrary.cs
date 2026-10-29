@@ -118,12 +118,14 @@ public static class ComponentLibrary
             SortTypes(child);
     }
 
-    public static string DisplayName(Type type)
+    // Built-in types go by the names people type ("float", not "Single"): searching the type picker for float
+    // found every float type but float itself. clrNames gives the runtime names, for what was matched on before.
+    public static string DisplayName(Type type, bool clrNames = false)
     {
         if (type == null)
             return "";
         if (!type.IsGenericType)
-            return type.Name;
+            return clrNames ? type.Name : KeywordName(type) ?? type.Name;
 
         var name = type.Name;
         int tick = name.IndexOf('`');
@@ -133,7 +135,26 @@ public static class ComponentLibrary
         var args = type.GetGenericArguments();
         var argNames = new string[args.Length];
         for (int i = 0; i < args.Length; i++)
-            argNames[i] = DisplayName(args[i]);
+            argNames[i] = DisplayName(args[i], clrNames);
         return $"{name}<{string.Join(", ", argNames)}>";
+    }
+
+    private static string? KeywordName(Type type)
+    {
+        if (type == typeof(float)) return "float";
+        if (type == typeof(double)) return "double";
+        if (type == typeof(decimal)) return "decimal";
+        if (type == typeof(int)) return "int";
+        if (type == typeof(uint)) return "uint";
+        if (type == typeof(long)) return "long";
+        if (type == typeof(ulong)) return "ulong";
+        if (type == typeof(short)) return "short";
+        if (type == typeof(ushort)) return "ushort";
+        if (type == typeof(byte)) return "byte";
+        if (type == typeof(sbyte)) return "sbyte";
+        if (type == typeof(bool)) return "bool";
+        if (type == typeof(char)) return "char";
+        if (type == typeof(string)) return "string";
+        return null;
     }
 }

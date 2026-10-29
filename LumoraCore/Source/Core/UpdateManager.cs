@@ -21,6 +21,7 @@ public class UpdateManager
     private readonly HashSet<Slot> _pendingMovedSlots = new HashSet<Slot>();
     private readonly object _movedSlotsLock = new object();
     private readonly List<Slot> _movedSlotsBatch = new List<Slot>();
+    private int[] _movedDepths = new int[256];
     private bool _processingMovedSlots;
     private float _currentDeltaTime = 0f;
 
@@ -104,12 +105,15 @@ public class UpdateManager
     }
 
     // Updatables whose startup threw - retried on later frames instead of dropped. A transient join-window
-    // permission denial or a not-yet-synced ref shouldn't kill the component for the session. Bounded so a
-    // genuinely broken OnStart doesn't spin forever. -xlinka
+    // permission denial or a not-yet-synced ref shouldn't kill the component for the session. After the fast
+    // window it drops to a slow tail rather than giving up: a start refused while somebody held the thing
+    // works the moment they let go of it, and a component dropped here stayed dead on this machine until
+    // somebody deleted it. A genuinely broken OnStart costs one try every few seconds. -xlinka
     private sealed class FailedStartup { public IUpdatable Target = null!; public int Attempts; public int CooldownFrames; }
     private readonly List<FailedStartup> _failedStartups = new();
     private const int MaxStartupRetries = 120;  // ~2s of frames, comfortably covers the join ownership-lag window
     private const int StartupRetryCooldown = 1; // next frame
+    private const int SlowStartupRetryCooldown = 240;
     private int _changeUpdateIndex = 0;
     private Dictionary<IInitializable, List<IInitializable>> _initializableChildren = new Dictionary<IInitializable, List<IInitializable>>();
 
@@ -121,7 +125,7 @@ public class UpdateManager
     // which component types. Holds the LATEST frame only (cleared at the start of each RunUpdates), so a reader
     // gets an instantaneous sample. Engine update + telemetry read are both on the main loop, so no lock. -xlinka
     public static bool ProfilingEnabled;
-    private sealed class ProfBucket { public string Name = string.Empty; public long Ticks; public int Count; }
+    private sealed class ProfBucket { public string Name = string.Empty; public long Ticks; public int Count; public long Bytes; }
     private readonly Dictionary<string, ProfBucket> _profByType = new(StringComparer.Ordinal);
     private readonly Dictionary<Slot, ProfBucket> _profBySlot = new();
 
@@ -130,7 +134,10 @@ public class UpdateManager
         public readonly string Name;
         public readonly double Ms;
         public readonly int Count;
-        public ProfileEntry(string name, double ms, int count) { Name = name; Ms = ms; Count = count; }
+        // Managed bytes allocated on the main thread while it ran, so the profile says who feeds the collector
+        // as well as who takes the time: forty avatars standing still collected eight times a second. -xlinka
+        public readonly long Bytes;
+        public ProfileEntry(string name, double ms, int count, long bytes = 0) { Name = name; Ms = ms; Count = count; Bytes = bytes; }
     }
 
     public UpdateManager(World world)
@@ -159,8 +166,38 @@ public class UpdateManager
     {
         if (updatable != null && !updatable.IsDestroyed)
         {
+            if (_startupHold != null && _startupHoldThread == Environment.CurrentManagedThreadId)
+            {
+                _startupHold.Add(updatable);
+                return;
+            }
             _startupQueue.Enqueue(updatable);
         }
+    }
+
+    // A big object loaded over several frames keeps what it attaches from starting until the last of it is in
+    // (Slot.LoadObjectStaged). While a hold is open on the loading thread, startups go into the loader's list
+    // instead of the queue, and the loader hands them over once the object is whole; they then start the way
+    // any burst does, a budgeted few a frame. -xlinka
+    private List<IUpdatable>? _startupHold;
+    private int _startupHoldThread;
+
+    internal void HoldStartups(List<IUpdatable> into)
+    {
+        _startupHold = into;
+        _startupHoldThread = Environment.CurrentManagedThreadId;
+    }
+
+    internal void EndStartupHold() => _startupHold = null;
+
+    internal void ReleaseStartups(List<IUpdatable> held)
+    {
+        for (int i = 0; i < held.Count; i++)
+        {
+            if (!held[i].IsDestroyed)
+                _startupQueue.Enqueue(held[i]);
+        }
+        held.Clear();
     }
 
     public void RegisterForUpdates(IUpdatable updatable)
@@ -209,9 +246,10 @@ public class UpdateManager
                 CurrentlyUpdating = component;
                 if (ProfilingEnabled)
                 {
+                    long bytes = GC.GetAllocatedBytesForCurrentThread();
                     long start = Stopwatch.GetTimestamp();
                     component.InternalRunLateUpdate(delta);
-                    RecordProfile(component, Stopwatch.GetTimestamp() - start, PhaseLate);
+                    RecordProfile(component, Stopwatch.GetTimestamp() - start, PhaseLate, GC.GetAllocatedBytesForCurrentThread() - bytes);
                 }
                 else
                 {
@@ -288,8 +326,14 @@ public class UpdateManager
             {
                 if (_queuedHookUpdates.Add(component))
                 {
-                    // Slots go to their own always-drained queue: a slot hook is the transform flush.
-                    if (component is Slot)
+                    // Slots go to their own always-drained queue: a slot hook is the transform flush. A camera's
+                    // hook is its pose for the picture it films, as cheap and as urgent: left behind the budget on
+                    // a busy frame (a cut, an import) its texture filmed the old place for a frame or two, which
+                    // on a camera feed is a repeated frame and then a double step. A skeleton's is a body's pose:
+                    // with three avatars in view the budget ran out most frames before every skeleton had its
+                    // turn, so people, their hair and their tails were drawn on every other frame. How often a
+                    // body is posed at all is AvatarViewLod's to say, not the hook budget's. -xlinka
+                    if (component is Slot or Components.Camera or Components.SkeletonBuilder)
                         _pendingSlotHookUpdates.Enqueue(component);
                     else
                         _pendingHookUpdates.Enqueue(component);
@@ -301,7 +345,7 @@ public class UpdateManager
     // Same shape as the world's startup-drain budget: a big queue only exists when a load or join just
     // integrated a whole tree, and draining every OnStart in the first Running frame is the last chunk
     // of the load spike. While that initial backlog exists the drain takes a time-boxed bite per frame
-    // (the floor keeps small worlds and the harnesses draining in one go); once the queue first comes up
+    // (the floor keeps small worlds and tests draining in one go); once the queue first comes up
     // empty the flag clears for good and a mid-session attach starts the same frame it always did. The
     // retry machinery already tolerates an OnStart seeing a not-yet-started sibling. -xlinka
     private const double StartupBudgetMs = 4.0;
@@ -388,8 +432,9 @@ public class UpdateManager
         => _startupBacklog || _startupBurst || _changeBurst || _startupQueue.Count >= StartupBurstThreshold
            || QueuedChangeCount >= ChangeBurstThreshold || PendingHookUpdateCount >= HookBacklogThreshold;
 
-    // Re-attempt updatables whose startup previously threw. Drops one only when it finally starts, is
-    // destroyed, or exhausts its retry budget (logged loudly then). Pumped each frame after RunStartups. -xlinka
+    // Re-attempt updatables whose startup previously threw. Drops one only when it finally starts or is
+    // destroyed; past the fast budget (logged once) it keeps trying every few seconds. Pumped each frame
+    // after RunStartups. -xlinka
     public void RunStartupRetries()
     {
         if (_failedStartups.Count == 0) return;
@@ -405,16 +450,15 @@ public class UpdateManager
             if (--f.CooldownFrames > 0)
                 continue;
 
-            f.CooldownFrames = StartupRetryCooldown;
+            f.CooldownFrames = f.Attempts >= MaxStartupRetries ? SlowStartupRetryCooldown : StartupRetryCooldown;
             f.Attempts++;
             if (TryStartup(f.Target, isRetry: true))
             {
                 _failedStartups.RemoveAt(i);
             }
-            else if (f.Attempts >= MaxStartupRetries)
+            else if (f.Attempts == MaxStartupRetries)
             {
-                Logging.Logger.Error($"UpdateManager: startup permanently failed for {f.Target} after {f.Attempts} retries.");
-                _failedStartups.RemoveAt(i);
+                Logging.Logger.Error($"UpdateManager: startup still failing for {f.Target} after {f.Attempts} retries; trying again every few seconds.");
             }
         }
     }
@@ -483,8 +527,11 @@ public class UpdateManager
         double ms = ticks * 1000.0 / Stopwatch.Frequency;
         if (ms < 0.5)
             return "";
-        string slot = (who as Component)?.Slot?.SlotName?.Value ?? "";
-        return slot.Length > 0 ? $"{who.GetType().Name} {ms:F0}ms on '{slot}'" : $"{who.GetType().Name} {ms:F0}ms";
+        var at = (who as Component)?.Slot;
+        string slot = at?.SlotName?.Value ?? "";
+        // The parent too: half the slots that hold a canvas or a skeleton are called Canvas or Skeleton.
+        string parent = at?.Parent?.SlotName?.Value ?? "";
+        return slot.Length > 0 ? $"{who.GetType().Name} {ms:F0}ms on '{slot}'{(parent.Length > 0 ? $" under '{parent}'" : "")}" : $"{who.GetType().Name} {ms:F0}ms";
     }
     public void RunUpdates(float deltaTime)
     {
@@ -508,11 +555,12 @@ public class UpdateManager
                         CurrentlyUpdating = updatable;
                         if (prof || attribute)
                         {
+                            long bytes = prof ? GC.GetAllocatedBytesForCurrentThread() : 0;
                             long start = Stopwatch.GetTimestamp();
                             updatable.InternalRunUpdate();
                             long ticks = Stopwatch.GetTimestamp() - start;
                             if (prof)
-                                RecordProfile(updatable, ticks);
+                                RecordProfile(updatable, ticks, "", GC.GetAllocatedBytesForCurrentThread() - bytes);
                             if (attribute && ticks > _worstUpdateTicks)
                             {
                                 _worstUpdateTicks = ticks;
@@ -602,7 +650,7 @@ public class UpdateManager
     private const string PhaseLate = " (late)";
     private const string PhaseDestroy = " (destroy)";
 
-    private void RecordProfile(IUpdatable updatable, long ticks, string phaseSuffix = "")
+    private void RecordProfile(IUpdatable updatable, long ticks, string phaseSuffix = "", long bytes = 0)
     {
         if (updatable is not Component comp)
         {
@@ -619,6 +667,7 @@ public class UpdateManager
         }
         tb.Ticks += ticks;
         tb.Count++;
+        tb.Bytes += bytes;
 
         var slot = comp.Slot;
         if (slot != null)
@@ -630,6 +679,7 @@ public class UpdateManager
             }
             sb.Ticks += ticks;
             sb.Count++;
+            sb.Bytes += bytes;
         }
     }
 
@@ -654,6 +704,7 @@ public class UpdateManager
         bucket.Name = name;
         bucket.Ticks = 0;
         bucket.Count = 0;
+        bucket.Bytes = 0;
         return bucket;
     }
 
@@ -664,11 +715,11 @@ public class UpdateManager
         double tickToMs = 1000.0 / Stopwatch.Frequency;
         foreach (var kv in _profByType)
         {
-            byType.Add(new ProfileEntry(kv.Value.Name, kv.Value.Ticks * tickToMs, kv.Value.Count));
+            byType.Add(new ProfileEntry(kv.Value.Name, kv.Value.Ticks * tickToMs, kv.Value.Count, kv.Value.Bytes));
         }
         foreach (var kv in _profBySlot)
         {
-            bySlot.Add(new ProfileEntry(kv.Value.Name, kv.Value.Ticks * tickToMs, kv.Value.Count));
+            bySlot.Add(new ProfileEntry(kv.Value.Name, kv.Value.Ticks * tickToMs, kv.Value.Count, kv.Value.Bytes));
         }
     }
 
@@ -725,11 +776,12 @@ public class UpdateManager
                     CurrentlyUpdating = updatable;
                     if (prof || attribute)
                     {
+                        long bytes = prof ? GC.GetAllocatedBytesForCurrentThread() : 0;
                         long start = Stopwatch.GetTimestamp();
                         updatable.InternalRunApplyChanges(_changeUpdateIndex);
                         long ticks = Stopwatch.GetTimestamp() - start;
                         if (prof)
-                            RecordProfile(updatable, ticks, PhaseChanges);
+                            RecordProfile(updatable, ticks, PhaseChanges, GC.GetAllocatedBytesForCurrentThread() - bytes);
                         if (attribute && ticks > _worstChangeTicks)
                         {
                             _worstChangeTicks = ticks;
@@ -798,14 +850,20 @@ public class UpdateManager
 
     private readonly Dictionary<Type, double> _hookMsByType = new();
     private readonly Dictionary<Type, int> _hookCallsByType = new();
+    private readonly Dictionary<Type, long> _hookBytesByType = new();
 
     // One hash per dictionary instead of a lookup and a store each; this runs once per hook call.
-    private void AccumulateHookCost(Type hookType, double ms, int calls)
+    private void AccumulateHookCost(Type hookType, double ms, int calls, long bytes = 0)
     {
         ref double totalMs = ref CollectionsMarshal.GetValueRefOrAddDefault(_hookMsByType, hookType, out _);
         totalMs += ms;
         ref int totalCalls = ref CollectionsMarshal.GetValueRefOrAddDefault(_hookCallsByType, hookType, out _);
         totalCalls += calls;
+        if (bytes != 0)
+        {
+            ref long totalBytes = ref CollectionsMarshal.GetValueRefOrAddDefault(_hookBytesByType, hookType, out _);
+            totalBytes += bytes;
+        }
     }
 
     // Hook cost used to be cleared at the top of every ProcessHookUpdates, and World runs that TWICE per
@@ -817,6 +875,7 @@ public class UpdateManager
     {
         _hookMsByType.Clear();
         _hookCallsByType.Clear();
+        _hookBytesByType.Clear();
 
         // The update profile used to clear itself at the top of RunUpdates. RunStartups runs BEFORE that
         // inside the same UpdateComponents call, so a component's OnStart cost was recorded and then
@@ -836,7 +895,8 @@ public class UpdateManager
         foreach (var pair in _hookMsByType)
         {
             _hookCallsByType.TryGetValue(pair.Key, out int calls);
-            into.Add(new ProfileEntry(pair.Key.Name, pair.Value, calls));
+            _hookBytesByType.TryGetValue(pair.Key, out long bytes);
+            into.Add(new ProfileEntry(pair.Key.Name, pair.Value, calls, bytes));
         }
     }
 
@@ -901,6 +961,8 @@ public class UpdateManager
             Type runType = null!;
             double runMs = 0.0;
             int runCalls = 0;
+            long runBytes = 0;
+            bool countBytes = ProfilingEnabled;
             for (int i = 0; i < _slotFlushBatch.Count; i++)
             {
                 var slotFlush = _slotFlushBatch[i];
@@ -910,6 +972,7 @@ public class UpdateManager
                     continue;
                 }
 
+                long slotBytes = countBytes ? GC.GetAllocatedBytesForCurrentThread() : 0;
                 long slotStart = System.Diagnostics.Stopwatch.GetTimestamp();
                 try
                 {
@@ -920,21 +983,27 @@ public class UpdateManager
                     Logging.Logger.Error($"UpdateManager: Error in hook update for {slotFlush}: {ex}");
                 }
                 double slotMs = (System.Diagnostics.Stopwatch.GetTimestamp() - slotStart) * ticksToMs;
+                if (slotMs >= SlowHookMs)
+                    NoteSlowHook(slotFlush, slotMs);
+                if (countBytes)
+                    slotBytes = GC.GetAllocatedBytesForCurrentThread() - slotBytes;
 
                 var slotHookType = slotFlush.Hook.GetType();
                 if (slotHookType != runType)
                 {
                     if (runType != null)
-                        AccumulateHookCost(runType, runMs, runCalls);
+                        AccumulateHookCost(runType, runMs, runCalls, runBytes);
                     runType = slotHookType;
                     runMs = 0.0;
                     runCalls = 0;
+                    runBytes = 0;
                 }
                 runMs += slotMs;
                 runCalls++;
+                runBytes += slotBytes;
             }
             if (runType != null)
-                AccumulateHookCost(runType, runMs, runCalls);
+                AccumulateHookCost(runType, runMs, runCalls, runBytes);
             _slotFlushBatch.Clear();
         }
 
@@ -951,6 +1020,16 @@ public class UpdateManager
             if (sharesLoad)
                 Engine.ChargeLoad(loadStart);
         }
+    }
+
+    // One hook that held the frame by itself, by name and place: the per-type cost says a mesh hook took 250 ms,
+    // and this says which mesh. A log line, not a warning: it is cheap on the thread that wrote it.
+    private const double SlowHookMs = 50.0;
+
+    private static void NoteSlowHook(IImplementable who, double ms)
+    {
+        var slot = who as Slot ?? (who as Component)?.Slot;
+        Logging.Logger.Log($"UpdateManager: {who.Hook?.GetType().Name} took {ms:F0} ms on '{slot?.SlotName?.Value}' ({(who as Component)?.GetType().Name ?? "slot"}, parent '{slot?.Parent?.SlotName?.Value}')");
     }
 
     // A startup burst can spend the shared allowance before this drain starts, and stopping on it after every
@@ -986,6 +1065,7 @@ public class UpdateManager
             // abort the whole world update mid-frame, which left queued startups,
             // changed-element processing and destructions undrained - destroyed UI
             // kept getting hover writes and the same hook re-threw every frame. - xlinka
+            long hookBytes = ProfilingEnabled ? GC.GetAllocatedBytesForCurrentThread() : 0;
             long hookStart = System.Diagnostics.Stopwatch.GetTimestamp();
             try
             {
@@ -999,7 +1079,9 @@ public class UpdateManager
             // question "which hook ate the frame" is answerable without a profiler attached.
             var hookType = implementable.Hook.GetType();
             double hookMs = (System.Diagnostics.Stopwatch.GetTimestamp() - hookStart) * ticksToMs;
-            AccumulateHookCost(hookType, hookMs, 1);
+            if (hookMs >= SlowHookMs)
+                NoteSlowHook(implementable, hookMs);
+            AccumulateHookCost(hookType, hookMs, 1, ProfilingEnabled ? GC.GetAllocatedBytesForCurrentThread() - hookBytes : 0);
 
             processed++;
             if (processed >= maxUpdates)
@@ -1047,8 +1129,16 @@ public class UpdateManager
             _pendingMovedSlots.Clear();
         }
 
-        // Parents before children, so a child handler reading parent state sees it updated.
-        batch.Sort((a, b) => a.Depth.CompareTo(b.Depth));
+        // Parents before children, so a child handler reading parent state sees it updated. A slot's depth is a
+        // walk to the root, so it is measured once per slot rather than twice per comparison: a crowd's bone
+        // colliders are over a thousand slots twenty deep, every frame. -xlinka
+        int count = batch.Count;
+        var depths = outer ? _movedDepths : new int[count];
+        if (depths.Length < count)
+            depths = _movedDepths = new int[System.Math.Max(count, depths.Length * 2)];
+        for (int i = 0; i < count; i++)
+            depths[i] = batch[i].Depth;
+        depths.AsSpan(0, count).Sort(CollectionsMarshal.AsSpan(batch));
 
         _processingMovedSlots = true;
         try

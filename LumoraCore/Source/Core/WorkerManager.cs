@@ -20,6 +20,15 @@ public class WorkerManager
     private List<Type> types;
     private HashSet<string> typesToRegister;
 
+    // A joiner handed the world in slices holds this table as it stood when the table's own slice went out. A type
+    // registered after that reaches it in a delta it only replays once running, so a later slice naming that type
+    // by index named an entry the joiner did not have, and its sync loop threw on it every cycle from then on.
+    // While a slice is encoded, an index at or past this goes out by name, which needs nothing from the table.
+    // Only the sync thread encodes, and it puts this back when the slice is done. -xlinka
+    internal int NameIndexesFrom = int.MaxValue;
+    internal SyncElement TypeTable => indexTable;
+    internal int TypeCount => types.Count;
+
     public WorkerManager(World world)
     {
         World = world;
@@ -110,6 +119,8 @@ public class WorkerManager
     public void EncodeType(BinaryWriter writer, Type type)
     {
         int index = GetIndex(type);
+        if (index >= NameIndexesFrom)
+            index = 0;
         writer.Write7BitEncoded((ulong)index);
         if (index == 0)
         {
@@ -122,9 +133,11 @@ public class WorkerManager
     {
         int index = (int)reader.Read7BitEncoded();
 
+        // A record that got here ahead of the table entry it names. Not corrupt, early: thrown as the kind of
+        // failure a pending record waits out, so it decodes once the entry lands. -xlinka
         if (index >= types.Count)
         {
-            throw new Exception($"Unknown type index: {index}, total known indexes: {types.Count}");
+            throw new InvalidOperationException($"Unknown type index: {index}, total known indexes: {types.Count}");
         }
 
         if (index > 0)
@@ -222,6 +235,11 @@ public class WorkerManager
         // a drive, so an old save resolves the component and its format but comes back with the clock
         // unwired; re-point it once and the save keeps it. -xlinka
         ["Lumora.Core.Components.UI.CurrentDateTimeTextDriver"] = "Lumora.Core.Components.Utility.CurrentDateTimeTextDriver",
+        // The dual-sided material split into a metallic and a specular member. The one type before the
+        // split had Metallic and Smoothness and the metallic shader, so its saves load as the metallic one,
+        // every member under the same name. -xlinka
+        ["Lumora.Core.Assets.PBS_DualSided"] = "Lumora.Core.Assets.PBS_MetallicDualSided",
+        ["Lumora.Core.Components.ItemSeal"] = "Lumora.Core.Components.AvatarProtection",
     };
 
     // Register a rename alias at runtime. Same contract as the table above; this is the entry point for
