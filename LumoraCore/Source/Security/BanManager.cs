@@ -6,12 +6,7 @@ using System.Collections.Generic;
 
 namespace Lumora.Core.Security;
 
-/// <summary>
-/// Tracks banned users. In-memory <b>temp bans</b> (this process only)
-/// plus durable bans persisted through the shared <see cref="Settings"/> config store - keyed by user
-/// id and/or machine id, scoped either globally or to one world. The authority consults
-/// <see cref="IsBanned"/> when a user tries to join.
-/// </summary>
+// The authority checks IsBanned when a user tries to join.
 public static class BanManager
 {
     private const string GlobalBanRoot = "Security.Ban.Blacklist";
@@ -82,7 +77,23 @@ public static class BanManager
         return true;
     }
 
-    /// <summary>True if temp-banned, globally banned, or banned in <paramref name="worldKey"/>.</summary>
+    // A world that changes its name keeps its bans. The old name's list stays, in case another world still
+    // goes by it. -xlinka
+    public static void CopyWorldBans(string? fromWorldKey, string? toWorldKey)
+    {
+        if (string.IsNullOrEmpty(fromWorldKey) || string.IsNullOrEmpty(toWorldKey)
+            || BanRoot(fromWorldKey) == BanRoot(toWorldKey))
+            return;
+        foreach (var ban in ListBans(fromWorldKey))
+        {
+            string? userId = ban.UserId.Length > 0 ? ban.UserId : null;
+            string? machineId = ban.MachineId.Length > 0 ? ban.MachineId : null;
+            if ((userId == null && machineId == null) || IsBannedIn(userId, machineId, toWorldKey))
+                continue;
+            AddBan(ban.Username, userId, machineId, toWorldKey);
+        }
+    }
+
     public static bool IsBanned(string? userId, string? machineId, string? worldKey = null)
     {
         if (IsTempBanned(userId, machineId)) return true;
@@ -113,7 +124,6 @@ public static class BanManager
         return null;
     }
 
-    /// <summary>Persistent bans in a scope (global when worldKey is null).</summary>
     public static List<BanEntry> ListBans(string? worldKey = null)
     {
         var result = new List<BanEntry>();

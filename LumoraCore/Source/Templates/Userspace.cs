@@ -43,12 +43,13 @@ namespace Lumora.Core.Templates
                 // puts itself in front of you in VR when one appears, so nothing has to open it. It sits
                 // beside the dash rather than inside it because the field being typed into is just as
                 // often on a world panel or an inspector. -xlinka
-                var keyboardSlot = userspaceRoot.AddSlot("Virtual Keyboard");
-                keyboardSlot.ActiveSelf.Value = false;
-                keyboardSlot.AttachComponent<VrKeyboard>();
+                SpawnKeyboard(userspaceRoot);
 
                 // The hand menu's overlay shaders, drawn unseen once so its first open does not compile them.
                 userspaceRoot.AddSlot("Overlay Warm-Up").AttachComponent<OverlayShaderWarmUp>();
+
+                // The focused world's chat in the corner of a screen. It follows whichever world has focus.
+                userspaceRoot.AddSlot("Chat Box").AttachComponent<Components.Chat.DesktopChatBox>();
 
                 // The radial context menu lives per-user in the game world
                 // (built by AvatarAssembler, opened by HandTool). Items
@@ -64,9 +65,20 @@ namespace Lumora.Core.Templates
             // Register with WorldManager as userspace world
             // (UserspaceWorld setter automatically calls PrivateOverlayWorld which adds to managed worlds)
             engine.WorldManager.UserspaceWorld = world;
+            // A favourite keyboard known before this space was, from a sign in that came first.
+            FavouriteKeyboard.Refresh();
 
             Logger.Log("Userspace: Userspace setup complete");
             return world;
+        }
+
+        // The built-in keyboard, parked hidden. Also what comes back when a favourite keyboard goes away.
+        public static Slot SpawnKeyboard(Slot userspaceRoot)
+        {
+            var keyboardSlot = userspaceRoot.AddSlot("Virtual Keyboard");
+            keyboardSlot.ActiveSelf.Value = false;
+            keyboardSlot.AttachComponent<VrKeyboard>();
+            return keyboardSlot;
         }
 
         // Userspace-owned pointer rig: a stripped proxy avatar that lives in the overlay world and

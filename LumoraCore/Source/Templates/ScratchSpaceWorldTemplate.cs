@@ -231,9 +231,14 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
 
     private static void CreateLighting(World world)
     {
+        // 40 degrees up and a little behind spawn's left shoulder, so what you face at spawn is lit. This was
+        // the grid's old rotation copied over: 10 degrees up dead ahead, backlighting everything in view, and
+        // shining from a different side of the sky than the sun the sky drew. The sky now takes its sun from
+        // this rotation. -xlinka
+        var sunRotation = floatQ.Euler(-0.611f, -0.698f, 0f);
         var lightSlot = world.RootSlot.AddSlot("DirectionalLight");
         lightSlot.LocalPosition.Value = new float3(0f, 10f, 0f);
-        lightSlot.LocalRotation.Value = floatQ.Euler(-2.55f, -0.181f, 0f);
+        lightSlot.LocalRotation.Value = sunRotation;
         var dirLight = lightSlot.AttachComponent<Light>();
         dirLight.Type.Value = LightType.Directional;
         dirLight.LightColor.Value = new color(1.00f, 0.91f, 0.82f, 1f);
@@ -253,7 +258,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         skybox.HorizonColor.Value = new color(0.44f, 0.48f, 0.56f, 1f);
         skybox.BottomColor.Value = new color(0.18f, 0.16f, 0.14f, 1f);
         skybox.SunColor.Value = new color(1.00f, 0.88f, 0.68f, 1f);
-        skybox.SunDirection.Value = new float3(0.62f, 0.38f, -0.68f);
+        skybox.SunDirection.Value = sunRotation * float3.Forward;
         skybox.SunSize.Value = 0.018f;
         skybox.SunIntensity.Value = 0.75f;
         skybox.SunGlowPower.Value = 24f;
@@ -289,6 +294,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         groundRenderer.ShadowCastMode.Value = ShadowCastMode.Off;
 
         var groundCollider = groundSlot.AttachComponent<BoxCollider>();
+        groundCollider.CharacterCollider.Value = true;
         groundCollider.Type.Value = ColliderType.Static;
         groundCollider.Size.Value = groundMesh.Size.Value;
     }
@@ -779,7 +785,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         });
 
         // A flat sheet is the only shape where a different back face reads as anything.
-        CreateQuadPreview<PBS_DualSided>(root, "PBS_DualSided", index++, new float2(0.44f, 0.44f), material =>
+        CreateQuadPreview<PBS_MetallicDualSided>(root, "PBS_MetallicDualSided", index++, new float2(0.44f, 0.44f), material =>
         {
             material.FrontAlbedoColor.Value = new colorHDR(0.95f, 0.85f, 0.30f, 1f);
             material.BackAlbedoColor.Value = new colorHDR(0.20f, 0.35f, 0.90f, 1f);
@@ -825,6 +831,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         mesh.UVScale.Value = new float2(5f, 2.5f);
 
         var collider = slot.AttachComponent<SphereCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Radius.Value = mesh.Radius.Value;
         collider.Type.Value = ColliderType.Trigger;
 
@@ -860,6 +867,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         mesh.BoundsMargin.Value = 0.1f;
 
         var collider = slot.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = new float3(extent * 2f, height, extent * 2f);
         collider.Type.Value = ColliderType.Trigger;
 
@@ -891,6 +899,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         mesh.UVScale.Value = new float3(2f, 2f, 2f);
 
         var collider = slot.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = size;
         collider.Type.Value = ColliderType.Trigger;
 
@@ -918,6 +927,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         mesh.DualSided.Value = false;
 
         var collider = slot.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = new float3(size.x, size.y, 0.02f);
         collider.Type.Value = ColliderType.Trigger;
 
@@ -952,6 +962,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         mesh.LowerRightColor.Value = new color(0.95f, 0.90f, 0.30f, 1f);
 
         var collider = slot.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = new float3(0.44f, 0.44f, 0.02f);
         collider.Type.Value = ColliderType.Trigger;
 
@@ -984,6 +995,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         mesh.WireframeBarycentrics.Value = true;
 
         var collider = slot.AttachComponent<SphereCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Radius.Value = 0.18f;
         collider.Type.Value = ColliderType.Trigger;
 
@@ -1064,6 +1076,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         mesh.UVScale.Value = new float2(3f, 1.5f);
 
         var collider = slot.AttachComponent<SphereCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Radius.Value = mesh.Radius.Value;
         collider.Type.Value = ColliderType.Trigger;
 
@@ -1189,6 +1202,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         renderer.Material.Target = material;
 
         var collider = cube.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = mesh.Size.Value;
 
         var body = cube.AttachComponent<RigidBody>();
@@ -1246,6 +1260,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         tableRenderer.Mesh.Target = tableMesh;
         tableRenderer.Material.Target = tableMat;
         var tableCollider = table.AttachComponent<BoxCollider>();
+        tableCollider.CharacterCollider.Value = true;
         tableCollider.Type.Value = ColliderType.Static;
         tableCollider.Size.Value = tableMesh.Size.Value;
         // The cloth finds this BoxCollider (and any other world collider) through CollideWithWorld's
@@ -1792,6 +1807,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         renderer.Material.Target = material;
 
         var collider = slot.AttachComponent<ConvexHullCollider>();
+        collider.CharacterCollider.Value = true;
         AddHullPoints(collider.Points);
         collider.Type.Value = ColliderType.Trigger;
 
@@ -1830,6 +1846,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
 
         // DevToolItem builds its own cone visual - adding one here doubled it.
         var collider = toolSlot.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = new float3(0.12f, 0.26f, 0.12f);
 
         toolSlot.AttachComponent<Grabbable>();
@@ -1859,7 +1876,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
 
         const float shelfHeight = 1.0f;
         const float spacing = 0.5f;
-        const float length = spacing * 6f;
+        const float length = spacing * 7f;
 
         var shelf = bench.AddSlot("Shelf");
         shelf.LocalPosition.Value = new float3(0f, shelfHeight, 0f);
@@ -1873,6 +1890,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         shelfRenderer.Mesh.Target = shelfMesh;
         shelfRenderer.Material.Target = shelfMat;
         var shelfCollider = shelf.AttachComponent<BoxCollider>();
+        shelfCollider.CharacterCollider.Value = true;
         shelfCollider.Type.Value = ColliderType.Static;
         shelfCollider.Size.Value = shelfMesh.Size.Value;
 
@@ -1891,6 +1909,8 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         RackTool<DuplicatorTool>(bench, "Duplicator", "Duplicator (DuplicatorTool)\ncopies what you point at", new float3(0f, shelfHeight + 0.16f, z));
         z += spacing;
         RackTool<MeterTool>(bench, "Meter Tool", "Meter (MeterTool)\ntwo clicks, one distance", new float3(0f, shelfHeight + 0.16f, z));
+        z += spacing;
+        RackTool<BrushTool>(bench, "Brush", "Brush (BrushTool)\nhold and draw; the ring picks the tip", new float3(0f, shelfHeight + 0.16f, z));
     }
 
     // The tool component brings its own Grabbable (ToolItem attaches one on attach) and its own
@@ -1902,6 +1922,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         slot.LocalPosition.Value = localPosition;
 
         var collider = slot.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = new float3(0.1f, 0.12f, 0.1f);
 
         slot.AttachComponent<T>();
@@ -1930,6 +1951,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         pedestalRenderer.Mesh.Target = pedestalMesh;
         pedestalRenderer.Material.Target = pedestalMat;
         var pedestalCollider = pedestal.AttachComponent<CylinderCollider>();
+        pedestalCollider.CharacterCollider.Value = true;
         pedestalCollider.Type.Value = ColliderType.Static;
         pedestalCollider.Radius.Value = 0.22f;
         pedestalCollider.Height.Value = 0.9f;
@@ -1969,6 +1991,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         renderer.Material.Target = material;
 
         var collider = cube.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = mesh.Size.Value;
         collider.Type.Value = ColliderType.Trigger;
 
@@ -2032,6 +2055,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         panelRenderer.Mesh.Target = panelMesh;
         panelRenderer.Material.Target = panelMat;
         var panelCollider = panel.AttachComponent<BoxCollider>();
+        panelCollider.CharacterCollider.Value = true;
         panelCollider.Type.Value = ColliderType.Static;
         panelCollider.Size.Value = panelMesh.Size.Value;
 
@@ -2064,6 +2088,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         var plungerSlot = panel.AddSlot("Plunger Button");
         plungerSlot.LocalPosition.Value = new float3(-0.5f, 0.14f, -0.05f);
         var plungerCollider = plungerSlot.AttachComponent<BoxCollider>();
+        plungerCollider.CharacterCollider.Value = true;
         plungerCollider.Size.Value = new float3(0.2f, 0.2f, 0.1f);
         plungerCollider.Type.Value = ColliderType.Trigger;
         var cap = plungerSlot.AddSlot("Plunger");
@@ -2132,6 +2157,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         switchRenderer.Mesh.Target = switchMesh;
         switchRenderer.Material.Target = switchMat;
         var switchCollider = switchSlot.AttachComponent<BoxCollider>();
+        switchCollider.CharacterCollider.Value = true;
         switchCollider.Size.Value = switchMesh.Size.Value;
         switchCollider.Type.Value = ColliderType.Trigger;
         var touchSwitch = switchSlot.AttachComponent<TouchSwitch>();
@@ -2161,6 +2187,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         flipRenderer.Mesh.Target = flipMesh;
         flipRenderer.Material.Target = flipMat;
         var flipCollider = flipSlot.AttachComponent<BoxCollider>();
+        flipCollider.CharacterCollider.Value = true;
         flipCollider.Size.Value = flipMesh.Size.Value;
         flipCollider.Type.Value = ColliderType.Trigger;
         var flip = flipSlot.AttachComponent<TouchFlip>();
@@ -2197,6 +2224,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         padRenderer.Mesh.Target = padMesh;
         padRenderer.Material.Target = padMat;
         var padCollider = padSlot.AttachComponent<BoxCollider>();
+        padCollider.CharacterCollider.Value = true;
         padCollider.Size.Value = padMesh.Size.Value;
         padCollider.Type.Value = ColliderType.Trigger;
         var pad = padSlot.AttachComponent<TouchPad>();
@@ -2254,6 +2282,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         templateRenderer.Mesh.Target = templateMesh;
         templateRenderer.Material.Target = templateMat;
         var templateCollider = template.AttachComponent<BoxCollider>();
+        templateCollider.CharacterCollider.Value = true;
         templateCollider.Size.Value = templateMesh.Size.Value;
         template.AttachComponent<Grabbable>();
 
@@ -2272,6 +2301,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         dispenserRenderer.Mesh.Target = dispenserMesh;
         dispenserRenderer.Material.Target = dispenserMat;
         var dispenserCollider = dispenser.AttachComponent<BoxCollider>();
+        dispenserCollider.CharacterCollider.Value = true;
         dispenserCollider.Size.Value = new float3(0.4f, 0.3f, 0.4f);
         dispenserCollider.Type.Value = ColliderType.Trigger;
         var spawner = dispenser.AttachComponent<GrabSpawner>();
@@ -2297,6 +2327,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         shelfRenderer.Mesh.Target = shelfMesh;
         shelfRenderer.Material.Target = shelfMat;
         var shelfCollider = shelf.AttachComponent<BoxCollider>();
+        shelfCollider.CharacterCollider.Value = true;
         shelfCollider.Type.Value = ColliderType.Static;
         shelfCollider.Size.Value = shelfMesh.Size.Value;
 
@@ -2312,6 +2343,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         shelfItemRenderer.Mesh.Target = shelfItemMesh;
         shelfItemRenderer.Material.Target = shelfItemMat;
         var shelfItemCollider = shelfItem.AttachComponent<CapsuleCollider>();
+        shelfItemCollider.CharacterCollider.Value = true;
         shelfItemCollider.Type.Value = ColliderType.Trigger;
         shelfItemCollider.Radius.Value = 0.07f;
         shelfItemCollider.Height.Value = 0.22f;
@@ -2335,6 +2367,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         checkRenderer.Mesh.Target = checkMesh;
         checkRenderer.Material.Target = checkMat;
         var checkCollider = checkItem.AttachComponent<SphereCollider>();
+        checkCollider.CharacterCollider.Value = true;
         checkCollider.Radius.Value = 0.13f;
         checkCollider.Type.Value = ColliderType.Trigger;
         checkItem.AttachComponent<Grabbable>();
@@ -2355,6 +2388,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         resetRenderer.Mesh.Target = resetMesh;
         resetRenderer.Material.Target = resetMat;
         var resetCollider = resetItem.AttachComponent<BoxCollider>();
+        resetCollider.CharacterCollider.Value = true;
         resetCollider.Size.Value = float3.One * 0.22f;
         resetCollider.Type.Value = ColliderType.Trigger;
         resetItem.AttachComponent<Grabbable>();
@@ -2385,6 +2419,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         seatRenderer.Mesh.Target = seatMesh;
         seatRenderer.Material.Target = seatMat;
         var seatCollider = seatSlot.AttachComponent<BoxCollider>();
+        seatCollider.CharacterCollider.Value = true;
         seatCollider.Type.Value = ColliderType.Static;
         seatCollider.Size.Value = seatMesh.Size.Value;
 
@@ -2434,6 +2469,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
             renderer.Mesh.Target = mesh;
             renderer.Material.Target = material;
             var collider = platform.AttachComponent<CylinderCollider>();
+            collider.CharacterCollider.Value = true;
             collider.Type.Value = ColliderType.Static;
             collider.Radius.Value = 0.55f;
             collider.Height.Value = 0.12f;
@@ -2454,6 +2490,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         blockedRenderer.Mesh.Target = blockedMesh;
         blockedRenderer.Material.Target = blockedMat;
         var blockedCollider = blocked.AttachComponent<CylinderCollider>();
+        blockedCollider.CharacterCollider.Value = true;
         blockedCollider.Type.Value = ColliderType.Static;
         blockedCollider.Radius.Value = 0.55f;
         blockedCollider.Height.Value = 0.12f;
@@ -2759,6 +2796,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         templateRenderer.Mesh.Target = templateMesh;
         templateRenderer.Material.Target = templateMat;
         var templateCollider = template.AttachComponent<SphereCollider>();
+        templateCollider.CharacterCollider.Value = true;
         templateCollider.Radius.Value = 0.09f;
         template.AttachComponent<RigidBody>().Mass.Value = 0.4f;
         template.AttachComponent<Grabbable>();
@@ -2858,6 +2896,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
         renderer.ShadowCastMode.Value = ShadowCastMode.Off;
 
         var collider = slot.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Type.Value = ColliderType.Static;
         collider.Size.Value = size;
     }
@@ -2895,7 +2934,7 @@ internal sealed class ScratchSpaceWorldTemplate : WorldTemplateDefinition
             // The scene inspector is pointed at the interaction area rather than at the world root, so it
             // opens on a subtree with something in it instead of on a list of area names.
             inspectorRoot = world.RootSlot.FindChild("Interaction Showcase") ?? world.RootSlot;
-            inspector = SceneInspectorPanel.Spawn(world, inspectorRoot);
+            inspector = SceneInspectorPanel.SpawnBuiltIn(world, inspectorRoot);
             if (inspector != null)
             {
                 StandPanel(root, inspector.Slot, "Scene inspector (SceneInspectorPanel)\nbrowsing the interaction area",

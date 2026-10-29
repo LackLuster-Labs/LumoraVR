@@ -162,6 +162,7 @@ internal sealed class ShaderGalleryWorldTemplate : WorldTemplateDefinition
         renderer.ShadowCastMode.Value = ShadowCastMode.Off;
 
         var collider = ground.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Type.Value = ColliderType.Static;
         collider.Size.Value = mesh.Size.Value;
     }
@@ -647,6 +648,7 @@ internal sealed class ShaderGalleryWorldTemplate : WorldTemplateDefinition
     private static void SolidBox(Slot slot, float3 size)
     {
         var collider = slot.AttachComponent<BoxCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Size.Value = size;
         collider.Type.Value = ColliderType.Static;
     }
@@ -654,6 +656,7 @@ internal sealed class ShaderGalleryWorldTemplate : WorldTemplateDefinition
     private static void SolidCylinder(Slot slot, float radius, float height)
     {
         var collider = slot.AttachComponent<CylinderCollider>();
+        collider.CharacterCollider.Value = true;
         collider.Radius.Value = radius;
         collider.Height.Value = height;
         collider.Type.Value = ColliderType.Static;

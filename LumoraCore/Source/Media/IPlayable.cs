@@ -33,4 +33,8 @@ public enum PlaybackAction : byte
     Stop,
     ToggleResumePause,
     TogglePlayStop,
+    // Loop on and off, wherever the playhead is.
+    ToggleLoop,
+    EnableLoop,
+    DisableLoop,
 }

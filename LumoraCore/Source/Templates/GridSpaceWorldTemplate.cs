@@ -32,13 +32,14 @@ internal sealed class GridSpaceWorldTemplate : WorldTemplateDefinition
                 new colorHDR(0.45f, 0.52f, 0.68f, 0.10f),
                 new colorHDR(0.42f, 0.52f, 0.72f, 0.42f));
 
-        // Warm low-angle key light. Rotation derived so the slot's local -Z
-        // (Godot DirectionalLight photon direction) is exactly opposite the
-        // skybox's sun_direction, i.e. photons travel from the visible sun
-        // out into the scene. floatQ.Euler args are (yaw, pitch, roll). - xlinka
+        // Warm morning key light, 35 degrees up and a little behind spawn's right shoulder, so what you face at
+        // spawn is lit. It sat 10 degrees up dead ahead before: everything in view was backlit and a white ball
+        // in front of spawn read the same with the sun on and off. The slot's -Z is the way the light travels
+        // and the sky draws its sun from the same rotation, so the two cannot disagree. -xlinka
+        var sunRotation = floatQ.Euler(0.698f, -0.611f, 0f);
         var lightSlot = world.RootSlot.AddSlot("DirectionalLight");
         lightSlot.LocalPosition.Value = new float3(0f, 10f, 0f);
-        lightSlot.LocalRotation.Value = floatQ.Euler(-2.55f, -0.181f, 0f);
+        lightSlot.LocalRotation.Value = sunRotation;
         var dirLight = lightSlot.AttachComponent<Light>();
         dirLight.Type.Value = LightType.Directional;
         dirLight.LightColor.Value = new color(1.00f, 0.78f, 0.55f, 1f);
@@ -46,16 +47,15 @@ internal sealed class GridSpaceWorldTemplate : WorldTemplateDefinition
         dirLight.Intensity.Value = 1.9f;
         dirLight.Shadows.Value = ShadowType.Soft;
 
-        // Morning-sunrise sky: deep cool dawn-blue overhead, a wide warm
-        // peach/orange band at the horizon, low sun positioned where the
-        // directional light is coming from. - xlinka
+        // Morning sky: deep cool dawn-blue overhead, a wide warm peach/orange band at the horizon, the sun
+        // where the directional light comes from. - xlinka
         var skySlot = world.RootSlot.AddSlot("GradientSkybox");
         var skybox = skySlot.AttachComponent<GradientSkybox>();
         skybox.TopColor.Value = new color(0.14f, 0.18f, 0.40f, 1f);
         skybox.HorizonColor.Value = new color(1.00f, 0.60f, 0.40f, 1f);
         skybox.BottomColor.Value = new color(0.95f, 0.55f, 0.42f, 1f);
         skybox.SunColor.Value = new color(1.00f, 0.78f, 0.52f, 1f);
-        skybox.SunDirection.Value = new float3(-0.55f, 0.18f, -0.82f);
+        skybox.SunDirection.Value = sunRotation * float3.Forward;
         skybox.SunSize.Value = 0.045f;
         skybox.SunIntensity.Value = 2.6f;
         skybox.SunGlowPower.Value = 48f;
@@ -101,6 +101,7 @@ internal sealed class GridSpaceWorldTemplate : WorldTemplateDefinition
         groundRenderer.ShadowCastMode.Value = ShadowCastMode.Off;
 
         var groundCollider = groundSlot.AttachComponent<BoxCollider>();
+        groundCollider.CharacterCollider.Value = true;
         groundCollider.Type.Value = ColliderType.Static;
         groundCollider.Size.Value = groundMesh.Size.Value;
 
@@ -125,14 +126,16 @@ internal sealed class GridSpaceWorldTemplate : WorldTemplateDefinition
         orbRenderer.Mesh.Target = orbMesh;
         orbRenderer.Material.Target = orbMaterial;
 
-        // Stand-height glass beside the spawn circle; controls overlay its upper corner.
-        MirrorPanel.Spawn(world.RootSlot, new float3(0f, 1.65f, 4.7f),
+        // Stand-height glass beside the spawn circle, nothing drawn over it.
+        Mirror.Spawn(world.RootSlot, new float3(0f, 1.65f, 4.7f),
             float3.Backward, new float2(2.6f, 2.2f));
         var probeSlot = world.RootSlot.AddSlot("Spawn reflections");
         probeSlot.LocalPosition.Value = new float3(0f, 1.5f, 0f);
         var probe = probeSlot.AttachComponent<ReflectionProbe>();
         probe.Size.Value = new float3(20f, 8f, 20f);
         probe.MaxDistance.Value = 40f;
-        probe.UpdateMode.Value = ProbeUpdateMode.Always;
+        // Captured once and again whenever loading settles, not every frame: Always re-rendered the whole
+        // scene six times a frame, avatars and all, for a soft reflection on a matte orb. -xlinka
+        probe.UpdateMode.Value = ProbeUpdateMode.Once;
     }
 }

@@ -5,6 +5,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Environment = System.Environment;
@@ -241,7 +242,7 @@ namespace Lumora.Core.Logging
                     SweepRepeats();
                     // The bootstrap pins the data folder within the first frames. Until it has, hold the
                     // queue rather than commit the file to the fallback folder; after a few seconds
-                    // assume there is no bootstrap (a harness, a tool) and write where the default says.
+                    // assume there is no bootstrap (a test, a tool) and write where the default says.
                     if (!Persistence.PathResolver.IsInitialized && DateTime.UtcNow - _started < TimeSpan.FromSeconds(3))
                         continue;
                     FlushLogQueue();
@@ -355,6 +356,39 @@ namespace Lumora.Core.Logging
         public static void Debug(string message)
         {
             WriteLog(LogLevel.DEBUG, message);
+        }
+
+        // An interpolated debug line is only put together when debug lines are kept. Hundreds of them sit on
+        // paths that run every frame (every material update wrote two), and each built its string just to
+        // have it dropped at the floor. -xlinka
+        public static void Debug(ref DebugMessage message)
+        {
+            if (message.Enabled)
+                WriteLog(LogLevel.DEBUG, message.Text());
+        }
+
+        [InterpolatedStringHandler]
+        public ref struct DebugMessage
+        {
+            private DefaultInterpolatedStringHandler _text;
+            public readonly bool Enabled;
+
+            public DebugMessage(int literalLength, int formattedCount, out bool isEnabled)
+            {
+                Enabled = isEnabled = MinimumLevel == LogLevel.DEBUG;
+                _text = isEnabled ? new DefaultInterpolatedStringHandler(literalLength, formattedCount) : default;
+            }
+
+            public void AppendLiteral(string value) => _text.AppendLiteral(value);
+            public void AppendFormatted<T>(T value) => _text.AppendFormatted(value);
+            public void AppendFormatted<T>(T value, string? format) => _text.AppendFormatted(value, format);
+            public void AppendFormatted<T>(T value, int alignment) => _text.AppendFormatted(value, alignment);
+            public void AppendFormatted<T>(T value, int alignment, string? format) => _text.AppendFormatted(value, alignment, format);
+            public void AppendFormatted(ReadOnlySpan<char> value) => _text.AppendFormatted(value);
+            public void AppendFormatted(string? value) => _text.AppendFormatted(value);
+            public void AppendFormatted(object? value, int alignment = 0, string? format = null) => _text.AppendFormatted(value, alignment, format);
+
+            internal string Text() => _text.ToStringAndClear();
         }
 
         public enum LogLevel

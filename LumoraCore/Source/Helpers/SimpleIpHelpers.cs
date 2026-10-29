@@ -29,6 +29,26 @@ namespace Lumora.Core.Helpers
         public static int? GetAvailablePortUdp(int maxAtemptsint)
             => Probe(maxAtemptsint, ProtocolType.Udp, SocketType.Dgram);
 
+        // How many ports up from the chosen hosting port further hosted worlds may take.
+        public const int HostingPortSpan = 32;
+
+        // The port a world about to be hosted listens on: the first free one from the hosting port set in the
+        // settings, which is what a forwarded range needs, or any free one when none is set or the range is full.
+        public static ushort HostingPortUdp()
+        {
+            int first = EngineSettings.HostingPort;
+            if (first > 0)
+            {
+                for (int port = first; port < first + HostingPortSpan && port <= ushort.MaxValue; port++)
+                {
+                    if (CanBind(port, ProtocolType.Udp, SocketType.Dgram))
+                        return (ushort)port;
+                }
+                Logging.Logger.Warn($"[lnl] Hosting ports {first}-{first + HostingPortSpan - 1} are all taken; using any free port");
+            }
+            return (ushort)(GetAvailablePortUdp(10) ?? 6000);
+        }
+
         public static int? GetAvailablePortTcp(int maxAtemptsint)
             => Probe(maxAtemptsint, ProtocolType.Tcp, SocketType.Stream);
 

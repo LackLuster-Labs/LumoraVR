@@ -35,7 +35,7 @@ internal sealed class LocalHomeWorldTemplate : WorldTemplateDefinition
 
         var lightSlot = world.RootSlot.AddSlot("DirectionalLight");
         lightSlot.LocalPosition.Value = new float3(0f, 10f, 0f);
-        lightSlot.LocalRotation.Value = floatQ.Euler(0.785f, -0.785f, 0f);
+        lightSlot.LocalRotation.Value = SunRotation;
         var dirLight = lightSlot.AttachComponent<Light>();
         dirLight.Type.Value = LightType.Directional;
         dirLight.LightColor.Value = new color(1f, 0.96f, 0.84f, 1f);
@@ -50,7 +50,7 @@ internal sealed class LocalHomeWorldTemplate : WorldTemplateDefinition
         skybox.HorizonColor.Value = new color(0.46f, 0.38f, 0.58f, 1f);
         skybox.BottomColor.Value = new color(0.040f, 0.032f, 0.065f, 1f);
         skybox.SunColor.Value = new color(1.0f, 0.72f, 0.54f, 1f);
-        skybox.SunDirection.Value = new float3(-0.38f, 0.58f, -0.72f);
+        skybox.SunDirection.Value = SkySun;
         skybox.SunSize.Value = 0.034f;
         skybox.SunIntensity.Value = 2.4f;
         skybox.AmbientEnergy.Value = 0.48f;
@@ -180,19 +180,14 @@ internal sealed class LocalHomeWorldTemplate : WorldTemplateDefinition
         dropletParticles.Seed.Value = 1771;
 
         var groundCollider = groundSlot.AttachComponent<CylinderCollider>();
+        groundCollider.CharacterCollider.Value = true;
         groundCollider.Type.Value = ColliderType.Static;
         groundCollider.Radius.Value = groundMesh.Radius.Value;
         groundCollider.Height.Value = groundMesh.Height.Value;
         groundCollider.Offset.Value = float3.Zero;
 
-        var ambientLightSlot = world.RootSlot.AddSlot("AmbientLight");
-        ambientLightSlot.LocalPosition.Value = new float3(0f, 5f, 0f);
-        var ambientLight = ambientLightSlot.AttachComponent<Light>();
-        ambientLight.Type.Value = LightType.Point;
-        ambientLight.LightColor.Value = new color(0.4f, 0.45f, 0.55f, 1f);
-        ambientLight.Intensity.Value = 0.4f;
-        ambientLight.Range.Value = 100f;
-        ambientLight.Shadows.Value = ShadowType.None;
+        var fillSlot = world.RootSlot.AddSlot(FillLightName);
+        ShapeFill(fillSlot, fillSlot.AttachComponent<Light>());
 
         // Catch-all under the world. Bigger than ground so a user yeeted off-edge
         // still triggers respawn instead of falling forever. - xlinka
@@ -206,9 +201,31 @@ internal sealed class LocalHomeWorldTemplate : WorldTemplateDefinition
         respawnPlane.UserRespawnPosition.Value = new float3(0f, 1f, 0f);
     }
 
-    // What older builds of this template put in the home and it no longer does, taken out of a saved home
-    // as it loads: the Helio test panel. Matched by its name and its title together, so nothing a person
-    // made is touched. -xlinka
+    private const string FillLightName = "FillLight";
+
+    // 45 degrees up behind spawn's right shoulder. The sky drew its sun ahead and to the left, a different side
+    // of the sky from where the light came; it now takes it from this rotation. -xlinka
+    private static readonly floatQ SunRotation = floatQ.Euler(0.785f, -0.785f, 0f);
+    private static float3 SkySun => SunRotation * float3.Forward;
+    private static readonly float3 RetiredSkySun = new float3(-0.38f, 0.58f, -0.72f);
+
+    // Fill from the side the sun is not on, low and to the front left: a directional light, cool and faint,
+    // with no shadow. It was a point light five metres up with a hundred metre reach, which lit the middle of
+    // the home brighter than its edges and had every pixel in reach light it. -xlinka
+    private static void ShapeFill(Slot slot, Light light)
+    {
+        slot.LocalPosition.Value = new float3(0f, 10f, 0f);
+        slot.LocalRotation.Value = floatQ.Euler(-2.404f, -0.467f, 0f);
+        light.Type.Value = LightType.Directional;
+        light.LightColor.Value = new color(0.4f, 0.45f, 0.55f, 1f);
+        light.Intensity.Value = 0.3f;
+        light.Shadows.Value = ShadowType.None;
+    }
+
+    // What older builds of this template put in the home and it no longer does, put right in a saved home as
+    // it loads: the Helio test panel goes, the old point fill becomes the directional one, and the sky's sun
+    // moves to where the light comes from. Each is matched by everything the template gave it, so nothing a
+    // person made or changed is touched. -xlinka
     internal static void RemoveRetired(World world)
     {
         foreach (var slot in new List<Slot>(world.RootSlot.Children))
@@ -217,5 +234,19 @@ internal sealed class LocalHomeWorldTemplate : WorldTemplateDefinition
                 && slot.GetComponent<PanelShell>()?.Title.Value?.StartsWith("Helio Validation", StringComparison.Ordinal) == true)
                 slot.Destroy();
         }
+
+        var oldFill = world.RootSlot.FindChild("AmbientLight", recursive: false);
+        var light = oldFill?.GetComponent<Light>();
+        if (oldFill != null && light != null && light.Type.Value == LightType.Point && light.Range.Value == 100f
+            && light.Intensity.Value == 0.4f && light.Shadows.Value == ShadowType.None
+            && oldFill.LocalPosition.Value.Equals(new float3(0f, 5f, 0f)))
+        {
+            oldFill.Name.Value = FillLightName;
+            ShapeFill(oldFill, light);
+        }
+
+        var sky = world.RootSlot.FindChild("GradientSkybox", recursive: false)?.GetComponent<GradientSkybox>();
+        if (sky != null && sky.SunDirection.Value.Equals(RetiredSkySun))
+            sky.SunDirection.Value = SkySun;
     }
 }
