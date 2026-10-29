@@ -52,7 +52,7 @@ public sealed class DuplicatorTool : EquippableTool
             return false;
 
         var source = ResolveObjectRoot(aim.HitSlot);
-        if (source == null || IsOffLimits(source))
+        if (source == null || IsOffLimits(source) || Security.ItemSeals.RefusesHere(source, Security.SealRule.SaveCopy))
             return false;
 
         var parent = source.Parent ?? World?.RootSlot;

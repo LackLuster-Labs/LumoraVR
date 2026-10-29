@@ -26,8 +26,8 @@ namespace Lumora.Core.Components.Interaction;
 // On a card: press a port and drag onto another to wire them, or off into space to let go of an input's
 // wire; press the header and drag to move the node. Wiring nodes of two groups puts the groups together,
 // whichever tool placed them. Secondary while dragging a wire makes the node that wire wants where it
-// ends, wired in: a Constant, a Display, a Call or a Pulse. Grab a node's body to carry it; let go, it lands
-// back on its graph's plane. Secondary on empty space opens the browser on desktop, and in VR opens the
+// ends, wired in: a Constant, a Display, a Call or a Pulse. Grab a node's body to carry it; let go, it stays
+// where it was let go, in its graph. Secondary on empty space opens the browser on desktop, and in VR opens the
 // menu, which has the browser on its ring. A hand holding something leaves secondary to the menu.
 //
 // Secondary held on a node for half a second selects every node wired to it in its graph, or deselects them
@@ -97,8 +97,10 @@ public sealed class ScriptNodeTool : EquippableTool
     private bool _holdDone;
 
     private ScriptCardHandle? _wireFrom;
+    private ScriptCardHandle? _pointFrom;
     private ScriptGraphNode? _moving;
     private float3 _moveStart;
+    private float3 _moveNormal;
     private float3 _grabOffset;
     private ScriptGraphSpace? _lastSpace;
     private string? _readyType;
@@ -228,11 +230,15 @@ public sealed class ScriptNodeTool : EquippableTool
         if (handle?.Node is { IsDestroyed: false } node)
         {
             _lastSpace = node.Space ?? _lastSpace;
+            if (handle.Kind == ScriptCardHandleKind.Material)
+            {
+                _pointFrom = handle;
+                return true;
+            }
             if (handle.Kind == ScriptCardHandleKind.Header)
             {
                 _moving = node;
-                _moveStart = node.Slot.LocalPosition.Value;
-                _grabOffset = RayOnGraph(node.Space, out var local) ? local - _moveStart : float3.Zero;
+                BeginMove(node);
                 return true;
             }
             _wireFrom = handle;
@@ -299,8 +305,7 @@ public sealed class ScriptNodeTool : EquippableTool
         _newRelay = relay;
         _newRelayWires = wires;
         _moving = relay;
-        _moveStart = relay.Slot.LocalPosition.Value;
-        _grabOffset = RayOnGraph(space, out var local) ? local - _moveStart : float3.Zero;
+        BeginMove(relay);
     }
 
     // The relay made by the last press, into the history where it stands.
@@ -332,12 +337,16 @@ public sealed class ScriptNodeTool : EquippableTool
 
     public override bool OnPrimaryHold()
     {
+        if (_pointFrom != null)
+        {
+            ShowPoint();
+            return true;
+        }
         if (_moving is { IsDestroyed: false } moving)
         {
-            if (RayOnGraph(moving.Space, out var local))
+            if (RayOnPlane(moving.Space, _moveStart, _moveNormal, out var local))
             {
                 var target = local - _grabOffset;
-                target.z = 0f;
                 if (moving.Slot.LocalPosition.Value != target)
                     Guarded(() => moving.Slot.LocalPosition.Value = target);
             }
@@ -358,6 +367,14 @@ public sealed class ScriptNodeTool : EquippableTool
 
     public override bool OnPrimaryRelease()
     {
+        if (_pointFrom != null)
+        {
+            var pointed = _pointFrom;
+            _pointFrom = null;
+            HidePreview();
+            PaintPointed(pointed);
+            return true;
+        }
         if (_moving != null)
         {
             var moving = _moving;
@@ -392,8 +409,8 @@ public sealed class ScriptNodeTool : EquippableTool
         return true;
     }
 
-    // Two ports joined as they are, or, when their types differ, the conversions that fit between them
-    // offered on the menu first.
+    // Two ports joined as they are, or with the input's node changed to the overload that takes the output.
+    // Only when neither works are the conversions that fit between them offered on the menu.
     private void Join(ScriptCardHandle from, ScriptCardHandle to)
     {
         var conversions = ScriptGraphEditing.ConversionsFor(from, to);
@@ -538,6 +555,7 @@ public sealed class ScriptNodeTool : EquippableTool
     {
         SettleRelay();
         _wireFrom = null;
+        _pointFrom = null;
         _moving = null;
         _writeMarks?.Hide();
         EndSnap();
@@ -614,8 +632,9 @@ public sealed class ScriptNodeTool : EquippableTool
             if (slot is { IsDestroyed: false })
                 slot.Destroy();
         }
+        // Somebody else may be holding the browser by now; then it stays theirs to put away.
         if (_browser is { IsDestroyed: false } browser)
-            browser.Slot.Destroy();
+            Guarded(() => browser.Slot.Destroy());
         base.OnDestroy();
     }
 
@@ -677,15 +696,9 @@ public sealed class ScriptNodeTool : EquippableTool
             PopulateSlotCardActions(page, held, space);
         // Pointing at a selected node, the selection is what packs.
         bool onSelection = under != null && Selected.Contains(under);
-        if (!onSelection && space is { IsDestroyed: false } && space.Kind.Value == GraphKind.Script)
-        {
-            page.AddItem(new ContextMenuItem
-            {
-                Label = "Pack script",
-                FillColor = ItemFill,
-                OnPressed = _ => Pack(space),
-            });
-        }
+        bool packOffered = !onSelection && space is { IsDestroyed: false, IsShown: true } && space.Kind.Value == GraphKind.Script;
+        if (packOffered)
+            AddPack(page, space!);
         // A material's graph closes back onto its orb; the material keeps what it made.
         if (space is { IsDestroyed: false } && space.ShaderSource.Target is { IsDestroyed: false } material)
         {
@@ -730,20 +743,42 @@ public sealed class ScriptNodeTool : EquippableTool
                     },
                 });
             }
-            page.AddItem(new ContextMenuItem
+            // An object's script packs when its graph is open, and unpacks when it is not.
+            var host = target.GetComponent<ScriptHost>();
+            if (host != null && ScriptGraphEditing.FindSpace(host) is { IsShown: true } open)
             {
-                Label = target.GetComponent<ScriptHost>() != null ? "Edit script" : "New script here",
-                FillColor = ArmFill,
-                OnPressed = _ =>
+                if (!packOffered || !ReferenceEquals(open, space))
+                    AddPack(page, open);
+            }
+            else
+            {
+                page.AddItem(new ContextMenuItem
                 {
-                    var opened = ScriptGraphEditing.EditScriptOn(target, out var error);
-                    if (opened != null)
-                        _lastSpace = opened;
-                    else
-                        Notice(error ?? "no script");
-                },
-            });
+                    Label = host != null ? "Unpack script" : "New script here",
+                    FillColor = ArmFill,
+                    OnPressed = _ =>
+                    {
+                        var opened = ScriptGraphEditing.EditScriptOn(target, out var error);
+                        if (opened != null)
+                            _lastSpace = opened;
+                        else
+                            Notice(error ?? "no script");
+                    },
+                });
+            }
         }
+    }
+
+    // Named for the object it packs into, so a menu opened away from the graph says which one it means.
+    private void AddPack(ContextMenuPage page, ScriptGraphSpace space)
+    {
+        var owner = space.Host.Target?.Slot;
+        page.AddItem(new ContextMenuItem
+        {
+            Label = owner == null || ScriptGraphEditing.IsImplicit(space) ? "Pack script" : "Pack " + CardName(owner),
+            FillColor = ItemFill,
+            OnPressed = _ => Pack(space),
+        });
     }
 
     // Readies a node type to place, or clears it with a null type.
@@ -761,9 +796,11 @@ public sealed class ScriptNodeTool : EquippableTool
     {
         if (_browser is { IsDestroyed: false } open)
         {
-            open.Slot.Destroy();
+            // In somebody else's hand it is not this tool's to close; a new one opens instead.
+            Guarded(() => open.Slot.Destroy());
             _browser = null;
-            return;
+            if (open.Slot.IsDestroyed)
+                return;
         }
         if (World != null)
             _browser = ScriptNodeBrowser.Open(World, this, CurrentSpace?.Kind.Value ?? _readyKind);
@@ -1178,6 +1215,45 @@ public sealed class ScriptNodeTool : EquippableTool
         return null;
     }
 
+    // A header drag slides the node in the plane of its own card, through where it stands, so a node put in front
+    // of its graph or turned keeps its depth and its turn.
+    private void BeginMove(ScriptGraphNode node)
+    {
+        var slot = node.Slot;
+        _moveStart = slot.LocalPosition.Value;
+        _moveNormal = slot.LocalRotation.Value * float3.Forward;
+        _grabOffset = RayOnPlane(node.Space, _moveStart, _moveNormal, out var local) ? local - _moveStart : float3.Zero;
+    }
+
+    // Where the laser crosses a node's card plane, in the graph's own space. A node held in a hand has no plane
+    // in its graph, and the graph's own stands in.
+    private bool RayOnCard(ScriptGraphSpace? space, ScriptGraphNode node, out float3 local)
+    {
+        var slot = node.Slot;
+        if (space?.Slot != null && slot != null && ReferenceEquals(slot.Parent, space.Slot))
+            return RayOnPlane(space, slot.LocalPosition.Value, slot.LocalRotation.Value * float3.Forward, out local);
+        return RayOnGraph(space, out local);
+    }
+
+    // Where the laser crosses the plane through point facing normal, both in the graph's own space.
+    private bool RayOnPlane(ScriptGraphSpace? space, float3 point, float3 normal, out float3 local)
+    {
+        local = default;
+        var laser = ActiveTool?.Laser;
+        if (laser == null || space?.Slot == null)
+            return false;
+        var origin = space.Slot.GlobalPointToLocal(laser.RayOrigin);
+        var direction = space.Slot.GlobalDirectionToLocal(laser.RayDirection);
+        float across = float3.Dot(direction, normal);
+        if (MathF.Abs(across) < 1e-5f)
+            return false;
+        float t = float3.Dot(point - origin, normal) / across;
+        if (t < 0f)
+            return false;
+        local = origin + direction * t;
+        return true;
+    }
+
     // Where the laser crosses a graph's plane, in the graph's own space.
     private bool RayOnGraph(ScriptGraphSpace? space, out float3 local)
     {
@@ -1211,8 +1287,8 @@ public sealed class ScriptNodeTool : EquippableTool
         if (from?.Node == null || space == null || view == null || !view.TryPortPoint(from.Node, from.Kind, from.Port, out var portPoint))
             return;
         // Pulled onto a port in reach, else onto the port the pointer is on, which may be in another group
-        // and off this graph's plane, else where the pointer meets the plane.
-        bool onGraph = RayOnGraph(space, out var end);
+        // and off this graph's plane, else where the pointer meets the plane of the card it leaves.
+        bool onGraph = RayOnCard(space, from.Node, out var end);
         if (onGraph && Snap(space, end) is { } pulled)
             end = pulled;
         else if (PortUnderLaser(from) is { } port)
@@ -1236,6 +1312,50 @@ public sealed class ScriptNodeTool : EquippableTool
             : from.Kind == ScriptCardHandleKind.Variable ? DashTheme.Warning : ScriptEditorStyle.Type(PortType(from));
         bool leavesRight = from.Kind is ScriptCardHandleKind.DataOutput or ScriptCardHandleKind.FlowOutput;
         _preview!.SetWires(new[] { leavesRight ? new ScriptWireCurve(start, end, tint, tint) : new ScriptWireCurve(end, start, tint, tint) });
+    }
+
+    // A drag from a Material Output's well: a line from the well to where the beam lands, and what it lands on
+    // wears the graph's material when the press lets go, the surface under the beam as the material tool's ray
+    // paints it.
+    private void ShowPoint()
+    {
+        var from = _pointFrom;
+        var space = from?.Node?.Space;
+        var view = space?.View;
+        if (from?.Node == null || space == null || view == null || !view.TryPortPoint(from.Node, from.Kind, from.Port, out var wellPoint))
+            return;
+        float3 end;
+        if (TryGetAim(out var aim) && aim.HitSlot != null)
+            end = aim.Point;
+        else if (ActiveTool?.Laser is { } laser)
+            end = laser.RayOrigin + laser.RayDirection * 1.5f;
+        else
+            return;
+        if (_previewSlot == null || _previewSlot.IsDestroyed || !ReferenceEquals(_previewSlot.Parent, space.Slot))
+        {
+            if (_previewSlot is { IsDestroyed: false })
+                _previewSlot.Destroy();
+            _previewSlot = space.Slot.AddLocalSlot("Wire preview");
+            _preview = _previewSlot.AttachComponent<ScriptWireMesh>();
+            ScriptGraphView.DrawPipe(_previewSlot, _preview);
+        }
+        _previewSlot.ActiveSelf.Value = true;
+        var tint = DashTheme.Accent;
+        _preview!.SetWires(new[] { new ScriptWireCurve(space.Slot.GlobalPointToLocal(wellPoint), space.Slot.GlobalPointToLocal(end), tint, tint) });
+    }
+
+    private void PaintPointed(ScriptCardHandle from)
+    {
+        if (from.Node is not { IsDestroyed: false } node || !TryGetAim(out var aim) || aim.HitSlot is not { IsDestroyed: false } hit)
+            return;
+        // Let go back on a graph: no paint, nothing to say.
+        if (hit.GetComponentInParents<ScriptGraphNode>() != null || hit.GetComponentInParents<ScriptGraphSpace>() != null)
+            return;
+        int painted = 0;
+        Localization.LocaleText message = default;
+        Guarded(() => painted = ShaderGraphOutput.ApplyAt(node, hit, aim.Point, out message));
+        ShaderOutputWell.Say(node, message, painted == 0);
+        Notice(message.Resolve());
     }
 
     private void HidePreview()

@@ -119,44 +119,22 @@ public static class LaserCarry
         return FacingRotation(forward, rootUp);
     }
 
-    // A panel's face (+Z) turned to the eye with its top edge level with the user: up is the root's up taken
-    // off the face direction, so the head's roll and pitch never tilt it sideways. One standing upright stays
-    // upright and only turns about the user's up. The head's up stands in only when the eye looks almost
-    // straight down or up at it, where the root's up says nothing about which way is the top. -xlinka
-    public static bool TryFaceRotation(float3 headPosition, float3 headForward, float3 headUp, float3 rootUp, float3 panelPosition,
-        float3 panelUp, out floatQ rotation)
+    // A panel's face (+Z) turned to the eye, standing upright on the user's up: the way to the eye is taken level,
+    // so neither the head's pitch nor its roll ever tips the panel back or leans it over, and one left tilted
+    // comes back upright. With the eye straight above or below it, where level says nothing about which way to
+    // face, it faces back along the view's heading. -xlinka
+    public static bool TryFaceRotation(float3 headPosition, float3 viewForward, float3 rootUp, float3 panelPosition, out floatQ rotation)
     {
         rotation = floatQ.Identity;
         rootUp = Unit(rootUp, float3.Up);
-        float3 face = headPosition - panelPosition;
+        float3 face = FlattenInRoot(rootUp, headPosition - panelPosition);
         if (face.Length <= 0.0001f)
-            face = headForward;
-        if (MathF.Abs(float3.Dot(Unit(panelUp, float3.Zero), rootUp)) >= UprightDot)
-        {
-            float3 level = FlattenInRoot(rootUp, face);
-            if (level.Length > 0.0001f)
-                face = level;
-        }
+            face = -FlattenInRoot(rootUp, viewForward);
         if (face.Length <= 0.0001f)
             return false;
-        face = face.Normalized;
-
-        float3 up = ProjectOnPlane(rootUp, face);
-        if (up.Length < NearVerticalCut)
-            up = ProjectOnPlane(headUp, face);
-        if (up.Length <= 0.0001f)
-            up = ProjectOnPlane(float3.Up, face);
-        if (up.Length <= 0.0001f)
-            up = float3.Right;
-        rotation = FacingRotation(face, up.Normalized);
+        rotation = FacingRotation(face.Normalized, rootUp);
         return true;
     }
-
-    // About three degrees: a panel this close to the user's up is one standing upright.
-    private const float UprightDot = 0.9986f;
-
-    // The root's up off a face direction this short means the face is within about six degrees of vertical.
-    private const float NearVerticalCut = 0.1f;
 
     // Straightens a held item: its local axis nearest the given direction goes onto it. Built and applied in the
     // parent's frame (the holder for anything in a hand), so the holder's own turn never enters the delta.

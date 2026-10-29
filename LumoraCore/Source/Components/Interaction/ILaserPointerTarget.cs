@@ -52,6 +52,10 @@ public interface ILaserAxisTarget
 
     // True while what this laser points at would scroll with the stick.
     bool WantsLaserAxis(InteractionLaser laser, int pointerId) => false;
+
+    // The scroll this laser is over, for something that drives it by itself (the desktop's middle-button
+    // scroll, DesktopAutoscroll). Null where nothing under the laser scrolls.
+    Helio.UI.ScrollRect? ScrollUnderLaser(InteractionLaser laser, int pointerId) => null;
 }
 
 public interface ILaserSecondaryTarget

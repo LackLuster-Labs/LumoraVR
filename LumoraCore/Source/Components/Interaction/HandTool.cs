@@ -146,6 +146,13 @@ public sealed class HandTool : Tool
     private ToolItem? _activeSecondaryToolItem;
     private bool _isHoldingWithLaser;
     private float _laserGrabDistance;
+    private InteractionLaser.HoldReference _holdSpace;
+    private Slot? _carryPoseSpace;
+    private float3 _carryPosition;
+    private floatQ _carryRotation;
+    private bool _desktopCarryPaused;
+    private bool _resumeDesktopGrip;
+    private float _carryResumeBlend = 1f;
     // The ring opens on the pointer at ContextMenuSystem.OpenDistance, so a load carried closer than
     // that would sit between the eye and the menu. While this hand's menu is up and it is laser-holding,
     // the hold distance is eased out to at least OpenDistance + the load's reach back toward the hand +
@@ -167,7 +174,6 @@ public sealed class HandTool : Tool
     // The controller's roll about the beam when the hold began. In VR a laser hold turns with the
     // wrist from here, at half rate.
     private float _originalTwistOffset;
-    private floatQ? _holderRotationReference;
     private bool _desktopInputSuppressed;
     private bool _scrollWheelCaptured;
     private bool _stickPressCaptured;
@@ -313,8 +319,9 @@ public sealed class HandTool : Tool
         // no presses bleeding through the panel into whatever is behind it. The userspace pointer
         // rig raises this flag while it is live (it is the thing actually pointing at the dash, on a
         // controller-tracked hand in VR or the free cursor on desktop), so we just back off. -xlinka
+        UpdateDesktopCarryPause();
         var dashOwner = Engine.Current?.InputInterface;
-        if (dashOwner != null && dashOwner.IsAnyUserspaceLaserActive)
+        if (dashOwner != null && (dashOwner.IsAnyUserspaceLaserActive || (!dashOwner.IsVRActive && dashOwner.IsDashboardOpen)))
         {
             _laser.SetToolState(false, false);
             _laser.SetHandState(false, false, false);
@@ -392,7 +399,10 @@ public sealed class HandTool : Tool
         ProcessSelection(_laser);
         ProcessSecondary(_laser);
         ProcessMenuKey(_laser);
+        UpdateDesktopCarryPause();
         ProcessGrip(_laser);
+        menuVisible = IsContextMenuOpenByThisHand();
+        carryingOnLaser = IsHoldingObjectsWithLaser && (!menuVisible || vrActive);
         PublishToolUse(ActiveToolItem.Target is { IsDestroyed: false } used && used.IsInUse);
 
         // The wheel is the held object's distance control while something rides the laser. Say so, or the
@@ -714,6 +724,9 @@ public sealed class HandTool : Tool
 
     private void LogToolHold(Slot? node, string outcome)
     {
+        // Every hand in the room comes through here each frame, remote ones too, and the line is a debug one.
+        if (!Logging.Logger.EnableDebug)
+            return;
         bool alive = node != null && !node.IsDestroyed;
         bool driven = alive && node!.LocalPosition.IsDriven;
         float3 local = alive ? node!.LocalPosition.Value : float3.Zero;
@@ -1311,10 +1324,40 @@ public sealed class HandTool : Tool
 
             EquipToolByType(toolType);
         }
+
+        var hand = input.Actions?.Interaction(Side.Value);
+        if (hand?.NextTool.Pressed == true)
+            CycleTool(1);
+        else if (hand?.PreviousTool.Pressed == true)
+            CycleTool(-1);
+    }
+
+    // The row's tools in the order their keys run along it, 2 to 9 then 0, for a pad that has no number row.
+    // Stepping past either end puts the tool away the way 1 does, and the next step starts over from that end.
+    private static readonly int[] ToolCycle = { 2, 3, 4, 5, 6, 9, 0 };
+
+    private void CycleTool(int step)
+    {
+        var current = ActiveToolItem.Target?.GetType();
+        int at = -1;
+        for (int i = 0; i < ToolCycle.Length; i++)
+        {
+            if (current != null && ShortcutTools[ToolCycle[i]] == current)
+                at = i;
+        }
+        int next = at < 0 ? (step > 0 ? 0 : ToolCycle.Length - 1) : at + step;
+        if (next < 0 || next >= ToolCycle.Length)
+        {
+            StashOrDequipTool();
+            return;
+        }
+        var toolType = ShortcutTools[ToolCycle[next]];
+        if (toolType != null)
+            EquipToolByType(toolType);
     }
 
     // Pressing the same tool's key again puts it away, so one key is equip and unequip both.
-    // public so a test harness can equip a tool without synthesising a keypress. The number-row
+    // public so a test can equip a tool without synthesising a keypress. The number-row
     // shortcut path calls exactly this, so a scripted run exercises the same code a person does.
     public void EquipToolByType(System.Type toolType)
     {
@@ -1528,9 +1571,26 @@ public sealed class HandTool : Tool
                 _refusedEquip = item;
                 Logging.Logger.Log($"{item.GetType().Name} not equipped: tools are not available to you in this world.");
             }
+            // Someone asked for it, so they are told why where they can see it. The rig's own re-offer is not asking.
+            if (pulse)
+                ToolNotice.Refused(World, item.EquipName.Value);
             return;
         }
         _refusedEquip = null;
+
+        // A tool in somebody else's hand or holder is theirs to put down first. Taking it was refused part way
+        // (its parent and its equip link are theirs to change), and this hand was left pointing at a tool that
+        // never came, a phantom only deleting the tool cleared. Nothing is touched until it can all be done.
+        if (item?.Slot is { } itemSlot && itemSlot.ActiveUser is { } holder && !ReferenceEquals(holder, World?.LocalUser)
+            && !itemSlot.ParentSlotRef.IsWriteAllowedQuietly())
+        {
+            if (pulse)
+            {
+                string owner = UI.SessionPermissionsPanel.DisplayName(holder);
+                ToolNotice.Say(World, UI.EditConsentLocale.RefusedTitle(owner).Resolve(), UI.EditConsentLocale.RefusedText(owner).Resolve());
+            }
+            return;
+        }
 
         if (previous != null)
         {
@@ -1664,6 +1724,14 @@ public sealed class HandTool : Tool
         _primaryHeld = !claimed && !_primaryHeldOff && primaryRaw;
         _secondaryHeld = !claimed && ReadSecondaryPressed(laser);
         _gripHeld = ReadGripPressed(laser);
+        var input = Engine.Current?.InputInterface;
+        if (_resumeDesktopGrip && input?.IsVRActive == false && input.Actions?.Interaction(Side.Value).Grab is { } grab)
+        {
+            // A dashboard gates the action until release. Continue only the carry that was already held. -xlinka
+            _gripHeld = input.Actions.ReadHeldIgnoringGates(grab);
+            if (!_gripHeld || grab.Held)
+                _resumeDesktopGrip = false;
+        }
     }
 
     // In VR a hand the dash pointer owns gives the dash its buttons outright. The laser already yields its
@@ -2000,6 +2068,11 @@ public sealed class HandTool : Tool
         {
             ToggleContextMenu(laser);
         }
+        // The pad's back closes the radial menu the way it backs out of the dash.
+        else if (input.Actions?.Menu.Back.Pressed == true && IsContextMenuOpenByThisHand())
+        {
+            FindContextMenu()?.Close();
+        }
     }
 
     private UI.ContextMenuSystem? _contextMenu;
@@ -2083,24 +2156,11 @@ public sealed class HandTool : Tool
             return;
         }
 
-        _laserGrabDistance = MathF.Max(0.05f, laser.CurrentHitDistance);
+        _holdSpace = laser.HoldSpace;
+        _laserGrabDistance = MathF.Max(0.05f, laser.MeasureHoldDistance(laser.CurrentHitPoint));
         _menuPushActive = false;
         _holderAxisOffset = 0f;
         _holderRotationOffset = floatQ.Identity;
-        // Frozen at grab, never recomputed. The held object keeps the facing it had when you picked it up;
-        // letting it re-derive from the head every frame makes it swing to face you as the view pitches and
-        // yaws, which is the last thing you want while trying to place something. Resolve it to a real value
-        // here so UpdateHolderRotation can never fall through to the chasing path. -xlinka
-        //
-        // DESKTOP ONLY. In VR the holder's facing comes off the HAND every frame (see
-        // UpdateHolderRotation), and a frame pinned here would hold the object to one world heading
-        // while the person walks and turns around it - which is exactly
-        // the "it snaps straight to the world" complaint. Desktop keeps the pinned frame because there
-        // the view IS the hand and the 2026-08-30 stepping fix depends on it. -xlinka
-        bool pinReference = Engine.Current?.InputInterface?.IsVRActive != true;
-        _holderRotationReference = pinReference
-            ? GetHeadFacingRotation(laser) ?? laser.FindHeadSlot()?.GlobalRotation ?? Slot.GlobalRotation
-            : null;
         _originalTwistOffset = TwistAngle(laser);
         RotationMode.Value = LaserRotationMode.AxisY;
 
@@ -2114,6 +2174,7 @@ public sealed class HandTool : Tool
         }
 
         _isHoldingWithLaser = true;
+        RememberCarryPose(holder);
         GrabCompanions(held);
     }
 
@@ -2165,7 +2226,7 @@ public sealed class HandTool : Tool
             return false;
         }
         var canvas = laser.CurrentTarget as Helio.UI.Canvas;
-        if (canvas == null && pastLoad)
+        if ((canvas == null && pastLoad) || (laser.CurrentTarget is Component { Slot: { } hitSlot } && IsUnderHeld(hitSlot)))
         {
             canvas = laser.NearestPanelOnBeam();
             if (canvas?.Slot != null && IsUnderHeld(canvas.Slot))
@@ -2320,10 +2381,10 @@ public sealed class HandTool : Tool
         if (holder == null)
             return;
 
-        _laserGrabDistance = MathF.Max(0.05f, float3.Distance(laser.RayOrigin, holder.GlobalPosition));
+        _holdSpace = laser.HoldSpace;
+        _laserGrabDistance = MathF.Max(0.05f, laser.MeasureHoldDistance(holder.GlobalPosition));
         _holderAxisOffset = 0f;
         _holderRotationOffset = floatQ.Identity;
-        _holderRotationReference = null;
         _originalTwistOffset = TwistAngle(laser);
         RotationMode.Value = LaserRotationMode.AxisY;
         _menuPushActive = false;
@@ -2359,6 +2420,14 @@ public sealed class HandTool : Tool
         {
             ResetInteraction(releaseHeld: false);
             return;
+        }
+
+        // F5, F6 and panel focus use different distance units. Convert the existing grip once on a switch. -xlinka
+        if (_holdSpace != laser.HoldSpace)
+        {
+            _holdSpace = laser.HoldSpace;
+            _laserGrabDistance = MathF.Max(0.05f, laser.MeasureHoldDistance(holder.GlobalPosition));
+            _menuPushActive = false;
         }
 
         // With the menu up the stick is the wedge selector, so slide, twist and scale stand down; the
@@ -2468,11 +2537,56 @@ public sealed class HandTool : Tool
         return float.IsNaN(reach) ? 0f : reach;
     }
 
+    // A paused holder still needs a pose write: its hand parent keeps moving under it. Keep the last
+    // carry pose in user-root space so menus cannot steer it, and walking still carries it along. -xlinka
+    private void RememberCarryPose(Slot holder)
+    {
+        _carryPoseSpace = FindUserRootSlot();
+        if (_carryPoseSpace == null || _carryPoseSpace.IsDestroyed)
+            return;
+        _carryPosition = _carryPoseSpace.GlobalPointToLocal(holder.GlobalPosition);
+        _carryRotation = _carryPoseSpace.GlobalRotationToLocal(holder.GlobalRotation);
+    }
+
+    private bool TryCarryPose(out float3 position, out floatQ rotation)
+    {
+        position = default;
+        rotation = floatQ.Identity;
+        if (_carryPoseSpace == null || _carryPoseSpace.IsDestroyed)
+            return false;
+        position = _carryPoseSpace.LocalPointToGlobal(_carryPosition);
+        rotation = _carryPoseSpace.LocalRotationToGlobal(_carryRotation);
+        return true;
+    }
+
+    private void UpdateDesktopCarryPause()
+    {
+        var input = Engine.Current?.InputInterface;
+        bool paused = input?.IsVRActive == false && IsHoldingObjectsWithLaser
+            && (input.IsDashboardOpen || input.IsAnyUserspaceLaserActive || IsContextMenuOpenByThisHand());
+        if ((paused || _desktopCarryPaused) && _grabber?.HolderSlot is { IsRemoved: false } holder
+            && TryCarryPose(out var position, out var rotation))
+        {
+            holder.GlobalPosition = position;
+            holder.GlobalRotation = rotation;
+        }
+        if (paused)
+        {
+            _carryResumeBlend = 0f;
+            _resumeDesktopGrip = true;
+        }
+        _desktopCarryPaused = paused;
+    }
+
     public override void OnLateUpdate(float delta)
     {
         base.OnLateUpdate(delta);
 
-        if (World?.IsFocused != true)
+        if (World?.IsFocused != true || !IsUnderLocalUser)
+            return;
+
+        UpdateDesktopCarryPause();
+        if (_desktopCarryPaused)
             return;
 
         long frame = Engine.Current?.FrameCount ?? -1;
@@ -2499,6 +2613,14 @@ public sealed class HandTool : Tool
         laser.RefreshHeldAim(delta);
         UpdateHolderPosition(laser, holder);
         UpdateHolderRotation(laser, holder);
+        if (_carryResumeBlend < 1f && TryCarryPose(out var position, out var rotation))
+        {
+            // Ease back to the world pointer after a menu; it may have moved across the screen. -xlinka
+            _carryResumeBlend = MathF.Min(1f, _carryResumeBlend + delta * 16f);
+            holder.GlobalPosition = float3.Lerp(position, holder.GlobalPosition, _carryResumeBlend);
+            holder.GlobalRotation = floatQ.Slerp(rotation, holder.GlobalRotation, _carryResumeBlend).Normalized;
+        }
+        RememberCarryPose(holder);
     }
 
     private void ApplyHoldInputs(InteractionLaser laser, Slot holder, float delta)
@@ -2533,12 +2655,20 @@ public sealed class HandTool : Tool
             ScaleHolder(holder, wheelScale);
         }
 
+        // The pad's d-pad pushes, pulls and (with the modifier) resizes at the headset stick's steady pace.
+        if (hand.HoldAxis.Value != float2.Zero)
+        {
+            ApplyVrHoldInputs(hand, delta, holder);
+        }
+
         if (!freezeCursor)
         {
             return;
         }
 
-        float2 mouseDelta = hand.HoldLook.Value;
+        // The pad's look stick turns the held object too, brought into the mouse's units (a share of half a
+        // turn) from the radians it turns the view by.
+        float2 mouseDelta = hand.HoldLook.Value + input.StickLook.Delta / MathF.PI;
         if (mouseDelta == float2.Zero)
         {
             return;
@@ -2568,6 +2698,11 @@ public sealed class HandTool : Tool
 
     private void UpdateHolderPosition(InteractionLaser laser, Slot holder)
     {
+        if (laser.HoldSpace != InteractionLaser.HoldReference.Hand)
+        {
+            holder.GlobalPosition = laser.GetHoldPoint(_laserGrabDistance);
+            return;
+        }
         float3 origin = laser.RayOrigin;
         float3 direction = laser.RayDirection;
         if (direction.Length <= 0.0001f)
@@ -2596,13 +2731,9 @@ public sealed class HandTool : Tool
         rootUp = rootUp.Normalized;
 
         bool vr = Engine.Current?.InputInterface?.IsVRActive == true;
-        // Desktop: the frame pinned at grab. VR: nothing pinned; the head's current yaw stands in for
-        // the side axis and the facing below comes off the hand.
-        floatQ reference = _holderRotationReference
-            ?? GetHeadFacingRotation(laser)
-            ?? (head?.GlobalRotation ?? Slot.GlobalRotation);
-        if (!vr)
-            _holderRotationReference ??= reference;
+        // The view's heading this frame, level on the user's up. It gives the side axis, and on a desktop the
+        // facing itself; in VR the facing below comes off the hand.
+        floatQ reference = GetHeadFacingRotation(laser, rootUp) ?? (head?.GlobalRotation ?? Slot.GlobalRotation);
         float3 rightAxis = reference * float3.Right;
         if (rightAxis.Length <= 0.0001f)
         {
@@ -2623,7 +2754,9 @@ public sealed class HandTool : Tool
         }
         else
         {
-            // A desktop laser hold keeps its captured orientation while its position follows the beam.
+            // A desktop laser hold turns with the view's heading, so a load keeps the side it showed you while you
+            // look round with it, and only ever about your up: looking up or down never tips it. Held to one world
+            // heading instead, a panel carried a quarter turn round ended up edge on and skewed. -xlinka
             facing = LaserCarry.TurnedFacing(RotationMode.Value, reference * float3.Backward, rootUp, rightAxis, _holderAxisOffset);
         }
 
@@ -2652,7 +2785,8 @@ public sealed class HandTool : Tool
             return;
         }
 
-        floatQ viewRotation = GetHeadFacingRotation(laser) ?? (laser.FindHeadSlot()?.GlobalRotation ?? Slot.GlobalRotation);
+        floatQ viewRotation = GetHeadFacingRotation(laser, FindUserRootSlot()?.Up ?? float3.Up)
+            ?? (laser.FindHeadSlot()?.GlobalRotation ?? Slot.GlobalRotation);
         floatQ inverseView = viewRotation.Inverse;
         foreach (var slot in slots)
         {
@@ -2708,7 +2842,7 @@ public sealed class HandTool : Tool
         }
 
         var head = laser.FindHeadSlot();
-        if (head == null || !LaserCarry.TryFaceRotation(head.GlobalPosition, head.Forward, head.Up, rootUp, slot.GlobalPosition, slot.Up, out var facing))
+        if (head == null || !LaserCarry.TryFaceRotation(head.GlobalPosition, head.GlobalRotation * float3.Backward, rootUp, slot.GlobalPosition, out var facing))
         {
             return false;
         }
@@ -2757,11 +2891,14 @@ public sealed class HandTool : Tool
         _holdPoseFrame = long.MinValue;
         _holdPoseWrittenFrame = long.MinValue;
         _isHoldingWithLaser = false;
+        _carryPoseSpace = null;
+        _desktopCarryPaused = false;
+        _resumeDesktopGrip = false;
+        _carryResumeBlend = 1f;
         _laserGrabDistance = 0f;
         _menuPushActive = false;
         _holderAxisOffset = 0f;
         _holderRotationOffset = floatQ.Identity;
-        _holderRotationReference = null;
         RotationMode.Value = LaserRotationMode.AxisY;
         _primaryHeld = false;
         _prevPrimaryHeld = false;
@@ -2841,21 +2978,29 @@ public sealed class HandTool : Tool
 
     private static float DeltaAngle(float from, float to) => LaserCarry.DeltaAngle(from, to);
 
-    private static floatQ? GetHeadFacingRotation(InteractionLaser laser)
+    // The view's heading, level on the user's up: the head's, or the camera's while an outside camera aims the
+    // desktop laser. Looking straight down the top of the view says which way is ahead, straight up its bottom.
+    private static floatQ? GetHeadFacingRotation(InteractionLaser laser, float3 rootUp)
     {
-        var head = laser.FindHeadSlot();
-        if (head == null)
+        var input = Engine.Current?.InputInterface;
+        floatQ? view = input?.DesktopExternalCameraAim == true ? input.DesktopCameraRotation : laser.FindHeadSlot()?.GlobalRotation;
+        if (view is not { } rotation)
         {
             return null;
         }
 
-        float3 forward = head.GlobalRotation * float3.Backward;
-        forward = ProjectOnPlane(forward, float3.Up);
+        rootUp = rootUp.Length > 0.0001f ? rootUp.Normalized : float3.Up;
+        float3 look = rotation * float3.Backward;
+        float3 forward = LaserCarry.FlattenInRoot(rootUp, look);
         if (forward.Length <= 0.0001f)
         {
-            forward = float3.Backward;
+            forward = LaserCarry.FlattenInRoot(rootUp, rotation * (float3.Dot(look, rootUp) < 0f ? float3.Up : float3.Down));
         }
-        return FacingRotation(forward.Normalized, float3.Up);
+        if (forward.Length <= 0.0001f)
+        {
+            return null;
+        }
+        return FacingRotation(forward.Normalized, rootUp);
     }
 
     private void ResolveFallbackRay(InteractionLaser laser, out float3 origin, out float3 direction)
@@ -2964,9 +3109,41 @@ public sealed class HandTool : Tool
     {
         var input = Engine.Current?.InputInterface;
         if (IsDestroyed || !Enabled.Value || !Slot.IsActive || !IsUnderLocalUser
-            || World.Focus != World.WorldFocus.Focused || input?.IsVRActive != true)
+            || World.Focus != World.WorldFocus.Focused || input == null)
             return;
+        if (!input.IsVRActive)
+        {
+            HoldPadResizeButton(input);
+            return;
+        }
         HoldCarryStick(UsesCarryStick);
+    }
+
+    // On a screen the pad resizes a carried object with LB and the d-pad, and LB is the blink aim a set below.
+    // While the desktop hand carries, its resize buttons are its own, and stay so past the drop until let go,
+    // so a resize never aims an arc and hops on release.
+    private bool _padResizeHeld;
+
+    private void HoldPadResizeButton(InputInterface input)
+    {
+        var map = input.Actions;
+        var hand = map?.Interaction(Side.Value);
+        if (map == null || hand == null || Side.Value != Chirality.Right)
+        {
+            _padResizeHeld = false;
+            return;
+        }
+        if (IsHoldingObjectsWithLaser)
+            _padResizeHeld = true;
+        else if (_padResizeHeld && !hand.HoldModifier.Held)
+            _padResizeHeld = false;
+        if (!_padResizeHeld)
+            return;
+        foreach (var binding in hand.HoldModifier.Bindings)
+        {
+            if (binding.Control.Device == Input.Actions.InputDeviceKind.Gamepad)
+                map.HoldControl(hand.Set, binding.Control);
+        }
     }
 
     private bool UsesCarryStick => IsHoldingObjectsWithLaser || CanExtendTouchHold()

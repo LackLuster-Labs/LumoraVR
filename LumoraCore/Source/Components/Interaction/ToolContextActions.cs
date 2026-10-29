@@ -42,16 +42,20 @@ public class ToolContextActions : ContextMenuItemSource
         if ((item == null || item.IsDestroyed) && !holdingSomething)
             return;
 
-        // Unequip sits with the equip items; Create New goes with the tool's own actions.
+        // Unequip sits with the equip items; Create New goes with the tool's own actions. Create New is building, so a
+        // world that is frozen for everyone leaves it out even under a gadget a script works. -xlinka
         if (item != null && !item.IsDestroyed)
         {
-            page.AddItem(new ContextMenuItem
+            if (World?.AllowsWorldEditing == true)
             {
-                Group = ContextMenuGroup.Tool,
-                Label = "Create New",
-                FillColor = new[] { 0.35f, 0.28f, 0.62f, 0.95f },
-                OnPressed = _ => ToggleCreateNew(),
-            });
+                page.AddItem(new ContextMenuItem
+                {
+                    Group = ContextMenuGroup.Tool,
+                    Label = "Create New",
+                    FillColor = new[] { 0.35f, 0.28f, 0.62f, 0.95f },
+                    OnPressed = _ => ToggleCreateNew(),
+                });
+            }
             page.AddItem(new ContextMenuItem
             {
                 Group = ContextMenuGroup.Equip,
@@ -76,16 +80,23 @@ public class ToolContextActions : ContextMenuItemSource
 
             var equipTarget = heldItem;
             var heldGrabbable = grabbable;
+            // Shown off with its reason, not left out: the radial closes before an action runs, so a refusal has to
+            // be on the item itself.
+            bool mayEquip = heldItem.AllowsEquip(World?.LocalUser);
             page.AddItem(new ContextMenuItem
             {
                 Group = ContextMenuGroup.Equip,
                 Label = "Equip Tool",
-                FillColor = new[] { 0.14f, 0.30f, 0.18f, 0.92f },
-                OnPressed = _ =>
-                {
-                    grabber.Release(heldGrabbable);
-                    hand.EquipToolItem(equipTarget);
-                },
+                Detail = mayEquip ? null : World?.AllowsWorldEditing == false ? "Tools are off here" : "Not for your role",
+                IsEnabled = mayEquip,
+                FillColor = mayEquip ? new[] { 0.14f, 0.30f, 0.18f, 0.92f } : new[] { 0.22f, 0.16f, 0.16f, 0.92f },
+                OnPressed = mayEquip
+                    ? _ =>
+                    {
+                        grabber.Release(heldGrabbable);
+                        hand.EquipToolItem(equipTarget);
+                    }
+                    : null,
             });
             break; // one equip item even if several tools are held
         }

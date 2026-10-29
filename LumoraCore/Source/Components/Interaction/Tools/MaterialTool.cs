@@ -9,7 +9,6 @@ using Lumora.Core.Components.Meshes;
 using Lumora.Core.Components.UI;
 using Lumora.Core.Math;
 using Lumora.Core.Networking.Sync;
-using Lumora.Core.Phos;
 using Lumora.Core.Physics;
 
 namespace Lumora.Core.Components.Interaction;
@@ -86,9 +85,9 @@ public sealed class MaterialTool : EquippableTool
     }
 
     // The tool's shape is written by the machines whose writes it is theirs to make: whoever made it,
-    // whoever holds it, the authority. Everyone else receives it.
+    // whoever holds it, the authority while nobody does. Everyone else receives it.
     private bool MayShape()
-        => World != null && Slot != null && (World.IsAuthority || IsMintedHere || Slot.IsUnderLocalUser);
+        => World != null && Slot != null && (IsMintedHere || Slot.IsUnderLocalUser || (World.IsAuthority && Slot.ActiveUserRoot == null));
 
     // VISUAL
 
@@ -354,47 +353,11 @@ public sealed class MaterialTool : EquippableTool
     private int Apply(Component renderer, int surface, IAssetProvider<MaterialAsset> material)
     {
         int recorded = 0;
-        void Add(IUndoBatch? batch)
+        Guarded(() => MaterialSurfaces.Apply(renderer, surface, material, batch =>
         {
-            if (batch == null)
-                return;
             recorded++;
             RecordUndo(batch);
-        }
-
-        Guarded(() =>
-        {
-            switch (renderer)
-            {
-                case MeshRenderer mesh:
-                    if (mesh.Materials.Count == 0)
-                    {
-                        // A renderer with no surface entries draws nothing at all. Painting it gives it its
-                        // first one, which is a list change, so undo takes the entry back out.
-                        Add(ListElementUndoBatch.Add(mesh.Materials, out var added));
-                        if (added is AssetRef<MaterialAsset> first)
-                            Add(AssignAt(first, material));
-                        return;
-                    }
-                    for (int i = 0; i < mesh.Materials.Count; i++)
-                    {
-                        if (surface < 0 || i == surface)
-                            Add(AssignAt(mesh.Materials.GetElement(i), material));
-                    }
-                    break;
-
-                case SkinnedMeshRenderer skinned:
-                    // A skinned renderer has its single material and the per-surface list over it.
-                    if (surface < 0 || (surface == 0 && skinned.Materials.Count == 0))
-                        Add(AssignAt(skinned.Material, material));
-                    for (int i = 0; i < skinned.Materials.Count; i++)
-                    {
-                        if (surface < 0 || i == surface)
-                            Add(AssignAt(skinned.Materials.GetElement(i), material));
-                    }
-                    break;
-            }
-        });
+        }));
         return recorded;
     }
 
@@ -419,58 +382,9 @@ public sealed class MaterialTool : EquippableTool
         return recorded;
     }
 
-    // Skips what a swap must not reach: orbs, tools, protected subtrees, people, slots a paint policy closes,
-    // and local slots, where a change would stay on this machine. The scope's own ancestry is asked once;
-    // below it each slot only looks at itself, so a scene swap stays one pass over the world.
+    // What a swap must not reach is MaterialSurfaces'; this tool is one of them.
     private void CollectMaterialReferences(Slot scope, List<AssetRef<MaterialAsset>> into)
-    {
-        if (!Paintable(scope))
-            return;
-        CollectMaterialReferences(scope, MaterialPaintPolicy.Allows(scope), into);
-    }
-
-    private void CollectMaterialReferences(Slot slot, bool allowed, List<AssetRef<MaterialAsset>> into)
-    {
-        if (slot.IsDestroyed || slot.IsLocalElement || slot.GetComponent<UserRoot>() != null
-            || slot.GetComponent<MaterialOrb>() != null || slot.GetComponent<Assets.ShaderGraphSource>() != null
-            || slot.GetComponent<ToolItem>() != null || ImmutableComponent.IsProtected(slot)
-            || (Slot != null && ReferenceEquals(slot, Slot)))
-            return;
-        if (slot.GetComponent<MaterialPaintPolicy>() is { IsDestroyed: false } policy && policy.Enabled.Value)
-            allowed = policy.AllowPaint.Value;
-        if (allowed)
-        {
-            foreach (var component in slot.Components)
-            {
-                for (int i = 0; i < component.SyncMemberCount; i++)
-                    CollectMaterialReferences(component.GetSyncMember(i), into);
-            }
-        }
-        foreach (var child in slot.Children)
-            CollectMaterialReferences(child, allowed, into);
-    }
-
-    private static void CollectMaterialReferences(ISyncMember? member, List<AssetRef<MaterialAsset>> into)
-    {
-        switch (member)
-        {
-            case AssetRef<MaterialAsset> reference:
-                into.Add(reference);
-                break;
-            case ISyncList list:
-                foreach (var element in list.Elements)
-                    CollectMaterialReferences(element as ISyncMember, into);
-                break;
-            case ISyncDictionary dictionary:
-                foreach (var value in dictionary.Values)
-                    CollectMaterialReferences(value as ISyncMember, into);
-                break;
-            case ISyncObject syncObject:
-                foreach (var child in syncObject.SyncMembers)
-                    CollectMaterialReferences(child, into);
-                break;
-        }
-    }
+        => MaterialSurfaces.CollectReferences(scope, Slot, into);
 
     // The materials a hit on a renderer means: the one surface, or every one it wears when the surface is
     // unknown.
@@ -615,20 +529,8 @@ public sealed class MaterialTool : EquippableTool
         return false;
     }
 
-    // The before/after here are RefIDs, because a reference IS a RefID field - which is exactly what
-    // the shared field record restores.
     private static IUndoBatch? AssignAt(AssetRef<MaterialAsset> element, IAssetProvider<MaterialAsset> material)
-    {
-        if (element == null || element.IsDestroyed)
-            return null;
-        var field = (IField)element;
-        object? before = field.BoxedValue;
-        element.Target = material;
-        object? after = field.BoxedValue;
-        if (Equals(before, after))
-            return null;
-        return new FieldEditUndoBatch(field, before, after, UndoLocale.ApplyMaterial);
-    }
+        => MaterialSurfaces.AssignAt(element, material);
 
     // SAMPLING
 
@@ -639,23 +541,31 @@ public sealed class MaterialTool : EquippableTool
     {
         var heldObject = HeldReference<Slot>();
         if (heldObject != null)
-            return ExtractAllMaterials(heldObject) > 0;
+            return !Security.ItemSeals.RefusesHere(heldObject, Security.SealRule.Inspect) && ExtractAllMaterials(heldObject) > 0;
         if (HasOrb)
             return false;
 
         var material = HeldReference<IAssetProvider<MaterialAsset>>();
+        // Where the material is taken from: a sealed object gives its materials to nobody but its owner.
+        Slot? source = (material as Component)?.Slot;
         if (material == null)
         {
             if (!TryGetAim(out var aim) || aim.HitSlot == null)
                 return LoadSky();
             if (FindRelay(aim.HitSlot) is { } relay)
+            {
                 material = relay.FirstMaterial;
+                source = relay.Slot;
+            }
             else if (FindRenderer(aim.HitSlot) is { } renderer)
             {
                 int surface = SurfaceUnder(renderer, aim.HitSlot, aim.Point);
                 material = MaterialAt(renderer, surface < 0 ? 0 : surface);
+                source = renderer.Slot;
             }
         }
+        if (material != null && Security.ItemSeals.RefusesHere(source, Security.SealRule.Inspect, inside: true))
+            return false;
         return material != null && Load(material) != null;
     }
 
@@ -752,7 +662,7 @@ public sealed class MaterialTool : EquippableTool
     // out at the tip.
     private void Convert(Slot? scope)
     {
-        if (IsDestroyed || World == null || SpawnBlocked)
+        if (IsDestroyed || World == null || SpawnBlocked || Security.ItemSeals.RefusesHere(scope, Security.SealRule.Inspect))
             return;
         var single = scope == null ? LoadedMaterial as MaterialProvider : null;
         if (scope == null && single == null)
@@ -877,143 +787,18 @@ public sealed class MaterialTool : EquippableTool
         return null;
     }
 
-    // Walk up from the hit for the renderer that owns the surface. A hit lands on the child slot a mesh
-    // happens to live on far more often than on the slot somebody authored the renderer on.
-    private Component? FindRenderer(Slot? hitSlot)
-    {
-        var current = hitSlot;
-        for (int depth = 0; current != null && depth < MaxParentWalk; depth++, current = current.Parent)
-        {
-            if (current.IsDestroyed || !Paintable(current))
-                return null;
-            var mesh = current.GetComponent<MeshRenderer>();
-            if (mesh != null && !mesh.IsDestroyed)
-                return mesh;
-            var skinned = current.GetComponent<SkinnedMeshRenderer>();
-            if (skinned != null && !skinned.IsDestroyed)
-                return skinned;
-        }
-        return null;
-    }
+    private Component? FindRenderer(Slot? hitSlot) => MaterialSurfaces.FindRenderer(hitSlot, Paintable);
 
     // Not an orb (the whole point of one is to keep its material; a shader graph orb is one too), not a
     // tool, this one or any other, not a protected subtree.
     private bool Paintable(Slot slot)
-    {
-        if (slot.GetComponent<MaterialOrb>() != null || slot.GetComponent<Assets.ShaderGraphSource>() != null
-            || ImmutableComponent.IsProtected(slot) || slot.GetComponentInParents<ToolItem>() != null)
-            return false;
-        return Slot == null || !(ReferenceEquals(slot, Slot) || slot.IsDescendantOf(Slot));
-    }
+        => MaterialSurfaces.Paintable(slot) && (Slot == null || !(ReferenceEquals(slot, Slot) || slot.IsDescendantOf(Slot)));
 
-    private static int SurfaceCount(Component renderer) => renderer switch
-    {
-        MeshRenderer mesh => mesh.Materials.Count,
-        SkinnedMeshRenderer skinned => System.Math.Max(1, skinned.Materials.Count),
-        _ => 0,
-    };
+    private static IAssetProvider<MaterialAsset>? MaterialAt(Component renderer, int surface) => MaterialSurfaces.MaterialAt(renderer, surface);
 
-    private static IAssetProvider<MaterialAsset>? MaterialAt(Component renderer, int surface) => renderer switch
-    {
-        MeshRenderer mesh => surface >= 0 && surface < mesh.Materials.Count ? mesh.Materials.GetElement(surface).Target : null,
-        SkinnedMeshRenderer skinned => skinned.MaterialFor(surface),
-        _ => null,
-    };
+    private static int SurfaceUnder(Component renderer, Slot hitSlot, float3 point) => MaterialSurfaces.SurfaceUnder(renderer, hitSlot, point);
 
-    // Which surface a point is on. The laser reports a collider and a point, never a triangle, so on a mesh
-    // collider it is the submesh holding the triangle nearest the point. A renderer with one surface has
-    // that one, and anything else gets every surface: a box or a sphere collider says nothing about where
-    // on a multi-material mesh it was hit.
-    private static int SurfaceUnder(Component renderer, Slot hitSlot, float3 point)
-    {
-        int count = SurfaceCount(renderer);
-        if (count == 1)
-            return 0;
-        var collider = hitSlot.GetComponent<MeshCollider>();
-        if (collider?.Mesh.Target is MeshProvider provider && provider.Asset?.MeshData is { } mesh)
-        {
-            int submesh = NearestSubmesh(mesh, collider.Slot.GlobalPointToLocal(point));
-            if (submesh >= 0 && submesh < count)
-                return submesh;
-        }
-        return -1;
-    }
-
-    private static int NearestSubmesh(PhosMesh mesh, float3 point)
-    {
-        var positions = mesh.RawPositions;
-        int best = -1;
-        float bestDistance = float.MaxValue;
-        for (int s = 0; s < mesh.Submeshes.Count; s++)
-        {
-            var submesh = mesh.Submeshes[s];
-            if (submesh == null || submesh.Topology != PhosTopology.Triangles)
-                continue;
-            var indices = submesh.RawIndices;
-            for (int i = 0; i + 2 < submesh.IndexCount; i += 3)
-            {
-                float distance = DistanceSquaredToTriangle(point, positions[indices[i]], positions[indices[i + 1]], positions[indices[i + 2]]);
-                if (distance < bestDistance)
-                {
-                    bestDistance = distance;
-                    best = s;
-                }
-            }
-        }
-        return best;
-    }
-
-    // The closest point on a triangle by its Voronoi regions, squared distance to it.
-    private static float DistanceSquaredToTriangle(float3 p, float3 a, float3 b, float3 c)
-    {
-        var ab = b - a;
-        var ac = c - a;
-        var ap = p - a;
-        float d1 = float3.Dot(ab, ap), d2 = float3.Dot(ac, ap);
-        if (d1 <= 0f && d2 <= 0f)
-            return (p - a).LengthSquared;
-
-        var bp = p - b;
-        float d3 = float3.Dot(ab, bp), d4 = float3.Dot(ac, bp);
-        if (d3 >= 0f && d4 <= d3)
-            return (p - b).LengthSquared;
-
-        float vc = d1 * d4 - d3 * d2;
-        if (vc <= 0f && d1 >= 0f && d3 <= 0f)
-            return (p - (a + ab * (d1 / (d1 - d3)))).LengthSquared;
-
-        var cp = p - c;
-        float d5 = float3.Dot(ab, cp), d6 = float3.Dot(ac, cp);
-        if (d6 >= 0f && d5 <= d6)
-            return (p - c).LengthSquared;
-
-        float vb = d5 * d2 - d1 * d6;
-        if (vb <= 0f && d2 >= 0f && d6 <= 0f)
-            return (p - (a + ac * (d2 / (d2 - d6)))).LengthSquared;
-
-        float va = d3 * d6 - d5 * d4;
-        if (va <= 0f && d4 - d3 >= 0f && d5 - d6 >= 0f)
-            return (p - (b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6))))).LengthSquared;
-
-        float denominator = 1f / (va + vb + vc);
-        return (p - (a + ab * (vb * denominator) + ac * (vc * denominator))).LengthSquared;
-    }
-
-    // The object a hit belongs to: the nearest slot marked as an object root, else the top-level slot it
-    // sits under. Slot.ObjectRoot answers the world root when nothing is marked, which would quietly turn
-    // object mode into scene mode.
-    private static Slot? ObjectOf(Slot hit)
-    {
-        for (var current = hit; current != null && !current.IsRootSlot; current = current.Parent)
-        {
-            if (current.GetComponent<ObjectRoot>() != null)
-                return current;
-        }
-        var top = hit;
-        while (top.Parent != null && !top.Parent.IsRootSlot)
-            top = top.Parent;
-        return top.IsRootSlot ? null : top;
-    }
+    private static Slot? ObjectOf(Slot hit) => MaterialSurfaces.ObjectOf(hit);
 
     // MENU
 

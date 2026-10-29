@@ -38,7 +38,7 @@ public struct ToolAim
 [ComponentCategory("Interaction/Tools")]
 public abstract class EquippableTool : ToolItem
 {
-    // Test seam: a headless harness has no laser and no physics hook, so there is nothing to aim
+    // Test seam: a headless test has no laser and no physics hook, so there is nothing to aim
     // with. Null in every session.
     public static ToolAim? AimOverride;
 
@@ -89,11 +89,12 @@ public abstract class EquippableTool : ToolItem
 
         // Rides the same collector the gizmo mode items use: it only scans the user hierarchy, so an
         // unequipped tool lying on the floor contributes nothing and equip state gates the menu for
-        // free.
-        if (Slot != null)
+        // free. Built by the machine that made the tool, like the visual; the others receive it.
+        if (Slot != null && IsMintedHere)
         {
             var source = Slot.GetComponent<ToolActionsMenuSource>() ?? Slot.AttachComponent<ToolActionsMenuSource>();
-            source.Tool.Target = this;
+            if (!ReferenceEquals(source.Tool.Target, this))
+                source.Tool.Target = this;
         }
     }
 
@@ -289,6 +290,15 @@ public abstract class EquippableTool : ToolItem
         }
         if (Slot == null)
             return;
+
+        // The machine that made the tool builds its look and the rest receive it, whoever is holding it by the
+        // time it gets to them. Here only what is already there is found, for the state tints.
+        if (!IsMintedHere)
+        {
+            _visualSlot = Slot.FindChild("Visual", recursive: false);
+            _visualMaterial = _visualSlot?.GetComponent<UnlitMaterial>();
+            return;
+        }
 
         _visualSlot = Slot.FindChild("Visual", recursive: false) ?? Slot.AddSlot("Visual");
         _visualSlot.LocalPosition.Value = float3.Backward * 0.05f;

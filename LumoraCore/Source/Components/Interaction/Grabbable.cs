@@ -125,7 +125,12 @@ public sealed class Grabbable : Component, IGrabbable, ISlotGrabSurface, IGrabHo
     // protocol apart from an edit of the object. Only the two replicated grab refs count; everything
     // else on this component stays owner-gated. -xlinka
 
-    bool IPermissionGrabSurface.AllowsGrab => AllowGrab.Value;
+    bool IPermissionGrabSurface.AllowsGrab => !IsDestroyed && Enabled.Value && AllowGrab.Value;
+
+    bool IPermissionGrabSurface.AllowsGrabBy(IPermissionActor actor)
+        => actor is User user && PassesUserGates(user)
+            && !(BlockWhenWorn.Value && Slot?.ActiveUserRoot != null)
+            && Slot is { } slot && !slot.LocalPosition.IsDriven && !slot.LocalRotation.IsDriven && !slot.LocalScale.IsDriven;
 
     bool IPermissionGrabSurface.AllowsSteal => AllowSteal.Value;
 
@@ -362,7 +367,8 @@ public sealed class Grabbable : Component, IGrabbable, ISlotGrabSurface, IGrabHo
         // Back where it came from, unless that is gone, inside the object itself, or something that does
         // not take it back: then the world root. - xlinka
         if (restoreParent == null || restoreParent.IsDestroyed || (Slot != null && restoreParent.IsDescendantOf(Slot))
-            || ReleaseReturnGuard.Blocks(restoreParent))
+            || ReleaseReturnGuard.Blocks(restoreParent)
+            || World?.DataModelPermissions?.AllowsPlacingUnder(Slot, restoreParent) == false)
         {
             restoreParent = World?.RootSlot;
         }

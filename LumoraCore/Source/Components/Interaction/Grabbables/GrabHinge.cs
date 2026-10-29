@@ -113,7 +113,9 @@ public sealed class GrabHinge : Component, IGrabbable, ISlotGrabSurface, IGrabHo
     public event Action<IGrabbable>? OnLocalGrabbed;
     public event Action<IGrabbable>? OnLocalReleased;
 
-    bool IPermissionGrabSurface.AllowsGrab => AllowGrab.Value;
+    bool IPermissionGrabSurface.AllowsGrab => !IsDestroyed && Enabled.Value && AllowGrab.Value;
+    bool IPermissionGrabSurface.AllowsGrabBy(IPermissionActor actor)
+        => actor is User user && PassesUserGates(user) && Slot?.Parent != null && !Slot.LocalRotation.IsDriven;
     bool IPermissionGrabSurface.AllowsSteal => AllowSteal.Value;
     IPermissionActor? IPermissionGrabSurface.CurrentHolder => GrabberRef.Target?.OwningUser;
     RefID IGrabHolderSurface.GrabHolderRefId => GrabberRef.ReferenceID;

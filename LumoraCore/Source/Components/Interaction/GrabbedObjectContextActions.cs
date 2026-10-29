@@ -6,6 +6,7 @@ using Lumora.Core.Components.Avatar;
 using Lumora.Core.Components.Scripting;
 using Lumora.Core.Components.UI;
 using Lumora.Core.Scripting;
+using Lumora.Core.Security;
 
 namespace Lumora.Core.Components.Interaction;
 
@@ -26,7 +27,8 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
             return;
 
         // An object marked to stay as it is keeps these off it; a hand holding only such objects shows them off.
-        bool canDestroy = AnyGrabbed(grabber, slot => !DestroyBlock.Blocks(slot));
+        // Destroy also needs the right to destroy: holding something is not owning it.
+        bool canDestroy = AnyGrabbed(grabber, slot => !DestroyBlock.Blocks(slot) && slot.MayDestroy());
         page.AddItem(new ContextMenuItem
         {
             Group = ContextMenuGroup.Held,
@@ -36,11 +38,12 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
             OnPressed = canDestroy ? _ => DestroyGrabbed(grabber) : null,
         });
 
-        bool canDuplicate = AnyGrabbed(grabber, slot => !DuplicateBlock.Blocks(slot));
+        bool canDuplicate = AnyGrabbed(grabber, slot => !DuplicateBlock.Blocks(slot) && MayDuplicate(slot));
         page.AddItem(new ContextMenuItem
         {
             Group = ContextMenuGroup.Held,
             Label = "Duplicate",
+            Detail = canDuplicate ? null : SealRefusal(grabber, SealRule.SaveCopy),
             IsEnabled = canDuplicate,
             FillColor = new[] { 0.10f, 0.28f, 0.14f, 0.92f },
             OnPressed = canDuplicate ? _ => DuplicateGrabbed(grabber) : null,
@@ -54,6 +57,7 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
         {
             Group = ContextMenuGroup.Held,
             Label = canSave ? "Save to Inventory" : saveRefusal ?? "Save Blocked",
+            Detail = canSave ? SaveDetail() : SealRefusal(grabber, SealRule.SaveCopy),
             IsEnabled = canSave,
             FillColor = canSave
                 ? new[] { 0.12f, 0.18f, 0.30f, 0.92f }
@@ -73,6 +77,19 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
                     continue;
 
                 var targetSlot = slot;
+                // A sealed avatar of someone else's says so here rather than after the press.
+                if (ItemSeals.Judge(slot, World?.LocalUser, SealRule.Equip, out var equipRefusal) == SealVerdict.Refused)
+                {
+                    page.AddItem(new ContextMenuItem
+                    {
+                        Group = ContextMenuGroup.Held,
+                        Label = ProtectionLocale.MenuProtected.Resolve(),
+                        Detail = equipRefusal,
+                        IsEnabled = false,
+                        FillColor = new[] { 0.22f, 0.16f, 0.16f, 0.92f },
+                    });
+                    break;
+                }
                 page.AddItem(new ContextMenuItem
                 {
                     Group = ContextMenuGroup.Held,
@@ -87,6 +104,17 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
                 break; // one equip item even if multiple avatars are held
             }
         }
+    }
+
+    // The seal's reason for the first held object one refuses, for the hub under a disabled item.
+    private string? SealRefusal(Grabber grabber, SealRule rule)
+    {
+        foreach (var slot in CollectGrabbedSlots(grabber))
+        {
+            if (ItemSeals.Refuses(slot, rule, out var reason))
+                return reason;
+        }
+        return null;
     }
 
     private Grabber? FindHandGrabber(Input.Chirality? side)
@@ -107,6 +135,13 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
     private void SaveGrabbedToInventory(Grabber grabber)
     {
         var actor = World?.LocalUser;
+        // The menu that asked is gone by the time a save answers, so a refusal for the email is said in front of the
+        // eyes, once for the whole hand.
+        if (AccountEmail.SavesHeld)
+        {
+            ToolNotice.Say(World, AccountEmailLocale.SaveRefusedTitle.Resolve(), AccountEmailLocale.SaveRefusedHint.Resolve());
+            return;
+        }
         foreach (var slot in CollectGrabbedSlots(grabber))
         {
             if (slot.IsDestroyed)
@@ -133,16 +168,30 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
                 continue;
             }
             // Packed here on the world thread, uploaded off it; the answer only goes to the log because
-            // the radial menu that asked is already gone. Lands at the inventory root. -xlinka
+            // the radial menu that asked is already gone. Lands in the folder the inventory has open, which
+            // the hub said while the item was hovered. -xlinka
             var name = slot.Name;
-            _ = Inventory.SaveItemAsync(slot, name, null).ContinueWith(t =>
+            _ = Inventory.SaveItemHereAsync(slot, name).ContinueWith(t =>
             {
                 var result = t.Status == System.Threading.Tasks.TaskStatus.RanToCompletion
                     ? t.Result
                     : InventoryResult.Failure(t.Exception?.GetBaseException().Message ?? "upload failed");
                 Logging.Logger.Log($"Save to Inventory '{name}': {result.Message}");
+                if (result.Code == AccountEmail.NotVerifiedCode)
+                    World?.RunSynchronously(() => ToolNotice.Say(World, AccountEmailLocale.SaveRefusedTitle.Resolve(), AccountEmailLocale.SaveRefusedHint.Resolve()));
             });
         }
+    }
+
+    // Where the save will land, for the hub under the name: the folder the inventory has open, or the top of
+    // the user's own when that folder is not theirs to save into.
+    private static string SaveDetail()
+    {
+        static string Short(string name) => name.Length > 16 ? name[..15].TrimEnd() + "…" : name;
+        Inventory.SavePlace(out var notice);
+        return notice != null
+            ? $"Into Inventory, not {Short(Inventory.OpenFolder?.Name ?? "there")}"
+            : $"Into {Short(Inventory.SavePlaceLabel())}";
     }
 
     // Whether anything in the hand can actually be filed away, and a short label for why not when
@@ -182,6 +231,7 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
     {
         var slots = CollectGrabbedSlots(grabber);
         slots.RemoveAll(DestroyBlock.Blocks);
+        slots.RemoveAll(NotTheirsToDestroy);
         if (slots.Count == 0)
             return;
         // Release only the objects being deleted; protected items in a mixed hand-load stay held.
@@ -219,6 +269,16 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
         }
     }
 
+    // Asked before anything is let go of, so a refused piece stays in the hand. The menu that asked is gone
+    // by now, so the answer goes to the log.
+    private static bool NotTheirsToDestroy(Slot slot)
+    {
+        if (slot.MayDestroy())
+            return false;
+        Logging.Logger.Log($"Destroy refused for '{slot.Name.Value}': not yours to destroy.");
+        return true;
+    }
+
     private void DuplicateGrabbed(Grabber grabber)
     {
         var root = World?.RootSlot;
@@ -230,7 +290,7 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
 
         // Nodes are copied into their own graphs, together, so a wire between two of them joins the copies.
         var held = CollectGrabbedSlots(grabber);
-        held.RemoveAll(DuplicateBlock.Blocks);
+        held.RemoveAll(slot => DuplicateBlock.Blocks(slot) || !MayDuplicate(slot));
         var nodes = TakeGraphNodes(held);
         var duplicates = nodes.Count > 0 ? ScriptGraphEditing.CopyNodes(nodes) : new List<Slot>();
         foreach (var slot in held)
@@ -245,6 +305,27 @@ public class GrabbedObjectContextActions : ContextMenuItemSource
         var batch = SlotExistenceUndoBatch.Created(World, duplicates, UndoLocale.Duplicate);
         if (batch != null)
             FindUndoManager()?.Record(batch);
+    }
+
+    // A copy is a new thing of the copier's own, so it takes the right to bring things in. Where the world is frozen
+    // it also takes the original being theirs: a copy of the world's own prop is the world multiplied, and the
+    // copier's to edit and keep. Only this machine can tell a copy from a fresh build, so this is where it is asked.
+    // -xlinka
+    private bool MayDuplicate(Slot slot)
+    {
+        if (ItemSeals.Refuses(slot, SealRule.SaveCopy, out _))
+            return false;
+        var world = World;
+        var local = world?.LocalUser;
+        var permissions = world?.DataModelPermissions;
+        if (local == null || permissions == null || !permissions.Enabled)
+            return true;
+        if (!permissions.AllowsDomain(local, DataModelPermissionDomain.Spawn))
+            return false;
+        if (!permissions.SocialLock)
+            return true;
+        byte owner = slot.ReferenceID.GetUserByte();
+        return RefIDConstants.IsValidUserByte(owner) && local.HoldsByte(owner);
     }
 
     private UndoManager? FindUndoManager()

@@ -507,7 +507,7 @@ public sealed class UserspacePointer : Component
         {
             // Keep the useful grid placement until the user deliberately adjusts the carried item.
             // Otherwise the late dash projection overwrites every push/pull on the next frame.
-            bool adjusting = vr ? hand.HoldAxis.Value != float2.Zero : hand.HoldScroll.Value != 0f;
+            bool adjusting = hand.HoldAxis.Value != float2.Zero || !vr && hand.HoldScroll.Value != 0f;
             if (!adjusting)
                 return;
             _freePanelCarry = true;
@@ -519,7 +519,15 @@ public sealed class UserspacePointer : Component
         if (vr)
             LaserCarry.ApplyVrAxis(hand, delta, canScale, ref _holdDistance, ref _twist, out scaleStep);
         else
+        {
             LaserCarry.ApplyWheel(hand, WheelSlideStep, WheelResizeStep, canScale, ref _holdDistance, out scaleStep);
+            // A pad's d-pad on a screen pushes, pulls and resizes at the headset stick's pace, not a notch a frame.
+            if (hand.HoldAxis.Value != float2.Zero)
+            {
+                LaserCarry.ApplyVrAxis(hand, delta, canScale, ref _holdDistance, ref _twist, out float padStep);
+                scaleStep += padStep;
+            }
+        }
         _holdDistance = System.Math.Clamp(_holdDistance, MinHoldDistance, MathF.Max(_laser.MaxDistance.Value, MinHoldDistance));
         if (scaleStep != 0f)
             ResizeLoad(scaleStep);
@@ -598,8 +606,8 @@ public sealed class UserspacePointer : Component
         }
     }
 
-    // A panel turns its face to the eye, level with the user: one that carries its canvas on its own slot, or a
-    // popped-out window, whose surface sits square on a child. Anything else has its nearest axis put on the
+    // A panel turns its face to the eye, upright on the user's up: one that carries its canvas on its own slot, or
+    // a popped-out window, whose surface sits square on a child. Anything else has its nearest axis put on the
     // user's up.
     private void StraightenLoad()
     {
@@ -611,8 +619,7 @@ public sealed class UserspacePointer : Component
                 continue;
             bool face = slot.GetComponent<Canvas>() != null || slot.GetComponent<RectTransform>() != null
                 || slot.GetComponent<DashWindowPanel>() != null;
-            if (face && LaserCarry.TryFaceRotation(head, headRotation * float3.Forward, headRotation * float3.Up, rootUp,
-                    slot.GlobalPosition, slot.Up, out var facing))
+            if (face && LaserCarry.TryFaceRotation(head, headRotation * float3.Backward, rootUp, slot.GlobalPosition, out var facing))
                 slot.GlobalRotation = facing;
             else
                 LaserCarry.Straighten(slot, rootUp);

@@ -102,12 +102,55 @@ public abstract class ToolItem : Component
         // Touch-to-equip: primary-click on the tool pops an "Equip <name>" confirm. The RayTarget persists but
         // its Activated event doesn't, so re-hook every session (OnStart, not OnAttach). Priority beats the
         // sibling Grabbable for the hovered target; grab resolves the Grabbable by parent-walk regardless. -xlinka
-        var target = Slot.GetComponent<RayTarget>() ?? Slot.AttachComponent<RayTarget>();
-        if (target.InteractionPriority.Value < 10)
-            target.InteractionPriority.Value = 10;
-        if (target.HoverRadius.Value < 0.15f)
-            target.HoverRadius.Value = 0.15f;
+        //
+        // Only the machine that made the tool gives it the target. Every other peer starts it the moment it
+        // arrives, often before the target has, and while somebody holds it: creating one there was refused,
+        // the start threw and retried, and a start that ran out of retries left the tool dead on that machine
+        // for good, so it would not work for whoever it was handed to next. The others hook the one that is
+        // there, or the one that turns up. -xlinka
+        if (!HookRayTarget())
+            Slot.OnComponentAdded += OnPartArrived;
+    }
+
+    public override void OnDestroy()
+    {
+        if (Slot != null)
+            Slot.OnComponentAdded -= OnPartArrived;
+        base.OnDestroy();
+    }
+
+    private RayTarget? _hookedTarget;
+
+    private bool HookRayTarget()
+    {
+        var target = Slot.GetComponent<RayTarget>();
+        if (target == null && IsMintedHere)
+        {
+            target = Slot.AttachComponent<RayTarget>();
+            target.HoverRadius.Value = 0.025f;
+        }
+        if (target == null)
+            return false;
+        if (ReferenceEquals(target, _hookedTarget))
+            return true;
+        if (IsMintedHere)
+        {
+            // Repair the exact radius the old tool setup forced onto saved tools. Other authored
+            // radii, including zero for collider-only targeting, stay as chosen. -xlinka
+            if (target.HoverRadius.Value == 0.15f && target.HoverRadius.IsWriteAllowedQuietly())
+                target.HoverRadius.Value = 0.025f;
+            if (target.InteractionPriority.Value < 10)
+                target.InteractionPriority.Value = 10;
+        }
+        _hookedTarget = target;
         target.Activated += _ => ConfirmEquip();
+        return true;
+    }
+
+    private void OnPartArrived(Slot slot, Component component)
+    {
+        if (component is RayTarget && !IsDestroyed && HookRayTarget())
+            Slot.OnComponentAdded -= OnPartArrived;
     }
 
     private void ConfirmEquip()
@@ -122,6 +165,13 @@ public abstract class ToolItem : Component
         var userRootSlot = World?.LocalUser?.Root?.Slot;
         if (userRootSlot == null)
             return;
+
+        // No confirm for a tool this user may not take: the answer would only be a second refusal after it.
+        if (!AllowsEquip(World?.LocalUser))
+        {
+            ToolNotice.Refused(World, EquipName.Value);
+            return;
+        }
 
         // Owner hand = right on desktop (the menu-owning hand), the pointing hand in VR. Same owner resolution
         // as the avatar equip confirm: the wrong hand means no camera freeze and the menu edge-closes. - xlinka

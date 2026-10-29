@@ -99,12 +99,17 @@ public sealed class DevToolItem : ToolItem, ILaserHitClassifier
     {
         if (!CanManipulateGizmos(laser) || hitSlot == null || hitSlot.IsDestroyed)
             return LaserHitClass.Allow;
-        if (target is TransformHandle)
-            return LaserHitClass.Prefer;
-        if (hitSlot.GetComponentInParents<SlotGizmo>() != null
-            || hitSlot.GetComponentInParents<ComponentGizmo>() != null)
-            return LaserHitClass.Prefer;
-        return LaserHitClass.Allow;
+        Slot? annotated;
+        if (target is TransformHandle handle)
+            annotated = handle.TargetSlot.Target;
+        else if (hitSlot.GetComponentInParents<SlotGizmo>() is { } slotGizmo)
+            annotated = slotGizmo.TargetSlot;
+        else if (hitSlot.GetComponentInParents<ComponentGizmo>() is { } componentGizmo)
+            annotated = componentGizmo.TargetComponent?.Slot;
+        else
+            return LaserHitClass.Allow;
+        // A rig on another person is there to be looked at, so it does not reach through what is in front of it.
+        return GizmoHelper.InAnotherPerson(annotated) ? LaserHitClass.Allow : LaserHitClass.Prefer;
     }
 
     public override bool OnPrimaryPress()
@@ -175,8 +180,10 @@ public sealed class DevToolItem : ToolItem, ILaserHitClassifier
 
         DropStaleSelection();
 
+        // The slot under the beam, solid or only drawn, not just what the laser can act on: a floor, a wall
+        // and a prop nobody made grabbable are all things a person points at to select. In VR the tip pokes too.
         var laser = ActiveTool?.Laser;
-        var target = ResolveSelectableSlot(laser?.CurrentHitSlot);
+        var target = ResolveSelectableSlot(DevToolPick.Pick(laser, Engine.Current?.InputInterface?.IsVRActive == true));
         if (target == null)
         {
             return false;
@@ -190,6 +197,14 @@ public sealed class DevToolItem : ToolItem, ILaserHitClassifier
         var gizmo = GizmoHelper.ToggleGizmo(target);
         SelectedSlot.Target = gizmo == null ? null! : target!;
         CurrentGizmoSlot.Target = (gizmo as Component)?.Slot!;
+        // Somebody else's and no yes from them: looking is fine, and the card says where the ask is.
+        if (gizmo != null && GizmoHelper.InAnotherPerson(target)
+            && Networking.Session.SessionEditConsent.PersonOf(target, World?.LocalUser) is { } person)
+        {
+            bool rootItself = ReferenceEquals(target, person.Root?.Slot)
+                && Networking.Session.SessionEditConsent.Allows(person, World?.LocalUser);
+            Lumora.Core.Components.UI.EditConsentNotices.Refused(World, person, rootItself);
+        }
         return true;
     }
 
@@ -212,6 +227,43 @@ public sealed class DevToolItem : ToolItem, ILaserHitClassifier
         GizmoHelper.DeselectLocal(World);
         ClearSelection();
     }
+
+    // The object one level up from what the gizmo is on: a part picked by pointing at it walks up to the thing it
+    // belongs to. The same rig moves up, and this tool follows when it was the one holding that selection. Never
+    // the world root, and nothing the selection rules would refuse.
+    public static bool CanSelectParent(SlotGizmo? gizmo)
+        => gizmo is { IsDestroyed: false } && gizmo.TargetSlot?.Parent is { IsDestroyed: false } parent
+           && !RefusesParent(parent);
+
+    public bool SelectParent(SlotGizmo? gizmo)
+    {
+        if (!CanSelectParent(gizmo))
+        {
+            return false;
+        }
+
+        var child = gizmo!.TargetSlot;
+        var parent = child.Parent;
+        bool ours = ReferenceEquals(SelectedSlot.Target, child);
+        gizmo.OpenParent();
+        if (!ReferenceEquals(gizmo.TargetSlot, parent))
+        {
+            return false;
+        }
+
+        if (ours)
+        {
+            SelectedSlot.Target = parent;
+            CurrentGizmoSlot.Target = gizmo.Slot;
+        }
+        return true;
+    }
+
+    // The quiet half of RefusesSelection, for deciding whether to offer the step at all.
+    private static bool RefusesParent(Slot parent)
+        => parent.IsRootSlot || parent.IsLocalElement || ImmutableComponent.IsProtected(parent)
+           || Security.ItemSeals.JudgeInside(parent, Security.ItemSeals.ActingAccount(parent.World), Security.SealRule.Inspect,
+               out _, out _) != Security.SealVerdict.Allowed;
 
     // The selection is only real while its gizmo is: the gizmo can go without this tool asking (a
     // deselect from the radial menu, the inspector letting go, the slot being deleted). CurrentGizmoSlot
@@ -264,9 +316,23 @@ public sealed class DevToolItem : ToolItem, ILaserHitClassifier
             return null;
         }
 
+        // A hitbox an IK solver fitted to a bone is that bone to whoever points at it.
+        if (ObjectBoundary.IsBodyHitbox(hitSlot) && hitSlot.Parent is { IsRootSlot: false } bone)
+        {
+            hitSlot = bone;
+        }
+
         // A card, a cursor or any other local visual stands for the replicated object it belongs to.
-        return GizmoHelper.ReplicatedOwner(hitSlot);
+        var target = GizmoHelper.ReplicatedOwner(hitSlot);
+        return target == null || RefusesSelection(target) ? null : target;
     }
+
+    // Selecting is looking, so another person's body, the avatar they wear and what they hold all select; their
+    // gizmo's handles stay inert (TransformHandle). What stays shut: the world root, a marked subtree, and an
+    // account's seal to everyone but its owner, as the inspector does.
+    private static bool RefusesSelection(Slot target)
+        => target.IsRootSlot || target.IsLocalElement || ImmutableComponent.IsProtected(target)
+           || Security.ItemSeals.RefusesHere(target, Security.SealRule.Inspect, inside: true);
 
     private bool IsInActiveToolHierarchy(Slot slot)
     {

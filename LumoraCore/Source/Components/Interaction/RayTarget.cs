@@ -38,6 +38,13 @@ public sealed class RayTarget : Component, IInteractionTarget
         };
     }
 
+    // A beam resting on somebody's held tool is pointing at it, not changing it.
+    public override void OnAwake()
+    {
+        base.OnAwake();
+        IsHovered.MarkUiState();
+    }
+
     public override void OnInit()
     {
         base.OnInit();
