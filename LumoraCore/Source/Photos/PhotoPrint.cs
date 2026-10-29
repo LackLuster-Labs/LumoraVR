@@ -97,7 +97,23 @@ public static class PhotoPrint
         var material = slot.AttachComponent<UnlitMaterial>();
         material.Texture.Target = picture;
         material.BlendMode.Value = clear ? BlendMode.Alpha : BlendMode.Opaque;
-        material.Culling.Value = Culling.None;
+        material.Culling.Value = clear ? Culling.None : Culling.Back;
+        renderer.Material.Target = material;
+        // A clear background would show the other face through it, mirrored. -xlinka
+        if (!clear)
+            OtherFace(slot, quad, material);
+    }
+
+    // Unlit draws both faces of a quad whatever its culling says, so from behind the card showed its picture
+    // mirrored. The same picture turned half a turn a millimetre behind is the nearer face from that side and
+    // reads the right way round. -xlinka
+    private static void OtherFace(Slot slot, QuadMesh quad, MaterialProvider material)
+    {
+        var back = slot.AddSlot("Back");
+        back.LocalPosition.Value = new float3(0f, 0f, -0.001f);
+        back.LocalRotation.Value = floatQ.AxisAngleRad(float3.Up, MathF.PI);
+        var renderer = back.AttachComponent<MeshRenderer>();
+        renderer.Mesh.Target = quad;
         renderer.Material.Target = material;
     }
 
@@ -116,13 +132,14 @@ public static class PhotoPrint
         grab.Scalable.Value = true;
         var material = slot.AttachComponent<UnlitMaterial>();
         material.Texture.Target = picture;
-        material.Culling.Value = Culling.None;
+        material.Culling.Value = Culling.Back;
         material.StereoTextureTransform.Value = true;
         material.LeftEyeTextureScale.Value = new float2(0.5f, 1f);
         material.LeftEyeTextureOffset.Value = float2.Zero;
         material.RightEyeTextureScale.Value = new float2(0.5f, 1f);
         material.RightEyeTextureOffset.Value = new float2(0.5f, 0f);
         renderer.Material.Target = material;
+        OtherFace(slot, quad, material);
     }
 
     // All the way round, on a ball as wide as asked: the picture wraps it, the middle of the picture at its
@@ -155,7 +172,7 @@ public static class PhotoPrint
         details.TakenBy.Value = facts.TakenBy?.UserName.Value ?? string.Empty;
         details.TakenById.Value = facts.TakenBy?.UserID.Value ?? string.Empty;
         details.TakenAt.Value = DateTime.UtcNow.ToString("o");
-        details.WorldName.Value = world.Name ?? string.Empty;
+        details.WorldName.Value = Lumora.Core.Management.WorldManager.DisplayName(world);
         details.Camera.Value = facts.Camera;
         details.Position.Value = facts.Position;
         details.Rotation.Value = facts.Rotation;
@@ -179,7 +196,9 @@ public static class PhotoPrint
             return;
         var result = await Inventory.SaveItemAsync(slot, slot.Name.Value, folder ?? Inventory.Root, image);
         await WorldContext.ToWorld();
-        if (!result.Ok)
+        // A photo is kept on its own, every time; an account that cannot save yet hears it on the inventory and the
+        // account card instead of a warning per picture.
+        if (!result.Ok && result.Code != AccountEmail.NotVerifiedCode)
             LumoraLogger.Warn($"Photos: not kept in the inventory: {result.Message}");
     }
 }

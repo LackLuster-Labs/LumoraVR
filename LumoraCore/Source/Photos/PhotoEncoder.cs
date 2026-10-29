@@ -36,7 +36,7 @@ public static class PhotoEncoder
         return (Png(rgba, width, height), ImageEncoding.Png);
     }
 
-    public static byte[] Png(byte[] rgba, int width, int height)
+    public static byte[] Png(byte[] rgba, int width, int height, bool compact = false)
     {
         using var output = new MemoryStream();
         output.Write(new byte[] { 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A });
@@ -48,13 +48,18 @@ public static class PhotoEncoder
         Chunk(output, "IHDR", header);
         using (var packed = new MemoryStream())
         {
-            using (var zlib = new ZLibStream(packed, CompressionLevel.Fastest, leaveOpen: true))
+            using (var zlib = new ZLibStream(packed, compact ? CompressionLevel.SmallestSize : CompressionLevel.Fastest, leaveOpen: true))
             {
                 int stride = width * 4;
-                for (int y = 0; y < height; y++)
+                if (compact)
+                    TextureRowFilter.Write(zlib, rgba, width, height);
+                else
                 {
-                    zlib.WriteByte(0);
-                    zlib.Write(rgba, y * stride, stride);
+                    for (int y = 0; y < height; y++)
+                    {
+                        zlib.WriteByte(0);
+                        zlib.Write(rgba, y * stride, stride);
+                    }
                 }
             }
             Chunk(output, "IDAT", packed.ToArray());

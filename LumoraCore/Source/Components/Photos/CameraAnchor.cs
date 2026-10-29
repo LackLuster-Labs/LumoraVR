@@ -15,13 +15,15 @@ namespace Lumora.Core.Components;
 // A spot a camera can be sent to: the camera glides there, lens on the anchor, looking where it looks, at its
 // width of view, and stays until another mode is picked. A laser press on it sends yours there. Its marker is
 // drawn for eyes only, so no camera ever films one. In use while a camera sits on it; one camera to an
-// anchor. -xlinka
+// anchor. Routes string anchors together (CameraRoute) and never hold one. -xlinka
 [ComponentCategory("Interaction/Tools")]
 public class CameraAnchor : Component
 {
     // Where the lens goes; nothing means this slot.
     public readonly SyncRef<Slot> Root = new();
     public readonly Sync<float> FieldOfView = new(60f);
+    // Seconds a route's glide rests here; nothing means it flows straight through.
+    public readonly Sync<float> Hold = new();
 
     private static readonly ConditionalWeakTable<World, List<CameraAnchor>> Registry = new();
 

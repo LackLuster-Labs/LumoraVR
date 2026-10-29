@@ -18,8 +18,9 @@ namespace Lumora.Core.Components;
 // framing, the smoothing and most switches are kept in the settings and follow the account. Who else may work
 // the camera, who is framed and who is in a group are not kept: they are about the people in the room.
 //
-// It also owns what goes with streaming: the camera on the desktop window, the camera's ears, the live mark,
-// the link to the streaming program and the chat. The dash widgets read and change all of it here.
+// It also owns what goes with streaming: the camera on the desktop window (in a headset, or on a desktop while
+// the dash is shut), the camera's ears, the live mark, the link to the streaming program and the chat. The dash
+// widgets read and change all of it here.
 //
 // This runs in userspace. The camera lives in another world, so everything done to it is queued onto that
 // world's own update. -xlinka
@@ -30,8 +31,8 @@ public sealed class CameraDirector : Component
 
     public event Action? StateChanged;
 
-    private const string ObsAddressKey = "Engine.Stream.ObsAddress";
-    private const string ObsPasswordKey = "Engine.Stream.ObsPassword";
+    internal const string ObsAddressKey = "Engine.Stream.ObsAddress";
+    internal const string ObsPasswordKey = "Engine.Stream.ObsPassword";
     public const string DefaultObsAddress = "ws://127.0.0.1:4455";
 
     // NOT KEPT
@@ -46,7 +47,10 @@ public sealed class CameraDirector : Component
         set
         {
             if (value != PhotoCameraMode.Manual)
+            {
                 _anchor = null;
+                _route = null;
+            }
             Set(ref _mode, value);
         }
     }
@@ -94,6 +98,11 @@ public sealed class CameraDirector : Component
 
     private CameraAnchor? _anchor;
     public CameraAnchor? Anchor => _anchor is { IsDestroyed: false } ? _anchor : null;
+
+    private CameraRoute? _route;
+    public CameraRoute? Route => _route is { IsDestroyed: false } ? _route : null;
+    private volatile bool _routeRestart;
+    private volatile CameraRoute? _madeRoute;
 
     // KEPT, FOLLOWING THE ACCOUNT
 
@@ -160,6 +169,8 @@ public sealed class CameraDirector : Component
     private volatile PhotoCamera? _camera;
     private World? _cameraWorld;
     private readonly Dictionary<World, PhotoCamera> _spawned = new();
+    // Worlds where a favourite camera is still coming down.
+    private readonly HashSet<World> _fetching = new();
     private string _status = string.Empty;
     public string Status => _status;
     public PhotoCamera? Camera => _camera is { IsDestroyed: false } camera ? camera : null;
@@ -176,7 +187,8 @@ public sealed class CameraDirector : Component
 
     // THE STREAMING PROGRAM
 
-    public ObsLink Obs { get; } = new();
+    // This machine's one link, shared with the capture watch that puts the recording mark on the nametag.
+    public ObsLink Obs => CaptureWatch.Obs;
     private bool _wasOut;
     private double _obsPoll;
     public string ObsAddress
@@ -209,7 +221,6 @@ public sealed class CameraDirector : Component
     {
         Settings.Changed -= OnSettingChanged;
         Obs.StateChanged -= OnObsChanged;
-        Obs.Dispose();
         DesktopFeed.Hide(this);
         LiveStatus.IsLive = false;
         RemoveCameras();
@@ -241,10 +252,11 @@ public sealed class CameraDirector : Component
             StateChanged?.Invoke();
         }
         ApplyNudges(delta);
-        var input = Engine.Current?.InputInterface;
-        bool inVR = input?.IsVRActive ?? false;
-        if (_mirror && !inVR)
-            Mirror = false;
+        if (_madeRoute is { } made)
+        {
+            _madeRoute = null;
+            PlayRoute(made);
+        }
         WatchObs(delta);
 
         var world = Engine.Current?.WorldManager?.FocusedWorld;
@@ -262,7 +274,7 @@ public sealed class CameraDirector : Component
 
         var feed = _active ? Feed : null;
         if (_mirror && feed != null)
-            DesktopFeed.Show(this, feed);
+            DesktopFeed.Show(this, feed, Camera?.Slot);
         else
             DesktopFeed.Hide(this);
         LiveStatus.IsLive = _active && (_mirror || _showLive || Obs.Streaming || Obs.Recording);
@@ -304,7 +316,15 @@ public sealed class CameraDirector : Component
         _users.Clear();
         world.GetAllUsers(_users);
         var anchor = Anchor;
-        Put(camera.Anchor, anchor != null && ReferenceEquals(anchor.World, world) && mode == PhotoCameraMode.Manual ? anchor : null);
+        var route = Route;
+        bool routed = route != null && ReferenceEquals(route.World, world) && mode == PhotoCameraMode.Manual;
+        Put(camera.Route, routed ? route : null);
+        Put(camera.Anchor, !routed && anchor != null && ReferenceEquals(anchor.World, world) && mode == PhotoCameraMode.Manual ? anchor : null);
+        if (_routeRestart && routed)
+        {
+            _routeRestart = false;
+            camera.RestartRoute();
+        }
         Put(camera.Subject, FindUser(_users, _subject));
         Put(camera.FieldOfView, _fieldOfView);
         Put(camera.Orbit, _orbit);
@@ -344,15 +364,31 @@ public sealed class CameraDirector : Component
     {
         if (_spawned.TryGetValue(world, out var known) && !known.IsDestroyed)
             return known;
+        if (_fetching.Contains(world))
+            return null;
         try
         {
-            var camera = PhotoCamera.Spawn(world, keep: false);
-            if (camera != null)
+            // The user's favourite camera arrives after its fetch, and until then there is none to push to.
+            PhotoCamera? made = null;
+            _fetching.Add(world);
+            FavouriteSpawn.Camera(world, keep: false, camera =>
+            {
+                _fetching.Remove(world);
+                if (camera == null)
+                    return;
+                if (!_active)
+                {
+                    camera.Slot.Destroy();
+                    return;
+                }
                 _spawned[world] = camera;
-            return camera;
+                made = camera;
+            });
+            return made;
         }
         catch (UnauthorizedAccessException)
         {
+            _fetching.Remove(world);
             _status = "This world does not let you add a camera";
             return null;
         }
@@ -372,6 +408,7 @@ public sealed class CameraDirector : Component
             });
         }
         _spawned.Clear();
+        _fetching.Clear();
         _camera = null;
         _cameraWorld = null;
         _pushedMode = null;
@@ -517,13 +554,62 @@ public sealed class CameraDirector : Component
         _active = true;
         _mode = PhotoCameraMode.Manual;
         _anchor = anchor;
+        _route = null;
+        StateChanged?.Invoke();
+    }
+
+    // Glides the camera through the route from its first stop; the same route again starts it over.
+    public void PlayRoute(CameraRoute route)
+    {
+        if (route == null || route.IsDestroyed)
+            return;
+        _active = true;
+        _mode = PhotoCameraMode.Manual;
+        _anchor = null;
+        _route = route;
+        _routeRestart = true;
         StateChanged?.Invoke();
     }
 
     public void Release()
     {
         _anchor = null;
+        _route = null;
         StateChanged?.Invoke();
+    }
+
+    // A route through every anchor in the focused world, in the order the anchors page lists them, timed at
+    // a walking pace, and the camera set off along it.
+    public void CreateRoute()
+    {
+        var world = _cameraWorld ?? Engine.Current?.WorldManager?.FocusedWorld;
+        if (world == null || world.IsDestroyed || world == World)
+            return;
+        world.RunSynchronously(() =>
+        {
+            var stops = new List<CameraAnchor>();
+            foreach (var anchor in CameraAnchor.InWorld(world))
+            {
+                if (anchor != null && !anchor.IsDestroyed)
+                    stops.Add(anchor);
+            }
+            stops.Sort((a, b) => a.ReferenceID.CompareTo(b.ReferenceID));
+            if (stops.Count < 2)
+            {
+                _status = CameraLocale.RouteNeedsAnchors.Resolve();
+                _notify = true;
+                return;
+            }
+            try
+            {
+                _madeRoute = CameraRoute.Spawn(world, stops, CameraRoute.SuggestedDuration(stops));
+            }
+            catch (UnauthorizedAccessException)
+            {
+                _status = CameraLocale.RouteRefused.Resolve();
+                _notify = true;
+            }
+        });
     }
 
     // An anchor where the lens is now, at the width of view it has now.
@@ -703,8 +789,7 @@ public sealed class CameraDirector : Component
         if (isOut && !_wasOut && _autoMirror)
         {
             _active = true;
-            if (Engine.Current?.InputInterface?.IsVRActive ?? false)
-                _mirror = true;
+            _mirror = true;
             StateChanged?.Invoke();
         }
         _wasOut = isOut;

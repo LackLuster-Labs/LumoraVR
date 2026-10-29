@@ -14,10 +14,14 @@ public static class DesktopFeed
 
     public static RenderTexture? Shown { get; private set; }
 
-    public static void Show(object owner, RenderTexture? texture)
+    // Where that picture is seen from: the filming camera, looking down its -Z.
+    public static Slot? Viewpoint { get; private set; }
+
+    public static void Show(object owner, RenderTexture? texture, Slot? viewpoint = null)
     {
         _owner = owner;
         Shown = texture;
+        Viewpoint = texture != null ? viewpoint : null;
     }
 
     public static void Hide(object owner)
@@ -26,5 +30,6 @@ public static class DesktopFeed
             return;
         _owner = null;
         Shown = null;
+        Viewpoint = null;
     }
 }

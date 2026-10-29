@@ -12,7 +12,7 @@ namespace Lumora.Core.Photos;
 
 // How a photo is filmed: the width of view and size, and what is kept out of it. Mask takes away whole
 // bands (name plates, lasers); LeaveOut takes away objects; Only films one object and nothing else, on a
-// clear background when Transparent.
+// clear background when Transparent. Studio adds a photo studio's light for the picture alone.
 public readonly record struct PhotoLens(float FieldOfView, int Width, int Height)
 {
     public int Mask { get; init; } = -1;
@@ -21,6 +21,7 @@ public readonly record struct PhotoLens(float FieldOfView, int Width, int Height
     public bool Transparent { get; init; } = false;
     public bool WearerView { get; init; } = false;
     public float NearClip { get; init; } = 0.02f;
+    public bool Studio { get; init; } = false;
 }
 
 // Photos from points of view: cameras of this machine's own, never sent, film one frame each at the size
@@ -65,14 +66,14 @@ public static class PhotoShot
                 eye.GlobalPosition = views[i].Position;
                 eye.GlobalRotation = views[i].Rotation;
                 var target = eye.AttachComponent<RenderTextureProvider>();
-                target.Width.Value = lens.Width;
-                target.Height.Value = lens.Height;
+                target.Size.Value = new int2(lens.Width, lens.Height);
                 var camera = eye.AttachComponent<Camera>();
                 camera.FieldOfView.Value = System.Math.Clamp(lens.FieldOfView, 1f, 170f);
                 camera.NearClip.Value = lens.NearClip;
                 camera.FarClip.Value = 4000f;
                 camera.CullingMask.Value = lens.Mask & ~RenderLayerOverride.CameraPoolLayers;
                 camera.WearerView.Value = lens.WearerView;
+                camera.StudioLight.Value = lens.Studio;
                 if (lens.Transparent)
                 {
                     camera.Clear.Value = ClearMode.Color;

@@ -21,7 +21,7 @@ namespace Lumora.Core.Components;
 // a distance from their face, pulling back to fit everyone standing with them, standing still and turning to
 // keep them framed, or carried by hand. Every mode but the last places the subject at the framing point on
 // the picture, eases in at the set speeds, and can step in front of walls rather than film through them. An
-// anchor takes the camera over and glides it to a fixed spot.
+// anchor takes the camera over and glides it to a fixed spot; a route glides it through anchors in turn.
 //
 // What it films is drawn on the operator's machine only, unless it is set to draw for everyone (then every
 // machine films it for its own screen). Name plates and lasers can be left out of the view by band, objects
@@ -76,6 +76,7 @@ public class PhotoCamera : Component
     public readonly Sync<bool> AnchorEase = new(true);
     public readonly Sync<float> AnchorSpeed = new(2.5f);
     public readonly Sync<bool> AnchorLinear = new();
+    public readonly SyncRef<CameraRoute> Route = new();
 
     // A countdown started by the operator, for everyone to see: its length, and a counter that moves on each
     // start or stop.
@@ -100,7 +101,13 @@ public class PhotoCamera : Component
     public bool PrivateUIHere { get; set; }
     public bool Busy => _busy;
     public RenderTexture? Feed => _feedTexture?.Asset as RenderTexture;
-    public float LiveFieldOfView => Anchor.Target != null && _anchorAt != null ? _anchorFov : FieldOfView.Value;
+    public float LiveFieldOfView => Route.Target != null && _routeAt != null ? _routeFov
+        : Anchor.Target != null && _anchorAt != null ? _anchorFov : FieldOfView.Value;
+    // Put somewhere by an anchor or a route rather than by its mode.
+    public bool Placed => Anchor.Target != null || Route.Target != null;
+    // Seconds along the route it is gliding, and whether a route that does not loop has reached its end.
+    public double RouteTime => _routeAt != null ? System.Math.Max(0, _routeClock - _leadSeconds) : 0;
+    public bool RouteFinished => _routeAt != null && _routeDone;
     public double CountdownLeft => _countdownEnds >= 0 && World != null ? System.Math.Max(0, _countdownEnds - World.Time.TotalTime) : -1;
 
     private Slot? _visuals;
@@ -143,6 +150,14 @@ public class PhotoCamera : Component
     private float3 _anchorPosMid;
     private floatQ _anchorRotMid;
     private float _anchorFovMid;
+    private CameraRoute? _routeAt;
+    private double _routeClock;
+    private bool _routeDone;
+    private float _routeFov;
+    private float _leadSeconds;
+    private float3 _leadPosition;
+    private floatQ _leadRotation;
+    private float _leadFov;
 
     public static IReadOnlyList<PhotoCamera> InWorld(World? world)
         => world != null && Registry.TryGetValue(world, out var list) ? list : Array.Empty<PhotoCamera>();
@@ -247,16 +262,23 @@ public class PhotoCamera : Component
         var grab = Slot.GetComponent<Grabbable>();
         if (grab != null)
         {
-            bool free = Anchor.Target == null;
+            bool free = !Placed;
             if (grab.AllowGrab.Value != free)
                 grab.AllowGrab.Value = free;
         }
         // Only a camera you can pick up stops a laser: one riding your eyes or flying round your face would
         // otherwise sit in front of everything you point at.
         var collider = Slot.GetComponent<BoxCollider>();
-        bool solid = Anchor.Target == null && !HideBody.Value && Mode.Value is PhotoCameraMode.Manual or PhotoCameraMode.Stationary;
+        bool solid = !Placed && !HideBody.Value && Mode.Value is PhotoCameraMode.Manual or PhotoCameraMode.Stationary;
         if (collider != null && collider.Enabled.Value != solid)
             collider.Enabled.Value = solid;
+        if (Route.Target is { IsDestroyed: false } route && route.HasPath)
+        {
+            _anchorAt = null;
+            FollowRoute(route, delta);
+            return;
+        }
+        _routeAt = null;
         if (Anchor.Target is { IsDestroyed: false } anchor)
         {
             FollowAnchor(anchor, delta);
@@ -594,6 +616,57 @@ public class PhotoCamera : Component
         Slot.GlobalRotation = turn;
     }
 
+    // Starts again from the top of the route on the next frame.
+    public void RestartRoute() => _routeAt = null;
+
+    // Along the route at its own pace. With the glide on, a camera that starts away from the route first eases
+    // over onto its first stop; with it off the camera cuts straight there.
+    private void FollowRoute(CameraRoute route, float delta)
+    {
+        if (!ReferenceEquals(_routeAt, route))
+        {
+            _routeAt = route;
+            _routeClock = 0;
+            _routeDone = false;
+            float scale = Slot.GlobalScale.x;
+            _leadRotation = Slot.GlobalRotation;
+            _leadPosition = Slot.GlobalPosition + _leadRotation * (LensOffset * scale);
+            _leadFov = LiveFieldOfView;
+            _leadSeconds = AnchorEase.Value ? LeadIn(route) : 0f;
+        }
+        else
+            _routeClock += delta;
+
+        float3 lens;
+        floatQ rotation;
+        float fov;
+        if (_routeClock < _leadSeconds)
+        {
+            route.Sample(0, out var start, out var startTurn, out var startFov);
+            float t = (float)(_routeClock / _leadSeconds);
+            float k = t * t * t * (t * (t * 6f - 15f) + 10f);
+            lens = float3.Lerp(_leadPosition, start, k);
+            rotation = floatQ.Slerp(_leadRotation, startTurn, k);
+            fov = _leadFov + (startFov - _leadFov) * k;
+        }
+        else
+            _routeDone = !route.Sample(_routeClock - _leadSeconds, out lens, out rotation, out fov);
+        Slot.GlobalRotation = rotation;
+        Slot.GlobalPosition = lens - rotation * (LensOffset * Slot.GlobalScale.x);
+        _routeFov = fov;
+    }
+
+    // Long enough to move and turn onto the route at about its own pace, between a moment and a few seconds.
+    private float LeadIn(CameraRoute route)
+    {
+        route.Sample(0, out var start, out var startTurn, out _);
+        float metres = (start - _leadPosition).Length;
+        float angle = 2f * MathF.Acos(System.Math.Clamp(MathF.Abs(floatQ.Dot(_leadRotation, startTurn)), 0f, 1f));
+        if (metres < 0.02f && angle < 0.02f)
+            return 0f;
+        return System.Math.Clamp(MathF.Max(metres / 1.2f, angle / 1.2f), 0.8f, 3f);
+    }
+
     // SMOOTHING
     //
     // Two eased stages, the second chasing the first, so a move starts gently and settles gently.
@@ -662,7 +735,7 @@ public class PhotoCamera : Component
         if (_feedCamera == null || _feedCamera.IsDestroyed)
             return;
         float scale = Slot.GlobalScale.x;
-        bool eyes = IsMine && Mode.Value == PhotoCameraMode.FirstPerson && Anchor.Target == null;
+        bool eyes = IsMine && Mode.Value == PhotoCameraMode.FirstPerson && !Placed;
         Put(_feedCamera.FieldOfView, System.Math.Clamp(LiveFieldOfView, 1f, 170f));
         Put(_feedCamera.CullingMask, BandMask(HideNameplates.Value, HideLasers.Value));
         Put(_feedCamera.WearerView, eyes);
@@ -700,8 +773,7 @@ public class PhotoCamera : Component
         _feedSlot = Slot.AddLocalSlot("Feed");
         _feedSlot.LocalPosition.Value = LensOffset;
         _feedTexture = _feedSlot.AttachComponent<RenderTextureProvider>();
-        _feedTexture.Width.Value = FeedWidth;
-        _feedTexture.Height.Value = FeedHeight;
+        _feedTexture.Size.Value = new int2(FeedWidth, FeedHeight);
         _feedCamera = _feedSlot.AttachComponent<Camera>();
         _feedCamera.FarClip.Value = 4000f;
         _feedCamera.TargetTexture.Target = _feedTexture;
@@ -735,7 +807,7 @@ public class PhotoCamera : Component
             BuildVisuals();
         float scale = Slot.GlobalScale.x;
         var mode = Mode.Value;
-        bool free = Anchor.Target == null;
+        bool free = !Placed;
         bool hidden = HideBody.Value || (free && mode == PhotoCameraMode.FirstPerson);
         if (!hidden && free && mode is PhotoCameraMode.ThirdPerson or PhotoCameraMode.Group
             && World?.LocalUser?.Root is { HeadSlot: not null } viewer)
@@ -805,10 +877,14 @@ public class PhotoCamera : Component
         lightRenderer.Material.Target = _lightMaterial;
 
         // Text with no font draws nothing.
-        var font = _visuals.AddLocalSlot("Font").AttachComponent<FontProvider>();
+        var fontSlot = _visuals.AddLocalSlot("Font");
+        var font = fontSlot.AttachComponent<FontProvider>();
         font.URL.Value = Lumora.Core.Components.UI.DashTheme.FontRegular;
-        _countFront = Count(_visuals, "Count Front", new float3(0f, BodyHeight * 0.5f + 0.035f, -BodyDepth * 0.5f), floatQ.Identity, font);
-        _countBack = Count(_visuals, "Count Back", new float3(0f, BodyHeight * 0.5f + 0.035f, BodyDepth * 0.5f), floatQ.AxisAngle(float3.Up, MathF.PI), font);
+        // Each count reads from its own side only; drawn from both, each side showed the other's mirrored. -xlinka
+        var oneSided = fontSlot.AttachComponent<TextMaterial>();
+        oneSided.Culling.Value = Culling.Back;
+        _countFront = Count(_visuals, "Count Front", new float3(0f, BodyHeight * 0.5f + 0.035f, -BodyDepth * 0.5f), floatQ.Identity, font, oneSided);
+        _countBack = Count(_visuals, "Count Back", new float3(0f, BodyHeight * 0.5f + 0.035f, BodyDepth * 0.5f), floatQ.AxisAngle(float3.Up, MathF.PI), font, oneSided);
 
         _frustum = _visuals.AddLocalSlot("Frustum");
         _frustum.LocalPosition.Value = LensOffset;
@@ -816,13 +892,14 @@ public class PhotoCamera : Component
         _frustum.ActiveSelf.Value = false;
     }
 
-    private static TextRenderer Count(Slot parent, string name, float3 position, floatQ rotation, FontProvider font)
+    private static TextRenderer Count(Slot parent, string name, float3 position, floatQ rotation, FontProvider font, TextMaterial style)
     {
         var slot = parent.AddLocalSlot(name);
         slot.LocalPosition.Value = position;
         slot.LocalRotation.Value = rotation;
         var text = slot.AttachComponent<TextRenderer>();
         text.Font.Target = font;
+        text.Style.Target = style;
         text.Size.Value = 0.05f;
         text.HorizontalAlign.Value = TextHorizontalAlignment.Center;
         text.VerticalAlign.Value = TextVerticalAlignment.Middle;
@@ -904,7 +981,7 @@ public class PhotoCamera : Component
         var grabber = Slot.GetComponent<Grabbable>()?.Grabber;
         var side = Chirality.None;
         if (grabber != null && grabber.Slot?.ActiveUserRoot?.ActiveUser is { } holder && ReferenceEquals(holder, me) && MayOperate(me)
-            && Anchor.Target == null)
+            && !Placed)
             side = grabber.Slot.GetComponentInParents<HandTool>()?.Side.Value ?? Chirality.None;
         if (input != null && side != _claimed)
         {
@@ -990,7 +1067,7 @@ public class PhotoCamera : Component
             if (slot is { IsDestroyed: false })
                 leaveOut.Add(slot);
         }
-        bool eyes = IsMine && Mode.Value == PhotoCameraMode.FirstPerson && Anchor.Target == null;
+        bool eyes = IsMine && Mode.Value == PhotoCameraMode.FirstPerson && !Placed;
         var up = rotation * float3.Up;
         float3 printAt;
         floatQ facing;
@@ -1016,7 +1093,7 @@ public class PhotoCamera : Component
                 var picture = shape switch
                 {
                     PhotoShape.Stereo => await Stereo(world, lens, rotation, scale, size, fov, mask, leaveOut, eyes),
-                    PhotoShape.Panorama => await Panorama(world, lens, rotation, size, mask, leaveOut),
+                    PhotoShape.Panorama => await Panorama(world, lens, rotation, size, mask, leaveOut, eyes),
                     PhotoShape.Object => await Alone(world, lens, rotation, fov, size, self),
                     _ => await Flat(world, lens, rotation, size, fov, mask, leaveOut, eyes),
                 };
@@ -1069,7 +1146,7 @@ public class PhotoCamera : Component
 
     // All the way round from the lens, level, its middle where the camera faces.
     private static async System.Threading.Tasks.Task<PixelFrame?> Panorama(World world, float3 lens, floatQ rotation,
-        (int Width, int Height) size, int mask, List<Slot> leaveOut)
+        (int Width, int Height) size, int mask, List<Slot> leaveOut, bool eyes)
     {
         int width = size.Width >= 2560 ? 4096 : 2048;
         int face = width / 4;
@@ -1082,7 +1159,7 @@ public class PhotoCamera : Component
             var (x, y, z, w) = PhotoStitch.FaceRotation(i);
             views[i] = (lens, level * new floatQ(x, y, z, w));
         }
-        var frames = await PhotoShot.TakeRawAsync(world, views, new PhotoLens(90f, face, face) { Mask = mask, LeaveOut = leaveOut });
+        var frames = await PhotoShot.TakeRawAsync(world, views, new PhotoLens(90f, face, face) { Mask = mask, LeaveOut = leaveOut, WearerView = eyes });
         if (frames == null)
             return null;
         var faces = new byte[frames.Length][];
@@ -1117,8 +1194,9 @@ public class PhotoCamera : Component
         var toward = centre - lens;
         var direction = toward.LengthSquared > 1e-6f ? toward.Normalized : rotation * Ahead;
         var position = centre - direction * distance;
+        // Filmed alone, the world's lights sit on bands this camera does not draw, so it brings a studio's.
         var frames = await PhotoShot.TakeRawAsync(world, new[] { (position, PhotoShot.Looking(direction, rotation * float3.Up)) },
-            new PhotoLens(fov, size.Width, size.Height) { Only = target, Transparent = true, NearClip = MathF.Max(0.005f, (distance - radius) * 0.5f) });
+            new PhotoLens(fov, size.Width, size.Height) { Only = target, Transparent = true, Studio = true, NearClip = MathF.Max(0.005f, (distance - radius) * 0.5f) });
         return frames?[0];
     }
 

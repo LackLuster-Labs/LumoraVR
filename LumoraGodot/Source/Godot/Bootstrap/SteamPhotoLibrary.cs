@@ -14,23 +14,36 @@ namespace Lumora.Source.Godot.Bootstrap;
 public static class SteamPhotoLibrary
 {
     private static Callback<ScreenshotReady_t>? _ready;
+    private static Callback<ScreenshotRequested_t>? _requested;
     private static readonly HashSet<ScreenshotHandle> Pending = new();
 
+    // Steam's own screenshot key is F12 out of the box, the photo key too. Left to itself Steam grabs the window
+    // on that press while the photo goes into its library as well: two shots for one press. Hooked, the key asks
+    // for a photo instead, and a press the photo keys already answer makes no second one. -xlinka
     public static void Initialize()
     {
         if (_ready != null)
             return;
         _ready = Callback<ScreenshotReady_t>.Create(OnReady);
+        _requested = Callback<ScreenshotRequested_t>.Create(OnRequested);
+        SteamScreenshots.HookScreenshots(true);
         PhotoLibrary.PhotoTaken += OnPhoto;
     }
 
     public static void Shutdown()
     {
         PhotoLibrary.PhotoTaken -= OnPhoto;
+        if (_requested != null)
+            SteamScreenshots.HookScreenshots(false);
         _ready?.Dispose();
         _ready = null;
+        _requested?.Dispose();
+        _requested = null;
         Pending.Clear();
     }
+
+    private static void OnRequested(ScreenshotRequested_t request)
+        => Lumora.Core.Components.HandViewfinder.AskForPhoto();
 
     // Photo completion runs off-thread; keep Steam calls and callback bookkeeping on the game thread.
     private static void OnPhoto(byte[] bytes, ImageEncoding encoding)
