@@ -130,6 +130,8 @@ public sealed class PermissionEngine
     [ThreadStatic] private static IPermissionActor? s_currentActor;
     [ThreadStatic] private static int s_systemBypassDepth;
     [ThreadStatic] private static int s_authoredContentDepth;
+    [ThreadStatic] private static int s_quietDepth;
+    [ThreadStatic] private static IPermissionTarget? s_upkeepSource;
 
     private readonly IPermissionWorldFacts _world;
     private readonly IPermissionIdSpace _ids;
@@ -243,9 +245,10 @@ public sealed class PermissionEngine
 
         var all = PermissionAction.All;
         var view = PermissionAction.Read | PermissionAction.CollectionEnumerate;
-        var build = view | PermissionAction.Create | PermissionAction.Write
-            | PermissionAction.ReferenceWrite | PermissionAction.CollectionAdd
-            | PermissionAction.CollectionInsert | PermissionAction.CollectionSet;
+        // Builders edit shared content completely, including deleting components and resizing collections.
+        // The person boundary, world freeze and configuration locks still decide which targets they may edit.
+        // -xlinka
+        var build = view | PermissionAction.Mutation;
         var moderate = view | PermissionAction.Destroy | PermissionAction.CollectionRemove
             | PermissionAction.CollectionClear;
 
@@ -280,13 +283,13 @@ public sealed class PermissionEngine
         // are written tight: a role gets a domain here only if it would be strange for it NOT to have it.
         // Export is the one that stays off by default even for people who can build, because taking
         // content off the machine is a different ask from editing it in place. -xlinka
-        // Script sits with the build rights: a script is something a user builds, and a host who wants
-        // guests scripting grants it per role. -xlinka
+        // Script runs for every role but Spectator, in every mode. What a person's script may touch is what they may:
+        // the floor and the role keep it to their own things, and it moves no one but its author. -xlinka
         _compiledCaps[HostRole] = new DomainCaps(true, true, true, true, true, true);
         _compiledCaps[AdminRole] = new DomainCaps(true, true, true, true, true, true);
         _compiledCaps[BuilderRole] = new DomainCaps(true, true, true, true, true, true);
-        _compiledCaps[ModeratorRole] = new DomainCaps(true, true, false, true, true, false);
-        _compiledCaps[GuestRole] = new DomainCaps(true, true, false, false, true, false);
+        _compiledCaps[ModeratorRole] = new DomainCaps(true, true, false, true, true, true);
+        _compiledCaps[GuestRole] = new DomainCaps(true, true, false, false, true, true);
         _compiledCaps[SpectatorRole] = new DomainCaps(false, false, false, false, true, false);
 
         RebuildResolvedCaps();
@@ -375,6 +378,7 @@ public sealed class PermissionEngine
 
     private DomainCaps CapsFor(PermissionRole role)
         => _resolvedCaps.TryGetValue(role, out var caps) ? caps : default;
+
 
     private PermissionToggle ToggleFor(PermissionRole role, PermissionDomain domain)
         => _toggles.TryGetValue(role.Name, out var set) && (int)domain < set.Length
@@ -533,9 +537,43 @@ public sealed class PermissionEngine
 
     // Whether the gate already takes this thread's changes for that actor, with no scope open that lifts it.
     public static bool IsActingAs(IPermissionActor? actor)
-        => ReferenceEquals(s_currentActor, actor) && s_systemBypassDepth == 0 && s_authoredContentDepth == 0;
+        => ReferenceEquals(s_currentActor, actor) && s_systemBypassDepth == 0 && s_authoredContentDepth == 0 && s_upkeepSource == null;
 
-    public IDisposable EnterSystemBypass() => new Scope(s_currentActor, systemBypass: true);
+    // Who this thread is acting for inside an actor scope, or null outside one. A fact for a caller that judges by
+    // the actor's account itself (an item seal), never a decision.
+    public static IPermissionActor? CurrentActor => s_currentActor;
+
+    // A struct, not an object: hot paths open one of these every frame (each dynamic bone chain, every IK
+    // solve), and the class it replaced was thirty-two bytes of garbage a time across a room of avatars. It
+    // puts back the actor and depth it found; a default one does nothing. -xlinka
+    public readonly struct BypassScope : IDisposable
+    {
+        private readonly IPermissionActor? _previousActor;
+        private readonly int _previousDepth;
+        private readonly bool _open;
+
+        internal BypassScope(IPermissionActor? previousActor, int previousDepth)
+        {
+            _previousActor = previousActor;
+            _previousDepth = previousDepth;
+            _open = true;
+        }
+
+        public void Dispose()
+        {
+            if (!_open)
+                return;
+            s_currentActor = _previousActor;
+            s_systemBypassDepth = _previousDepth;
+        }
+    }
+
+    public BypassScope EnterSystemBypass()
+    {
+        var scope = new BypassScope(s_currentActor, s_systemBypassDepth);
+        s_systemBypassDepth++;
+        return scope;
+    }
 
     // A much narrower door than EnterSystemBypass, for the world's OWN authored logic running on the
     // authority: a button in the world flipping a light it was built alongside. Under the Social/Event
@@ -563,10 +601,54 @@ public sealed class PermissionEngine
         return new AuthoredContentScope(armed: true);
     }
 
-    // Whether the calling thread is inside a scope that opens the gate: a system bypass or an authored
-    // content scope. A script runtime refuses to start a call inside one, or the script would run with
-    // the scope's rights instead of its author's.
-    public static bool IsGateOpenOnThisThread => s_systemBypassDepth > 0 || s_authoredContentDepth > 0;
+    // Shared UI (an inspector, a node browser, their rows and readouts) is built and kept up by the
+    // authority, and it goes on working when somebody picks the panel up or pins it to themselves: the
+    // authority rebuilding the rows of a panel in somebody's hand is the panel keeping itself, not anybody
+    // changing what that person holds. This is the door for exactly that.
+    //
+    // Narrow on purpose, and every limit is load-bearing:
+    //   authority only - a peer's upkeep would arrive at the host as that peer writing into someone else's
+    //                    things, which the host cannot tell from the real thing, so peers never keep shared UI;
+    //   source         - the component doing its own upkeep. Only what sits on its slot or below passes, so an
+    //                    inspector looking at somebody's avatar refreshes its rows and never the avatar;
+    //   the person boundary only - the role, the freeze and everything after them still judge the write;
+    //   never a person's root itself, and only for the dynamic extent of the using block.
+    // Engine code opens it around the upkeep itself; nothing a person does reaches it. -xlinka
+    public UpkeepScope EnterUpkeepScope(IPermissionTarget? source)
+    {
+        if (source == null || !_world.IsAuthority || _world.IsDisposed)
+            return default;
+        var scope = new UpkeepScope(s_upkeepSource);
+        s_upkeepSource = source;
+        return scope;
+    }
+
+    public readonly struct UpkeepScope : IDisposable
+    {
+        private readonly IPermissionTarget? _previous;
+        private readonly bool _open;
+
+        internal UpkeepScope(IPermissionTarget? previous)
+        {
+            _previous = previous;
+            _open = true;
+        }
+
+        public void Dispose()
+        {
+            if (_open)
+                s_upkeepSource = _previous;
+        }
+    }
+
+    // Whether the authority is keeping shared UI that this element is part of, inside an upkeep scope.
+    private bool InUpkeepOf(IPermissionTarget? reached)
+        => s_upkeepSource is { } source && reached != null && _world.IsAuthority && reached.IsInside(source);
+
+    // Whether the calling thread is inside a scope that opens the gate: a system bypass, an authored
+    // content scope or shared UI upkeep. A script runtime refuses to start a call inside one, or the script
+    // would run with the scope's rights instead of its author's.
+    public static bool IsGateOpenOnThisThread => s_systemBypassDepth > 0 || s_authoredContentDepth > 0 || s_upkeepSource != null;
 
     // Whether anything on the ownership chain reads as a user's: under their root, which covers what
     // they wear and what they are holding. The authority mints user roots, so authority-authored alone
@@ -595,6 +677,30 @@ public sealed class PermissionEngine
             target = target.OwnershipParent;
         }
         return false;
+    }
+
+    // What a world script may do inside an object someone wears or holds: change it and add to it, never take
+    // anything out of it.
+    private const PermissionAction OwnObjectActions = PermissionAction.Read | PermissionAction.CollectionEnumerate
+        | PermissionAction.Write | PermissionAction.ReferenceWrite | PermissionAction.Create
+        | PermissionAction.CollectionAdd | PermissionAction.CollectionInsert | PermissionAction.CollectionSet;
+
+    // A world script inside an object someone wears or holds keeps working that object, as it did before it was
+    // picked up or put on: the world-made parts of the nearest object or avatar root that holds both the script
+    // and what it changes. Never that root's own place, transform or parent, never the wearer's body machinery
+    // or anything a person added (none of it the authority's), and nothing outside that root, the user root
+    // above it included. Destroying, copying and exporting stay refused. -xlinka
+    private bool InOwnWornObject(IPermissionActor actor, IPermissionTarget? reached, PermissionAction action)
+    {
+        if (reached == null || (action & ~OwnObjectActions) != 0 || actor.ScriptHome is not { } home || !IsAuthorityAuthored(home))
+            return false;
+        var root = home.SharedObjectRoot(reached);
+        if (root == null || !IsAuthorityAuthored(root) || root.StructuralOwner is not { } wearer
+            || ReferenceEquals(root, wearer.RootElement))
+            return false;
+        if (ReferenceEquals(reached, root) || ReferenceEquals(reached.OwnershipParent, root))
+            return false;
+        return !reached.IsWearerMachinery;
     }
 
     public void AddRule(IPermissionRule rule)
@@ -868,7 +974,8 @@ public sealed class PermissionEngine
         }
 
         // World scripts act for the world, so ownership and roles have nothing to say about them. The one
-        // question is whether the target is the world's own content and no user is holding or wearing it.
+        // question is whether the target is the world's own content and no user is holding or wearing it,
+        // or else a part of the very object the script sits in (InOwnWornObject).
         // Above the freeze on purpose: the world's authored logic has to keep working in a frozen world,
         // the same reasoning as EnterAuthoredContentScope. Copy and export are never theirs to ask for.
         // The slot registry is world content itself, so there the key is what counts: a world script adds
@@ -884,8 +991,8 @@ public sealed class PermissionEngine
             if (world.IsAuthority
                 && (request.Action & ~worldScriptActions) == 0
                 && IsAuthorityAuthored(reached)
-                && !BelongsToAUser(reached)
-                && worldKey)
+                && worldKey
+                && (!BelongsToAUser(reached) || InOwnWornObject(actor, reached, request.Action)))
             {
                 return true;
             }
@@ -893,10 +1000,52 @@ public sealed class PermissionEngine
             return Deny(request, reason, PermissionDenialKind.ForeignWrite);
         }
 
+        // THE PERSON BOUNDARY. What hangs under somebody's user root is theirs: their body, the avatar they wear, what
+        // they hold. Nobody else changes any of it, whatever their role, the host included, unless that person said
+        // yes to them for this session; the person's own record says so and nothing the asker sends counts. With the
+        // yes, the asker is judged below as the person would be, so a held world prop stays the role's question and
+        // copying stays its own; and never on the person's root itself (where they stand, what it hangs from, its own
+        // components, removing it). Authored grab interactions pass for their protocol fields only, including
+        // grabbable accessories and bone chains; their grab restrictions still apply. Moderation writes the
+        // user record, which is not under the root, and the engine's own work on bodies
+        // (building, respawning, tearing down, the solvers) runs past the gate. Every mode. -xlinka
+        var owner = actor;
+        bool asPerson = false;
+        if ((request.Action & PermissionAction.Mutation) != 0
+            && PersonReached(in request, world, out bool rootLevel, out var reachedTarget) is { } person && person.Id != actor.Id)
+        {
+            bool consented = person.AllowsEditsBy(actor);
+            if (consented && !rootLevel)
+            {
+                owner = person;
+                // Their own things answer as they would, their role included; something they only hold stays the
+                // actor's role's question, or a yes would hand out whatever the person happens to carry.
+                asPerson = reachedTarget == null || !reachedTarget.IsCarriedBy(person) || OwnsIdStrong(person, reachedTarget);
+            }
+            else if (!rootLevel && KeepsSharedUi(in request, reachedTarget))
+            {
+                // Pointing at a panel they hold, or the authority keeping it up: past the boundary only, the role
+                // and the freeze below still decide.
+            }
+            else if (rootLevel || !IsAllowedGrabWrite(in request, actor, world, out _))
+            {
+                reason = consented
+                    ? "a person's own root is never anyone else's to change, even with their yes"
+                    : "another person's body and what they hold are theirs to change; ask them first";
+                // Whatever moved into or out of their hands while the write was on the wire was not aimed at them.
+                return Deny(request, reason, request.IsNetwork && reachedTarget?.ChangedHandsRecently == true
+                    ? PermissionDenialKind.StaleView
+                    : (request.Action & RemovalActions) != 0
+                        ? PermissionDenialKind.Ownership
+                        : PermissionDenialKind.ForeignWrite);
+            }
+        }
+
         var role = GetRole(actor);
+        var personRole = asPerson ? GetRole(owner) : role;
         var question = RoleQuestion(request.Action);
-        bool ownsTarget = OwnsTarget(actor, request.Target) ||
-                          OwnsTarget(actor, request.Parent);
+        bool ownsTarget = OwnsTarget(owner, request.Target) ||
+                          OwnsTarget(owner, request.Parent);
 
         // Own-byte slot-REGISTRY adds: the flat world slot registry lives in the authority byte with a null
         // parent, so neither Target (the registry) nor Parent reads as owned - that wrongly denies a guest
@@ -917,7 +1066,7 @@ public sealed class PermissionEngine
         // which a grab never changes, so this is the strong kind of ownership as well. -xlinka
         bool ownsRegistryKey = ReferenceEquals(request.Target, world.SlotRegistry) &&
             _ids.TryGetElementId(request.Key, out var keyId) &&
-            OwnsId(actor, keyId);
+            OwnsId(owner, keyId);
         if (!ownsTarget && ownsRegistryKey &&
             (request.Action & (PermissionAction.CollectionAdd | PermissionAction.CollectionInsert | PermissionAction.CollectionRemove)) != 0)
         {
@@ -934,7 +1083,7 @@ public sealed class PermissionEngine
             (request.Action & (PermissionAction.CollectionAdd | PermissionAction.CollectionInsert | PermissionAction.CollectionSet |
                 PermissionAction.CollectionClear | PermissionAction.CollectionResize | PermissionAction.Create)) == 0 &&
             _ids.TryGetElementId(request.Key, out var entryId) &&
-            OwnsId(actor, entryId);
+            OwnsId(owner, entryId);
         if (ownsRemovedEntry)
         {
             ownsTarget = true;
@@ -976,30 +1125,31 @@ public sealed class PermissionEngine
         // everything it carries along, and OwnsTarget reads all of that as ownership. Worked out once for
         // the freeze and for the role question below. -xlinka
         bool carriedOnly = ownsTarget && (request.Action & PermissionAction.Mutation) != 0
-            && IsCarriedOnly(in request, actor, ownsRegistryKey || ownsRemovedEntry);
+            && IsCarriedOnly(in request, owner, ownsRegistryKey || ownsRemovedEntry);
 
         // Social/Event floor: the authored world is frozen for EVERYONE incl. the host. Only a user's
         // own runtime objects may be mutated; world content (authority-owned) is foreign to all and
         // denied regardless of role, held or not. This is the unbypassable lock - no role escapes it, no
-        // live toggle. The one way through it is picking up the world's own things: the writes the grab
-        // protocol makes on world content are judged by the same grab rules an open world uses, so props
-        // still go from hand to hand and hinges still turn. Every other edit of them stays frozen, and a
-        // user's things are nobody else's to pick up here. -xlinka
+        // live toggle. Authored grab interactions use the same rules as an open world, including a wearable
+        // that permits other users to grab it. Every other edit of world content stays frozen. -xlinka
         if (SocialLock && (!ownsTarget || carriedOnly) && (request.Action & PermissionAction.Mutation) != 0)
         {
-            if (IsWorldGrabWrite(in request, actor, world))
+            if (IsAllowedGrabWrite(in request, actor, world, out _))
             {
                 return true;
             }
-            reason = "editing is disabled in this world (social)";
-            return Deny(request, reason, PermissionDenialKind.LockedWorld);
+            // Taking away what someone brought goes on to the role, which only a moderator's and up allows.
+            if (!IsItemRemoval(in request, actor, world))
+            {
+                reason = "editing is disabled in this world (social)";
+                return Deny(request, reason, PermissionDenialKind.LockedWorld);
+            }
         }
 
         // Grab interactions: a grabbable object opts into being picked up + moved by ANY user - that's an
         // interaction, not an ownership edit. Allow the grab-state refs (who holds it / its restore-parent)
         // and the reparent+pose, but ONLY for the user who is actually holding the thing. The host still
-        // owns the object and arbitrates the authoritative holder, and in a frozen world the floor above
-        // lets only the world's own things through to here. Ordinary edits to the object stay owner-gated
+        // owns the object and arbitrates the authoritative holder. Ordinary edits to the object stay owner-gated
         // by the role check below. -xlinka
         if (IsAllowedGrabWrite(in request, actor, world, out bool grabTraffic))
         {
@@ -1034,8 +1184,8 @@ public sealed class PermissionEngine
         // reaches here. Holding conveys no destroy authority. -xlinka
         if ((request.Action & DestructiveActions) != 0 && ownsTarget)
         {
-            bool ownsTargetStrong = OwnsIdStrong(actor, request.Target) ||
-                                    OwnsIdStrong(actor, request.Parent) ||
+            bool ownsTargetStrong = OwnsIdStrong(owner, request.Target) ||
+                                    OwnsIdStrong(owner, request.Parent) ||
                                     ownsRegistryKey || ownsRemovedEntry;
             if (!ownsTargetStrong)
             {
@@ -1043,16 +1193,20 @@ public sealed class PermissionEngine
                 // holding it. Denying outright here took away authority the role grants: the host deleting a
                 // component off something in its own hand was refused, then allowed the moment it let go. A
                 // guest holding host content still fails, because its role cannot destroy foreign objects.
+                // Acting on a person's yes, the question is the person's: what they may take out of their own
+                // body. Never more than that, and nothing they only hold gets this far. -xlinka
                 ownsTarget = false;
-                if (!role.Allows(question, ownsTarget))
+                if (!personRole.Allows(question, ownsTarget))
                 {
                     reason = "destroying a held object requires ownership, not just holding it";
                     return Deny(request, reason, PermissionDenialKind.Ownership);
                 }
+                if (asPerson)
+                    return true;
             }
         }
 
-        if (role.Allows(question, ownsTarget))
+        if (role.Allows(question, ownsTarget) || (asPerson && personRole.Allows(question, ownsTarget)))
         {
             return true;
         }
@@ -1085,11 +1239,52 @@ public sealed class PermissionEngine
         }
     }
 
+    // Authorize's answer, asked without acting on it: nothing logged, nothing counted. For an offer drawn
+    // before anyone presses it.
+    public bool Allows(in PermissionRequest request)
+    {
+        s_quietDepth++;
+        try
+        {
+            return Authorize(in request, out _);
+        }
+        finally
+        {
+            s_quietDepth--;
+        }
+    }
+
+    // The same, as the request's actor stands with no bypass or authored scope open on this thread. For a
+    // caller already running as the system that has to know whether the person it is acting for could do
+    // the thing themselves. It can only ever say less than Authorize does. -xlinka
+    public bool AllowsUnscoped(in PermissionRequest request)
+    {
+        int bypass = s_systemBypassDepth;
+        int authored = s_authoredContentDepth;
+        var upkeep = s_upkeepSource;
+        s_systemBypassDepth = 0;
+        s_authoredContentDepth = 0;
+        s_upkeepSource = null;
+        try
+        {
+            return Allows(in request);
+        }
+        finally
+        {
+            s_systemBypassDepth = bypass;
+            s_authoredContentDepth = authored;
+            s_upkeepSource = upkeep;
+        }
+    }
+
     private bool Deny(in PermissionRequest request, string reason, PermissionDenialKind kind)
     {
         var actor = request.IsNetwork
             ? request.Actor
             : request.Actor ?? s_currentActor ?? request.World?.LocalActor;
+
+        if (s_quietDepth > 0)
+            return false;
 
         if (LogDeniedMutations)
         {
@@ -1328,11 +1523,18 @@ public sealed class PermissionEngine
         grabTraffic = true;
         var holder = surface.CurrentHolder;
 
+        // Keep a current hold or placement valid when moving the item changes its wearer filter.
+        // A new claimant must pass the object's own restrictions before it gets any grab rights. -xlinka
+        if (!ReferenceEquals(holder, actor) && !ReferenceEquals(surface.Placer, actor) && !surface.AllowsGrabBy(actor))
+            return false;
+
         if (kind == GrabWriteKind.HolderRef)
         {
-            if (holder == null || ReferenceEquals(holder, actor))
+            if (ReferenceEquals(holder, actor))
                 return true;
-            return surface.AllowsSteal;
+            if (holder != null && !surface.AllowsSteal)
+                return false;
+            return !request.IsNetwork || world.BatchClaimsGrab(surface, actor);
         }
 
         if (ReferenceEquals(holder, actor))
@@ -1350,23 +1552,115 @@ public sealed class PermissionEngine
         return surface.AllowsSteal && world.BatchClaimsGrab(surface, actor);
     }
 
-    // A write the grab protocol makes on the world's own content, for the Social/Event floor. The surface is
-    // authority-authored and sits in nobody's body unless someone is holding or placing it, and the grab
-    // rules above answer exactly as they do in an open world. -xlinka
-    private bool IsWorldGrabWrite(in PermissionRequest request, IPermissionActor actor, IPermissionWorldFacts world)
-    {
-        if (!IsAllowedGrabWrite(in request, actor, world, out _) || request.Parent is not IPermissionGrabSurface surface)
-            return false;
-        return IsAuthorityAuthored(request.Parent)
-            && (surface.CurrentHolder != null || surface.Placer != null || !BelongsToAUser(request.Parent));
-    }
-
     // Whether the actor reads as owning the target only because it is holding it: the target hangs off a grab
     // the actor holds or rides along under one, and is not the actor's own by its id.
     private bool IsCarriedOnly(in PermissionRequest request, IPermissionActor actor, bool ownsRegistryKey)
         => !ownsRegistryKey
             && !OwnsIdStrong(actor, request.Target) && !OwnsIdStrong(actor, request.Parent)
             && (IsHeldByActor(in request, actor) || (request.Target ?? request.Parent)?.IsCarriedBy(actor) == true);
+
+    // The one edit of a person's things the Social/Event floor hands on to the role: removing an item somebody
+    // spawned. Destroy only, by a person by hand (no script, no world), of an element in a user's own byte that is
+    // not the actor's and sits in nobody's body or hands, so never a worn avatar, a user root or the world. The
+    // role still decides after this, and only a moderator's mask and up holds a foreign Destroy. -xlinka
+    private const PermissionAction RemovalActions = PermissionAction.Destroy | PermissionAction.CollectionRemove;
+
+    private bool IsItemRemoval(in PermissionRequest request, IPermissionActor actor, IPermissionWorldFacts world)
+    {
+        if (actor.RootElement == null || actor.IsWorldContent)
+            return false;
+        var action = request.Action & ~(PermissionAction.Write | PermissionAction.Replicate);
+        if ((action & PermissionAction.Destroy) == 0 || (action & ~RemovalActions) != 0)
+            return false;
+
+        // A collection removal names what it takes out by key; a destroy names it as its target.
+        IPermissionTarget? removed = request.Target;
+        if ((action & PermissionAction.CollectionRemove) != 0)
+        {
+            if (!_ids.TryGetElementId(request.Key, out var keyId))
+                return false;
+            removed = world.FindTarget(keyId);
+            // A destroy takes the slot out of the id table before the registry, so its own last step finds
+            // nothing here; the removal was judged as that destroy began. Only this machine's own, never the wire's.
+            if (removed == null)
+                return !request.IsNetwork && !_ids.IsAuthority(keyId) && _ids.IsValidOwnerByte(_ids.OwnerByte(keyId))
+                    && !OwnsId(actor, keyId);
+        }
+        if (removed == null || BelongsToAUser(removed))
+            return false;
+
+        for (int depth = 0; removed != null && depth < 8; depth++)
+        {
+            if (_ids.IsAuthority(removed.Id))
+                return false;
+            if (!_ids.IsNull(removed.Id) && _ids.IsValidOwnerByte(_ids.OwnerByte(removed.Id)))
+                return !OwnsId(actor, removed.Id);
+            removed = removed.OwnershipParent;
+        }
+        return false;
+    }
+
+    // The person whose user root a request reaches into, or null: up the target's ownership chain to the first slot
+    // or component that sits under someone. A removal names what it takes out by key. rootLevel says what is reached
+    // is the person's root slot itself, one of its members or one of its components. A script counts as its author
+    // (same id), so a person's script still keeps house in its own author's avatar.
+    private IPermissionActor? PersonReached(in PermissionRequest request, IPermissionWorldFacts world, out bool rootLevel,
+        out IPermissionTarget? reached)
+    {
+        rootLevel = false;
+        reached = request.Target ?? request.Parent;
+        if ((request.Action & RemovalActions) != 0 && _ids.TryGetElementId(request.Key, out var keyId))
+            reached = world.FindTarget(keyId) ?? reached;
+        var node = reached;
+        for (int depth = 0; node != null && depth < 8; depth++)
+        {
+            if (node.StructuralOwner is { } person)
+            {
+                var slot = node.PermissionKind == PermissionTargetKind.Slot ? node : node.OwnershipParent;
+                rootLevel = slot != null && ReferenceEquals(slot, person.RootElement);
+                return person;
+            }
+            node = node.OwnershipParent;
+        }
+        return null;
+    }
+
+    // What passes the person boundary on shared UI: a member that is a control's own interaction state or a
+    // panel's own view, for whoever points at it, and the authority keeping a panel up inside an upkeep scope.
+    // Both stay inside the UI they are about.
+    private bool KeepsSharedUi(in PermissionRequest request, IPermissionTarget? reached)
+        => request.Member is { IsUiState: true } || (!request.IsNetwork && InUpkeepOf(reached));
+
+    // The person boundary for a slot being put somewhere: a new child made under `parent`, or `placed` moved there.
+    // Only the boundary: whatever the move writes is judged on its own. Your own body may sit in a seat someone else
+    // wears (that is the seat's business), and a world script keeps to the object it sits in. Same scopes and the
+    // same actor as Authorize. -xlinka
+    public bool AllowsPlacingUnder(IPermissionActor? actor, IPermissionTarget? placed, IPermissionTarget? parent, bool isNetwork)
+    {
+        if (!Enabled || parent == null || _world.IsDisposed || !_world.IsRunning || s_systemBypassDepth > 0)
+            return true;
+        if (isNetwork && !_world.IsAuthority)
+            return true;
+        if (!isNetwork && (placed is { IsLocalElement: true } || parent.IsLocalElement))
+            return true;
+
+        actor = isNetwork ? actor : actor ?? s_currentActor ?? _world.LocalActor;
+        if (actor == null)
+            return false;
+
+        IPermissionActor? person = null;
+        for (var node = parent; node != null && person == null; node = node.OwnershipParent)
+            person = node.StructuralOwner;
+        if (person == null || person.Id == actor.Id)
+            return true;
+        if (placed != null && ReferenceEquals(placed, actor.RootElement))
+            return true;
+        if (!isNetwork && InUpkeepOf(parent) && (placed == null || InUpkeepOf(placed)))
+            return true;
+        if (actor.IsWorldContent)
+            return InOwnWornObject(actor, parent, PermissionAction.Create);
+        return person.AllowsEditsBy(actor);
+    }
 
     // Whether the thing being written to is, or hangs off, a grabbable this actor is holding right now.
     // Walks the ownership chain because a write to some other component on a held prop has that component

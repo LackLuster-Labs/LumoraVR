@@ -82,7 +82,10 @@ public enum PermissionDenialKind
     // Destroying or unregistering something the sender does not own.
     Ownership,
     // Forging a member the host alone may author (identity, allocation, permission config).
-    HostOnly
+    HostOnly,
+    // A write about something that went into or out of somebody's hands while it was on the wire. The
+    // sender's machine had not seen the move yet, so it is refused and never counted.
+    StaleView
 }
 
 // What the host wants done when a peer's denial score crosses the threshold. This is a CEILING, not a

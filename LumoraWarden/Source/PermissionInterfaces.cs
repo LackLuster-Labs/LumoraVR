@@ -59,6 +59,15 @@ public interface IPermissionActor
     // A script the world itself carries: authored by the authority, acting for no user. It may change
     // the world's own content and nothing else, in every world mode. False for every user.
     bool IsWorldContent => false;
+
+    // For a world script, the slot it runs on. What it may change inside an object someone wears or holds is
+    // judged from there. Null for everyone else.
+    IPermissionTarget? ScriptHome => null;
+
+    // Whether this person said yes, for this session, to `other` changing what hangs under their user root: their
+    // body, the avatar they wear, what they hold. A fact off the person's own record, which only their own machine
+    // writes, so nothing `other` sends can make it true. False for anything that is not a person.
+    bool AllowsEditsBy(IPermissionActor other) => false;
 }
 
 // Attached to an object to say it may not be copied off by people who do not own it. The datamodel
@@ -111,6 +120,26 @@ public interface IPermissionTarget
     // along. Holding puts it under the actor's root without making it theirs.
     bool IsCarriedBy(IPermissionActor actor) => false;
 
+    // The slot standing for the one object this element and other are both part of: the nearest object or
+    // avatar root at or above both, and below any user root. Null when they share none.
+    IPermissionTarget? SharedObjectRoot(IPermissionTarget other) => null;
+
+    // Whether this element is a person's body machinery rather than the object's own content: the solvers,
+    // pose, hand and face drivers and hitboxes that putting an avatar on fits to whoever wears it.
+    bool IsWearerMachinery => false;
+
+    // Whether this member is state a control keeps for whoever points at it (hover, press, a scroll, typed
+    // text) or a panel's own view of what it shows. Pointing at a panel somebody holds, or moving through it,
+    // changes nothing of theirs. -xlinka
+    bool IsUiState => false;
+
+    // Whether this element sits on other's slot or anywhere below it.
+    bool IsInside(IPermissionTarget other) => false;
+
+    // Whether the slot this element sits on went into or out of somebody's hands, body or pin moments ago. A
+    // write the sender made before its machine saw the move can land after it, and that is not an attempt.
+    bool ChangedHandsRecently => false;
+
     // The nearest copy-protection marker at or above this element, or null. Only ever read on the copy
     // path (an explicit user action), so the walk it costs never lands on a per-write path.
     IPermissionCopyProtection? CopyProtection { get; }
@@ -125,6 +154,9 @@ public interface IPermissionGrabSurface
 {
     // Whether this object may be picked up at all.
     bool AllowsGrab { get; }
+
+    // Authored restrictions on starting a grab, checked against the sender on the authority too.
+    bool AllowsGrabBy(IPermissionActor actor) => AllowsGrab;
 
     // Whether it may be taken out of another user's hands.
     bool AllowsSteal { get; }
@@ -164,6 +196,9 @@ public interface IPermissionWorldFacts
     // ref still reads pre-grab - without this, a legitimate pickup would be refused for not already
     // holding the thing it is picking up. False when no batch is being validated. -xlinka
     bool BatchClaimsGrab(IPermissionGrabSurface surface, IPermissionActor actor);
+
+    // The element behind an id, for a request that names what it removes only by key. Null when there is none.
+    IPermissionTarget? FindTarget(ulong id) => null;
 }
 
 // A pluggable decision that runs before roles. Abstain to defer to the built-in policy. Rules run

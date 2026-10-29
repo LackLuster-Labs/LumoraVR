@@ -17,7 +17,8 @@ public enum WorldMode
     // their own avatar and may bring their own items.
     Social,
 
-    // Like Social but stricter: users can't spawn items either - view and interact only.
+    // Like Social but stricter: users can't spawn items and their scripts don't run. They still wear their own
+    // avatars, or the world's.
     Event
 }
 
@@ -54,7 +55,8 @@ public static class WorldModePolicy
         // Interacting with what is already there is what a social world IS.
         PermissionDomain.Touch => true,
 
-        // A user's script rides on a user's object, so it goes wherever their own items may go.
+        // A user's script rides on a user's object, so it goes wherever their own items may go. An event lets
+        // people wear their avatars but runs none of their scripts, the world's own scripts aside.
         PermissionDomain.Script => AllowsOwnItems(mode),
 
         // Taking a copy is not editing, so the freeze does not reach it. Ownership, the per-role toggles

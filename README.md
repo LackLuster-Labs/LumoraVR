@@ -1,6 +1,13 @@
 # Lumora VR Project Summary
 Lumora VR is a feature-rich Social VR Platform designed for mid-range PC users with VR capabilities built using Godot Engine and written in C#.
 
+## Build requirements
+
+Use Godot **4.8 beta1 .NET**, its matching **4.8.beta1.mono export templates**, and .NET 10.
+The local Steam build script's `GODOT` path must point to that editor too. Updating the C# SDK
+alone does not update the native runtime shipped in an export. Godot 4.8 dev6/dev7 have a
+[Steam Deck controller regression](https://github.com/godotengine/godot/issues/123704) in Linux Gaming Mode.
+
 ## Editor Mode
 - Real-time collaborative environment for building and sharing Avatars, Worlds, and Gadgets.
 - Simplified interfaces for each asset category, focusing on essential features.

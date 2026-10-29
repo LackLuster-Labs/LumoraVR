@@ -63,6 +63,9 @@ public sealed class PermissionLedger
         // Same weight for the same reason.
         PermissionDenialKind.HostOnly => 10.0,
 
+        // Refused all the same, but the sender could not have known.
+        PermissionDenialKind.StaleView => 0.0,
+
         _ => 1.0
     };
 
