@@ -117,6 +117,8 @@ public class MeshCollider : Collider
         box.Mass.Value = Mass.Value;
         box.CharacterCollider.Value = CharacterCollider.Value;
         box.IgnoreRaycasts.Value = IgnoreRaycasts.Value;
+        box.Friction.Value = Friction.Value;
+        box.Bounce.Value = Bounce.Value;
         box.Enabled.Value = Enabled.Value;
         Destroy();
     }
@@ -134,6 +136,8 @@ public class MeshCollider : Collider
         hull.Mass.Value = Mass.Value;
         hull.CharacterCollider.Value = CharacterCollider.Value;
         hull.IgnoreRaycasts.Value = IgnoreRaycasts.Value;
+        hull.Friction.Value = Friction.Value;
+        hull.Bounce.Value = Bounce.Value;
         hull.Enabled.Value = Enabled.Value;
         Destroy();
     }

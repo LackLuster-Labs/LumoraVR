@@ -40,6 +40,7 @@ public class BoxCollider : Collider
     // Offset and Size to the exact box around the meshes drawn at and under this slot, measured in this
     // slot's own space, so it sits on the geometry whatever the slot's scale and rotation.
     [SyncMethod]
+    [ScriptMethod]
     public void FitToMesh()
     {
         if (!SlotBoundsHelper.TryComputeGeometryBounds(Slot, Slot, out var bounds))

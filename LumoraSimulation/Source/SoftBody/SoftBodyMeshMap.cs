@@ -59,19 +59,55 @@ public sealed class SoftBodyMeshMap
         int n = positions.Length;
         VertexCount = n;
 
-        // WELD. Exact spots, keyed on the bits: seam copies are written from the same source value.
+        // WELD. Spots within a hair of each other, a millionth of the mesh's size. Keyed on the exact bits it left
+        // every generated round shape open: a sphere or a rounded box closes its seam with a column at a full turn,
+        // and sin(2 pi) in single precision is 1.7e-7, not 0, so the closing column sat a ten-millionth of a metre off
+        // the first and never joined it. The body was slit from pole to pole, and the bottom pole (sin(pi) is not 0
+        // either) was a ring of separate particles on one spot. Open, it counted as a sheet in soft contacts, and a
+        // heap of them shivered at the slits for good and never slept. -xlinka
         var spotOf = new int[n];
         var spots = new List<int>();
-        var byBits = new Dictionary<(int, int, int), int>(n);
+        float tolerance = WeldTolerance(positions);
+        float inverse = 1f / tolerance;
+        float toleranceSq = tolerance * tolerance;
+        var cells = new Dictionary<(int, int, int), int>(n);
+        var nextInCell = new List<int>(n);
         for (int v = 0; v < n; v++)
         {
             var p = positions[v];
-            var key = (BitConverter.SingleToInt32Bits(p.x + 0f), BitConverter.SingleToInt32Bits(p.y + 0f), BitConverter.SingleToInt32Bits(p.z + 0f));
-            if (!byBits.TryGetValue(key, out int spot))
+            int spot = -1;
+            if (float.IsFinite(p.x) && float.IsFinite(p.y) && float.IsFinite(p.z))
+            {
+                int cx = (int)MathF.Floor(p.x * inverse), cy = (int)MathF.Floor(p.y * inverse), cz = (int)MathF.Floor(p.z * inverse);
+                for (int dz = -1; dz <= 1 && spot < 0; dz++)
+                    for (int dy = -1; dy <= 1 && spot < 0; dy++)
+                        for (int dx = -1; dx <= 1 && spot < 0; dx++)
+                        {
+                            if (!cells.TryGetValue((cx + dx, cy + dy, cz + dz), out int s))
+                                continue;
+                            for (; s >= 0; s = nextInCell[s])
+                            {
+                                if (float3.DistanceSquared(positions[spots[s]], p) <= toleranceSq)
+                                {
+                                    spot = s;
+                                    break;
+                                }
+                            }
+                        }
+                if (spot < 0)
+                {
+                    spot = spots.Count;
+                    spots.Add(v);
+                    var key = (cx, cy, cz);
+                    nextInCell.Add(cells.TryGetValue(key, out int head) ? head : -1);
+                    cells[key] = spot;
+                }
+            }
+            else
             {
                 spot = spots.Count;
                 spots.Add(v);
-                byBits[key] = spot;
+                nextInCell.Add(-1);
             }
             spotOf[v] = spot;
         }
@@ -288,6 +324,23 @@ public sealed class SoftBodyMeshMap
 
     // Smallest cell that keeps the occupied count under the cap, searched between one cell over the whole mesh and a
     // cell far finer than any edge. Geometric steps, since the count goes with the inverse square or cube of the size.
+    // A millionth of the mesh's largest extent, never below a ten-millionth of a unit.
+    private static float WeldTolerance(float3[] positions)
+    {
+        var min = new float3(float.MaxValue, float.MaxValue, float.MaxValue);
+        var max = new float3(float.MinValue, float.MinValue, float.MinValue);
+        for (int i = 0; i < positions.Length; i++)
+        {
+            var p = positions[i];
+            if (!float.IsFinite(p.x) || !float.IsFinite(p.y) || !float.IsFinite(p.z))
+                continue;
+            min = new float3(MathF.Min(min.x, p.x), MathF.Min(min.y, p.y), MathF.Min(min.z, p.z));
+            max = new float3(MathF.Max(max.x, p.x), MathF.Max(max.y, p.y), MathF.Max(max.z, p.z));
+        }
+        float extent = max.x >= min.x ? MathF.Max(max.x - min.x, MathF.Max(max.y - min.y, max.z - min.z)) : 0f;
+        return MathF.Max(extent * 1e-6f, 1e-7f);
+    }
+
     private static float FindCellSize(float3[] spots, int maxParticles)
     {
         var min = spots[0];

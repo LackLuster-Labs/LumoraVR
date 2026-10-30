@@ -2,6 +2,8 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System.Collections.Generic;
+using Helio.UI;
+using Lumora.Simulation;
 using Lumora.Core.Math;
 using Lumora.Core.Physics;
 
@@ -10,13 +12,14 @@ namespace Lumora.Core.Components;
 // Its shape is every solid collider on its slot and below it, down to the next rigid body: a model with its
 // colliders on child parts falls as one piece.
 [ComponentCategory("Physics")]
-public class RigidBody : ImplementableComponent
+public class RigidBody : ImplementableComponent, ICustomInspectorUI
 {
     // SYNC FIELDS
 
     // kilograms
     public readonly Sync<float> Mass;
 
+    public readonly Sync<SimulationDevice> SimulationDevice;
     public readonly Sync<float3> LinearVelocity;
 
     // radians per second
@@ -40,6 +43,9 @@ public class RigidBody : ImplementableComponent
 
     // RUNTIME STATE
 
+    public string SimulationStatus { get; set; } = "CPU";
+    public long SimulationGpuBytes { get; set; }
+
     // These are LOCAL runtime state, not synced. Only the owner runs the simulation, so only the owner's
     // values are meaningful; a non-owner doesn't simulate and leaves them at their defaults. They are not
     // replicated - peers that need a body's sleep/collision state should drive off the synced velocity/pose
@@ -52,11 +58,18 @@ public class RigidBody : ImplementableComponent
     // owner-local; only valid on the simulating peer
     public bool IsColliding { get; set; }
 
+    public void BuildInspectorBody(UIBuilder ui)
+    {
+        InspectorStats.AddRow(ui, "Simulation", SimulationStatus);
+        InspectorStats.AddRow(ui, "World GPU buffers", $"{SimulationGpuBytes / 1048576.0:F2} MiB");
+    }
+
     // INITIALIZATION
 
     public RigidBody()
     {
         Mass = new Sync<float>(this, 1f);
+        SimulationDevice = new Sync<SimulationDevice>(this, Lumora.Simulation.SimulationDevice.Automatic);
         LinearVelocity = new Sync<float3>(this, float3.Zero);
         AngularVelocity = new Sync<float3>(this, float3.Zero);
         UseGravity = new Sync<bool>(this, true);

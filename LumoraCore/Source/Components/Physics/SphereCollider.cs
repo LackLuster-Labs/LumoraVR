@@ -40,6 +40,7 @@ public class SphereCollider : Collider
 
     // Around every vertex drawn at and under this slot, in this slot's own space.
     [SyncMethod]
+    [ScriptMethod]
     public void FitToMesh()
     {
         if (!SlotBoundsHelper.TryFitSphere(Slot, out var centre, out var radius))

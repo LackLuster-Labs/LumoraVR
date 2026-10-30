@@ -54,6 +54,7 @@ public class CapsuleCollider : Collider
     // Upright along this slot's Y axis: as wide as the farthest vertex from the axis, as tall as the geometry.
     // The caps round off what the corners of a boxy mesh reach.
     [SyncMethod]
+    [ScriptMethod]
     public void FitToMesh()
     {
         if (!SlotBoundsHelper.TryFitUpright(Slot, out var centre, out var radius, out var height))

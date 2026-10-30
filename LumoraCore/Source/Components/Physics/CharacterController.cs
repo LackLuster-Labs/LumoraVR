@@ -36,8 +36,12 @@ public class CharacterController : ImplementableComponent, IColliderOwner
     public float CrouchSpeed { get; set; } = 2.5f;
     public float SprintMultiplier { get; set; } = 1.7f;
     public float StandingHeight { get; set; } = 1.8f;
-    public float CrouchHeight { get; set; } = 1.0f;
+    public float CrouchHeight { get; set; } = 1.4f;
     public float CrouchTransitionSpeed { get; set; } = 8.0f;
+
+    // No gravity and no ground: the move direction is followed in all three axes at AirSpeed, and walls still
+    // stop the body. A flying locomotion turns it on while it is the one in use.
+    public bool Flying { get; set; }
 
     // STATE
 
@@ -251,6 +255,12 @@ public class CharacterController : ImplementableComponent, IColliderOwner
     }
 
     public float3 GetVelocity() => _velocity;
+
+    // How fast the body itself moves, metres a second in world space, as the physics step has it; setting it is
+    // a push the step carries on from. Only the local user's character steps.
+    public float3 BodyVelocity => CharacterHook?.Velocity ?? float3.Zero;
+
+    public void SetBodyVelocity(float3 velocity) => CharacterHook?.SetVelocity(velocity);
 
     // CLEANUP
 

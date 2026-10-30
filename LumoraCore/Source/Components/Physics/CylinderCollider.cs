@@ -43,6 +43,7 @@ public class CylinderCollider : Collider
 
     // Upright along this slot's Y axis: as wide as the farthest vertex from the axis, as tall as the geometry.
     [SyncMethod]
+    [ScriptMethod]
     public void FitToMesh()
     {
         if (!SlotBoundsHelper.TryFitUpright(Slot, out var centre, out var radius, out var height))

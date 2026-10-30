@@ -10,15 +10,14 @@ using Lumora.Core.Components.Meshes;
 using Lumora.Core.Input;
 using Lumora.Core.Math;
 using Lumora.Core.Phos;
+using Lumora.Core.Physics;
+using Lumora.Simulation;
 using Lumora.Simulation.SoftBody;
 
 namespace Lumora.Core.Components;
 
-// Our own CPU soft body: a Verlet particle mesh with distance constraints, pressure, pinning and
-// collision against dynamic-bone colliders + a ground plane. Unlike Godot's Jolt soft body this
-// actually collides, holds pins, and can be grabbed - we own every step. Deforms a source mesh and
-// renders the result on a child DeformableMesh. Simulation is LOCAL per peer (visual), like dynamic
-// bones: same rest-anchored, no-drift model. -xlinka
+// Deforms a mesh locally on each peer. Cloth constraints can use compute; pressure, shape retention
+// and world contacts use the CPU solver. Pins follow the anchor or the sampled skin pose. -xlinka
 //
 // ANY MESH GOES IN. A procedural mesh, an imported one, a mesh renderer (its mesh, and its materials when Material
 // is empty), a skinned mesh renderer, or a deformable mesh, which is then bent where it already is. A skinned mesh
@@ -32,6 +31,8 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
 {
     [Group("General")]
     public readonly SyncRef<Component> SourceMesh;
+
+    public readonly Sync<SimulationDevice> SimulationDevice;
 
     // empty: the source renderer's own materials
     public readonly AssetRef<MaterialAsset> Material;
@@ -85,8 +86,13 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
     public readonly Sync<float> GroundY;
 
     // drapes cloth over arbitrary world geometry, not just the assigned dynamic-bone colliders;
-    // costs a raycast per moving particle per frame
+    // costs a raycast per moving particle per frame. Also what lets it meet other soft bodies and push
+    // back on rigid bodies this machine simulates.
     public readonly Sync<bool> CollideWithWorld;
+
+    // kilograms, spread evenly over the particles; only contacts read it: what a landing hands a rigid
+    // body it hits, and how two soft bodies share a push. Gravity moves every mass alike.
+    public readonly Sync<float> Mass;
 
     // Metres from the local user's head past which this body drops iterations and eventually stops
     // simulating. Zero never pauses. Measured from the head rather than the camera node because that
@@ -188,6 +194,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
     public SquishyBody()
     {
         SourceMesh = new SyncRef<Component>(this);
+        SimulationDevice = new Sync<SimulationDevice>(this, Lumora.Simulation.SimulationDevice.Automatic);
         Material = new AssetRef<MaterialAsset>(this);
         Stiffness = new Sync<float>(this, 0.6f);
         BendStiffness = new Sync<float>(this, 0.15f);
@@ -204,6 +211,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         Colliders = new SyncRefList<IDynamicBoneCollider>(this);
         GroundY = new Sync<float>(this, float.NaN);
         CollideWithWorld = new Sync<bool>(this, false);
+        Mass = new Sync<float>(this, 1f);
         MaxViewDistance = new Sync<float>(this, 0f);
         MaxParticles = new Sync<int>(this, DefaultMaxParticles);
         SkinMode = new Sync<SoftBodySkinMode>(this, SoftBodySkinMode.FollowPose);
@@ -232,7 +240,25 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         SimulateBones.OnChanged += _ => RequestBuild();
         SkinFollow.OnChanged += _ => UpdatePulls();
         ShapeRetention.OnChanged += _ => UpdatePulls();
+
+        // A settled body only wakes when something moves it, so an edit to how it behaves did nothing until it was
+        // touched: gravity switched on in the inspector left a jelly hanging in the air. -xlinka
+        Gravity.OnChanged += _ => _tuned = true;
+        Pressure.OnChanged += _ => _tuned = true;
+        ShapeRetention.OnChanged += _ => _tuned = true;
+        Stiffness.OnChanged += _ => _tuned = true;
+        BendStiffness.OnChanged += _ => _tuned = true;
+        Damping.OnChanged += _ => _tuned = true;
+        Friction.OnChanged += _ => _tuned = true;
+        Iterations.OnChanged += _ => _tuned = true;
+        ParticleRadius.OnChanged += _ => _tuned = true;
+        GroundY.OnChanged += _ => _tuned = true;
+        CollideWithWorld.OnChanged += _ => _tuned = true;
+        Mass.OnChanged += _ => _tuned = true;
+        SimulationDevice.OnChanged += _ => _tuned = true;
     }
+
+    private bool _tuned;
 
     public override void OnStart()
     {
@@ -248,6 +274,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
 
     public override void OnDestroy()
     {
+        _solver.ReleaseCompute();
         if (_registered)
             Engine.Current?.InputInterface?.UnregisterInputEventReceiver(this);
         if (World != null)
@@ -271,6 +298,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
 
     public override void OnDisabled()
     {
+        _solver.ReleaseCompute();
         base.OnDisabled();
         ApplyRendererHiding(false);
     }
@@ -378,7 +406,9 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
 
     public void AfterInputUpdate()
     {
-        if (!Enabled || IsDestroyed)
+        // A body under a switched-off slot is not drawn, and it was still solved every frame: a room with its
+        // cloth hidden kept paying for all of it. It holds where it was and takes up from there. -xlinka
+        if (!Enabled || IsDestroyed || Slot?.IsActive != true)
         {
             _solver.ResetVelocities();
             return;
@@ -392,7 +422,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         // Stepping through that window drops the cloth through a collider that does not exist yet and
         // leaves it on the floor, which is exactly what "it clips through the cube" was. Hold the pose
         // the author placed until there is a world to fall into. -xlinka
-        if (World?.IsLoading == true)
+        if (HeldByLoad())
         {
             _solver.ResetVelocities();
             return;
@@ -417,14 +447,39 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
 
         SnapshotColliders();
         _perturbedThisFrame = CheckPerturbed();
+        var world = World;
         // Fully at rest and nothing can have disturbed it -> skip the sim AND the mesh upload entirely.
+        // It still tells the world's batch where it lies, so a soft body stepping near it this frame meets it
+        // (see SoftBodyStepBatch).
         if (!_solver.IsAwake && !_perturbedThisFrame)
+        {
+            if (world != null && TouchesSoftBodies)
+                SoftBodyStepBatch.For(world).NoteResting(this, world.Time.UpdateIndex);
             return;
+        }
         _solver.Wake();
+        PrepareStep();
+        if (world != null)
+        {
+            SoftBodyStepBatch.For(world).Enqueue(this, world.Time.UpdateIndex);
+            return;
+        }
 
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        for (int i = 0, steps = _batchSteps; i < steps; i++)
+        {
+            SolveBatchedStep(i);
+            ResolveBatchedStep(i);
+        }
+        FinishBatchedStep((System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+    }
+
+    // This frame's parameters, iteration count and substeps, and the anchor frozen for the pool half.
+    private void PrepareStep()
+    {
         PushSolverParameters();
         var budget = Budget();
-        _solver.Iterations = ScaleIterations(IterationsForDistance(), budget);
+        _solver.Iterations = _solver.WantsCompute ? IterationsForDistance() : ScaleIterations(IterationsForDistance(), budget);
         _queryMargin = MathF.Max(_solver.AverageEdgeLength * 2f, MathF.Max(ParticleRadius.Value, 0f));
 
         // CLAMPED delta, and never one big step. SmoothDelta is an average of the RAW frame time with no
@@ -444,19 +499,33 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         _batchSub = MathF.Min(dt / steps, MaxSubstep);
         _batchNow = world?.Time.TotalTime ?? 0.0;
         _anchor.Capture(AnchorSlot);
-        if (world != null)
-        {
-            SoftBodyStepBatch.For(world).Enqueue(this, world.Time.UpdateIndex);
-            return;
-        }
+        MarkGivingBodies();
+    }
 
-        long start = System.Diagnostics.Stopwatch.GetTimestamp();
-        for (int i = 0; i < steps; i++)
-        {
-            SolveBatchedStep(i);
-            ResolveBatchedStep(i);
-        }
-        FinishBatchedStep((System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1000.0 / System.Diagnostics.Stopwatch.Frequency);
+    // SOFT AGAINST SOFT, WORLD SIDE.
+    //
+    // A body meets other soft bodies when it collides with the world at all; a skin following its wearer's pose
+    // steps on its own after the bones and stays out of it. The batch reads the bounds the collider snapshot took
+    // this frame to find which bodies are near each other.
+    internal bool TouchesSoftBodies => _built && !_follows && CollideWithWorld.Value && _solver.IsBuilt;
+
+    internal SoftBodySolver Solver => _solver;
+
+    internal float3 FrameBoundsCentre => _boundsCentre;
+
+    internal float3 FrameBoundsSize => _boundsSize;
+
+    // The frame this body last stepped because a neighbour pulled it in.
+    internal ulong RestCheckedFrame;
+
+    // A resting body something stepping has come near: it steps this frame too, without being woken, so its
+    // particles keep their sleep counts and it drops back out the moment nothing moves it. False if it cannot.
+    internal bool JoinStep()
+    {
+        if (IsDestroyed || !TouchesSoftBodies || !Enabled || Slot?.IsActive != true || _batchSteps > 0)
+            return false;
+        PrepareStep();
+        return true;
     }
 
     private SoftBodyBudget? Budget()
@@ -492,6 +561,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         _batchSteps = 0;
         if (IsDestroyed)
             return;
+        ApplyPushes();
         WriteBack();
         _lastStepMs = milliseconds;
         _budget?.Report(World?.Time.UpdateIndex ?? 0UL, milliseconds);
@@ -543,7 +613,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
     {
         if (!_follows || !_built || IsDestroyed || _skin == null || _map == null)
             return;
-        if (!Enabled)
+        if (!Enabled || Slot?.IsActive != true)
         {
             _solver.ResetVelocities();
             return;
@@ -554,7 +624,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         if (moved)
             SamplePose();
 
-        if (World?.IsLoading == true || IsBeyondViewDistance())
+        if (HeldByLoad() || IsBeyondViewDistance())
         {
             _paused = true;
             _solver.ResetVelocities();
@@ -584,9 +654,10 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         _solver.Wake();
 
         PushSolverParameters();
-        _solver.Iterations = ScaleIterations(IterationsForDistance(), Budget());
+        _solver.Iterations = _solver.WantsCompute ? IterationsForDistance() : ScaleIterations(IterationsForDistance(), Budget());
         _queryMargin = MathF.Max(_solver.AverageEdgeLength * 2f, MathF.Max(ParticleRadius.Value, 0f));
 
+        MarkGivingBodies();
         var world = World;
         float dt = world?.Time.Delta ?? (1f / 60f);
         int steps = System.Math.Clamp((int)MathF.Ceiling(dt / MaxSubstep), 1, MaxSubsteps);
@@ -598,6 +669,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
             _stepIndex++;
             _solver.ResolveContacts(this, this);
         }
+        ApplyPushes();
 
         WriteFollowing(rigid: false);
         double ms = (System.Diagnostics.Stopwatch.GetTimestamp() - start) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
@@ -756,7 +828,8 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
     // the moment something moved so a sleeping body wakes on the same frame it's touched. -xlinka
     private bool CheckPerturbed()
     {
-        bool moved = false;
+        bool moved = _tuned;
+        _tuned = false;
 
         // Wind is a continuous external force - a windy body never truly rests, and a dormant one must
         // wake the moment wind is switched on (nothing else in the wake model would notice it).
@@ -807,15 +880,24 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
             bool probe = moved || _solver.IsAwake || ((World.Time?.UpdateIndex ?? 0UL) & 1UL) == 0UL;
             if (probe)
             {
-                _worldNear = World.Physics.OverlapBox(_boundsCentre, _boundsSize, floatQ.Identity, _overlapScratch) > 0;
+                // The box is grown by the contact margin on every side. Bare, its edge sat exactly on whatever the
+                // body rests on, a particle radius below the lowest particle, so the floor under a draped sheet
+                // went in and out of the set with every millimetre of settling: each swing threw out every cached
+                // contact and woke the body, which then never slept and crept off what it lay on. -xlinka
+                float grow = 2f * MathF.Max(_solver.AverageEdgeLength * 2f, MathF.Max(ParticleRadius.Value, 0f));
+                _worldNear = World.Physics.OverlapBox(_boundsCentre, _boundsSize + new float3(grow, grow, grow), floatQ.Identity, _overlapScratch) > 0;
                 if (NearSetChangedOrMoved(out float displacement, out bool rotated))
                 {
                     moved = true;
-                    // A collider that only translated cannot have come closer to any particle than the
-                    // distance it travelled, so free-air answers survive it as a debt against their
-                    // clearance. Cached surfaces do not: the plane they hold is the old one. Anything
-                    // entering, leaving or turning throws everything out.
-                    if (rotated || displacement < 0f)
+                    // Only what the changed colliders can reach is asked again; see InvalidateNear. When that
+                    // cannot be bounded: a collider that only translated cannot have come closer to any particle
+                    // than the distance it travelled, so free-air answers survive it as a debt against their
+                    // clearance. Cached surfaces do not: the plane they hold is the old one. Anything entering,
+                    // leaving or turning throws everything out.
+                    if (InvalidateNear())
+                    {
+                    }
+                    else if (rotated || displacement < 0f)
                         InvalidateContacts();
                     else
                     {
@@ -840,27 +922,37 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
     {
         displacement = 0f;
         rotated = false;
-        bool membership = _overlapScratch.Count != _nearSlots.Count;
-        if (!membership)
+        _changed.Clear();
+        bool membership = false;
+        for (int i = 0; i < _overlapScratch.Count; i++)
         {
-            for (int i = 0; i < _overlapScratch.Count; i++)
+            var s = _overlapScratch[i];
+            var at = s.GlobalPosition;
+            int idx = _nearSlots.IndexOf(s);
+            if (idx < 0)
             {
-                var s = _overlapScratch[i];
-                int idx = _nearSlots.IndexOf(s);
-                if (idx < 0)
-                {
-                    membership = true;
-                    break;
-                }
-                float moved = float3.Distance(s.GlobalPosition, _nearPos[idx]);
-                if (moved > 1e-4f)
-                    displacement = MathF.Max(displacement, moved);
-                var rot = s.GlobalRotation;
-                var was = _nearRot[idx];
-                float dot = rot.x * was.x + rot.y * was.y + rot.z * was.z + rot.w * was.w;
-                if (MathF.Abs(dot) < 0.99999f)
-                    rotated = true;
+                membership = true;
+                NoteChanged(at, at, s);
+                continue;
             }
+            float moved = float3.Distance(at, _nearPos[idx]);
+            if (moved > 1e-4f)
+                displacement = MathF.Max(displacement, moved);
+            var rot = s.GlobalRotation;
+            var was = _nearRot[idx];
+            float dot = rot.x * was.x + rot.y * was.y + rot.z * was.z + rot.w * was.w;
+            bool turned = MathF.Abs(dot) < 0.99999f;
+            if (turned)
+                rotated = true;
+            if (turned || moved > 1e-4f)
+                NoteChanged(_nearPos[idx], at, s);
+        }
+        for (int j = 0; j < _nearSlots.Count; j++)
+        {
+            if (_overlapScratch.Contains(_nearSlots[j]))
+                continue;
+            membership = true;
+            NoteChanged(_nearPos[j], _nearPos[j], _nearSlots[j]);
         }
         _nearSlots.Clear();
         _nearPos.Clear();
@@ -878,6 +970,88 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
             return true;
         }
         return displacement > 0f || rotated;
+    }
+
+    // WHERE THE NEAR SET CHANGED
+    //
+    // A rubble cube tumbling past a jelly turns every frame, and a turn used to throw out every cached contact
+    // of every body it was near: five jellies in a pile of cubes paid a full world query for every particle for
+    // as long as anything in the pile moved, 7 to 12 ms a frame on the trailer's wall. A collider can only
+    // change the answer for particles it can reach, so each member that came, went, turned or moved leaves a
+    // sphere round where it was and where it is, its own colliders' reach wide, and only contacts inside one
+    // are asked again. A member whose reach is unknown here (its colliders sit lower in its hierarchy), or a
+    // frame with more changes than are worth walking, falls back to throwing everything out. -xlinka
+    private readonly List<float4> _changed = new();
+    private const int MostChangedRegions = 24;
+
+    private void NoteChanged(in float3 from, in float3 to, Slot slot)
+    {
+        if (_changed.Count > MostChangedRegions)
+            return;
+        float reach = ReachOf(slot);
+        var mid = (from + to) * 0.5f;
+        _changed.Add(new float4(mid.x, mid.y, mid.z, reach + float3.Distance(from, to) * 0.5f));
+    }
+
+    // How far a slot's own solid colliders reach from its origin, in world metres; infinity when it has none.
+    private static float ReachOf(Slot slot)
+    {
+        if (slot == null || slot.IsDestroyed)
+            return float.PositiveInfinity;
+        float reach = -1f;
+        var components = slot.Components;
+        for (int i = 0; i < components.Count; i++)
+        {
+            if (components[i] is not Collider { IsSolid: true } collider)
+                continue;
+            var bounds = collider.GetLocalBounds();
+            if (bounds.IsEmpty)
+                continue;
+            var c = bounds.Center;
+            var e = bounds.Extents;
+            var far = new float3(MathF.Abs(c.x) + e.x, MathF.Abs(c.y) + e.y, MathF.Abs(c.z) + e.z);
+            reach = MathF.Max(reach, far.Length);
+        }
+        if (reach < 0f)
+            return float.PositiveInfinity;
+        var scale = slot.GlobalScale;
+        return reach * MathF.Max(MathF.Abs(scale.x), MathF.Max(MathF.Abs(scale.y), MathF.Abs(scale.z)));
+    }
+
+    // Asks again only the contacts a changed member could have touched. False when the change cannot be bounded.
+    private bool InvalidateNear()
+    {
+        int regions = _changed.Count;
+        if (regions == 0 || regions > MostChangedRegions)
+            return false;
+        for (int r = 0; r < regions; r++)
+        {
+            if (!float.IsFinite(_changed[r].w))
+                return false;
+        }
+        var contacts = _contacts;
+        float pad = MathF.Max(ParticleRadius.Value, 0f) + _queryMargin;
+        for (int i = 0; i < contacts.Length; i++)
+        {
+            ref var c = ref contacts[i];
+            if (c.State == ContactNone)
+                continue;
+            // A free-air particle is somewhere within its clearance of where it last asked.
+            float slack = pad + (c.State == ContactClear ? c.Clearance : 0f);
+            var p = c.QueriedAt;
+            for (int r = 0; r < regions; r++)
+            {
+                var sphere = _changed[r];
+                float dx = p.x - sphere.x, dy = p.y - sphere.y, dz = p.z - sphere.z;
+                float reach = sphere.w + slack;
+                if (dx * dx + dy * dy + dz * dz < reach * reach)
+                {
+                    c.State = ContactNone;
+                    break;
+                }
+            }
+        }
+        return true;
     }
 
     // BUILD
@@ -903,6 +1077,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
 
     private void Teardown()
     {
+        _solver.ReleaseCompute();
         if (_built)
             ApplyRendererHiding(false);
         _built = false;
@@ -1095,9 +1270,26 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         return true;
     }
 
+    // The hold is for the world coming up and for a body that has not run yet: its collider may still be on its way.
+    // A body already running carries on through a big spawn or a join somewhere else in the world, which also leaves
+    // platform nodes queued; holding there froze every curtain in the room and threw its motion away. -xlinka
+    private bool _ranOnce;
+
+    private bool HeldByLoad()
+    {
+        var world = World;
+        if (world == null || !world.IsLoading)
+        {
+            _ranOnce = _built;
+            return false;
+        }
+        return !_ranOnce || world.IsSessionStartPending || world.State != World.WorldState.Running;
+    }
+
     private void Finish()
     {
         _built = true;
+        _ranOnce = false;
         _solver.ResetVelocities();
         ApplyRendererHiding(Enabled.Value);
         if (_status == null)
@@ -1425,6 +1617,7 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
     // cheap enough to call every step
     private void PushSolverParameters()
     {
+        _solver.Device = SimulationDevice.Value;
         _solver.Stiffness = Stiffness.Value;
         _solver.BendStiffness = BendStiffness.Value;
         _solver.Damping = Damping.Value;
@@ -1437,6 +1630,8 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         _solver.Gravity = Gravity.Value;
         _solver.ParticleRadius = ParticleRadius.Value;
         _solver.GroundY = GroundY.Value;
+        float mass = Mass.Value;
+        _solver.Mass = float.IsFinite(mass) && mass > 1e-3f ? mass : 1e-3f;
     }
 
     // The solver's anchor space is the slot the bent mesh draws in: pinned particles are rebuilt through it every
@@ -1455,20 +1650,303 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
     bool ISoftBodyCollisionHandler.ResolveParticle(int index, ref float3 position, float radius)
     {
         bool hit = false;
+        _stepBody = null;
 
         if (_worldNear && CollideWithWorld.Value && World?.Physics != null
             && ResolveAgainstWorld(index, ref position, radius))
         {
             hit = true;
+            _stepBody = _contacts.Length > index ? _contacts[index].Body : null;
         }
 
         var shapes = _shapes;
         for (int i = 0; i < _shapeCount; i++)
         {
             if (shapes[i].Resolve(ref position, radius))
+            {
                 hit = true;
+                // A person's hand gives nothing back; whatever else this particle met, it is held like the world.
+                _stepBody = null;
+            }
         }
+        _stepParticle = index;
         return hit;
+    }
+
+    // PUSHING BACK
+    //
+    // A particle that met a rigid body this machine simulates hands it the momentum it loses (see
+    // SoftBodySolver.RespondMovable). Each body met this frame is read from the physics engine once, the first time,
+    // and every push is added to that copy straight away, so the next particle to land meets a body already moving
+    // and the pushes cannot add up to more than the jelly had to give. The sum goes to the engine once, at the end of
+    // the frame's step. A body another machine simulates, a held or kinematic one, and anything that is not a rigid
+    // body never get this far and are pushed against like the floor, as before. -xlinka
+    private RigidBody? _stepBody;
+    private int _stepParticle = -1;
+
+    private struct Pushed
+    {
+        public RigidBody Body;
+        public RigidBodyMotion Motion;
+        // As the engine had it before this frame's pushes: how it came at what it met (WayIn).
+        public RigidBodyMotion Read;
+        public float3 Linear;
+        public float3 Angular;
+        public bool Movable;
+        // Inside this body, held like the world while it is let out (FreeTrapped).
+        public bool Trapped;
+        // What this body held it up with this frame, and over how wide a patch (ResistTurning).
+        public float Bearing;
+        public float3 PatchMin;
+        public float3 PatchMax;
+    }
+
+    private Pushed[] _pushed = new Pushed[4];
+    private int _pushedCount;
+
+    // Below this a push on a sleeping body is let go: a jelly settling on a box asleep on the floor would otherwise
+    // wake it every frame with its own weight and neither would ever rest.
+    private const float WakeSpeed = 0.05f;
+
+    private int PushedIndex(RigidBody body)
+    {
+        for (int i = 0; i < _pushedCount; i++)
+        {
+            if (ReferenceEquals(_pushed[i].Body, body))
+                return _pushed[i].Movable ? i : -1;
+        }
+        if (_pushedCount == _pushed.Length)
+            Array.Resize(ref _pushed, _pushed.Length * 2);
+        // One that cannot be pushed is remembered as such too, so the frame asks the engine about it once.
+        var motion = default(RigidBodyMotion);
+        bool movable = World?.Hook is IPhysicsContactHook hook && hook.TryGetMotion(body, out motion);
+        _pushed[_pushedCount] = new Pushed { Body = body, Motion = motion, Read = motion, Movable = movable };
+        int index = _pushedCount++;
+        return movable ? index : -1;
+    }
+
+    bool ISoftBodyCollisionHandler.MovableContact(int index, in float3 point, in float3 normal, out float3 surfaceVelocity, out float inverseMass, out bool resting, out int pushedBody)
+    {
+        surfaceVelocity = float3.Zero;
+        inverseMass = 0f;
+        resting = false;
+        pushedBody = -1;
+        var body = _stepBody;
+        if (body == null || index != _stepParticle || body.IsDestroyed)
+            return false;
+        int i = PushedIndex(body);
+        if (i < 0 || _pushed[i].Trapped || HeldAsleep(body, _pushed[i].Motion.Sleeping))
+            return false;
+        pushedBody = i;
+        ref var pushed = ref _pushed[i];
+        surfaceVelocity = pushed.Motion.VelocityAt(point);
+        inverseMass = pushed.Motion.InverseMassAt(point, normal);
+        // Asleep (or just put to sleep, before the engine has ticked to say so) and not yet pushed awake this frame.
+        resting = (pushed.Motion.Sleeping || SettledLately(body)) && pushed.Linear == float3.Zero && pushed.Angular == float3.Zero;
+        return inverseMass > 0f && float.IsFinite(inverseMass);
+    }
+
+    void ISoftBodyCollisionHandler.Push(int body, in float3 impulse, in float3 point)
+    {
+        if ((uint)body >= (uint)_pushedCount || !_pushed[body].Movable || _pushed[body].Body.IsDestroyed)
+            return;
+        ref var pushed = ref _pushed[body];
+        var turn = float3.Cross(point - pushed.Motion.CenterOfMass, impulse);
+        pushed.Motion.LinearVelocity += impulse * pushed.Motion.InverseMass;
+        pushed.Motion.AngularVelocity += pushed.Motion.ApplyInverseInertia(turn);
+        pushed.Linear += impulse;
+        pushed.Angular += turn;
+
+        // Held up: the push lifts it against gravity, so it rests on this body here.
+        var gravity = Gravity.Value;
+        float g = gravity.Length;
+        float lift = g > 1e-6f ? -float3.Dot(impulse, gravity) / g : 0f;
+        if (lift > 0f && float.IsFinite(lift))
+        {
+            pushed.PatchMin = pushed.Bearing > 0f ? new float3(MathF.Min(pushed.PatchMin.x, point.x), MathF.Min(pushed.PatchMin.y, point.y), MathF.Min(pushed.PatchMin.z, point.z)) : point;
+            pushed.PatchMax = pushed.Bearing > 0f ? new float3(MathF.Max(pushed.PatchMax.x, point.x), MathF.Max(pushed.PatchMax.y, point.y), MathF.Max(pushed.PatchMax.z, point.z)) : point;
+            pushed.Bearing += lift;
+        }
+    }
+
+    // TURNING ON A JELLY. A box resting on a jelly rocked a centimetre and a half either way and never stopped: each
+    // tilt pressed one side deeper, that side sprang back, and the touches, settled as two masses meeting along their
+    // normals, take out only the speed into the surface at each point, which the rocking keeps handing back. A real
+    // patch of jelly under a box resists the box turning on it as a whole: it is held at every point of the patch at
+    // once, and the most it can hold against is the friction of that patch, Friction times the load it carries times
+    // how wide it is. So the turn the box brought into this frame, relative to how the jelly itself turns, is taken
+    // out up to that much; the frame's own pushes still act, so a box still tilts into its dent and settles there,
+    // and a box only grazing the jelly, or one the jelly falls onto, carries no load on it and turns freely. -xlinka
+    private void ResistTurning(ref Pushed pushed)
+    {
+        if (!(pushed.Bearing > 0f))
+            return;
+        float width = float3.Distance(pushed.PatchMin, pushed.PatchMax) * 0.5f;
+        float most = MathF.Max(Friction.Value, 0f) * pushed.Bearing * width;
+        if (!(most > 1e-9f) || !float.IsFinite(most))
+            return;
+        var turning = pushed.Read.AngularVelocity - _solver.Spin;
+        var undo = -pushed.Motion.ApplyInertia(turning);
+        float size = undo.Length;
+        if (!(size > 1e-12f) || !float.IsFinite(size))
+            return;
+        if (size > most)
+            undo *= most / size;
+        pushed.Angular += undo;
+    }
+
+    // The frame's pushes to the engine, one impulse per body.
+    private void ApplyPushes()
+    {
+        var hook = World?.Hook as IPhysicsContactHook;
+        LetGoUnheld(hook);
+        if (_pushedCount == 0)
+            return;
+        for (int i = 0; i < _pushedCount; i++)
+        {
+            ref var pushed = ref _pushed[i];
+            if (pushed.Movable && !pushed.Body.IsDestroyed)
+            {
+                ResistTurning(ref pushed);
+                if (hook != null && AtRestOnThis(ref pushed))
+                {
+                    hook.Settle(pushed.Body);
+                    double now = World?.Time.TotalTime ?? 0.0;
+                    _settled[pushed.Body] = new SettledHere { At = now, Touched = now };
+                    pushed = default;
+                    continue;
+                }
+            }
+            if (hook != null && pushed.Movable && !pushed.Body.IsDestroyed && (pushed.Linear != float3.Zero || pushed.Angular != float3.Zero))
+            {
+                bool rests = (pushed.Motion.Sleeping || SettledLately(pushed.Body))
+                    && (pushed.Linear * pushed.Motion.InverseMass).Length + pushed.Motion.ApplyInverseInertia(pushed.Angular).Length * 0.25f < WakeSpeed;
+                if (!rests)
+                    hook.ApplyImpulse(pushed.Body, pushed.Linear, pushed.Angular);
+            }
+            pushed = default;
+        }
+        _pushedCount = 0;
+        if (_held.Count > 0)
+        {
+            // Kept through a frame or two without a touch: a box settling on a jelly leaves it by a hair now and then.
+            double now = World?.Time.TotalTime ?? 0.0;
+            _heldGone.Clear();
+            foreach (var (body, held) in _held)
+            {
+                if (now - held.Seen > RestTime || body.IsDestroyed)
+                    _heldGone.Add(body);
+            }
+            foreach (var body in _heldGone)
+                _held.Remove(body);
+        }
+    }
+
+    // AT REST AGAINST A JELLY. The engine calls a body at rest when its speed stays low over a few of its ticks. A box
+    // a jelly holds up is handed that support between ticks, as an impulse, and every tick then adds a tick of gravity
+    // to it: whatever it reads, the box is falling at g/60, so it never slept, and while it was awake every touch was a
+    // push and the jelly under it never slept either. A box on the floor leaning on a jelly is the same: pushed every
+    // frame, held by the floor every tick, never still in the engine's eyes. So the host judges rest by where the box
+    // is: touched by this body, its centre within 2.5 cm of where it was half a second ago and not spinning, it is put
+    // to sleep where it is. That much because the support comes once a frame: a box on a jelly drops a tick of
+    // gravity between looks (two, when a frame holds two ticks) and is lifted back, and settles into bobbing a
+    // centimetre or so that the engine's own sleep test would read as motion for ever.
+    private struct Held
+    {
+        public float3 Anchor;
+        public float Time;
+        public double Seen;
+    }
+
+    private readonly Dictionary<RigidBody, Held> _held = new();
+    private readonly List<RigidBody> _heldGone = new();
+
+    private const float RestDrift = 0.025f;
+    private const float RestTurn = 1f;
+    private const float RestTime = 0.5f;
+
+    // Put to sleep by this body, a box is the world to it for as long as it sleeps: held up, leaned on, pressed by a
+    // face springing back. Left to the touches, the spring of the face it had pressed down woke it again the moment it
+    // slept, every time, and the two went round settling and waking for as long as the scene ran. The engine still
+    // wakes it for anything else that hits it, and so does this body if it stops touching it for a moment (the jelly
+    // pulled out from under it): the engine cannot see that the box was standing on it. Just put to sleep, it reads
+    // awake until the engine next ticks, so for a moment it counts as asleep here whatever the engine says.
+    private struct SettledHere
+    {
+        public double At;
+        public double Touched;
+    }
+
+    private readonly Dictionary<RigidBody, SettledHere> _settled = new();
+    private readonly List<RigidBody> _settledGone = new();
+    private const double SettleGrace = 0.25;
+    private const double SupportLost = 0.3;
+
+    private bool SettledLately(RigidBody body)
+        => _settled.TryGetValue(body, out var settled) && (World?.Time.TotalTime ?? 0.0) - settled.At < SettleGrace;
+
+    // A body this one put to sleep and that still sleeps: held like the world, and noted as still touched.
+    private bool HeldAsleep(RigidBody body, bool sleeping)
+    {
+        if (!_settled.TryGetValue(body, out var settled))
+            return false;
+        double now = World?.Time.TotalTime ?? 0.0;
+        if (!sleeping && now - settled.At >= SettleGrace)
+        {
+            _settled.Remove(body);
+            return false;
+        }
+        settled.Touched = now;
+        _settled[body] = settled;
+        return true;
+    }
+
+    private void LetGoUnheld(IPhysicsContactHook? hook)
+    {
+        if (_settled.Count == 0)
+            return;
+        double now = World?.Time.TotalTime ?? 0.0;
+        _settledGone.Clear();
+        foreach (var (body, settled) in _settled)
+        {
+            if (body.IsDestroyed || now - settled.Touched > SupportLost)
+                _settledGone.Add(body);
+        }
+        foreach (var body in _settledGone)
+        {
+            _settled.Remove(body);
+            if (!body.IsDestroyed)
+                hook?.ApplyImpulse(body, float3.Zero, float3.Zero);
+        }
+    }
+
+    private bool AtRestOnThis(ref Pushed pushed)
+    {
+        // Only what this body touched this frame: a box merely near it is the engine's own business.
+        if (pushed.Read.Sleeping || pushed.Trapped || SettledLately(pushed.Body) || (pushed.Linear == float3.Zero && !(pushed.Bearing > 0f)))
+            return false;
+        var gravity = Gravity.Value;
+        float frame = World?.Time.Delta ?? (1f / 60f);
+        float still = gravity.Length * MathF.Max(frame, 1f / 60f) * 2f + 0.05f;
+        var centre = pushed.Read.CenterOfMass;
+        _held.TryGetValue(pushed.Body, out var held);
+        held.Seen = World?.Time.TotalTime ?? 0.0;
+        if (held.Time <= 0f || float3.Distance(centre, held.Anchor) > RestDrift
+            || pushed.Read.AngularVelocity.Length > RestTurn || pushed.Read.LinearVelocity.Length > still)
+        {
+            held.Anchor = centre;
+            held.Time = frame * 0.001f;
+            _held[pushed.Body] = held;
+            return false;
+        }
+        held.Time += frame;
+        if (held.Time < RestTime)
+        {
+            _held[pushed.Body] = held;
+            return false;
+        }
+        _held.Remove(pushed.Body);
+        return true;
     }
 
     // WORLD CONTACT CACHE
@@ -1499,6 +1977,9 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
         public int Step;
         public int Epoch;
         public byte State;
+
+        // The rigid body whose surface this is, if it is one: what a push goes back to.
+        public RigidBody? Body;
     }
 
     private const byte ContactNone = 0;
@@ -1563,16 +2044,22 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
                 break;
             }
         }
-        return QueryWorld(ref c, ref position, radius);
+        return QueryWorld(index, ref c, ref position, radius);
     }
 
-    private bool QueryWorld(ref WorldContact c, ref float3 position, float radius)
+    private bool QueryWorld(int index, ref WorldContact c, ref float3 position, float radius)
     {
         float margin = _queryMargin;
         c.Step = _stepIndex;
         c.MotionAtQuery = _nearMotion;
+        c.Body = null;
 
-        if (!World!.Physics!.ResolveSphere(position, radius + margin, _selfExclude, out var corrected, out var normal))
+        float3 corrected, normal;
+        Slot? met = null;
+        bool found = World!.Hook is IPhysicsContactHook contactHook
+            ? contactHook.ResolveSphere(position, radius + margin, _selfExclude, out corrected, out normal, out met)
+            : World.Physics!.ResolveSphere(position, radius + margin, _selfExclude, out corrected, out normal);
+        if (!found)
         {
             c.State = ContactClear;
             c.Epoch = _clearEpoch;
@@ -1594,13 +2081,249 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
             return false;
         }
 
+        var body = met?.GetComponent<RigidBody>();
+        if (body != null)
+            WayIn(index, body, met!, position, radius, ref point, ref normal);
         position = point + normal * radius;
         c.State = ContactSurface;
         c.Epoch = _surfaceEpoch;
         c.Point = point;
         c.Normal = normal;
         c.QueriedAt = position;
+        c.Body = body;
         return true;
+    }
+
+    // THE WAY IN. The push-out finds the nearest way out of a body, which is the way in only while the particle is
+    // less deep than it is far from every other face. Against a body that moves that stops being true two ways.
+    //
+    // A fast one. A 0.3 kg box dropped 1.5 m comes down 9 cm a frame, and a particle that deep under a 25 cm box is
+    // nearer a side face than the bottom: it was put out sideways and the box went through the skin of the jelly as if
+    // it were not there, or did not, by where in the frame it happened to arrive.
+    //
+    // A slow one settling. A box resting on a jelly sits on the particles under its edges, a centimetre or two from its
+    // sides; as it settles they come nearer a side than the bottom, are put out sideways, and the box sinks onto the
+    // next ones in, a knife through the jelly a few millimetres a frame until it is inside it.
+    //
+    // A closed body knows which way its inside is, and the way out of something pressing into it is always into the
+    // jelly: when the push-out is not that way, a ray from inside the jelly back out along its own normal finds the
+    // face of the body that faces it, and the particle goes there. A particle beside the body rather than under it
+    // finds nothing and keeps the nearest way. An open sheet has no inside; for it a body that could have come further
+    // than a particle's radius since the last look (FrameReach) is swept instead, a ray from where the particle sat
+    // against it then, back along its motion. Nothing needs a ray while the push-out already agrees. -xlinka
+    private void WayIn(int index, RigidBody body, Slot met, in float3 position, float radius, ref float3 point, ref float3 normal)
+    {
+        int i = PushedIndex(body);
+        // Inside the jelly the nearest way out is the one to take, and a body asleep came in no way at all: it is held
+        // like the world. Rays against one that a jelly lay against put the same particles out of one face and then
+        // another every step, and that jelly ran at half a metre a second next to a box that never moved.
+        if (i < 0 || _pushed[i].Trapped || _pushed[i].Read.Sleeping)
+            return;
+        var velocity = _pushed[i].Read.VelocityAt(point);
+        float speed = velocity.Length;
+        float travel = speed * FrameReach();
+        if (!float.IsFinite(travel))
+            return;
+        float3 back;
+        float reach;
+        if (_solver.InwardAt(index, out var inward))
+        {
+            back = inward;
+            reach = travel + radius * 2f;
+        }
+        else if (travel > radius)
+        {
+            back = velocity * (1f / speed);
+            reach = travel + radius;
+        }
+        else
+        {
+            return;
+        }
+        if (float3.Dot(normal, back) > 0.7f)
+            return;
+        if (World!.Physics!.Raycast(position + back * reach, -back, reach, _selfExclude, out var hit)
+            && (ReferenceEquals(hit.Slot, met) || ReferenceEquals(hit.Slot?.GetComponent<RigidBody>(), body))
+            && float3.Dot(hit.Normal, back) > 0f)
+        {
+            // Straight out of that face, wherever along it the ray happened to cross.
+            normal = hit.Normal;
+            point = position - normal * float3.Dot(position - hit.Point, normal);
+        }
+    }
+
+    private static bool IsFinite(in float3 v) => float.IsFinite(v.x) && float.IsFinite(v.y) && float.IsFinite(v.z);
+
+    // LET OUT. Whatever gets past the skin, a rigid body whose centre is inside a closed jelly is in the wrong place:
+    // the particles round it are put out of it every step and the shape pulls them back in, and a 0.3 kg box that
+    // ended up there spun and shoved at the jelly for as long as the scene ran, which never slept. So while it is
+    // inside it is held like the world, its particles put out of it the nearest way and nothing pushed back, and the
+    // jelly squeezes it out through its nearest face: lifted toward clearing that face in a fifth of a second, with
+    // no more each frame than four times the jelly's own weight could give. A body too heavy for that, a 40 kg block
+    // that crushed a jelly flat and sits inside what is left of it, stops being pushed after a second and a half and
+    // stays held like the world, so both sleep. -xlinka
+    private struct Trap
+    {
+        public float Time;
+        public ulong Frame;
+        public double Inside;
+    }
+
+    private readonly Dictionary<RigidBody, Trap> _trapped = new();
+    private readonly List<RigidBody> _trapGone = new();
+    private ulong _trapFrame;
+
+    private const float TrapGiveUp = 1.5f;
+    private const float TrapLetOutTime = 0.2f;
+    private const float TrapSqueeze = 4f;
+    private const float TrapForget = 1f;
+
+    // True if the body is inside this one this frame (and so takes no samples).
+    private bool FreeTrapped(RigidBody body, Slot slot, int i)
+    {
+        if (!_solver.IsClosed)
+            return false;
+        ref var pushed = ref _pushed[i];
+        var centre = pushed.Read.CenterOfMass;
+        var half = _boundsSize * 0.5f;
+        var offset = centre - _boundsCentre;
+        bool known = _trapped.TryGetValue(body, out var trap);
+        double now = World?.Time.TotalTime ?? 0.0;
+        if (MathF.Abs(offset.x) > half.x || MathF.Abs(offset.y) > half.y || MathF.Abs(offset.z) > half.z
+            || !_solver.Encloses(centre) || !_solver.NearestSurface(centre, out var surface, out var outward))
+        {
+            // One given up on stays held like the world for a second after it seems to be out: lying in a pocket of
+            // the surface, its centre went in and out of the jelly with every wobble, and each time in it was pushed
+            // again for a second and a half, so neither ever slept.
+            if (known && trap.Time >= TrapGiveUp && now - trap.Inside < TrapForget)
+            {
+                trap.Frame = _trapFrame;
+                _trapped[body] = trap;
+                pushed.Trapped = true;
+                return true;
+            }
+            return false;
+        }
+
+        trap.Frame = _trapFrame;
+        trap.Inside = now;
+        float frame = World?.Time.Delta ?? (1f / 60f);
+        pushed.Trapped = true;
+        if (trap.Time < TrapGiveUp)
+        {
+            trap.Time += frame;
+            // How far its centre must go along the face's normal for the body to clear it.
+            float depth = MathF.Max(float3.Dot(surface - centre, outward), 0f);
+            float reach = 0f;
+            var toWorld = slot.LocalToWorld;
+            foreach (var collider in slot.GetComponents<Collider>())
+            {
+                if (collider == null || collider.IsDestroyed || !collider.Enabled)
+                    continue;
+                var local = collider.GetLocalBounds();
+                if (local.IsEmpty)
+                    continue;
+                var box = local.Transformed(toWorld);
+                var size = box.Max - box.Min;
+                reach = MathF.Max(reach, 0.5f * (MathF.Abs(outward.x) * size.x + MathF.Abs(outward.y) * size.y + MathF.Abs(outward.z) * size.z));
+            }
+            float want = (depth + reach) / TrapLetOutTime;
+            float along = float3.Dot(pushed.Motion.LinearVelocity, outward);
+            float inverseMass = pushed.Motion.InverseMass;
+            if (want > along && inverseMass > 0f)
+            {
+                var gravity = Gravity.Value;
+                float most = TrapSqueeze * MathF.Max(Mass.Value, 1e-3f) * gravity.Length * frame;
+                float give = MathF.Min((want - along) / inverseMass, most);
+                if (give > 0f && float.IsFinite(give))
+                {
+                    pushed.Motion.LinearVelocity += outward * (give * inverseMass);
+                    pushed.Linear += outward * give;
+                }
+            }
+        }
+        _trapped[body] = trap;
+        return true;
+    }
+
+    // How long a rigid body may have moved for since this body last looked: the physics runs on its own clock, and a
+    // frame that two of its ticks land in moves a body twice as far as the frame's own length says.
+    private float FrameReach() => MathF.Max(World?.Time.Delta ?? (1f / 60f), 1f / 60f) * 2f;
+
+    // Where the solver's face samples are asked about this frame (see SoftBodySolver.FaceSamples): round every rigid
+    // body near this one that gives, grown by how far it moves in a frame. Nothing near that gives, nothing asked. A
+    // body asleep keeps its samples, held like the world: dropped when it slept, the face under it let go of all the
+    // strain they held at once and sprang up into the box hard enough to wake it again.
+    private void MarkGivingBodies()
+    {
+        _solver.ClearSampleZones();
+        _trapFrame++;
+        if (!_worldNear || !CollideWithWorld.Value || World == null)
+        {
+            _trapped.Clear();
+            return;
+        }
+        float radius = MathF.Max(ParticleRadius.Value, 0f);
+        float reach = FrameReach();
+        for (int n = 0; n < _nearSlots.Count; n++)
+        {
+            var slot = _nearSlots[n];
+            if (slot == null || slot.IsDestroyed)
+                continue;
+            var body = slot.GetComponent<RigidBody>();
+            if (body == null || body.IsDestroyed)
+                continue;
+            int i = PushedIndex(body);
+            if (i < 0)
+                continue;
+            if (FreeTrapped(body, slot, i))
+                continue;
+            bool any = false;
+            var min = float3.Zero;
+            var max = float3.Zero;
+            var toWorld = slot.LocalToWorld;
+            foreach (var collider in slot.GetComponents<Collider>())
+            {
+                if (collider == null || collider.IsDestroyed || !collider.Enabled)
+                    continue;
+                var local = collider.GetLocalBounds();
+                if (local.IsEmpty)
+                    continue;
+                var box = local.Transformed(toWorld);
+                min = any ? new float3(MathF.Min(min.x, box.Min.x), MathF.Min(min.y, box.Min.y), MathF.Min(min.z, box.Min.z)) : box.Min;
+                max = any ? new float3(MathF.Max(max.x, box.Max.x), MathF.Max(max.y, box.Max.y), MathF.Max(max.z, box.Max.z)) : box.Max;
+                any = true;
+            }
+            if (!any)
+                continue;
+            // Swept along the way it is going only: grown every way by its reach, a box falling fast had every sample
+            // on the jelly asked about every step before it arrived, and twenty-five of them at once took the frame
+            // long enough for the engine to run four ticks between looks.
+            var sweep = _pushed[i].Read.LinearVelocity * reach;
+            if (!IsFinite(sweep))
+                continue;
+            var pad = new float3(radius, radius, radius);
+            _solver.AddSampleZone(
+                new float3(min.x + MathF.Min(sweep.x, 0f), min.y + MathF.Min(sweep.y, 0f), min.z + MathF.Min(sweep.z, 0f)) - pad,
+                new float3(max.x + MathF.Max(sweep.x, 0f), max.y + MathF.Max(sweep.y, 0f), max.z + MathF.Max(sweep.z, 0f)) + pad);
+        }
+        if (_trapped.Count > 0)
+        {
+            _trapGone.Clear();
+            foreach (var (body, trap) in _trapped)
+            {
+                if (trap.Frame != _trapFrame)
+                    _trapGone.Add(body);
+            }
+            foreach (var body in _trapGone)
+                _trapped.Remove(body);
+        }
+        if (_solver.SampleZoneCount == 0)
+            return;
+        int samples = _solver.EnsureFaceSamples(MathF.Max(radius, 0.005f) * 2.5f);
+        int needed = _solver.ParticleCount + samples;
+        if (_contacts.Length < needed)
+            Array.Resize(ref _contacts, needed);
     }
 
     // COLLIDER SNAPSHOT
@@ -1742,6 +2465,8 @@ public class SquishyBody : Component, IInputUpdateReceiver, ISoftBodySpace, ISof
             if (_skinTriangles == null && SimulateBones.Count == 0 && map.VertexCount > 4000)
                 InspectorStats.AddRow(ui, "", "costly: name a part in SimulateBones");
         }
+        InspectorStats.AddRow(ui, "Simulation", _solver.ComputeStatus);
+        InspectorStats.AddRow(ui, "GPU buffers", $"{_solver.GpuBytes / 1048576.0:F2} MiB");
         InspectorStats.AddRow(ui, "Last step", $"{_lastStepMs:F2} ms");
     }
 }

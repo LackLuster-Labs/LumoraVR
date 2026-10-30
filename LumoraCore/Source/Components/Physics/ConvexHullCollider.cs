@@ -104,6 +104,7 @@ public class ConvexHullCollider : Collider
     // for geometry that changed behind the reference without the reference itself changing, which
     // raises no event on this side
     [SyncMethod]
+    [ScriptMethod]
     public void RebuildHull()
     {
         MarkHullDirty();

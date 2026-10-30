@@ -5,10 +5,6 @@ using Lumora.Core.Math;
 
 namespace Lumora.Core.Components;
 
-/// <summary>
-/// Hook interface for CharacterController.
-/// Implemented by platform-specific hooks (e.g. CharacterControllerHook in LumoraGodot).
-/// </summary>
 public interface ICharacterControllerHook : IHook
 {
     void AddColliderShape(Collider collider);
@@ -24,4 +20,8 @@ public interface ICharacterControllerHook : IHook
     void SetSimulationEnabled(bool enabled);
     void Teleport(float3 position);
     bool IsOnFloor();
+    // The body's velocity in world space, metres a second, as the next step starts from it; set, the step
+    // carries on from the new one, so gravity, the ground and walking act on it from there.
+    float3 Velocity => float3.Zero;
+    void SetVelocity(float3 velocity) { }
 }

@@ -617,6 +617,8 @@ public sealed class ConvexSplitDialog : Component
                 collider.Mass.Value = source.Mass.Value;
                 collider.CharacterCollider.Value = source.CharacterCollider.Value;
                 collider.IgnoreRaycasts.Value = source.IgnoreRaycasts.Value;
+                collider.Friction.Value = source.Friction.Value;
+                collider.Bounce.Value = source.Bounce.Value;
                 collider.Enabled.Value = source.Enabled.Value;
             }
             made.Add(collider);

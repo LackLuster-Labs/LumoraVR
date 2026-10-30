@@ -11,7 +11,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <Description>LumoraSimulation - Pure CPU simulation kernels (particles, soft bodies). No datamodel, no networking, no engine types. Depends only on LumoraMath.</Description>
+    <Description>LumoraSimulation - Simulation kernels and compute backend contracts. No datamodel, networking or rendering types. Depends only on LumoraMath.</Description>
     <Company>Lumora Project</Company>
     <Product>LumoraSimulation</Product>
     <Version>0.1.0</Version>
