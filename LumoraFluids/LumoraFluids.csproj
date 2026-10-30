@@ -1,0 +1,24 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <LangVersion>13</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <RootNamespace>Lumora.Fluids</RootNamespace>
+    <AssemblyName>LumoraFluids</AssemblyName>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <Description>LumoraFluids - the fluid module's data side: components, ledger, keeper, Loom nodes and the GPU seam (no Godot dependencies)</Description>
+    <Company>Lumora Project</Company>
+    <Product>LumoraFluids</Product>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- NO Godot dependencies: the headless harnesses load this assembly with no engine around it. -->
+    <ProjectReference Include="..\LumoraCore\LumoraCore.csproj" />
+  </ItemGroup>
+</Project>
