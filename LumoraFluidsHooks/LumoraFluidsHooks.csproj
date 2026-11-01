@@ -1,0 +1,21 @@
+<Project Sdk="Godot.NET.Sdk/4.8.0-beta.1">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <LangVersion>preview</LangVersion>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RootNamespace>Lumora.Fluids.Hooks</RootNamespace>
+    <AssemblyName>LumoraFluidsHooks</AssemblyName>
+    <Description>LumoraFluidsHooks - the fluid module's Godot side: the boot, the GPU device and solver, and the fluid hooks.</Description>
+    <Company>Lumora Project</Company>
+    <Product>LumoraFluidsHooks</Product>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+  <!-- One more csproj to bump with the Godot SDK at every engine upgrade, beside Lumora and LumoraHooks. -xlinka -->
+  <ItemGroup>
+    <ProjectReference Include="..\LumoraHooks\LumoraHooks.csproj" />
+    <ProjectReference Include="..\LumoraFluids\LumoraFluids.csproj" />
+  </ItemGroup>
+</Project>
