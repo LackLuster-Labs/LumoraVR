@@ -2,18 +2,22 @@
 // Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
 
 using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using Helio.UI;
 using Lumora.Core;
 using Lumora.Core.Networking.Sync;
 using Lumora.Core.Math;
+using Lumora.Core.Components.Interaction;
 using Lumora.Core.Components.UI;
+using Lumora.Core.Localization;
 
 namespace Lumora.Core.Components;
 
 // dotted path addresses one leaf inside the field's value ("x", "r"; "" = the whole value).
 // editors read/write the WHOLE boxed value through a StructMemberAccessor, so one non-generic
 // component edits any value type.
-public abstract class MemberEditor : Component
+public abstract class MemberEditor : Component, IProxyReceiver
 {
     public readonly SyncRef<IWorldElement> TargetMember;
     public readonly Sync<string> MemberPath;
@@ -48,6 +52,14 @@ public abstract class MemberEditor : Component
         RefreshDisplay();
     }
 
+    // Copy the actual leaf value, including its precision, rather than the rounded display text. -xlinka
+    public virtual IGrabbable? CopyValue(TextInput input, in float3 spawnPoint)
+    {
+        if (World == null || Field is not { IsDestroyed: false } || LeafType is not { } type)
+            return null;
+        return ValueProxy.Spawn(World, type, GetMemberValue(), spawnPoint);
+    }
+
     protected abstract void BuildUI(UIBuilder ui);
 
     // also called on remote changes
@@ -57,6 +69,17 @@ public abstract class MemberEditor : Component
     {
         base.OnStart();
         WatchField();
+        KeepDisplay();
+    }
+
+    // What the row shows follows its field on the authority, which keeps every panel's rows, the panel in
+    // somebody's hand included; every other machine has it from there. Every peer used to write the same text
+    // on every change, so a panel picked up mid-change had the others' writes refused at the host. -xlinka
+    private void KeepDisplay()
+    {
+        if (World?.IsAuthority != true)
+            return;
+        using var keep = World.DataModelPermissions?.EnterUiUpkeep(this);
         RefreshDisplay();
     }
 
@@ -88,7 +111,7 @@ public abstract class MemberEditor : Component
     private void OnFieldChanged(IChangeable element)
     {
         if (!IsDestroyed)
-            RefreshDisplay();
+            KeepDisplay();
     }
 
     // Whether this editor must refuse writes to the EDITED MEMBER (not this editor component's own
@@ -107,10 +130,14 @@ public abstract class MemberEditor : Component
     // host included: the datamodel refuses the write anyway, and a row that swallows every edit in
     // silence is worse than a row that says up front that it will not take one. The Session dashboard is
     // where those are edited. -xlinka
+    //
+    // Part of somebody else who has not said yes to the person writing is read-only the same way: the gate refuses
+    // it, and an editor that sends the write anyway only looks broken. -xlinka
     protected bool IsReadOnly
         => TargetMember.Target is ILinkable { IsDestroyed: false, IsDriven: true, IsHooked: false }
            || ImmutableComponent.IsProtected(TargetMember.Target)
-           || TargetMember.Target is SyncElement { IsConfigLocked: true };
+           || TargetMember.Target is SyncElement { IsConfigLocked: true }
+           || Networking.Session.SessionEditConsent.Refuses(ObjectBoundary.SlotOf(TargetMember.Target), World?.LocalUser);
 
     protected object? GetMemberValue()
     {
@@ -129,7 +156,9 @@ public abstract class MemberEditor : Component
             return;
 
         object? before = field.BoxedValue;
-        object? after = accessor.SetValue(before, leaf);
+        // A fresh box to write into: SetValue changes a leaf IN the box it is handed, and changing `before`
+        // made the undo step's before and after one object, so undoing a vector lane edit did nothing. -xlinka
+        object? after = accessor.SetValue(field.BoxedValue, leaf);
         // BoxedValue is typed non-null, but a reference-type field's new value can legitimately be null. -xlinka
         field.BoxedValue = after!;
         InspectorUndo.RecordEdit(this, field, before, after);
@@ -168,262 +197,229 @@ public abstract class MemberEditor : Component
         tint.StateTint.Target = widgetTint;
         tint.TintBaseColor.Value = baseColor;
     }
-}
 
-public static class InspectorUI
-{
-    // Metres per canvas unit for the inspector and every panel it opens. Was 0.0005, which put body text at
-    // 7.5 mm: crisp, but past arm's length on a desktop view it was too small to read. Neighbour offsets are
-    // in canvas units times this, so the layout grows with it. -xlinka
-    public const float PanelScale = 0.00065f;
-    public static readonly color TextColor = DashTheme.Text;
-    public static readonly color MutedColor = new color(0.78f, 0.77f, 0.85f, 1f);
-    // slot's own persistence flag is off
-    public static readonly color NonPersistentColor = new color(0.95f, 0.58f, 0.20f, 1f);
-    // non-persistent only through an ancestor
-    public static readonly color NonPersistentInheritedColor = new color(0.78f, 0.56f, 0.34f, 1f);
-    public static readonly color DrivenColor = new color(0.85f, 0.45f, 0.9f, 1f);
-    // Linked but not driving (a hook/link holds the field without writing it) - reads cyan.
-    public static readonly color LinkedColor = new color(0.38f, 0.78f, 0.85f, 1f);
-    // a member the editor can no longer resolve (destroyed or never wired)
-    public static readonly color BrokenColor = new color(0.50f, 0.50f, 0.52f, 1f);
-    // Section headers/dividers in inspector panels.
-    public static readonly color CyanColor = new color(0.35f, 0.75f, 0.90f, 1f);
-    public static readonly color RowColor = DashTheme.Field;
-    public static readonly color HeaderColor = DashTheme.Surface;
-    // opaque near-black backing for the hierarchy and detail panes
-    public static readonly color PaneColor = new color(DashTheme.Panel.r, DashTheme.Panel.g, DashTheme.Panel.b, 0.75f);
-    public static readonly color AccentColor = DashTheme.Accent;
-    // row backing for the selected hierarchy entry
-    public static readonly color SelectionColor = new color(0.45f, 0.38f, 0.80f, 0.60f);
-    public static readonly color DangerColor = new color(0.70f, 0.24f, 0.28f, 1f);
-    public static readonly color AxisXColor = new color(0.90f, 0.30f, 0.32f, 1f);
-    public static readonly color AxisYColor = new color(0.36f, 0.80f, 0.42f, 1f);
-    public static readonly color AxisZColor = new color(0.35f, 0.55f, 0.95f, 1f);
-    public const float RowHeight = 34f;
-    public const float FontSize = 17f;
+    // A value card released or pressed onto this editor: the field takes the card's value through the same
+    // write and undo a hand edit uses, one undo step per card. A driven, locked or read-only field refuses the
+    // way typing into it does, and says why in the field for a moment. Anything that is not a value card goes
+    // on outward, so a tree row still takes a slot card dropped on its Active box. Reference editors answer
+    // this themselves. -xlinka
+    bool IProxyReceiver.TryReceiveProxy(IReadOnlyList<IGrabbable> held, Grabber grabber)
+        => ReceiveValue(held, grabber, null);
 
-    // The name a member reads as on a card, a ref readout or a list row. A collection element has
-    // no name of its own (its member name is its type), so the owning worker gets first say through
-    // ICustomMemberNameSource (a blend shape weight names itself after the mesh's shape), then a
-    // list element falls back to "List[i]", then anything else to the member name. -xlinka
-    public static string MemberDisplayName(ISyncMember member)
+    public bool ReceiveValue(IReadOnlyList<IGrabbable> held, Grabber grabber, TextInput? input)
     {
-        if (member is SyncElement element)
+        LocaleText refusal = LocaleText.Empty;
+        bool sawCard = false;
+        for (int i = 0; i < held.Count; i++)
         {
-            IWorldElement? node = element.Parent;
-            while (node is SyncElement parentElement)
-                node = parentElement.Parent;
-            if (node is ICustomMemberNameSource source && source.GetMemberName(member) is { Length: > 0 } custom)
-                return custom;
-
-            if (element.Parent is ISyncList list && element.Parent is ISyncMember listMember)
+            if (held[i] is not Component { Slot: { IsDestroyed: false } slot } || slot.GetComponent<ValueProxy>() is not { } card)
+                continue;
+            sawCard = true;
+            if (TryTakeValue(card, input, out var why))
             {
-                for (int i = 0; i < list.Count; i++)
-                {
-                    if (ReferenceEquals(list.GetElement(i), member))
-                        return $"{listMember.Name}[{i}]";
-                }
+                card.Consume(held[i], grabber);
+                return true;
+            }
+            if (refusal.IsEmpty)
+                refusal = why;
+        }
+        if (!sawCard)
+            return PassOutward(held, grabber);
+        if (!refusal.IsEmpty)
+            ShowDropRefusal(refusal.Resolve());
+        return false;
+    }
+
+    // The next receiver further out on this panel, the one the hand would have found without this editor.
+    private bool PassOutward(IReadOnlyList<IGrabbable> held, Grabber grabber)
+    {
+        for (var current = Slot?.Parent; current != null; current = current.Parent)
+        {
+            foreach (var receiver in current.GetComponentsImplementing<IProxyReceiver>())
+            {
+                if (receiver is Component { IsDestroyed: false } component && component.Enabled.Value)
+                    return receiver.TryReceiveProxy(held, grabber);
+            }
+            if (current.GetComponent<Canvas>() != null)
+                break;
+        }
+        return false;
+    }
+
+    // Writes the card's value into the field. The card goes where it fits best, outermost first: the whole
+    // field, then each part down to the one this editor shows, so a float3 card on Position's x box sets all
+    // of Position while a float card there sets only x. A part of the card's own type wins over one it would
+    // have to be converted for.
+    public bool TryTakeValue(ValueProxy card, out LocaleText refusal)
+        => TryTakeValue(card, null, out refusal);
+
+    private bool TryTakeValue(ValueProxy card, TextInput? input, out LocaleText refusal)
+    {
+        refusal = LocaleText.Empty;
+        var field = Field;
+        if (field == null || field.IsDestroyed)
+        {
+            refusal = ValueCardConversion.Gone;
+            return false;
+        }
+        if (!card.TryGetValue(out var value, out var type) || type == null)
+        {
+            refusal = ValueCardConversion.Empty;
+            return false;
+        }
+        if (WriteRefusal(field) is { } locked)
+        {
+            refusal = locked;
+            return false;
+        }
+        if (!TryFit(field, value, type, input, out var path, out var fitted, out refusal))
+            return false;
+
+        // An accepted drop ends the pending edit before writing, so a later blur cannot put stale text back. -xlinka
+        if (TextInput.Focused is { } focused && (ReferenceEquals(focused.Slot, Slot) || focused.Slot.IsDescendantOf(Slot)))
+            focused.Cancel();
+        var accessor = StructMemberAccessor.Get(field.ValueType, path);
+        object? before = field.BoxedValue;
+        object? after = accessor.SetValue(field.BoxedValue, fitted);
+        if (Equals(before, after))
+        {
+            RefreshDisplay();
+            return true;
+        }
+        try
+        {
+            field.BoxedValue = after!;
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException)
+        {
+            refusal = ValueCardConversion.Refused;
+            return false;
+        }
+        object? landed = field.BoxedValue;
+        // A hook decides for itself what a write means; anything else that did not move refused the write.
+        if (Equals(landed, before) && field is not ILinkable { IsHooked: true })
+        {
+            refusal = ValueCardConversion.Refused;
+            return false;
+        }
+        if (!Equals(landed, before))
+            InspectorUndo.RecordEditStep(this, field, before, landed);
+        RefreshDisplay();
+        return true;
+    }
+
+    // Same rules as IsReadOnly, worded, plus the permission gate a typed value would meet in the setter.
+    private static LocaleText? WriteRefusal(IField field)
+    {
+        if (field is ILinkable { IsDriven: true, IsHooked: false })
+            return ValueCardConversion.Driven;
+        if (field is SyncElement { IsConfigLocked: true })
+            return ValueCardConversion.Locked;
+        if (ImmutableComponent.IsProtected(field))
+            return ValueCardConversion.ReadOnly;
+        if (field is SyncElement element && !element.IsWriteAllowed())
+            return ValueCardConversion.NoPermission;
+        return null;
+    }
+
+    protected virtual bool TryFit(IField field, object? value, Type type, TextInput? input, out string path, out object? fitted, out LocaleText refusal)
+    {
+        fitted = null;
+        refusal = LocaleText.Empty;
+        var paths = PathsOutward(MemberPath.Value ?? "");
+        foreach (var candidate in paths)
+        {
+            if (StructMemberAccessor.Get(field.ValueType, candidate).LeafType == type)
+            {
+                path = candidate;
+                fitted = value;
+                return true;
             }
         }
-        return string.IsNullOrEmpty(member.Name) ? member.GetType().Name : member.Name!;
+        foreach (var candidate in paths)
+        {
+            var leafType = StructMemberAccessor.Get(field.ValueType, candidate).LeafType;
+            if (ValueCardConversion.TryConvert(value, type, leafType, out fitted, out var why))
+            {
+                path = candidate;
+                return true;
+            }
+            if (refusal.IsEmpty)
+                refusal = why;
+        }
+        path = "";
+        if (refusal.IsEmpty)
+            refusal = ValueCardConversion.NoFit.WithArgs(ValueCardConversion.TypeName(type), ValueCardConversion.TypeName(field.ValueType));
+        return false;
     }
 
-    // THE field-state color rule, one implementation for every editor and every widget in a member
-    // row: a member that is gone reads broken gray, a driven one the drive magenta, one that is
-    // merely linked (something holds it but nothing writes it) cyan, anything else the caller's
-    // normal color. Keep new editors on this instead of hand-rolling a tint, or the row's chip, its
-    // label and its value widget end up disagreeing about what state the field is in. -xlinka
-    public static color FieldStateColor(IWorldElement? member, color? normal = null)
+    // "a.x" -> "", "a", "a.x"
+    private static List<string> PathsOutward(string path)
     {
-        // Broken means the MEMBER ITSELF is gone. A member kind that simply has no link machinery
-        // (a delegate, a bag) is normal, not broken.
-        if (member == null || member.IsDestroyed)
-            return BrokenColor;
-        if (member is not ILinkable linkable)
-            return normal ?? TextColor;
-        if (linkable.IsDriven)
-            return DrivenColor;
-        if (linkable.IsLinked)
-            return LinkedColor;
-        return normal ?? TextColor;
+        var paths = new List<string> { "" };
+        if (path.Length == 0)
+            return paths;
+        int dot = path.IndexOf('.');
+        while (dot >= 0)
+        {
+            paths.Add(path[..dot]);
+            dot = path.IndexOf('.', dot + 1);
+        }
+        paths.Add(path);
+        return paths;
     }
 
-    // Paint a widget's backing with a field-state color.
-    // Helio buttons DRIVE their own Image.Tint from an interaction ColorDriver (normal/hover/pressed),
-    // so writing the tint directly is silently reverted on the driver's next pass - the base color has
-    // to be retuned on the DRIVER instead, which also re-derives the hover and pressed shades from it.
-    // A plain image (a text input backing) has no driver and takes the write. Anything tinting an
-    // inspector widget must go through here or it will look like it worked and then flicker back on
-    // the first hover. -xlinka
-    public static void ApplyStateTint(IField<color>? widgetTint, in color value)
+    // The reason goes where the drop landed: in a text box of this editor's own, the same red note a mistyped
+    // value gets, else in place of the row's label.
+    private void ShowDropRefusal(string reason)
     {
-        if (widgetTint == null || widgetTint.IsDestroyed)
+        var input = Slot?.GetComponentInChildren<TextInput>();
+        if (input != null && !input.IsDestroyed && ReferenceEquals(input.Slot.GetComponentInParent<MemberEditor>(), this))
+        {
+            FieldHint.Show(input, input.Text.Value ?? "", reason, RefreshDisplay);
             return;
+        }
+        var tint = Slot?.GetComponentInParent<MemberStateTint>();
+        if (tint?.Label.Target is { IsDestroyed: false } label)
+            ShowLabelNote(label, reason, TargetMember.Target, tint.BaseColor.Value);
+    }
 
-        // The color field's parent is the graphic component, whose slot carries any interaction
-        // ColorDriver bound to it. Every Helio Button installs one on its own backing in OnAttach.
-        var slot = ((widgetTint as SyncElement)?.Parent as Component)?.Slot;
-        if (slot != null)
+    private sealed class LabelNote
+    {
+        public bool Up;
+        public int Serial;
+        public string Content = "";
+        public bool AutoSized;
+        public float AutoSizeMin;
+    }
+
+    private static readonly ConditionalWeakTable<Text, LabelNote> LabelNotes = new();
+    private const float LabelNoteSeconds = 2.5f;
+
+    private static void ShowLabelNote(Text label, string message, IWorldElement? member, color baseColor)
+    {
+        var note = LabelNotes.GetValue(label, _ => new LabelNote());
+        if (!note.Up)
         {
-            foreach (var driver in slot.GetComponents<ColorDriver>())
-            {
-                if (!ReferenceEquals(driver.Target.Target, widgetTint))
-                    continue;
-                driver.SetColors(value);
+            note.Content = label.Content.Value ?? "";
+            note.AutoSized = label.AutoSizeHorizontal.Value;
+            note.AutoSizeMin = label.AutoSizeMin.Value;
+        }
+        note.Up = true;
+        int serial = ++note.Serial;
+        label.Content.Value = message;
+        label.Color.Value = DashTheme.Negative;
+        label.AutoSizeHorizontal.Value = true;
+        label.AutoSizeMin.Value = 8f;
+        label.RunInSeconds(LabelNoteSeconds, () =>
+        {
+            if (note.Serial != serial || !note.Up || label.IsDestroyed)
                 return;
-            }
-        }
-        widgetTint.Value = value;
-    }
-
-    // text without a font renders nothing - the first inspector shipped with invisible content this way
-    public static Lumora.Core.Components.UI.UITheme? ApplyTheme(UIBuilder ui, Slot context)
-    {
-        ui.FontSize(FontSize).CornerRadius(DashTheme.RadiusControl);
-        var theme = context.GetComponentInParent<Lumora.Core.Components.UI.UITheme>();
-        if (theme != null)
-        {
-            if (theme.ThemeFont != null)
-                ui.Font(theme.ThemeFont);
-            ui.TextColor(theme.TextPrimary.Value);
-            ui.BackgroundColor(theme.ButtonFill.Value);
-            ui.RoundedSprite(null);
-        }
-        return theme;
-    }
-
-    public static TextInput CreateTextInput(UIBuilder ui, string name = "Input",
-        TextHorizontalAlignment alignment = TextHorizontalAlignment.Left)
-    {
-        var slot = ui.Next(name);
-        ui.NestInto(slot);
-        var image = slot.AttachComponent<Image>();
-        image.Tint.Value = RowColor;
-        image.CornerRadius.Value = DashTheme.RadiusControl;
-        var input = slot.AttachComponent<TextInput>();
-
-        var textSlot = slot.AddSlot("Text");
-        FillParent(textSlot.AttachComponent<RectTransform>());
-        textSlot.GetComponent<RectTransform>()!.OffsetMin.Value = new float2(8f, 2f);
-        textSlot.GetComponent<RectTransform>()!.OffsetMax.Value = new float2(-8f, -2f);
-        var text = textSlot.AttachComponent<Text>();
-        text.Size.Value = FontSize;
-        text.Color.Value = TextColor;
-        text.HorizontalAlignment.Value = alignment;
-        text.VerticalAlignment.Value = TextVerticalAlignment.Middle;
-        text.WordWrap.Value = false;
-        text.ClipToRect.Value = true;
-        text.KeepCaretVisible.Value = true;
-        var theme = slot.GetComponentInParent<Lumora.Core.Components.UI.UITheme>();
-        if (theme?.ThemeFont != null)
-            text.Font.Target = theme.ThemeFont;
-
-        ui.NestOut();
-        return input;
-    }
-
-    // Returns the header ROW so a caller can hang a control off the right-hand end of it - the label
-    // takes the flexible width, so anything appended after lands hard right. -xlinka
-    public static Slot SectionHeader(Slot parent, string label, Slot themeContext)
-    {
-        var row = FixedRow(parent, "Section", RowHeight, out var ui, themeContext);
-        ui.PushStyle();
-        ui.FlexibleWidth(1f);
-        var text = ui.Text(label, FontSize - 1f, CyanColor);
-        FillParent(text.RectTransform!);
-        text.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
-        text.VerticalAlignment.Value = TextVerticalAlignment.Bottom;
-        ui.PopStyle();
-
-        var divider = parent.AddSlot("Divider");
-        divider.AttachComponent<RectTransform>();
-        var dividerLE = divider.AttachComponent<Helio.UI.Layout.LayoutElement>();
-        dividerLE.MinHeight.Value = 4f;
-        dividerLE.PreferredHeight.Value = 4f;
-        var rule = divider.AttachComponent<Image>();
-        rule.Tint.Value = new color(CyanColor.r, CyanColor.g, CyanColor.b, 0.85f);
-        return row;
-    }
-
-    // a bare RectTransform defaults to a 100x100 centered chunk
-    public static void FillParent(RectTransform rect)
-    {
-        rect.AnchorMin.Value = float2.Zero;
-        rect.AnchorMax.Value = float2.One;
-        rect.OffsetMin.Value = float2.Zero;
-        rect.OffsetMax.Value = float2.Zero;
-    }
-
-    public static Slot FixedRow(Slot parent, string name, float height, out UIBuilder rowUi, Slot themeContext)
-    {
-        var row = parent.AddSlot(name);
-        row.AttachComponent<RectTransform>();
-        var le = row.AttachComponent<Helio.UI.Layout.LayoutElement>();
-        le.MinHeight.Value = height;
-        le.PreferredHeight.Value = height;
-        var layout = row.AttachComponent<Helio.UI.Layout.HorizontalLayout>();
-        layout.Spacing.Value = 6f;
-        layout.PaddingLeft.Value = 4f;
-        layout.PaddingRight.Value = 4f;
-        layout.ForceExpandHeight.Value = true;
-        layout.ForceExpandWidth.Value = false;
-        // Own graphics chunk per row: a hover tint or text change re-tessellates ONE ROW's mesh
-        // instead of the whole panel - the difference between smooth and slideshow on busy panels.
-        row.AttachComponent<GraphicChunkRoot>();
-        rowUi = new UIBuilder(row);
-        ApplyTheme(rowUi, themeContext);
-        return row;
-    }
-
-    // color coding: purple ref, blue field, green list, magenta driven. pressing it pops the
-    // member's reference card out of the panel when a pull source is wired; otherwise just the marker
-    public static void MemberChip(UIBuilder ui, color tint, ReferenceProxySource? pullSource)
-    {
-        ui.PushStyle();
-        ui.MinWidth(14f);
-        ui.PreferredWidth(14f);
-        ui.FlexibleWidth(0f);
-        if (pullSource != null)
-        {
-            ui.PushStyle();
-            ui.BackgroundColor(tint);
-            var button = ui.Button("", null!);
-            button.SetAction(pullSource.OnPullPressed);
-            pullSource.GrabArea.Target = button.Slot;
-            ui.PopStyle();
-        }
-        else
-        {
-            var chip = ui.Image(null, tint);
-            FillParent(chip.RectTransform!);
-        }
-        ui.PopStyle();
-    }
-
-    // synced argument routed to an IInspectorActionHandler, never closures
-    public static Button RelayButton(UIBuilder ui, Component handler, string argument, string label, float width)
-    {
-        ui.PushStyle();
-        if (width > 0f)
-        {
-            ui.MinWidth(width);
-            ui.PreferredWidth(width);
-            ui.FlexibleWidth(0f);
-        }
-        else
-        {
-            ui.FlexibleWidth(1f);
-        }
-        var button = ui.Button(label, null!);
-        var relay = button.Slot.AttachComponent<InspectorButtonRelay>();
-        relay.Argument.Value = argument;
-        relay.Handler.Target = handler;
-        button.SetAction(relay.OnPressed);
-        var text = button.Slot.GetComponentInChildren<Text>();
-        if (text != null)
-            FillParent(text.RectTransform!);
-        ui.PopStyle();
-        return button;
+            note.Up = false;
+            label.Content.Value = note.Content;
+            label.AutoSizeHorizontal.Value = note.AutoSized;
+            label.AutoSizeMin.Value = note.AutoSizeMin;
+            label.Color.Value = InspectorUI.FieldStateColor(member, baseColor);
+        });
     }
 }

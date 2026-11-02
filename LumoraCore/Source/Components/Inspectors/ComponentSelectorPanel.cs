@@ -54,7 +54,7 @@ public class ComponentSelectorPanel : Component, IInspectorActionHandler
         _builtPath = new Sync<string>(this, "unbuilt");
         _builtQuery = new Sync<string>(this, "unbuilt");
         SwapTarget = new SyncRef<Component>(this);
-        CloseAfterAttach = new Sync<bool>(this, true);
+        CloseAfterAttach = new Sync<bool>(this, false);
         GenericPath = new Sync<string>(this, "");
         _builtGeneric = new Sync<string>(this, "unbuilt");
     }
@@ -493,8 +493,8 @@ public class ComponentSelectorPanel : Component, IInspectorActionHandler
                 ComponentUndo.RecordAttach(this, attached);
                 var owner = Owner.Target;
                 owner?.MarkListsDirty();
-                // A selector puts one component on and goes, and the inspector opens the next on the same
-                // category. A pick that attached nothing leaves it up. -xlinka
+                // Keep browsing the same category after an attachment unless the author opted into
+                // closing this selector. The close button is always available. -xlinka
                 bool close = CloseAfterAttach.Value;
                 if (close)
                 {

@@ -17,4 +17,17 @@ public sealed class InspectorTab : Component
     public readonly Sync<float2> TreeScroll = new();
     public readonly Sync<float2> ComponentScroll = new();
     public readonly Sync<float> HierarchyWidth = new(SceneInspectorPanel.DefaultHierarchyWidth);
+
+    // A parked view, the same kind of state as the panel's live one.
+    public override void OnAwake()
+    {
+        base.OnAwake();
+        Root.MarkUiState();
+        Selected.MarkUiState();
+        ExpandedSlots.MarkUiState();
+        ExpandedComponents.MarkUiState();
+        TreeScroll.MarkUiState();
+        ComponentScroll.MarkUiState();
+        HierarchyWidth.MarkUiState();
+    }
 }

@@ -139,7 +139,8 @@ public static class CreateNewCatalog
         Add("Object", "Seat", SpawnSeat);
         Add("Object", "Glow Marker", SpawnGlowMarker);
         Add("Object", "Reflection Probe", SpawnReflectionProbe);
-        Add("Object", "Mirror", slot => slot.AttachComponent<MirrorPanel>());
+        Add("Object", "Mirror", SpawnMirror);
+        Add("Object", "Keyboard", SpawnKeyboard);
 
         // A blank material orb with its shader graph open above it, a Material Output ready to wire into.
         // The orb wears whatever the graph makes, and the material tool takes it to anything else.
@@ -206,9 +207,14 @@ public static class CreateNewCatalog
         Add("Tools", "Duplicator", slot => SpawnTool<DuplicatorTool>(slot));
         Add("Tools", "Meter Tool", slot => SpawnTool<MeterTool>(slot));
         Add("Tools", "Script Node Tool", slot => SpawnTool<ScriptNodeTool>(slot));
-        Add("Tools", "Camera", slot => slot.AttachComponent<PhotoCamera>());
+        Add("Tools", "Camera", SpawnCamera);
         Add("Tools", "Camera Anchor", SpawnCameraAnchor);
         Add("Tools", "Camera Leave-Out Tool", slot => SpawnTool<CameraLeaveOutTool>(slot));
+        foreach (var tip in Enum.GetValues<BrushTip>())
+        {
+            var pick = tip;
+            Add("Tools/Brushes", BrushTool.PresetName(pick), slot => slot.AttachComponent<BrushTool>().UsePreset(pick));
+        }
     }
 
     // RECIPES
@@ -608,9 +614,43 @@ public static class CreateNewCatalog
         slot.AttachComponent<CameraAnchor>();
     }
 
+    // The VR keyboard as an object to change with the usual tools: the built-in layout standing here, turned to
+    // whoever made it. Saved and made a favourite, it is the keyboard that comes up when they type in VR.
+    private static void SpawnKeyboard(Slot slot)
+    {
+        UI.VrKeyboardLayout.Build(slot);
+        slot.LocalScale.Value = float3.One * UI.VrKeyboardLayout.PanelScale;
+        var head = slot.World?.LocalUser?.Root?.HeadPosition;
+        var toViewer = head.HasValue ? head.Value - slot.GlobalPosition : float3.Zero;
+        toViewer.y = 0f;
+        if (toViewer.LengthSquared > 1e-6f)
+            slot.GlobalRotation = floatQ.AxisAngleRad(float3.Up, MathF.Atan2(toViewer.x, toViewer.z));
+    }
+
     // A tool item attaches its own grabbable and builds its own visual, so this really is one line.
     private static void SpawnTool<T>(Slot slot) where T : ToolItem, new()
     {
         slot.AttachComponent<T>();
     }
+
+    // The maker's favourite camera or mirror when they have one. It can come a moment later, after its
+    // fetch, so what is attached then is attached in the maker's own allocation again.
+    private static void SpawnCamera(Slot slot) => FavouriteSpawn.Fill<PhotoCamera>(slot, FavouriteKind.Camera, camera =>
+    {
+        if (slot.IsDestroyed)
+            return;
+        using var own = slot.World.EnterSpawnAllocation();
+        if (camera == null)
+            slot.AttachComponent<PhotoCamera>();
+        else
+            camera.Operator.Target = slot.World.LocalUser!;
+    });
+
+    private static void SpawnMirror(Slot slot) => FavouriteSpawn.Fill<Mirror>(slot, FavouriteKind.Mirror, mirror =>
+    {
+        if (slot.IsDestroyed || mirror != null)
+            return;
+        using var own = slot.World.EnterSpawnAllocation();
+        Mirror.SetUp(slot);
+    });
 }

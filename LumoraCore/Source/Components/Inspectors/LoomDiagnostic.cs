@@ -768,6 +768,10 @@ public sealed class LoomDiagnostic : Component, IInspectorActionHandler
                 return $"{Ms(stats.CompileMs)} ms{(stats.CompileCached ? ", reused from the cache" : "")}; loaded in {Ms(stats.LoadMs)} ms";
             return view.Published && view.CompileMs > 0 ? $"{Ms(view.CompileMs)} ms on the host" : "-";
         });
+        Info("Runs as", () => Runtime(host)?.Runner.Compiled is not { } compiled ? "-"
+            : compiled.IsNative ? "native code"
+            : compiled.NativeRefusal is { } why ? "the interpreter: " + why
+            : Lumora.Wasm.WasmStore.NativeCode ? "the interpreter, native code on its way" : "the interpreter");
         Info("Graph", () => Runtime(host) is { } runtime
             ? $"{runtime.Stats.Nodes} nodes, {Bytes(runtime.Stats.ModuleBytes)} module, {runtime.Runner.Compiled.Events.Count} events, {runtime.Runner.Compiled.Timers.Count} delays, {runtime.Runner.Compiled.Variables.Count} stored values"
             : "-");

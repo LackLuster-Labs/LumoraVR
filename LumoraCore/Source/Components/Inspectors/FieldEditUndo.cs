@@ -12,23 +12,26 @@ public sealed class FieldEditUndoBatch : IUndoBatch
     private readonly IField _field;
     private readonly object? _before;
     private object? _after;
+    private readonly bool _mergeable;
 
     public LocaleText LocalizedDescription { get; }
 
     public string Description => LocalizedDescription.Resolve();
 
-    public FieldEditUndoBatch(IField field, object? before, object? after, LocaleText description)
+    public FieldEditUndoBatch(IField field, object? before, object? after, LocaleText description, bool mergeable = true)
     {
         _field = field;
         _before = before;
         _after = after;
         LocalizedDescription = description;
+        _mergeable = mergeable;
     }
 
-    // consecutive edits of the same field merge into one step (slider drags, typing)
+    // consecutive edits of the same field merge into one step (slider drags, typing); a step recorded as
+    // whole (a dropped value card) neither joins the one before it nor takes the ones after
     public bool TryMerge(IField field, object? after)
     {
-        if (!ReferenceEquals(field, _field))
+        if (!_mergeable || !ReferenceEquals(field, _field))
             return false;
         _after = after;
         return true;
@@ -84,5 +87,12 @@ public static class InspectorUndo
             return;
         string name = (field as ISyncMember)?.Name ?? "field";
         manager.Record(new FieldEditUndoBatch(field, before, after, UndoLocale.EditField(name)));
+    }
+
+    // One edit as one step of its own, never merged with the field's typing or slider steps around it.
+    public static void RecordEditStep(Worker context, IField field, object? before, object? after)
+    {
+        string name = (field as ISyncMember)?.Name ?? "field";
+        Record(context, new FieldEditUndoBatch(field, before, after, UndoLocale.EditField(name), mergeable: false));
     }
 }

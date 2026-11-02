@@ -6,6 +6,8 @@ using System.Globalization;
 using Helio.UI;
 using Lumora.Core;
 using Lumora.Core.Math;
+using Lumora.Core.Components.Interaction;
+using Lumora.Core.Localization;
 
 namespace Lumora.Core.Components;
 
@@ -29,12 +31,15 @@ public class QuaternionMemberEditor : MemberEditor
 
     protected override void BuildUI(UIBuilder ui)
     {
+        // Same columns as a vector's fields, so Rotation's boxes sit under Position's and the axis letters.
+        InspectorUI.Columns(ui, "Angles");
         ui.PushStyle();
         ui.FlexibleWidth(1f);
         _yaw.Target = InspectorUI.CreateTextInput(ui, "Yaw", TextHorizontalAlignment.Center);
         _pitch.Target = InspectorUI.CreateTextInput(ui, "Pitch", TextHorizontalAlignment.Center);
         _roll.Target = InspectorUI.CreateTextInput(ui, "Roll", TextHorizontalAlignment.Center);
         ui.PopStyle();
+        ui.NestOut();
 
         foreach (var input in new[] { _yaw.Target, _pitch.Target, _roll.Target })
         {
@@ -95,6 +100,44 @@ public class QuaternionMemberEditor : MemberEditor
             return;
         FieldHint.Clear(input);
         input.Text.Value = Degrees(radians);
+    }
+
+    private int InputAxis(TextInput? input)
+        => input == null ? -1 : ReferenceEquals(input, _yaw.Target) ? 0 : ReferenceEquals(input, _pitch.Target) ? 1 : ReferenceEquals(input, _roll.Target) ? 2 : -1;
+
+    // Each angle box carries degrees, while a card from the row label carries the whole rotation. -xlinka
+    public override IGrabbable? CopyValue(TextInput input, in float3 spawnPoint)
+    {
+        int axis = InputAxis(input);
+        if (axis < 0 || GetMemberValue() is not floatQ rotation)
+            return base.CopyValue(input, spawnPoint);
+        var euler = rotation.ToEuler();
+        float angle = (axis == 0 ? euler.y : axis == 1 ? euler.x : euler.z) * (180f / MathF.PI);
+        return ValueProxy.Spawn(World, typeof(float), angle, spawnPoint);
+    }
+
+    protected override bool TryFit(IField field, object? value, Type type, TextInput? input,
+        out string path, out object? fitted, out LocaleText refusal)
+    {
+        int axis = InputAxis(input);
+        if (axis >= 0 && FieldMath.IsNumberType(type) && GetMemberValue() is floatQ rotation)
+        {
+            path = MemberPath.Value ?? "";
+            fitted = null;
+            if (!ValueCardConversion.TryConvert(value, type, typeof(float), out var converted, out refusal))
+                return false;
+            var euler = rotation.ToEuler();
+            float degrees = (float)converted!;
+            if (!float.IsFinite(degrees))
+            {
+                refusal = ValueCardConversion.NotFinite;
+                return false;
+            }
+            float angle = degrees * (MathF.PI / 180f);
+            fitted = floatQ.Euler(axis == 0 ? angle : euler.y, axis == 1 ? angle : euler.x, axis == 2 ? angle : euler.z);
+            return true;
+        }
+        return base.TryFit(field, value, type, input, out path, out fitted, out refusal);
     }
 
     private static string Degrees(float radians)

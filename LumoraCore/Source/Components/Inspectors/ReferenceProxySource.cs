@@ -111,7 +111,7 @@ public class ReferenceProxySource : Component, IProxySource
         var canvas = area?.GetComponentInParents<Canvas>();
         if (rect == null || canvas == null || !area!.IsActive) return false;
         var local = canvas.Slot.GlobalPointToLocal(worldPoint);
-        var point = new float2(local.x, local.y);
+        var point = canvas.LocalToCanvas(local);
         return rect.LocalComputeRect.Contains(canvas.CanvasPointToLocal(area, in point));
     }
 

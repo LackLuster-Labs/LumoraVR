@@ -47,8 +47,8 @@ public static class SyncMemberEditorBuilder
             var actions = row.AttachComponent<MemberActionsRelay>();
             actions.TargetMember.Target = actionTarget;
             ui.PushStyle();
-            ui.MinWidth(20f);
-            ui.PreferredWidth(20f);
+            ui.MinWidth(InspectorUI.ActionsWidth);
+            ui.PreferredWidth(InspectorUI.ActionsWidth);
             ui.FlexibleWidth(0f);
             ui.PushStyle();
             ui.TextColor(InspectorUI.MutedColor);
@@ -59,8 +59,8 @@ public static class SyncMemberEditorBuilder
 
         // FIXED label width so the editor always gets ALL remaining row width.
         ui.PushStyle();
-        ui.MinWidth(150f);
-        ui.PreferredWidth(190f);
+        ui.MinWidth(InspectorUI.LabelMinWidth);
+        ui.PreferredWidth(InspectorUI.LabelWidth);
         ui.FlexibleWidth(0f);
         var label = ui.Text($"{name}:", InspectorUI.FontSize, driven ? InspectorUI.DrivenColor : InspectorUI.MutedColor);
         InspectorUI.FillParent(label.RectTransform!);
@@ -76,6 +76,12 @@ public static class SyncMemberEditorBuilder
             tint.Label.Target = label;
             tint.BaseColor.Value = InspectorUI.MutedColor;
         }
+
+        // Grip split on a value row: the chip pulls the MEMBER's reference card, the label pulls a VALUE card
+        // with what the field holds now, and each editor pulls its own value and takes dropped cards. Reference rows
+        // keep their own split (their ≡ pulls the target). See ValueProxySource. -xlinka
+        if (member is IField valueField && member is not ISyncRef && ValueCardConversion.CanCarry(valueField.ValueType))
+            label.Slot.AttachComponent<ValueProxySource>().Target.Target = valueField;
 
         ui.PushStyle();
         ui.FlexibleWidth(1f);
@@ -201,7 +207,7 @@ public static class SyncMemberEditorBuilder
             var fields = type.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance);
             if (fields.Length > 0 && fields.Length <= 6)
             {
-                ui.HorizontalLayout(4f);
+                ui.HorizontalLayout(InspectorUI.ColumnSpacing);
                 foreach (var structField in fields)
                 {
                     ui.PushStyle();
@@ -239,20 +245,7 @@ public static class SyncMemberEditorBuilder
     private static bool IsTextEditable(Type type)
         => type.IsPrimitive || type == typeof(string) || type == typeof(decimal) || type == typeof(Uri);
 
-    public static string NiceTypeName(Type type)
-    {
-        if (!type.IsGenericType)
-            return type.Name;
-        var name = type.Name;
-        int tick = name.IndexOf('`');
-        if (tick >= 0)
-            name = name[..tick];
-        var args = type.GetGenericArguments();
-        var argNames = new string[args.Length];
-        for (int i = 0; i < args.Length; i++)
-            argNames[i] = NiceTypeName(args[i]);
-        return $"{name}<{string.Join(", ", argNames)}>";
-    }
+    public static string NiceTypeName(Type type) => ComponentLibrary.DisplayName(type);
 }
 
 // optional hook: a component builds its own inspector body instead of the reflected rows
@@ -264,7 +257,8 @@ public interface ICustomInspector
 // reflected member rows for a worker, skips [HideInInspector]
 public static class WorkerInspectorBuilder
 {
-    public static void BuildMemberRows(Worker worker, Slot container, Slot themeContext)
+    // beforeRow runs ahead of each member's row with its name, for a header that belongs over one of them.
+    public static void BuildMemberRows(Worker worker, Slot container, Slot themeContext, Action<string>? beforeRow = null)
     {
         // [Group] on a field opens a section: cyan header + rule before that member's row. Only a
         // NAME CHANGE emits a header, so annotating just the first field of a block or every field
@@ -285,7 +279,9 @@ public static class WorkerInspectorBuilder
                 InspectorUI.SectionHeader(container, group.Name.ToUpperInvariant(), themeContext);
                 currentGroup = group.Name;
             }
-            SyncMemberEditorBuilder.Build(member, worker.GetSyncMemberName(i), fieldInfo, container, themeContext);
+            string name = worker.GetSyncMemberName(i);
+            beforeRow?.Invoke(name);
+            SyncMemberEditorBuilder.Build(member, name, fieldInfo, container, themeContext);
         }
     }
 
@@ -420,33 +416,5 @@ public static class WorkerInspectorBuilder
                 rect.OffsetMin.Value = new Lumora.Core.Math.float2(10f, 0f);
         }
         ui.PopStyle();
-    }
-}
-
-// press relay carrying a synced string argument to an IInspectorActionHandler - the duplication-
-// and network-safe replacement for closure button actions in inspector lists
-[ComponentCategory("Utility/Inspectors")]
-public class InspectorButtonRelay : Component
-{
-    public readonly Sync<string> Argument;
-    public readonly SyncRef<Component> Handler;
-
-    public InspectorButtonRelay()
-    {
-        Argument = new Sync<string>(this, "");
-        Handler = new SyncRef<Component>(this);
-    }
-
-    [SyncMethod]
-    public void OnPressed(Button button, UIInteractionContext context)
-    {
-        // Context-aware handlers get the presser's context (destructive actions confirm on THAT
-        // user's menu); plain handlers keep the simple string contract.
-        if (Handler.Target is IInspectorActionContextHandler contextHandler)
-        {
-            contextHandler.HandleInspectorAction(Argument.Value ?? "", context);
-            return;
-        }
-        (Handler.Target as IInspectorActionHandler)?.HandleInspectorAction(Argument.Value ?? "");
     }
 }

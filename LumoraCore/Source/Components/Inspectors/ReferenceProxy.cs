@@ -142,29 +142,7 @@ public class ReferenceProxy : Component, IHeldActivatable
     // material inspector, anything else opens the scene inspector rooted at the element's owning slot
     // (a component target comes pre-expanded). Both panels spawn facing the local user. -xlinka
     private bool OpenInspectorForTarget()
-    {
-        var target = Target.Target;
-        if (target == null || target.IsDestroyed || World == null)
-            return false;
-
-        var (slot, component) = ResolveOwner(target);
-
-        if (component is MaterialProvider material && !material.IsDestroyed)
-        {
-            MaterialInspectorPanel.Spawn(World, material, Slot.GlobalPosition, Slot.GlobalRotation);
-            return true;
-        }
-
-        if (slot == null || slot.IsDestroyed)
-            return false;
-
-        var panel = SceneInspectorPanel.OpenOrFocus(World, slot, Slot.GlobalPosition, mineOnly: true);
-        if (panel == null)
-            return false;
-        if (component != null && !SceneInspectorPanel.IsExpanded(panel.ExpandedComponents, component.ReferenceID.RawValue))
-            panel.ExpandedComponents.Add(component.ReferenceID.RawValue);
-        return true;
-    }
+        => ElementInspector.Open(World, Target.Target, Slot.GlobalPosition, Slot.GlobalRotation);
 
     // Spawn a grabbable in-world instance of the target asset at the card's spot, facing the user, for
     // the asset kinds this engine can represent (material orb, texture quad, mesh preview). Other asset
@@ -296,17 +274,7 @@ public class ReferenceProxy : Component, IHeldActivatable
     // Resolve the slot (and owning component, if any) an element lives on: a slot is itself, a
     // component carries its slot, a sync member walks up its parent chain to the component/slot. -xlinka
     private static (Slot? slot, Component? component) ResolveOwner(IWorldElement? element)
-    {
-        while (element != null)
-        {
-            if (element is Slot slot)
-                return (slot, null);
-            if (element is Component component)
-                return (component.Slot, component);
-            element = (element as SyncElement)?.Parent;
-        }
-        return (null, null);
-    }
+        => ElementInspector.OwnerOf(element);
 
     // Worn-avatar content: the target's owning slot sits under a live user root. A card pulled from it
     // stays inert on activate, so it cannot be used to open or duplicate someone's worn avatar. -xlinka
@@ -331,6 +299,9 @@ public class ReferenceProxy : Component, IHeldActivatable
     public static IGrabbable? Spawn(World world, IWorldElement? target, float3 position)
     {
         if (world == null || target == null || target.IsDestroyed)
+            return null;
+        // A card is a handle on the element, so nothing inside a sealed object hands one to anyone but its owner.
+        if (Security.ItemSeals.RefusesHere(ObjectBoundary.SlotOf(target), Security.SealRule.Inspect, inside: true))
             return null;
 
         var slot = world.RootSlot.AddSlot("ReferenceProxy");

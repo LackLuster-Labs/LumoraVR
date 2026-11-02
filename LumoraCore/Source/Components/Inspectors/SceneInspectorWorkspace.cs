@@ -393,17 +393,6 @@ public partial class SceneInspectorPanel
         return cap;
     }
 
-    // The one spot on a tree row that pulls the slot's card: the grab action here, or a press for when
-    // gripping is awkward.
-    private static void BuildReferenceGrip(UIBuilder ui, ReferenceProxySource source)
-    {
-        ui.PushStyle().MinWidth(20f).PreferredWidth(20f).FlexibleWidth(0f)
-            .BackgroundColor(color.Transparent).TextColor(InspectorUI.MutedColor);
-        var pull = ui.Button("≡", source.OnPullPressed);
-        ui.PopStyle();
-        source.GrabArea.Target = pull.Slot;
-    }
-
     // ---- tabs --------------------------------------------------------------------------------------
 
     // The panel's own Root/Selected/expansion fields ARE the live tab, so the active tab's component only
@@ -413,6 +402,8 @@ public partial class SceneInspectorPanel
         if (ActiveTab.Target is { IsDestroyed: false } || Root.Target == null)
             return;
         var tab = Slot.AttachComponent<InspectorTab>();
+        // A tab is where this panel is looking, which a saved copy has no use for.
+        tab.Persistent = false;
         tab.Root.Target = Root.Target;
         tab.Selected.Target = Selected.Target;
         Tabs.Add(tab);
@@ -473,6 +464,7 @@ public partial class SceneInspectorPanel
             oldest.Destroy();
         }
         var tab = Slot.AttachComponent<InspectorTab>();
+        tab.Persistent = false;
         tab.Root.Target = target;
         tab.Selected.Target = target;
         tab.HierarchyWidth.Value = HierarchyWidth.Value;
@@ -535,6 +527,7 @@ public partial class SceneInspectorPanel
     {
         if (IsDestroyed)
             return;
+        using var keep = Upkeep();
         if (Tabs.Count > 1 && ActiveTab.Target is { IsDestroyed: false } active)
             CloseTab(active);
         else
@@ -607,6 +600,7 @@ public partial class SceneInspectorPanel
         var add = InspectorUI.RelayButton(ui, this, "tab:new", "+", ToolSize);
         ui.PopStyle();
         SetChipColors(add, color.Transparent);
+        LeaveUnsaved(strip);
     }
 
     private TabChip BuildTab(UIBuilder ui, InspectorTab tab)
@@ -782,6 +776,7 @@ public partial class SceneInspectorPanel
         if ((_workspaceRefresh += delta) >= WorkspaceRefreshInterval)
         {
             _workspaceRefresh = 0f;
+            AdoptLocalParts();
             RefreshWorkspace();
             RefreshScrollControls();
             RelayoutHierarchyWidth();
@@ -795,6 +790,7 @@ public partial class SceneInspectorPanel
     {
         if (World?.IsAuthority != true || IsDestroyed)
             return;
+        using var keep = Upkeep();
         EnsureTab();
         RefreshTabs();
         ApplyHierarchyWidth();
@@ -1042,6 +1038,8 @@ public partial class SceneInspectorPanel
 
     // ---- small helpers -----------------------------------------------------------------------------
 
+    // Never waits on a favourite's first fetch: a torn-off tab is in the hand the frame it comes out, so a
+    // favourite not fetched yet gives way to the built-in this once.
     private static SceneInspectorPanel? SpawnBeside(SceneInspectorPanel origin, Slot rootTarget, float3 offset)
     {
         if (origin == null || RefuseLocked(origin.World) || RefuseProtected(rootTarget, "open beside"))
@@ -1053,10 +1051,7 @@ public partial class SceneInspectorPanel
         panelSlot.GlobalPosition = origin.Slot.GlobalPosition + origin.Slot.GlobalRotation * offset;
         panelSlot.GlobalRotation = origin.Slot.GlobalRotation;
         panelSlot.GlobalScale = origin.Slot.GlobalScale;
-        var panel = panelSlot.AttachComponent<SceneInspectorPanel>();
-        panel.Root.Target = rootTarget;
-        panel.Selected.Target = rootTarget;
-        return panel;
+        return Fill(panelSlot, rootTarget, null, wait: false);
     }
 
     // Explicit hover and press shades: a driver derives them from the base colour's own alpha, so a

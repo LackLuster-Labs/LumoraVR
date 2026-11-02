@@ -9,6 +9,7 @@ using Helio.UI.Layout;
 using Lumora.Core;
 using Lumora.Core.Components.UI;
 using Lumora.Core.Localization;
+using Lumora.Core.Networking.Session;
 using Lumora.Core.Networking.Sync;
 using Lumora.Core.Math;
 
@@ -52,6 +53,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
     private readonly SyncRef<Slot> _duplicateButton;
     private readonly SyncRef<Slot> _destroyAssetsButton;
     private readonly SyncRef<Slot> _destroyButton;
+    private readonly SyncRef<Slot> _focusButton;
 
     private bool _hierarchyDirty = true;
     private bool _componentsDirty = true;
@@ -143,6 +145,13 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         Selected = new SyncRef<Slot>(this);
         ExpandedSlots = new SyncFieldList<ulong>(this);
         ExpandedComponents = new SyncFieldList<ulong>(this);
+        // What the panel shows and where it is in it: anyone pointing at it moves through it, whoever has it in hand.
+        Root.MarkUiState();
+        Selected.MarkUiState();
+        ExpandedSlots.MarkUiState();
+        ExpandedComponents.MarkUiState();
+        ActiveTab.MarkUiState();
+        HierarchyWidth.MarkUiState();
         _hierarchyContent = new SyncRef<Slot>(this);
         _componentsContent = new SyncRef<Slot>(this);
         _selectedTitle = new SyncRef<Text>(this);
@@ -152,6 +161,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         _duplicateButton = new SyncRef<Slot>(this);
         _destroyAssetsButton = new SyncRef<Slot>(this);
         _destroyButton = new SyncRef<Slot>(this);
+        _focusButton = new SyncRef<Slot>(this);
     }
 
     // A slot under an ImmutableComponent is not editable content, so a panel aimed at one would be a
@@ -159,10 +169,28 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
     // pressed something and nothing happened, and this is the only place that can say why.
     private static bool RefuseProtected(Slot? rootTarget, string what)
     {
+        // An account's seal keeps its object shut to everyone but its owner, the host included.
+        if (Security.ItemSeals.RefusesHere(rootTarget, Security.SealRule.Inspect, inside: true))
+        {
+            Logging.Logger.Log($"SceneInspectorPanel: refusing to {what} on '{rootTarget!.SlotName.Value}' - sealed");
+            return true;
+        }
         if (!ImmutableComponent.IsProtected(rootTarget))
             return false;
         Logging.Logger.Log($"SceneInspectorPanel: refusing to {what} on '{rootTarget!.SlotName.Value}' - protected by ImmutableComponent");
         return true;
+    }
+
+    // Whose window this is, for the seal gate: the user it is pinned to, else the one who opened it. The authority
+    // builds every panel's rows, so the question cannot be put to whoever is at this machine.
+    private User? Viewer
+        => Slot?.GetComponent<PanelWorkspace>()?.PinnedUser.Target ?? Security.ItemSeals.BringerOf(Slot);
+
+    private bool SealedFromViewer(Slot? target, out string? reason)
+    {
+        reason = null;
+        return target != null && Security.ItemSeals.JudgeInside(target, Viewer?.AccountId.Value, Security.SealRule.Inspect, out reason, out _)
+            != Security.SealVerdict.Allowed;
     }
 
     // Rows are SCENE content. Local-only slots are render plumbing and never appear; a protected
@@ -173,15 +201,32 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
 
     // Social and Event worlds are view spaces: the authored world is frozen for everyone, host
     // included, and the tooling stays off with no switch to bring it back. Every inspector opens
-    // through one of the three entry points below, so this one check is the whole lock. -xlinka
+    // through the entry points below, so this one check is the whole lock. -xlinka
     private static bool RefuseLocked(World? world)
         => world == null || world.IsDestroyed || !world.AllowsWorldEditing;
 
-    public static SceneInspectorPanel? Spawn(World world, Slot rootTarget)
+    public static SceneInspectorPanel? Spawn(World world, Slot rootTarget) => Spawn(world, rootTarget, null);
+
+    // opened hears the panel once it stands: straight away, or after the first fetch of the user's favourite
+    // inspector, when the return is null. See SceneInspectorFavourite.
+    public static SceneInspectorPanel? Spawn(World world, Slot rootTarget, Action<SceneInspectorPanel>? opened)
     {
         if (RefuseLocked(world) || RefuseProtected(rootTarget, "spawn"))
             return null;
+        return Fill(PanelSlotAhead(world), rootTarget, opened);
+    }
 
+    // The built-in whatever anyone's favourite is: a panel that is part of a world's own content, set up by its
+    // template, rather than one somebody opened.
+    public static SceneInspectorPanel? SpawnBuiltIn(World world, Slot rootTarget)
+    {
+        if (RefuseLocked(world) || RefuseProtected(rootTarget, "spawn"))
+            return null;
+        return BuiltIn(PanelSlotAhead(world), rootTarget);
+    }
+
+    private static Slot PanelSlotAhead(World world)
+    {
         var head = world.LocalUser?.Root?.HeadSlot;
         var panelSlot = world.RootSlot.AddSlot("Inspector");
         panelSlot.Persistent.Value = false;
@@ -198,11 +243,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
             FaceHead(panelSlot, head);
         }
         panelSlot.LocalScale.Value = float3.One * InspectorUI.PanelScale;
-
-        var panel = panelSlot.AttachComponent<SceneInspectorPanel>();
-        panel.Root.Target = rootTarget;
-        panel.Selected.Target = rootTarget;
-        return panel;
+        return panelSlot;
     }
 
     // Yaw the panel so its readable +Z front points AT the head. Mirrors FaceLocalUser: the vector runs
@@ -226,10 +267,10 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
     //
     // mineOnly keeps to panels this machine minted. A tab writes the panel's tabs, root, selection and
     // expansion lists, and a builder may add to another user's panel but not clear its lists, so a tab
-    // opened there stops part way with that user's view already switched. A panel pinned to someone else
-    // never takes a tab at all. -xlinka
+    // opened there stops part way with that user's view already switched. A panel pinned to someone else, or
+    // in their hand, never takes a tab at all. -xlinka
     public static SceneInspectorPanel? OpenOrFocus(World world, Slot rootTarget, float3 near, float3? spawnAt = null,
-        bool mineOnly = false)
+        bool mineOnly = false, Action<SceneInspectorPanel>? opened = null)
     {
         if (RefuseLocked(world) || RefuseProtected(rootTarget, "open"))
             return null;
@@ -245,7 +286,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
             if (panel.HasTabFor(rootTarget))
             {
                 panel.OpenTab(rootTarget);
-                return panel;
+                return Opened(panel, opened);
             }
             float d = (panel.Slot.GlobalPosition - near).LengthSquared;
             if (d < nearestDist)
@@ -257,23 +298,22 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         if (nearest != null)
         {
             nearest.OpenTab(rootTarget);
-            return nearest;
+            return Opened(nearest, opened);
         }
-        return spawnAt is { } at ? SpawnAt(world, rootTarget, at) : Spawn(world, rootTarget);
+        return spawnAt is { } at ? SpawnAt(world, rootTarget, at, opened) : Spawn(world, rootTarget, opened);
     }
 
-    // Spawn() on a spot the caller picked, still turned to face the user.
-    public static SceneInspectorPanel? SpawnAt(World world, Slot root, float3 position)
-    {
-        var panel = Spawn(world, root);
-        if (panel == null)
-            return null;
-        panel.Slot.GlobalPosition = position;
-        var head = world.LocalUser?.Root?.HeadSlot;
-        if (head != null)
-            FaceHead(panel.Slot, head);
-        return panel;
-    }
+    // Spawn() on a spot the caller picked, still turned to face the user. The panel goes there whenever it
+    // stands, so a favourite that comes after its fetch lands on the same spot.
+    public static SceneInspectorPanel? SpawnAt(World world, Slot root, float3 position, Action<SceneInspectorPanel>? opened = null)
+        => Spawn(world, root, panel =>
+        {
+            panel.Slot.GlobalPosition = position;
+            var head = world.LocalUser?.Root?.HeadSlot;
+            if (head != null)
+                FaceHead(panel.Slot, head);
+            opened?.Invoke(panel);
+        });
 
     // A guest mints in its own allocation byte, the host in the world's.
     private static bool MintedHere(World world, Slot slot)
@@ -285,8 +325,10 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
             && slot.ReferenceID.GetUserByte() == local.AllocationID.Value;
     }
 
+    // Pinned to somebody else, or in their hand: a tab there would be this machine changing their things.
     private static bool PinnedToSomeoneElse(World world, SceneInspectorPanel panel)
-        => panel.Slot.GetComponent<PanelWorkspace>()?.PinnedUser.Target is { } user && !ReferenceEquals(user, world.LocalUser);
+        => panel.Slot.GetComponent<PanelWorkspace>()?.PinnedUser.Target is { } user && !ReferenceEquals(user, world.LocalUser)
+           || panel.Slot.ActiveUser is { } holder && !ReferenceEquals(holder, world.LocalUser);
 
     // Metres. A card dropped further than this from every panel opens a panel of its own rather than a
     // tab somewhere across the world.
@@ -348,6 +390,13 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         // Same for sections: a press sets the rebuild flag only on the presser's machine, and the
         // authority is the one that rebuilds.
         ExpandedComponents.OnChanged += OnExpandedComponentsChanged;
+        SessionEditConsent.Changed += OnEditConsentChanged;
+
+        // Taken out of an inventory as an object of its own, not opened as somebody's favourite: it starts on
+        // the world root. Only the machine that loaded it knows, and that one says so for everybody.
+        if (_fromSave && World != null)
+            TakeLoaded(Root.Target ?? World.RootSlot);
+        AdoptLocalParts();
     }
 
     private void OnExpandedSlotsChanged(SyncFieldList<ulong> list)
@@ -391,7 +440,8 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         var root = Root.RawTarget;
         if (root != null && (ReferenceEquals(root, slot) || root.IsDestroyed))
         {
-            World?.RunSynchronously(CloseActiveTabOrPanel);
+            if (World?.IsAuthority == true)
+                World.RunSynchronously(CloseActiveTabOrPanel);
             return;
         }
 
@@ -425,12 +475,16 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         {
             _componentWatchSlot.OnComponentAdded -= OnSelectedComponentsChanged;
             _componentWatchSlot.OnComponentRemoved -= OnSelectedComponentsChanged;
+            _componentWatchSlot.ParentChanged -= OnSelectedMoved;
+            _componentWatchSlot.ActiveChanged -= OnSelectedMoved;
         }
         _componentWatchSlot = selected;
         if (selected != null)
         {
             selected.OnComponentAdded += OnSelectedComponentsChanged;
             selected.OnComponentRemoved += OnSelectedComponentsChanged;
+            selected.ParentChanged += OnSelectedMoved;
+            selected.ActiveChanged += OnSelectedMoved;
         }
     }
 
@@ -438,6 +492,14 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
     {
         _componentsDirty = true;
         MarkChangeDirty();
+    }
+
+    // An undoable delete parks the slot, or one above it, in the graveyard instead of destroying it, so
+    // OnWorldSlotRemoved never hears; the selection hears the move. -xlinka
+    private void OnSelectedMoved(Slot slot)
+    {
+        if (UndoGraveyard.Holds(slot))
+            MarkChangeDirty();
     }
 
     // Any Helio UI panel (this inspector, another inspector, a material panel, a reference card, the
@@ -492,6 +554,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         actionsUi.PushStyle().FlexibleWidth(1f);
         actionsUi.Empty("Spacer");
         actionsUi.PopStyle();
+        _focusButton.Target = InspectorUI.RelayButton(actionsUi, this, "focus", "Focus", 68f).Slot;
         actionsUi.PushStyle().TextColor(InspectorUI.DangerColor);
         _destroyAssetsButton.Target = InspectorUI.RelayButton(actionsUi, this, "destroyassets", "Destroy Keep Assets", 160f).Slot;
         _destroyButton.Target = InspectorUI.RelayButton(actionsUi, this, "destroy", "Destroy", 76f).Slot;
@@ -592,11 +655,25 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         return content.Slot;
     }
 
+    // The authority keeps every panel's rows, the ones in somebody's hand or pinned to them too. Whatever it
+    // writes for that stays inside this panel; see DataModelPermissions.EnterUiUpkeep.
+    private Lumora.Warden.PermissionEngine.UpkeepScope? Upkeep() => World?.DataModelPermissions?.EnterUiUpkeep(this);
+
     public override void OnChanges()
     {
         base.OnChanges();
         if (World?.IsAuthority != true)
             return;
+        using var keep = Upkeep();
+
+        // Parked by an undoable delete is gone the same as destroyed: the tab closes, the selection falls back.
+        if (Root.Target is { } parkedRoot && UndoGraveyard.Holds(parkedRoot))
+        {
+            World.RunSynchronously(CloseActiveTabOrPanel);
+            return;
+        }
+        if (Selected.Target is { } parked && UndoGraveyard.Holds(parked))
+            Selected.Target = Root.Target;
 
         bool tabChanged = ActiveTab.GetWasChangedAndClear();
         bool selectionChanged = Selected.GetWasChangedAndClear();
@@ -612,7 +689,10 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
                 SetRef(selector.TargetSlot, Selected.Target);
         }
         if (Root.GetWasChangedAndClear())
+        {
             _hierarchyDirty = true;
+            UpdateHeaderActions(Selected.Target);
+        }
 
         // A DIFFERENT tree (root change, "Up") is the only full rebuild left. Everything else below
         // reconciles the rows that actually moved.
@@ -647,6 +727,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
             RebuildComponents();
         }
         RefreshWorkspace();
+        LeaveRowsUnsaved();
     }
 
     // Full rebuild: only for a tree rooted somewhere else, where nothing on screen can be reused.
@@ -674,6 +755,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         _rootNameField = root.SlotName;
         _rootNameHandler = value =>
         {
+            using var keep = Upkeep();
             var title = _rootTitle.Target;
             if (title != null && !title.IsDestroyed)
                 title.Content.Value = $"Root: {value}";
@@ -797,6 +879,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
 
     public override void OnDestroy()
     {
+        SessionEditConsent.Changed -= OnEditConsentChanged;
         if (_subscribedWorld != null)
         {
             _subscribedWorld.OnSlotAdded -= OnWorldSlotAdded;
@@ -813,6 +896,8 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         {
             _componentWatchSlot.OnComponentAdded -= OnSelectedComponentsChanged;
             _componentWatchSlot.OnComponentRemoved -= OnSelectedComponentsChanged;
+            _componentWatchSlot.ParentChanged -= OnSelectedMoved;
+            _componentWatchSlot.ActiveChanged -= OnSelectedMoved;
             _componentWatchSlot = null;
         }
         base.OnDestroy();
@@ -1022,7 +1107,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         var target = row.Target;
         if (!row.Expanded || target == null || target.IsDestroyed)
             return;
-        if (!HasVisibleChildren(target))
+        if (!HasVisibleChildren(target) || SealedFromViewer(target, out _))
         {
             // Expanded over nothing: hold no container at all, or the node layout's spacing opens a
             // gap under the row that the flat list never had.
@@ -1226,7 +1311,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         var branch = InspectorUI.RelayButton(ui, this, $"branch:{row.TargetId}", "", 24f);
         row.BranchLabel = branch.Slot.GetComponentInChildren<Text>();
         ui.PopStyle();
-        BuildReferenceGrip(ui, rowSource);
+        rowSource.GrabArea.Target = nameButton.Slot;
 
         ui.PushStyle();
         ui.MinWidth(28f);
@@ -1241,6 +1326,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
 
         ApplyRowTint(row, ancestorsPersistent);
         SubscribeRow(row);
+        LockControls(rowSlot, PersonLockTip(target));
     }
 
     // Persistence tints the label (bright orange = this slot opted out, muted orange = an ancestor
@@ -1308,10 +1394,19 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         row.ChildAdded = (_, _) => QueueChildSync(row.TargetId);
         row.ChildRemoved = (_, _) => QueueChildSync(row.TargetId);
         row.OrderChanged = _ => QueueChildSync(row.Parent?.TargetId ?? 0);
-        row.ActiveChanged = _ => RefreshRowTint(row);
-        row.PersistentChanged = _ => RefreshRowTintTree(row);
+        row.ActiveChanged = _ =>
+        {
+            using var keep = Upkeep();
+            RefreshRowTint(row);
+        };
+        row.PersistentChanged = _ =>
+        {
+            using var keep = Upkeep();
+            RefreshRowTintTree(row);
+        };
         row.NameChanged = value =>
         {
+            using var keep = Upkeep();
             if (row.Label != null && !row.Label.IsDestroyed)
                 row.Label.Content.Value = TreeName(value);
         };
@@ -1461,6 +1556,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
             _titleNameField = selected.SlotName;
             _titleNameHandler = value =>
             {
+                using var keep = Upkeep();
                 var titleText = _selectedTitle.Target;
                 if (titleText != null && !titleText.IsDestroyed)
                     titleText.Content.Value = value ?? "Slot";
@@ -1472,17 +1568,272 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         if (selected == null || selected.IsDestroyed)
             return;
 
+        if (SealedFromViewer(selected, out var sealedReason))
+        {
+            InspectorUI.FixedRow(container, "Sealed", InspectorUI.RowHeight * 2f, out var sealedUi, Slot);
+            sealedUi.PushStyle();
+            sealedUi.FlexibleWidth(1f);
+            var owner = Security.ItemSeals.SealOf(selected)?.Owner;
+            var note = sealedUi.Text(owner != null
+                    ? Security.ProtectionLocale.InspectorHidden(Security.ItemSeals.NameOf(World, owner)).Resolve()
+                    : sealedReason ?? string.Empty,
+                InspectorUI.FontSize, InspectorUI.MutedColor);
+            InspectorUI.FillParent(note.RectTransform!);
+            note.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
+            note.VerticalAlignment.Value = TextVerticalAlignment.Middle;
+            sealedUi.PopStyle();
+            return;
+        }
+
+        BuildConsentRows(container, selected);
         BuildSlotSection(container, selected);
 
         _builtOrder = OrderSignature(selected);
-        foreach (var component in OrderedComponents(selected))
+        foreach (var component in InspectedComponents(selected))
+            BuildComponentSection(container, component);
+        ApplyPersonLock();
+    }
+
+    // Part of somebody else: what the viewer may do about it, and while nothing is asked yet, the way to ask. The
+    // fields below stay as they are and the gate refuses what they would write, so this line is what says why.
+    // -xlinka
+    private void BuildConsentRows(Slot container, Slot selected)
+    {
+        var viewer = Viewer;
+        var person = SessionEditConsent.PersonOf(selected, viewer);
+        if (person == null || viewer == null)
+            return;
+
+        string name = SessionPermissionsPanel.DisplayName(person);
+        var state = SessionEditConsent.StateOf(viewer, person);
+        long left = SessionEditConsent.SecondsLeft(viewer, person);
+        bool rootItself = ReferenceEquals(selected, person.Root?.Slot);
+        LocaleText line;
+        color tint = InspectorUI.MutedColor;
+        if (state == EditAskState.Granted)
+        {
+            line = rootItself ? EditConsentLocale.InspectorRoot(name) : EditConsentLocale.InspectorGranted(name);
+            tint = rootItself ? InspectorUI.MutedColor : DashTheme.Positive;
+        }
+        else
+        {
+            line = state switch
+            {
+                EditAskState.Pending => EditConsentLocale.InspectorPending(name),
+                EditAskState.Denied => EditConsentLocale.InspectorDenied(name, EditConsentLocale.Clock(left)),
+                EditAskState.Waiting => EditConsentLocale.InspectorWaiting(name, EditConsentLocale.Clock(left)),
+                _ => EditConsentLocale.InspectorLocked(name),
+            };
+            if (state == EditAskState.Denied)
+                tint = DashTheme.Warning;
+        }
+
+        InspectorUI.FixedRow(container, "Consent", InspectorUI.RowHeight, out var noteUi, Slot);
+        noteUi.PushStyle();
+        noteUi.FlexibleWidth(1f);
+        var note = noteUi.Text(line.Resolve(), InspectorUI.FontSize, tint);
+        InspectorUI.FillParent(note.RectTransform!);
+        note.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
+        note.VerticalAlignment.Value = TextVerticalAlignment.Middle;
+        noteUi.PopStyle();
+
+        if (state == EditAskState.None)
+        {
+            InspectorUI.FixedRow(container, "ConsentAsk", InspectorUI.RowHeight, out var askUi, Slot);
+            InspectorUI.RelayButton(askUi, this, "askedit", EditConsentLocale.InspectorAsk(name).Resolve(), 0f);
+        }
+        // A no or a wait runs out with nothing on either record moving: look again then.
+        if (left > 0)
+            World?.RunInSeconds(left + 1, () =>
+            {
+                if (IsDestroyed || !ReferenceEquals(Selected.Target, selected))
+                    return;
+                _componentsDirty = true;
+                RunApplyChangesSafe();
+            });
+    }
+
+    // READ-ONLY FOR SOMEBODY ELSE'S THINGS
+    //
+    // Without the person's yes every control that would change what is shown goes grey and dead, with the reason as
+    // its tip: the member rows and their buttons, the component headers' Dup, x and gizmo, the slot actions, + Child,
+    // + Parent, Duplicate, Destroy, Attach Component, a row's active box. Looking stays live: folding sections and
+    // rows, selecting, Focus, Up, Jump To and the ask itself. With the yes the same controls come back, and they go
+    // again when it is taken back. Only what this pass turned off is ever turned back on. -xlinka
+    private readonly HashSet<InteractionElement> _personLocked = new();
+    // The words on a locked control, faded, and the colour each had: the stock disabled fill is a light grey that
+    // reads louder on this dark panel than the live control did.
+    private readonly Dictionary<Text, color> _fadedText = new();
+
+    private static readonly string[] SelectionActions = { "addchild", "insertparent", "duplicate", "destroyassets", "destroy", "attach" };
+
+    // The tip for every control that would change slot for the viewer, or null when nothing stands in the way.
+    private string? PersonLockTip(Slot? slot)
+    {
+        var viewer = Viewer;
+        var person = SessionEditConsent.PersonOf(slot, viewer);
+        if (person == null || viewer == null || !SessionEditConsent.Refuses(slot, viewer))
+            return null;
+        return EditConsentLocale.ReadOnlyTip(SessionPermissionsPanel.DisplayName(person)).Resolve();
+    }
+
+    private void ApplyPersonLock()
+    {
+        if (World?.IsAuthority != true)
+            return;
+
+        // What was turned off and is no longer anybody else's comes back first.
+        foreach (var element in new List<InteractionElement>(_personLocked))
+        {
+            if (element.IsDestroyed || element.Slot == null)
+                _personLocked.Remove(element);
+        }
+        foreach (var text in new List<Text>(_fadedText.Keys))
+        {
+            if (text.IsDestroyed)
+                _fadedText.Remove(text);
+        }
+
+        var selected = Selected.Target;
+        string? tip = PersonLockTip(selected);
+        if (_componentsContent.Target is { IsDestroyed: false } pane)
+            LockControls(pane, tip);
+        foreach (var relay in Slot.GetComponentsInChildren<InspectorButtonRelay>())
+        {
+            if (Array.IndexOf(SelectionActions, relay.Argument.Value ?? "") >= 0 && relay.Slot.GetComponent<InteractionElement>() is { } button)
+                SetLocked(button, tip);
+        }
+        foreach (var row in _rows.Values)
+        {
+            if (row.RowSlot is { IsDestroyed: false } rowSlot && row.Target is { IsDestroyed: false } target)
+                LockControls(rowSlot, PersonLockTip(target));
+        }
+    }
+
+    private void LockControls(Slot root, string? tip)
+    {
+        if (World?.IsAuthority != true)
+            return;
+        foreach (var element in root.GetComponentsInChildren<InteractionElement>())
+        {
+            if (IsViewOnly(element))
+                continue;
+            SetLocked(element, tip);
+        }
+    }
+
+    private void SetLocked(InteractionElement element, string? tip)
+    {
+        if (tip != null)
+        {
+            if (!element.Interactable.Value && !_personLocked.Contains(element))
+                return;
+            if (element.Interactable.Value)
+                element.Interactable.Value = false;
+            if (element.Tip.Value != tip)
+                element.Tip.Value = tip;
+            if (_personLocked.Add(element))
+                Fade(element, true);
+        }
+        else if (_personLocked.Remove(element))
+        {
+            element.Interactable.Value = true;
+            element.Tip.Value = string.Empty;
+            Fade(element, false);
+        }
+    }
+
+    private void Fade(InteractionElement element, bool faded)
+    {
+        var slot = element.Slot;
+        foreach (var driver in slot.GetComponentsInChildren<ColorDriver>())
+        {
+            if (driver.Interaction.Target is { } owner && !ReferenceEquals(owner, element))
+                continue;
+            var normal = driver.NormalColor.Value;
+            var dim = color.Lerp(normal, InspectorUI.PaneColor, 0.6f) with { a = normal.a };
+            if (faded && !driver.DisabledColor.IsDriven && driver.DisabledColor.Value != dim)
+                driver.DisabledColor.Value = dim;
+        }
+        foreach (var text in slot.GetComponentsInChildren<Text>())
+        {
+            if (text.Color.IsDriven)
+                continue;
+            if (faded && !_fadedText.ContainsKey(text))
+            {
+                _fadedText[text] = text.Color.Value;
+                text.Color.Value = color.Lerp(text.Color.Value, InspectorUI.PaneColor, 0.55f) with { a = text.Color.Value.a };
+            }
+            else if (!faded && _fadedText.Remove(text, out var was))
+            {
+                text.Color.Value = was;
+            }
+        }
+    }
+
+    // Controls that only look: folding, selecting, moving the view, the person line and its ask.
+    private static bool IsViewOnly(InteractionElement element)
+    {
+        var slot = element.Slot;
+        for (var at = slot; at != null; at = at.Parent)
+        {
+            if (at.Name.Value is "Consent" or "ConsentAsk")
+                return true;
+            if (at.GetComponent<SceneInspectorPanel>() != null)
+                break;
+        }
+        if (slot?.GetComponent<InspectorButtonRelay>() is not { } relay)
+            return false;
+        var argument = relay.Argument.Value ?? "";
+        return argument is "expandall" or "collapseall" or "jumpto" or "focus" or "rootup" or "askedit"
+            || argument.StartsWith("comp:", StringComparison.Ordinal)
+            || argument.StartsWith("expand:", StringComparison.Ordinal)
+            || argument.StartsWith("select:", StringComparison.Ordinal)
+            || argument.StartsWith("branch:", StringComparison.Ordinal);
+    }
+
+    // Either side of an ask moved in this world: the person line is rebuilt when it is about them or the viewer.
+    private void OnEditConsentChanged(World world, User who)
+    {
+        if (IsDestroyed || !ReferenceEquals(world, World) || World?.IsAuthority != true)
+            return;
+        var viewer = Viewer;
+        var person = SessionEditConsent.PersonOf(Selected.Target, viewer);
+        if (person == null || (!ReferenceEquals(who, person) && !ReferenceEquals(who, viewer)))
+            return;
+        _componentsDirty = true;
+        RunApplyChangesSafe();
+    }
+
+    // The components that get a section, in the order they show.
+    private IEnumerable<Component> InspectedComponents(Slot slot)
+    {
+        foreach (var component in OrderedComponents(slot))
         {
             if (component == null || component.IsDestroyed)
                 continue;
             // Class-level opt-out: pure render plumbing renders no section at all.
             if (component.GetType().GetCustomAttribute<HideInInspectorAttribute>() != null)
                 continue;
-            BuildComponentSection(container, component);
+            yield return component;
+        }
+    }
+
+    private bool HasInspectedComponents(Slot slot)
+    {
+        foreach (var _ in InspectedComponents(slot))
+            return true;
+        return false;
+    }
+
+    // Every section the slot shows, opened or closed in one go. Other slots keep theirs.
+    private void SetComponentsExpanded(Slot slot, bool expanded)
+    {
+        foreach (var component in InspectedComponents(slot))
+        {
+            ulong id = component.ReferenceID.RawValue;
+            if (IsExpanded(ExpandedComponents, id) != expanded)
+                ToggleExpanded(ExpandedComponents, id);
         }
     }
 
@@ -1490,7 +1841,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
     // is not a thing any of them can be done to, and an offer that always refuses reads as a bug. The
     // relay handlers refuse it as well, so a peer driving the synced Selected field at a button that is
     // hidden on their own screen gets nothing. + Child and Attach Component stay: building ON the root
-    // is ordinary work. -xlinka
+    // is ordinary work. Focus is gone while the selection already is the hierarchy's root. -xlinka
     private void UpdateHeaderActions(Slot? selected)
     {
         bool offer = selected != null && !selected.IsDestroyed && !selected.IsRootSlot;
@@ -1498,6 +1849,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         SetActionVisible(_duplicateButton.Target, offer);
         SetActionVisible(_destroyAssetsButton.Target, offer);
         SetActionVisible(_destroyButton.Target, offer);
+        SetActionVisible(_focusButton.Target, selected != null && !selected.IsDestroyed && !ReferenceEquals(selected, Root.Target));
     }
 
     private static void SetActionVisible(Slot? button, bool visible)
@@ -1509,38 +1861,23 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
     }
 
     // Editable rows for the slot itself (Name, Parent, Tag, Active, Persistent, Position, Rotation,
-    // Scale, OrderOffset), then the axis legend and the transform/parenting actions.
+    // Scale, OrderOffset) with the axis legend heading the transform rows, then the transform and
+    // parenting actions.
     private void BuildSlotSection(Slot container, Slot selected)
     {
-        WorkerInspectorBuilder.BuildMemberRows(selected, container, Slot);
-
-        // Column legend for the three-wide vector editors above: X red, Y green, Z blue. The spacer
-        // matches the fixed chip + label width of member rows so the letters sit over the columns.
-        InspectorUI.FixedRow(container, "AxisLegend", 24f, out var legendUi, Slot);
-        legendUi.PushStyle();
-        legendUi.MinWidth(210f);
-        legendUi.PreferredWidth(210f);
-        legendUi.FlexibleWidth(0f);
-        legendUi.Empty("Spacer");
-        legendUi.PopStyle();
-        legendUi.PushStyle();
-        legendUi.FlexibleWidth(1f);
-        var axes = legendUi.Next("Axes");
-        var axesLayout = axes.AttachComponent<HorizontalLayout>();
-        axesLayout.Spacing.Value = 4f;
-        axesLayout.ForceExpandHeight.Value = true;
-        legendUi.NestInto(axes);
-        AddAxisLabel(legendUi, "X", InspectorUI.AxisXColor);
-        AddAxisLabel(legendUi, "Y", InspectorUI.AxisYColor);
-        AddAxisLabel(legendUi, "Z", InspectorUI.AxisZColor);
-        legendUi.NestOut();
-        legendUi.PopStyle();
+        WorkerInspectorBuilder.BuildMemberRows(selected, container, Slot, name =>
+        {
+            if (name == "Position")
+                BuildAxisLegend(container);
+        });
 
         InspectorUI.FixedRow(container, "ResetRow", 34f, out var resetUi, Slot);
-        AddRowLabel(resetUi, "Reset:");
+        InspectorUI.MemberLead(resetUi, "Reset:");
+        InspectorUI.Columns(resetUi, "Buttons");
         InspectorUI.RelayButton(resetUi, this, "resetpos", "Position", 0f);
         InspectorUI.RelayButton(resetUi, this, "resetrot", "Rotation", 0f);
         InspectorUI.RelayButton(resetUi, this, "resetscale", "Scale", 0f);
+        resetUi.NestOut();
 
         InspectorUI.FixedRow(container, "ResetAllRow", InspectorUI.RowHeight, out var resetAllUi, Slot);
         InspectorUI.RelayButton(resetAllUi, this, "resetall", "Reset All", 0f);
@@ -1556,9 +1893,34 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         InspectorUI.RelayButton(focusUi, this, "bringto", "Bring To", 0f);
 
         InspectorUI.FixedRow(container, "ParentRow", 34f, out var parentUi, Slot);
-        AddRowLabel(parentUi, "Parent under:");
+        InspectorUI.MemberLead(parentUi, "Parent under:");
+        InspectorUI.Columns(parentUi, "Buttons");
         InspectorUI.RelayButton(parentUi, this, "parentuser", "Local User Space", 0f);
         InspectorUI.RelayButton(parentUi, this, "parentroot", "World Root", 0f);
+        parentUi.NestOut();
+
+        // Last, right above the sections it opens and closes.
+        if (!HasInspectedComponents(selected))
+            return;
+        InspectorUI.FixedRow(container, "ComponentsRow", 34f, out var componentsUi, Slot);
+        InspectorUI.MemberLead(componentsUi, "Components:");
+        InspectorUI.Columns(componentsUi, "Buttons");
+        InspectorUI.RelayButton(componentsUi, this, "expandall", "Expand All", 0f);
+        InspectorUI.RelayButton(componentsUi, this, "collapseall", "Collapse All", 0f);
+        componentsUi.NestOut();
+    }
+
+    // X red, Y green, Z blue, each centred over its column of the vector rows below it: built from the same
+    // lead and columns as a member row, so the letters stay over the fields at any panel width.
+    private void BuildAxisLegend(Slot container)
+    {
+        InspectorUI.FixedRow(container, "AxisLegend", 24f, out var ui, Slot);
+        InspectorUI.MemberLead(ui);
+        InspectorUI.Columns(ui, "Axes");
+        AddAxisLabel(ui, "X", InspectorUI.AxisXColor);
+        AddAxisLabel(ui, "Y", InspectorUI.AxisYColor);
+        AddAxisLabel(ui, "Z", InspectorUI.AxisZColor);
+        ui.NestOut();
     }
 
     private static void AddAxisLabel(UIBuilder ui, string label, color tint)
@@ -1568,19 +1930,6 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
         var text = ui.Text(label, InspectorUI.FontSize, tint);
         InspectorUI.FillParent(text.RectTransform!);
         text.HorizontalAlignment.Value = TextHorizontalAlignment.Center;
-        text.VerticalAlignment.Value = TextVerticalAlignment.Middle;
-        ui.PopStyle();
-    }
-
-    private static void AddRowLabel(UIBuilder ui, string label)
-    {
-        ui.PushStyle();
-        ui.MinWidth(130f);
-        ui.PreferredWidth(130f);
-        ui.FlexibleWidth(0f);
-        var text = ui.Text(label, InspectorUI.FontSize, InspectorUI.MutedColor);
-        InspectorUI.FillParent(text.RectTransform!);
-        text.HorizontalAlignment.Value = TextHorizontalAlignment.Left;
         text.VerticalAlignment.Value = TextVerticalAlignment.Middle;
         ui.PopStyle();
     }
@@ -1855,11 +2204,32 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
 
         switch (argument)
         {
+            case "askedit":
+            {
+                // On the presser's own machine, asked of the person the selection is part of. Nothing else moves;
+                // the line changes once the ask is on the presser's record.
+                var world = World;
+                var person = SessionEditConsent.PersonOf(Selected.Target, world?.LocalUser);
+                if (world != null && person != null)
+                    SessionEditConsent.Ask(world, person);
+                return;
+            }
             case "rootup":
             {
                 var root = Root.Target;
                 if (root == null || root.IsRootSlot || root.Parent == null) return;
                 Root.Target = root.Parent;
+                break;
+            }
+            case "focus":
+            {
+                // The selected slot becomes this tab's hierarchy root, the way a new tab would open on it,
+                // without the tab. ↑ Up walks back out.
+                var selected = Selected.Target;
+                if (selected == null || selected.IsDestroyed || ReferenceEquals(selected, Root.Target)
+                    || RefuseProtected(selected, "focus"))
+                    return;
+                Root.Target = selected;
                 break;
             }
             case "addchild":
@@ -1887,6 +2257,7 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
             {
                 var selected = Selected.Target;
                 if (selected == null || selected == Root.Target || selected.IsRootSlot) return;
+                if (Security.ItemSeals.RefusesHere(selected, Security.SealRule.SaveCopy)) return;
                 var copy = selected.Duplicate();
                 if (copy == null) return;
                 RecordUndo(SlotExistenceUndoBatch.Created(World, new[] { copy }, UndoLocale.Duplicate));
@@ -1925,6 +2296,16 @@ public partial class SceneInspectorPanel : Component, IInspectorActionHandler, I
                     selected.DestroyPreservingAssets();
                 Selected.Target = parent;
                 break;
+            }
+            case "expandall":
+            case "collapseall":
+            {
+                var selected = Selected.Target;
+                if (selected == null || selected.IsDestroyed) return;
+                SetComponentsExpanded(selected, argument == "expandall");
+                _componentsDirty = true;
+                RunApplyChangesSafe();
+                return;
             }
             case "resetpos":
             {

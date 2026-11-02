@@ -251,6 +251,11 @@ public class RefMemberEditor : MemberEditor, IProxyReceiver, IProxySource
                 continue;
             var proxy = component.Slot.GetComponent<ReferenceProxy>();
             object? before = Field?.BoxedValue;
+            if (proxy == null && component.Slot.GetComponent<ValueProxy>() != null)
+            {
+                refusal ??= ValueCardConversion.NotReference.Resolve();
+                continue;
+            }
             if (proxy == null)
             {
                 // A held object fills an asset field with what it carries and stays in the hand: an orb its
