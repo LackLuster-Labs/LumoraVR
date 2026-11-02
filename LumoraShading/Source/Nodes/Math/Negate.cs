@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Negate")]
+[Node("Math/Negate", Description = "Reverses the sign of a value.")]
 public sealed class Negate : ShaderNode
 {
     [Glsl("-{value}")]

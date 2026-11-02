@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // The part after the point: value minus its floor.
-[Node("Math/Fraction")]
+[Node("Math/Fraction", Description = "The part after the point: value minus its floor.")]
 public sealed class Fraction : ShaderNode
 {
     [Glsl("fract({value})")]

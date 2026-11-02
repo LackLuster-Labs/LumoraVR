@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Lays detail normal b over base normal a, both tangent space.
-[Node("Vector/Normal Blend")]
+[Node("Math/Vectors/Normal Blend", Description = "Lays detail normal b over base normal a, both tangent space.")]
 public sealed class NormalBlend : ShaderNode
 {
     [Glsl("lm_normal_blend({a}, {b})", Needs = new[] { "lm_normal_blend" })]

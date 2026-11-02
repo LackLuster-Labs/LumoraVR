@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // A negative base gives no usable result, as on any GPU.
-[Node("Math/Power")]
+[Node("Math/Power", Description = "Raises the first value to the power of the second. Negative bases can produce an undefined shader result.")]
 public sealed class Power : ShaderNode
 {
     [Glsl("pow({base}, {exponent})")]

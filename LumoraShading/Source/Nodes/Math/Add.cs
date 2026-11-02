@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Add")]
+[Node("Math/Add", Description = "Adds the input values together.")]
 public sealed class Add : ShaderNode
 {
     [Glsl("{a} + {b}")]

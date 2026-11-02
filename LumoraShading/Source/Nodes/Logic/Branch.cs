@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // ifTrue where condition holds, ifFalse where it does not.
-[Node("Logic/Branch")]
+[Node("Logic/Branch", Description = "IfTrue where condition holds, ifFalse where it does not.")]
 public sealed class Branch : ShaderNode
 {
     [Glsl("({condition} ? {ifTrue} : {ifFalse})")]

@@ -8,7 +8,7 @@ namespace Lumora.Shading;
 
 // A color the material exposes by name, picked like any other color on the material. White until one is
 // typed in. Typed on the node, never wired.
-[Node("Properties/Color Property")]
+[Node("Properties/Color Property", Description = "A color the material exposes by name, picked like any other color on the material.")]
 public sealed class ColorProperty : ShaderNode
 {
     [return: Port("color")]

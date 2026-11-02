@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Clamp")]
+[Node("Math/Clamp", Description = "Keeps a value within the given minimum and maximum.")]
 public sealed class Clamp : ShaderNode
 {
     [Glsl("clamp({value}, {min}, {max})")]

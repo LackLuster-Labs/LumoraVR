@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Radians.
-[Node("Math/Trigonometry/Sine")]
+[Node("Math/Trigonometry/Sine", Description = "Returns the sine of an angle in radians.")]
 public sealed class Sine : ShaderNode
 {
     [Glsl("sin({value})")]

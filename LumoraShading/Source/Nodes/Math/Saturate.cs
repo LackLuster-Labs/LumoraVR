@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Clamps to 0 to 1.
-[Node("Math/Saturate")]
+[Node("Math/Saturate", Description = "Clamps to 0 to 1.")]
 public sealed class Saturate : ShaderNode
 {
     [Glsl("clamp({value}, 0.0, 1.0)")]

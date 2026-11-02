@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Channel/Combine XYZ")]
+[Node("Math/Vectors/Combine XYZ", Description = "Combines X, Y and Z values into a vector.")]
 public sealed class CombineXYZ : ShaderNode
 {
     [Glsl("vec3({x}, {y}, {z})")]

@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // One layer of gradient noise, 0 to 1.
-[Node("Procedural/Gradient Noise")]
+[Node("Procedural/Gradient Noise", Description = "One layer of gradient noise, 0 to 1.")]
 public sealed class GradientNoise : ShaderNode
 {
     [Glsl("lm_perlin({uv} * {scale})", Needs = new[] { "lm_perlin" })]

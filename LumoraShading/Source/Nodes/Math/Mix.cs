@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // A at factor 0, b at 1, in between along the way; past the ends it keeps going.
-[Node("Math/Mix")]
+[Node("Math/Interpolation/Mix", Description = "A at factor 0, b at 1, in between along the way; past the ends it keeps going.")]
 public sealed class Mix : ShaderNode
 {
     [Glsl("mix({a}, {b}, {factor})")]

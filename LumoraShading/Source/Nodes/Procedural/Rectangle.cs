@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // A rectangle filling width and height of the UV square, soft by one pixel. Per pixel only.
-[Node("Procedural/Shapes/Rectangle")]
+[Node("Procedural/Shapes/Rectangle", Description = "A rectangle filling width and height of the UV square, soft by one pixel.")]
 public sealed class Rectangle : ShaderNode
 {
     [Glsl("lm_rectangle({uv}, {width}, {height})", Needs = new[] { "lm_rectangle" }, Stages = ShaderStage.Fragment)]

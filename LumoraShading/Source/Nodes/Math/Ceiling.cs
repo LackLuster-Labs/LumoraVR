@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Ceiling")]
+[Node("Math/Ceiling", Description = "Rounds upward to the next whole number.")]
 public sealed class Ceiling : ShaderNode
 {
     [Glsl("ceil({value})")]

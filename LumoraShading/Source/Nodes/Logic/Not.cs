@@ -5,7 +5,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Logic/Not")]
+[Node("Logic/Not", Description = "Returns the opposite boolean value.")]
 public sealed class Not : ShaderNode
 {
     [Glsl("(!{value})")]

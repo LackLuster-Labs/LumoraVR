@@ -5,7 +5,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Input/Value")]
+[Node("Input/Value", Description = "Provides a constant number for the shader.")]
 public sealed class Value : ShaderNode
 {
     [Glsl("{value}")]

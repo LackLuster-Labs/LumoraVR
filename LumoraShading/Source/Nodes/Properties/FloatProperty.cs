@@ -7,7 +7,7 @@ namespace Lumora.Shading;
 
 // A number the material exposes by name, so it can be changed on the material without a recompile.
 // With min below max it gets a slider over that range. Its values are typed on the node, never wired.
-[Node("Properties/Float Property")]
+[Node("Properties/Float Property", Description = "A number the material exposes by name, so it can be changed on the material without a recompile.")]
 public sealed class FloatProperty : ShaderNode
 {
     public static float Run([Setting] string name = "Amount", [Setting] float value = 0f,

@@ -8,7 +8,7 @@ namespace Lumora.Shading;
 
 // 0 where the surface faces the eye, toward 1 at its edges. Normal and view must be in one
 // space; by default both are the surface's own. Per pixel only.
-[Node("Input/Fresnel")]
+[Node("Input/Fresnel", Description = "0 where the surface faces the eye, toward 1 at its edges.")]
 public sealed class Fresnel : ShaderNode
 {
     [Glsl("lm_fresnel({normal}, {view}, {power})", Needs = new[] { "lm_fresnel" }, Stages = ShaderStage.Fragment)]

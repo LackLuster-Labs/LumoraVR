@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Distance from center across, angle around it down.
-[Node("UV/Polar Coordinates")]
+[Node("UV/Polar Coordinates", Description = "Distance from center across, angle around it down.")]
 public sealed class PolarCoordinates : ShaderNode
 {
     [Glsl("lm_polar({uv}, {center}, {radialScale}, {lengthScale})", Needs = new[] { "lm_polar" })]

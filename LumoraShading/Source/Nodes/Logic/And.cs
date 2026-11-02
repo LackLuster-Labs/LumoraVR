@@ -5,7 +5,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Logic/And")]
+[Node("Logic/And", Description = "Returns true when both inputs are true.")]
 public sealed class And : ShaderNode
 {
     [Glsl("({a} && {b})")]

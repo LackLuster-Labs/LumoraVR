@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // The viewing eye, in world space.
-[Node("Input/Camera Position")]
+[Node("Input/Camera Position", Description = "The viewing eye, in world space.")]
 public sealed class CameraPosition : ShaderNode
 {
     [Glsl("CAMERA_POSITION_WORLD")]

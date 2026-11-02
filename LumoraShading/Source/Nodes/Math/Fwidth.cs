@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // How much value changes over one pixel, both ways added. Per pixel only.
-[Node("Math/Derivative/Fwidth")]
+[Node("Math/Derivatives/Fwidth", Description = "How much value changes over one pixel, both ways added.")]
 public sealed class Fwidth : ShaderNode
 {
     [Glsl("fwidth({value})", Stages = ShaderStage.Fragment)]

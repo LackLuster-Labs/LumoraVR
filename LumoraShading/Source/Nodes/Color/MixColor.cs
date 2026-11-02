@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Puts b over a the way mode says, faded in by factor. The result keeps a's alpha.
-[Node("Color/Mix Color")]
+[Node("Color/Mix Color", Description = "Puts b over a the way mode says, faded in by factor.")]
 public sealed class MixColor : ShaderNode
 {
     [return: Port("color")]

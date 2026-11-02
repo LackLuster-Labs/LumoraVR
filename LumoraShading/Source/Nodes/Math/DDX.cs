@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // How fast value changes from one pixel to the next across the screen. Per pixel only.
-[Node("Math/Derivative/DDX")]
+[Node("Math/Derivatives/DDX", Description = "How fast value changes from one pixel to the next across the screen.")]
 public sealed class DDX : ShaderNode
 {
     [Glsl("dFdx({value})", Stages = ShaderStage.Fragment)]

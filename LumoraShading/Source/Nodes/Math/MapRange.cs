@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Moves value from one range to another, unclamped.
-[Node("Math/Map Range")]
+[Node("Math/Interpolation/Map Range", Description = "Moves value from one range to another, unclamped.")]
 public sealed class MapRange : ShaderNode
 {
     [Glsl("lm_map_range({value}, {fromMin}, {fromMax}, {toMin}, {toMax})", Needs = new[] { "lm_map_range" })]

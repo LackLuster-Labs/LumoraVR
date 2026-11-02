@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Color/Gamma")]
+[Node("Color/Gamma", Description = "Applies a gamma adjustment to the colour.")]
 public sealed class Gamma : ShaderNode
 {
     [Glsl("vec4(pow(max({color}.rgb, vec3(0.0)), vec3({gamma})), {color}.a)")]

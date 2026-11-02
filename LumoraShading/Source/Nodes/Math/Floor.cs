@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Floor")]
+[Node("Math/Floor", Description = "Rounds downward to the previous whole number.")]
 public sealed class Floor : ShaderNode
 {
     [Glsl("floor({value})")]

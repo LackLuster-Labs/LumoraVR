@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // The angle of the point (x, y) in radians, from -pi to pi.
-[Node("Math/Arctangent2")]
+[Node("Math/Trigonometry/Arctangent2", Description = "The angle of the point (x, y) in radians, from -pi to pi.")]
 public sealed class Arctangent2 : ShaderNode
 {
     [Glsl("atan({y}, {x})")]

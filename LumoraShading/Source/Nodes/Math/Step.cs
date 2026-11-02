@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // 1 where value reaches edge, 0 below it.
-[Node("Math/Step")]
+[Node("Math/Step", Description = "1 where value reaches edge, 0 below it.")]
 public sealed class Step : ShaderNode
 {
     [Glsl("step({edge}, {value})")]

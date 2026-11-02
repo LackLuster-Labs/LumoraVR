@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Dividing by zero gives an unbounded result, as on any GPU.
-[Node("Math/Divide")]
+[Node("Math/Divide", Description = "Divides the first value by the second.")]
 public sealed class Divide : ShaderNode
 {
     [Glsl("{a} / {b}")]

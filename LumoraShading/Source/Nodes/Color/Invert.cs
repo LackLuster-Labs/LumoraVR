@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Alpha stays as it is.
-[Node("Color/Invert")]
+[Node("Color/Invert", Description = "Alpha stays as it is.")]
 public sealed class Invert : ShaderNode
 {
     [Glsl("vec4(mix({color}.rgb, 1.0 - {color}.rgb, {factor}), {color}.a)")]

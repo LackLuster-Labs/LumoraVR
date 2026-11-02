@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // What is left over after taking whole steps of b; always the sign of b.
-[Node("Math/Modulo")]
+[Node("Math/Modulo", Description = "What is left over after taking whole steps of b; always the sign of b.")]
 public sealed class Modulo : ShaderNode
 {
     [Glsl("mod({a}, {b})")]

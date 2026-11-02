@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // 0 below edge0, 1 above edge1, an eased ramp between.
-[Node("Math/Smoothstep")]
+[Node("Math/Interpolation/Smoothstep", Description = "0 below edge0, 1 above edge1, an eased ramp between.")]
 public sealed class Smoothstep : ShaderNode
 {
     [Glsl("smoothstep({edge0}, {edge1}, {value})")]

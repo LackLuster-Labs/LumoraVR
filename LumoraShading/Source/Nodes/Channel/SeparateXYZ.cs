@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Channel/Separate XYZ")]
+[Node("Math/Vectors/Separate XYZ", Description = "Splits a vector into X, Y and Z components.")]
 public sealed class SeparateXYZ : ShaderNode
 {
     [Glsl("{x} = {vector}.x; {y} = {vector}.y; {z} = {vector}.z;")]

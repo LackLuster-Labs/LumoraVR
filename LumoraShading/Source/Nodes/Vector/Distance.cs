@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Vector/Distance")]
+[Node("Math/Vectors/Distance", Description = "Returns the distance between two points.")]
 public sealed class Distance : ShaderNode
 {
     [Glsl("distance({a}, {b})")]

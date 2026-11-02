@@ -8,7 +8,7 @@ namespace Lumora.Shading;
 
 // Where the vertex or pixel is. Object space per pixel is the vertex's own position carried across, as
 // it was before any vertex offset.
-[Node("Input/Position")]
+[Node("Input/Position", Description = "Where the vertex or pixel is.")]
 public sealed class Position : ShaderNode
 {
     [return: Port("position")]

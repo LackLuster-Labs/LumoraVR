@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Radians.
-[Node("Math/Trigonometry/Cosine")]
+[Node("Math/Trigonometry/Cosine", Description = "Returns the cosine of an angle in radians.")]
 public sealed class Cosine : ShaderNode
 {
     [Glsl("cos({value})")]

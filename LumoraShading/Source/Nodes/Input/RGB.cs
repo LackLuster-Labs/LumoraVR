@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Input/RGB")]
+[Node("Input/RGB", Description = "Provides a constant colour for the shader.")]
 public sealed class RGB : ShaderNode
 {
     [Glsl("{value}")]

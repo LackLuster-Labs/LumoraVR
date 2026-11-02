@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Seconds since this machine started, so it is not the same moment for everyone.
-[Node("Input/Time")]
+[Node("Input/Time", Description = "Seconds since this machine started, so it is not the same moment for everyone.")]
 public sealed class Time : ShaderNode
 {
     [Glsl("{time} = TIME; {sine} = sin(TIME); {cosine} = cos(TIME);")]

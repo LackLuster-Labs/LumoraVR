@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // The mesh's texture coordinates. V is 0 at the top of a texture.
-[Node("Input/UV")]
+[Node("Input/UV", Description = "The mesh's texture coordinates.")]
 public sealed class UV : ShaderNode
 {
     [return: Port("uv")]

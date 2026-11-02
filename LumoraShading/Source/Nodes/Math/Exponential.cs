@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // e to the power of value.
-[Node("Math/Exponential")]
+[Node("Math/Exponential", Description = "E to the power of value.")]
 public sealed class Exponential : ShaderNode
 {
     [Glsl("exp({value})")]

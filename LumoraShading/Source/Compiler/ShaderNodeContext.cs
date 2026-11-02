@@ -147,31 +147,34 @@ public sealed class ShaderNodeContext
     // What a node without its own Emit does: the [Glsl] on its overload, with its ports filled in.
     public void EmitGlsl()
     {
+        // A Loom node's [Gpu] code runs in either stage.
         var glsl = Overload.Method?.GetCustomAttribute<GlslAttribute>();
-        if (glsl == null)
+        var gpu = glsl == null ? Overload.Method?.GetCustomAttribute<GpuAttribute>() : null;
+        if (glsl == null && gpu == null)
         {
             Error($"{Overload.Definition.Name} has no shader code for these inputs");
             return;
         }
-        if ((glsl.Stages & Stage) == 0)
+        if (glsl != null && (glsl.Stages & Stage) == 0)
         {
             Error(Stage == ShaderStage.Vertex
                 ? $"{Overload.Definition.Name} only works per pixel, so it cannot feed a vertex input"
                 : $"{Overload.Definition.Name} only works per vertex");
             return;
         }
-        foreach (var need in glsl.Needs)
+        string code = glsl?.Code ?? gpu!.Code;
+        foreach (var need in glsl?.Needs ?? gpu!.Needs)
             Need(need);
 
         var outputs = Overload.Outputs;
-        if (outputs.Count == 1 && !glsl.Code.Contains(';'))
+        if (outputs.Count == 1 && !code.Contains(';'))
         {
-            Output(outputs[0].Name, Fill(glsl.Code));
+            Output(outputs[0].Name, Fill(code));
             return;
         }
         foreach (var output in outputs)
             Declare(output.Name);
-        foreach (var statement in Fill(glsl.Code).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        foreach (var statement in Fill(code).Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
             Line(statement + ";");
     }
 

@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Square Root")]
+[Node("Math/Square Root", Description = "Returns the square root of the input.")]
 public sealed class SquareRoot : ShaderNode
 {
     [Glsl("sqrt({value})")]

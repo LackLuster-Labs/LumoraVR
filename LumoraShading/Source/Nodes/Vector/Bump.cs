@@ -8,7 +8,7 @@ namespace Lumora.Shading;
 
 // A tangent space normal from a height, from how it changes between pixels; feeds the Material
 // Output's normal. Per pixel only.
-[Node("Vector/Bump")]
+[Node("Math/Vectors/Bump", Description = "A tangent space normal from a height, from how it changes between pixels; feeds the Material Output's normal.")]
 public sealed class Bump : ShaderNode
 {
     [Glsl("lm_bump({height}, {strength}, VERTEX, NORMAL, TANGENT, BINORMAL)", Needs = new[] { "lm_bump" }, Stages = ShaderStage.Fragment)]

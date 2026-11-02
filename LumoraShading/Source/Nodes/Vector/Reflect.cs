@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Bounces incident off a surface facing normal; normal should be normalized.
-[Node("Vector/Reflect")]
+[Node("Math/Vectors/Reflect", Description = "Bounces incident off a surface facing normal; normal should be normalized.")]
 public sealed class Reflect : ShaderNode
 {
     [Glsl("reflect({incident}, {normal})")]

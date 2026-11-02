@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Radians.
-[Node("Math/Trigonometry/Tangent")]
+[Node("Math/Trigonometry/Tangent", Description = "Returns the tangent of an angle in radians.")]
 public sealed class Tangent : ShaderNode
 {
     [Glsl("tan({value})")]

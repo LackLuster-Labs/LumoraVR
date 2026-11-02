@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Which way the surface faces, normalized.
-[Node("Input/Normal")]
+[Node("Input/Normal", Description = "Which way the surface faces, normalized.")]
 public sealed class Normal : ShaderNode
 {
     [return: Port("normal")]

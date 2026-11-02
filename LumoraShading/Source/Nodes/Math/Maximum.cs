@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Maximum")]
+[Node("Math/Maximum", Description = "Returns the larger of the input values.")]
 public sealed class Maximum : ShaderNode
 {
     [Glsl("max({a}, {b})")]

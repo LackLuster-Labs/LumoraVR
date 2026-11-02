@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Two, three or four numbers the material exposes by name. Typed on the node, never wired.
-[Node("Properties/Vector Property")]
+[Node("Properties/Vector Property", Description = "Two, three or four numbers the material exposes by name.")]
 public sealed class VectorProperty : ShaderNode
 {
     [return: Port("vector")]

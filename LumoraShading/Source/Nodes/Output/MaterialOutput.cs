@@ -10,7 +10,7 @@ namespace Lumora.Shading;
 // something is wired or typed in, so an unused input costs nothing. Normal takes a tangent space normal
 // (Normal Map, Bump). Alpha only shows on a Cutout or see-through surface; typing or wiring an alpha clip
 // clips on any surface. Vertex offset moves each vertex in the object's own space. -xlinka
-[Node("Output/Material Output")]
+[Node("Output/Material Output", Description = "Connects the shader's colour, surface properties and other outputs to the material.")]
 public sealed class MaterialOutput : ShaderNode
 {
     public override bool IsOutput => true;

@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Hue, saturation and value, each 0 to 1.
-[Node("Color/Separate HSV")]
+[Node("Color/Separate HSV", Description = "Hue, saturation and value, each 0 to 1.")]
 public sealed class SeparateHSV : ShaderNode
 {
     [Glsl("{hue} = lm_rgb_to_hsv({color}.rgb).x; {saturation} = lm_rgb_to_hsv({color}.rgb).y; {value} = lm_rgb_to_hsv({color}.rgb).z;", Needs = new[] { "lm_rgb_to_hsv" })]

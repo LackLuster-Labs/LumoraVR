@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Input/Vertex Color")]
+[Node("Input/Vertex Color", Description = "Reads the colour stored on the mesh's vertices.")]
 public sealed class VertexColor : ShaderNode
 {
     [Glsl("COLOR")]

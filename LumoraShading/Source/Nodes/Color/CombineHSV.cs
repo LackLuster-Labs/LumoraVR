@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Hue, saturation and value, each 0 to 1.
-[Node("Color/Combine HSV")]
+[Node("Color/Combine HSV", Description = "Hue, saturation and value, each 0 to 1.")]
 public sealed class CombineHSV : ShaderNode
 {
     [Glsl("vec4(lm_hsv_to_rgb(vec3({hue}, {saturation}, {value})), {alpha})", Needs = new[] { "lm_hsv_to_rgb" })]

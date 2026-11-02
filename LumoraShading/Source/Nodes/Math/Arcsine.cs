@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Trigonometry/Arcsine")]
+[Node("Math/Trigonometry/Arcsine", Description = "Returns the angle whose sine is the input, in radians.")]
 public sealed class Arcsine : ShaderNode
 {
     [Glsl("asin({value})")]

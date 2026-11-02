@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // The object's origin, in world space.
-[Node("Input/Object Position")]
+[Node("Input/Object Position", Description = "The object's origin, in world space.")]
 public sealed class ObjectPosition : ShaderNode
 {
     [Glsl("NODE_POSITION_WORLD")]

@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("UV/Tiling And Offset")]
+[Node("UV/Tiling And Offset", Description = "Scales and shifts texture coordinates to control texture repetition and placement.")]
 public sealed class TilingAndOffset : ShaderNode
 {
     [Glsl("{uv} * {tiling} + {offset}")]

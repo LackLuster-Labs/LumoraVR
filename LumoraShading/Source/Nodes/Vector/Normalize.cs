@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // A zero vector has no direction and gives no usable result.
-[Node("Vector/Normalize")]
+[Node("Math/Vectors/Normalize", Description = "Keeps a vector's direction while making its length 1. A zero vector has no direction to keep.")]
 public sealed class Normalize : ShaderNode
 {
     [Glsl("normalize({vector})")]

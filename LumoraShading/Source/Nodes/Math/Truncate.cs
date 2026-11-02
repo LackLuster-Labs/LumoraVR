@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Drops the part after the point, toward zero.
-[Node("Math/Truncate")]
+[Node("Math/Truncate", Description = "Drops the part after the point, toward zero.")]
 public sealed class Truncate : ShaderNode
 {
     [Glsl("trunc({value})")]

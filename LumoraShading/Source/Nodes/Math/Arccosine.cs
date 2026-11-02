@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Trigonometry/Arccosine")]
+[Node("Math/Trigonometry/Arccosine", Description = "Returns the angle whose cosine is the input, in radians.")]
 public sealed class Arccosine : ShaderNode
 {
     [Glsl("acos({value})")]

@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Color/Brightness Contrast")]
+[Node("Color/Brightness Contrast", Description = "Adjusts a colour's brightness and contrast.")]
 public sealed class BrightnessContrast : ShaderNode
 {
     [Glsl("vec4(lm_brightness_contrast({color}.rgb, {bright}, {contrast}), {color}.a)", Needs = new[] { "lm_brightness_contrast" })]

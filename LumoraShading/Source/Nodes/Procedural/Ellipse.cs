@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // An ellipse filling width and height of the UV square, soft by one pixel. Per pixel only.
-[Node("Procedural/Shapes/Ellipse")]
+[Node("Procedural/Shapes/Ellipse", Description = "An ellipse filling width and height of the UV square, soft by one pixel.")]
 public sealed class Ellipse : ShaderNode
 {
     [Glsl("lm_ellipse({uv}, {width}, {height})", Needs = new[] { "lm_ellipse" }, Stages = ShaderStage.Fragment)]

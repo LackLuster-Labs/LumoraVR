@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Reciprocal")]
+[Node("Math/Reciprocal", Description = "Divides 1 by the input value.")]
 public sealed class Reciprocal : ShaderNode
 {
     [Glsl("1.0 / {value}")]

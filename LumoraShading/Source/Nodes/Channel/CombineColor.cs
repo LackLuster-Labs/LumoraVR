@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Channel/Combine Color")]
+[Node("Color/Packing/Combine Color", Description = "Combines red, green, blue and alpha values into a colour.")]
 public sealed class CombineColor : ShaderNode
 {
     [Glsl("vec4({r}, {g}, {b}, {a})")]

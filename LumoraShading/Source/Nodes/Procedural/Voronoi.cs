@@ -8,7 +8,7 @@ namespace Lumora.Shading;
 
 // Distance to the nearest of a field of points, and a random value per point's cell. Angle offset
 // moves the points.
-[Node("Procedural/Voronoi")]
+[Node("Procedural/Voronoi", Description = "Distance to the nearest of a field of points, and a random value per point's cell.")]
 public sealed class Voronoi : ShaderNode
 {
     [Glsl("lm_voronoi({uv}, {angleOffset}, {cellDensity}, {distance}, {cells});", Needs = new[] { "lm_voronoi" })]

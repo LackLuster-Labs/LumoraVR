@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Trigonometry/Arctangent")]
+[Node("Math/Trigonometry/Arctangent", Description = "Returns the angle whose tangent is the input, in radians.")]
 public sealed class Arctangent : ShaderNode
 {
     [Glsl("atan({value})")]

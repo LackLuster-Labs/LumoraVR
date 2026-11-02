@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // From the surface toward the eye, normalized.
-[Node("Input/View Direction")]
+[Node("Input/View Direction", Description = "From the surface toward the eye, normalized.")]
 public sealed class ViewDirection : ShaderNode
 {
     [return: Port("direction")]

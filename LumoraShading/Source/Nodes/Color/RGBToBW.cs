@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Brightness as people see it.
-[Node("Color/RGB to BW")]
+[Node("Color/RGB to BW", Description = "Brightness as people see it.")]
 public sealed class RGBToBW : ShaderNode
 {
     [Glsl("dot({color}.rgb, vec3(0.2126, 0.7152, 0.0722))")]

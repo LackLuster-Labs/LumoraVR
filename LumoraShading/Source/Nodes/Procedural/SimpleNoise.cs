@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Smooth value noise in three layers, 0 to 1. The same pattern on every GPU.
-[Node("Procedural/Simple Noise")]
+[Node("Procedural/Simple Noise", Description = "Smooth value noise in three layers, 0 to 1.")]
 public sealed class SimpleNoise : ShaderNode
 {
     [Glsl("lm_simple_noise({uv}, {scale})", Needs = new[] { "lm_simple_noise" })]

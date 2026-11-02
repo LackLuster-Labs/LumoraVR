@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Channel/Separate Color")]
+[Node("Color/Packing/Separate Color", Description = "Splits a colour into its red, green, blue and alpha channels.")]
 public sealed class SeparateColor : ShaderNode
 {
     [Glsl("{r} = {color}.r; {g} = {color}.g; {b} = {color}.b; {a} = {color}.a;")]

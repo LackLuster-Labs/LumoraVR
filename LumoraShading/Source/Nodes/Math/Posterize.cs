@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Snaps value to steps levels between 0 and 1.
-[Node("Math/Posterize")]
+[Node("Math/Posterize", Description = "Snaps value to steps levels between 0 and 1.")]
 public sealed class Posterize : ShaderNode
 {
     [Glsl("(floor({value} * {steps}) / {steps})")]

@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Where value sits between a and b: 0 at a, 1 at b.
-[Node("Math/Inverse Lerp")]
+[Node("Math/Interpolation/Inverse Lerp", Description = "Where value sits between a and b: 0 at a, 1 at b.")]
 public sealed class InverseLerp : ShaderNode
 {
     [Glsl("(({value} - {a}) / ({b} - {a}))")]

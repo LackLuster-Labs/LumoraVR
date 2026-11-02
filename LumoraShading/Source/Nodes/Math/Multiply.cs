@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Multiply")]
+[Node("Math/Multiply", Description = "Multiplies the input values together.")]
 public sealed class Multiply : ShaderNode
 {
     [Glsl("{a} * {b}")]

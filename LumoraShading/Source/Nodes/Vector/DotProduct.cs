@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Vector/Dot Product")]
+[Node("Math/Vectors/Dot Product", Description = "Returns the dot product of two vectors, useful for comparing directions or finding projections.")]
 public sealed class DotProduct : ShaderNode
 {
     [Glsl("dot({a}, {b})")]

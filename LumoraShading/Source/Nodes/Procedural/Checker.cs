@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Smoothed at its edges so it does not shimmer in the distance. Per pixel only.
-[Node("Procedural/Checker")]
+[Node("Procedural/Checker", Description = "Creates a checkerboard pattern with softened edges to reduce flickering in the distance.")]
 public sealed class Checker : ShaderNode
 {
     [Glsl("{factor} = lm_checker({uv}, vec2({scale})); {color} = mix({colorA}, {colorB}, {factor});", Needs = new[] { "lm_checker" }, Stages = ShaderStage.Fragment)]

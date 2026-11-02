@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Absolute")]
+[Node("Math/Absolute", Description = "Returns the absolute value, turning negative numbers positive.")]
 public sealed class Absolute : ShaderNode
 {
     [Glsl("abs({value})")]

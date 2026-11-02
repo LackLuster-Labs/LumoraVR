@@ -5,7 +5,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Logic/Or")]
+[Node("Logic/Or", Description = "Returns true when either input is true.")]
 public sealed class Or : ShaderNode
 {
     [Glsl("({a} || {b})")]

@@ -7,7 +7,7 @@ namespace Lumora.Shading;
 
 // An on/off switch the material exposes by name, for a Branch to pick with. Typed on the node, never
 // wired.
-[Node("Properties/Boolean Property")]
+[Node("Properties/Boolean Property", Description = "An on/off switch the material exposes by name, for a Branch to pick with.")]
 public sealed class BooleanProperty : ShaderNode
 {
     [return: Port("on")]

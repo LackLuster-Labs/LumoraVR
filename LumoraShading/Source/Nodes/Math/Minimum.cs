@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Minimum")]
+[Node("Math/Minimum", Description = "Returns the smaller of the input values.")]
 public sealed class Minimum : ShaderNode
 {
     [Glsl("min({a}, {b})")]

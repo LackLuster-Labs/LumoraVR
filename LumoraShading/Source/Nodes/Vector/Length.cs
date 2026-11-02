@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Vector/Length")]
+[Node("Math/Vectors/Length", Description = "Returns the length of a vector.")]
 public sealed class Length : ShaderNode
 {
     [Glsl("length({vector})")]

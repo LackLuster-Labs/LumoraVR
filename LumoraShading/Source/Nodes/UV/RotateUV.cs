@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Radians, around center.
-[Node("UV/Rotate")]
+[Node("UV/Rotate", Description = "Rotates texture coordinates around a centre point by an angle in radians.")]
 public sealed class RotateUV : ShaderNode
 {
     [Glsl("lm_rotate_uv({uv}, {center}, {radians})", Needs = new[] { "lm_rotate_uv" })]

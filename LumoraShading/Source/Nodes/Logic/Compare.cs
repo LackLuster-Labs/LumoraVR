@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Tests a against b. Equal allows for the rounding a GPU does, within 0.00001.
-[Node("Logic/Compare")]
+[Node("Logic/Compare", Description = "Tests a against b.")]
 public sealed class Compare : ShaderNode
 {
     public static bool Run(float a, float b, [Setting] CompareMode mode = CompareMode.Greater) => throw GpuOnly;

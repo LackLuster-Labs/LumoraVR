@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // One tile of a sheet of columns by rows, counted from the top left across.
-[Node("UV/Flipbook")]
+[Node("UV/Flipbook", Description = "One tile of a sheet of columns by rows, counted from the top left across.")]
 public sealed class Flipbook : ShaderNode
 {
     [Glsl("lm_flipbook({uv}, {columns}, {rows}, {tile})", Needs = new[] { "lm_flipbook" })]

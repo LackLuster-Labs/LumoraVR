@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Where the pixel is on the screen, 0 to 1. Per pixel only.
-[Node("Input/Screen Position")]
+[Node("Input/Screen Position", Description = "Where the pixel is on the screen, 0 to 1.")]
 public sealed class ScreenPosition : ShaderNode
 {
     [Glsl("SCREEN_UV", Stages = ShaderStage.Fragment)]

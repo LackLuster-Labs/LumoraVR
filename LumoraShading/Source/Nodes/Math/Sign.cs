@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Sign")]
+[Node("Math/Sign", Description = "Returns -1 for a negative value, 0 for zero, or 1 for a positive value.")]
 public sealed class Sign : ShaderNode
 {
     [Glsl("sign({value})")]

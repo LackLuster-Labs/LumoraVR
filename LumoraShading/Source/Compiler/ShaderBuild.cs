@@ -147,12 +147,19 @@ internal sealed class ShaderBuild
         }
         if (!_behaviours.TryGetValue(definition.ClrType, out var behaviour))
         {
-            if (!typeof(ShaderNode).IsAssignableFrom(definition.ClrType) || definition.ClrType.IsGenericTypeDefinition)
+            if (ShaderNodes.IsShared(definition.ClrType))
+            {
+                behaviour = SharedShaderNode.Instance;
+            }
+            else if (!typeof(ShaderNode).IsAssignableFrom(definition.ClrType) || definition.ClrType.IsGenericTypeDefinition)
             {
                 Report(DiagnosticSeverity.Error, node.Id, $"{definition.Name} is not a shader node");
                 return;
             }
-            behaviour = (ShaderNode)Activator.CreateInstance(definition.ClrType)!;
+            else
+            {
+                behaviour = (ShaderNode)Activator.CreateInstance(definition.ClrType)!;
+            }
             _behaviours.Add(definition.ClrType, behaviour);
         }
         foreach (var input in overload.Inputs)

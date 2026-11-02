@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/Round")]
+[Node("Math/Round", Description = "Rounds to the nearest whole number.")]
 public sealed class Round : ShaderNode
 {
     [Glsl("round({value})")]

@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Vector/Cross Product")]
+[Node("Math/Vectors/Cross Product", Description = "Returns a vector perpendicular to both input vectors, with direction determined by their order.")]
 public sealed class CrossProduct : ShaderNode
 {
     [Glsl("cross({a}, {b})")]

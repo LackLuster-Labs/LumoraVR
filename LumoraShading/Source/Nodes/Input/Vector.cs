@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Input/Vector")]
+[Node("Input/Vector", Description = "Provides a constant vector for the shader.")]
 public sealed class Vector : ShaderNode
 {
     [Glsl("{value}")]

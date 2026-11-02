@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Natural logarithm.
-[Node("Math/Logarithm")]
+[Node("Math/Logarithm", Description = "Natural logarithm.")]
 public sealed class Logarithm : ShaderNode
 {
     [Glsl("log({value})")]

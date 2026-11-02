@@ -8,7 +8,7 @@ namespace Lumora.Shading;
 
 // Layered gradient noise, 0 to 1. Detail adds finer layers (up to 15); roughness is how much each
 // layer counts against the one before.
-[Node("Procedural/Noise Texture")]
+[Node("Procedural/Noise Texture", Description = "Layered gradient noise, 0 to 1.")]
 public sealed class NoiseTexture : ShaderNode
 {
     [Glsl("lm_noise_texture({uv}, {scale}, {detail}, {roughness})", Needs = new[] { "lm_noise_texture" })]

@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Turns the UV around center, more the further out.
-[Node("UV/Twirl")]
+[Node("UV/Twirl", Description = "Turns the UV around center, more the further out.")]
 public sealed class Twirl : ShaderNode
 {
     [Glsl("lm_twirl({uv}, {center}, {strength}, {offset})", Needs = new[] { "lm_twirl" })]

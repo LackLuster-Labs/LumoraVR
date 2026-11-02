@@ -11,7 +11,7 @@ namespace Lumora.Shading;
 // by name or else after this node, so it can be swapped on the material without touching the graph.
 // Color space says what the texture holds: a picture, plain numbers, or a normal map. Per vertex it reads
 // the full size image, since a vertex has no pixel size to pick a smaller one by. -xlinka
-[Node("Texture/Image Texture")]
+[Node("Texture/Image Texture", Description = "Samples a named material texture at the given UV coordinates.")]
 public sealed class ImageTexture : ShaderNode
 {
     [return: Port("color")]

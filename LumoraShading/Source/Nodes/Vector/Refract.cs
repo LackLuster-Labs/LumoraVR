@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Shading;
 
 // Bends incident through a surface facing normal; eta is the ratio of the two indices of refraction.
-[Node("Vector/Refract")]
+[Node("Math/Vectors/Refract", Description = "Bends incident through a surface facing normal; eta is the ratio of the two indices of refraction.")]
 public sealed class Refract : ShaderNode
 {
     [Glsl("refract({incident}, {normal}, {eta})")]

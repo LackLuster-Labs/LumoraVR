@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Shading;
 
-[Node("Math/One Minus")]
+[Node("Math/One Minus", Description = "Subtracts the input from 1.")]
 public sealed class OneMinus : ShaderNode
 {
     [Glsl("1.0 - {value}")]
