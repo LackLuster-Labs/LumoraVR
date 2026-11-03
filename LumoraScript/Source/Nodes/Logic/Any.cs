@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Whether at least one lane of a bool vector is true.
-[Node("Logic/Any")]
+[Node("Logic/Any", Description = "Returns true when at least one component of a boolean vector is true.",
+    Keywords = "some, any true, bool vector")]
 public sealed class Any : ValueNode
 {
     public static bool Run(bool2 value) => value.Any;

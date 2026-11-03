@@ -11,11 +11,11 @@ namespace Lumora.Script;
 // as far from the pivot as the target is, and that spot is turned onto the target by the shortest turn.
 // A target nearer the pivot than the line ever comes cannot be reached: reaches is false and the
 // rotation is no turn. A zero direction is no line and reaches nothing.
-[Node("Math/Geometry 3D/Rotation At Target Point")]
+[Node("Math/Geometry 3D/Rotation At Target Point", Description = "The turn about pivot that swings the line through point along direction until it passes through target: aiming a barrel that sits off a turret's pivot.")]
 public sealed class RotationAtTargetPoint : ValueNode
 {
     [return: Port("rotation")]
-    public static floatQ Run(float3 pivot, float3 point, float3 direction, float3 target, out bool reaches)
+    public static floatQ Run(float3 pivot, float3 point, [Default(0, 0, 1)] float3 direction, float3 target, out bool reaches)
     {
         reaches = false;
         var d = direction.Normalized;

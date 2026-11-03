@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // A bool vector goes lane by lane; a whole number bit by bit.
 [Variadic]
-[Node("Logic/Xor")]
+[Node("Logic/Xor", Description = "Returns true when the two inputs differ; with more inputs, when an odd number of them are true. Integer inputs use bitwise XOR.",
+    Keywords = "exclusive or, differ, toggle, parity, bitwise xor")]
 public sealed class Xor : ValueNode
 {
     [Wasm(WasmOp.I32Xor)] public static bool Run(bool a, bool b) => a ^ b;

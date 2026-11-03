@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // a's items, then b's, as one array.
-[Node("JSON/Arrays/Concat")]
+[Node("Data/JSON/Arrays/Concat", Description = "A's items, then b's, as one array.")]
 public sealed class JsonConcat : ReadNode
 {
     public static ScriptJsonArray Run(ScriptContextBase ctx, ScriptJsonArray? a, ScriptJsonArray? b)

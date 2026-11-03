@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // JSON written out as text: compact, or with indent two spaces a level. Keys come out in the order they
 // were first set, the same on every machine. No value gives empty text.
-[Node("JSON/To Text")]
+[Node("Data/JSON/To Text", Description = "JSON written out as text: compact, or with indent two spaces a level.",
+    Keywords = "serialize, stringify, encode, write json, string")]
 public sealed class JsonToText : ValueNode
 {
     [return: Port("text")]

@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // One minus red, green and blue; alpha kept. An HDR colour is not clamped first, so a channel past one goes
 // below zero.
-[Node("Color/Invert")]
+[Node("Color/Invert", Description = "One minus red, green and blue; alpha kept.",
+    Keywords = "negative, complement")]
 public sealed class InvertColor : ValueNode
 {
     [return: Port("color")]

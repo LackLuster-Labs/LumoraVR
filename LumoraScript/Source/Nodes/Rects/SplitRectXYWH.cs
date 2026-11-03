@@ -5,7 +5,8 @@ using Lumora.Core.Math;
 
 namespace Lumora.Script;
 
-[Node("Math/Rects/Split Rect XYWH")]
+[Node("Math/Rects/Split Rect XYWH", Description = "Separates a rectangle into X, Y, width and height.",
+    Keywords = "rectangle")]
 public sealed class SplitRectXYWH : ValueNode
 {
     public static void Run(Rect rect, out float x, out float y, out float width, out float height)

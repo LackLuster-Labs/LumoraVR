@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // The item at index, 0 first; the type's default when the index is outside the list.
-[Node("Lists/Get At")]
+[Node("Data/Lists/Get At", Description = "The item at index, 0 first; the type's default when the index is outside the list.",
+    Keywords = "element, item at, index, array")]
 public sealed class ListGetAt<T> : ReadNode
 {
     [return: Port("item")]

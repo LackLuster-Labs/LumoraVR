@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // The rect between two opposite corners, which may come in either order.
-[Node("Math/Rects/Rect From Min Max")]
+[Node("Math/Rects/Rect From Min Max", Description = "The rect between two opposite corners, which may come in either order.",
+    Keywords = "rectangle")]
 public sealed class RectFromMinMax : ValueNode
 {
     [return: Port("rect")]

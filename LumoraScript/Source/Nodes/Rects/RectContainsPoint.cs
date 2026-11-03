@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // A point on the edge counts as inside.
-[Node("Math/Rects/Contains Point")]
+[Node("Math/Rects/Contains Point", Description = "Checks whether a point is inside or on the edge of a rectangle.",
+    Keywords = "rectangle, inside, hit test")]
 public sealed class RectContainsPoint : ValueNode
 {
     [return: Port("contains")]

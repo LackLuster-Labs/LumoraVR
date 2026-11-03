@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // A dictionary as a JSON object: keys as their text, values in their JSON form, in key order. Later changes
 // to the dictionary do not reach it. No dictionary gives an empty object.
-[Node("JSON/Objects/From Dictionary")]
+[Node("Data/JSON/Objects/From Dictionary", Description = "A dictionary as a JSON object: keys as their text, values in their JSON form, in key order.")]
 public sealed class JsonFromDictionary<TKey, TValue> : ReadNode where TKey : notnull
 {
     public static bool IsValidGenericType

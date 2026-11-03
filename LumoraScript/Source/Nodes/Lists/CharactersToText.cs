@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // The chars of a list as one text, in order.
-[Node("Lists/Text/Characters To Text")]
+[Node("Strings/Collections/Characters To Text", Description = "The chars of a list as one text, in order.",
+    Keywords = "implode, join characters")]
 public sealed class CharactersToText : ReadNode
 {
     [return: Port("text")]

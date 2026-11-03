@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Every key in the order they were first set, as a new list. No object gives an empty list.
-[Node("JSON/Objects/Keys")]
+[Node("Data/JSON/Objects/Keys", Description = "Every key in the order they were first set, as a new list.")]
 public sealed class JsonKeys : ReadNode
 {
     [return: Port("keys")]

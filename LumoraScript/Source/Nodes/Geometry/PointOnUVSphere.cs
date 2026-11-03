@@ -11,7 +11,7 @@ namespace Lumora.Script;
 // outside; v runs from the top pole at 0 to the bottom pole at 1, the way a picture's rows run top down.
 // The rotation turns forward (+z) out from the middle and up (+y) along the surface toward the top pole,
 // so a sign placed there stands upright.
-[Node("Math/Geometry 3D/Point On UV Sphere")]
+[Node("Math/Geometry 3D/Point On UV Sphere", Description = "Finds a point and outward-facing rotation on a sphere from UV coordinates. V runs from the top pole to the bottom.")]
 public sealed class PointOnUVSphere : ValueNode
 {
     [return: Port("point")]

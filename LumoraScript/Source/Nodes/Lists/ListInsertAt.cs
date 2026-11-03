@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Puts item at index and moves the rest along; an index equal to the count adds at the end. Anywhere else
 // nothing changes, inserted is false and the call fails, as it does without a list.
-[Node("Lists/Insert At")]
+[Node("Data/Lists/Insert At", Description = "Puts item at index and moves the rest along; an index equal to the count adds at the end.",
+    Keywords = "insert, array")]
 public sealed class ListInsertAt<T> : ActionNode
 {
     [return: Port("inserted")]

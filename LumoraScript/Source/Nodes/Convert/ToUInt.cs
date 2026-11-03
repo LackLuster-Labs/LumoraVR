@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // Rounds toward zero. Below 0 it is 0, past the top of uint it holds there, and NaN is 0.
-[Node("Math/Convert/To UInt")]
+[Node("Math/Conversion/To UInt", Description = "Converts a value to an unsigned 32-bit integer, dropping any fractional part toward zero.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToUInt : ValueNode
 {
     public static uint Run(int value) => uint.CreateSaturating(value);

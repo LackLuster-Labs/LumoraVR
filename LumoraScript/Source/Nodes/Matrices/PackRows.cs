@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // A matrix from its rows, top first: the way a matrix is written down.
-[Node("Math/Matrices/Pack Rows")]
+[Node("Math/Matrices/Pack Rows", Description = "A matrix from its rows, top first: the way a matrix is written down.",
+    Keywords = "make matrix, build matrix, compose matrix, matrix from vectors")]
 public sealed class PackRows : ValueNode
 {
     [return: Port("matrix")]

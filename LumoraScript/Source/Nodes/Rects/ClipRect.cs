@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // The part of rect inside mask. Rects that do not meet give the zero rect; rects that only touch give
 // the shared edge, with no width or no height.
-[Node("Math/Rects/Clip")]
+[Node("Math/Rects/Clip", Description = "The part of rect inside mask.",
+    Keywords = "rectangle, intersection, crop, intersect")]
 public sealed class ClipRect : ValueNode
 {
     [return: Port("clipped")]

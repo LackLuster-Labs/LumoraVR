@@ -7,7 +7,8 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // Rounds toward zero. Below 0 it is 0, past the top of ulong it holds there, and NaN is 0.
-[Node("Math/Convert/To ULong")]
+[Node("Math/Conversion/To ULong", Description = "Converts a value to an unsigned 64-bit integer, dropping any fractional part toward zero.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToULong : ValueNode
 {
     public static ulong Run(int value) => ulong.CreateSaturating(value);

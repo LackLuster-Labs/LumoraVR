@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the character is punctuation, such as stops, commas, dashes, brackets and quotes.
-[Node("Strings/Characters/Is Punctuation")]
+[Node("Strings/Characters/Is Punctuation", Description = "Whether the character is punctuation, such as stops, commas, dashes, brackets and quotes.")]
 public sealed class IsPunctuation : ValueNode
 {
     public static bool Run(char character) => char.IsPunctuation(character);

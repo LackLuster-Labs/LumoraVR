@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // value with bit index set to bit, 0 the lowest. An index outside the number's width changes nothing.
-[Node("Math/Bits/Set Bit")]
+[Node("Math/Bits/Set Bit", Description = "Value with bit index set to bit, 0 the lowest.",
+    Keywords = "clear bit, write bit, set flag, bitmask")]
 public sealed class SetBit : ValueNode
 {
     public static int Run(int value, int index, bool bit = true)

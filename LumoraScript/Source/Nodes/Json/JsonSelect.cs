@@ -8,7 +8,8 @@ namespace Lumora.Script;
 // Every value a JSONPath query finds, in document order, as an array: $.store.book[*].author,
 // $..price, $.items[?(@.count > 2 && @.tag == 'red')], $.list[-2:] and the rest. ok is false, and error
 // why, when the query is not one.
-[Node("JSON/Paths/Select")]
+[Node("Data/JSON/Paths/Select", Description = "Finds every value matching a JSONPath query and returns them as an array.",
+    Keywords = "jsonpath, query, filter, search, find all")]
 public sealed class JsonSelect : ReadNode
 {
     [return: Port("matches")]

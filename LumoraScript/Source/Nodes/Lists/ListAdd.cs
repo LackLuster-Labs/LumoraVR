@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Puts item at the end. Without a list nothing happens, and the call fails.
-[Node("Lists/Add")]
+[Node("Data/Lists/Add", Description = "Puts item at the end.",
+    Keywords = "append, push, array")]
 public sealed class ListAdd<T> : ActionNode
 {
     public static void Run(ScriptContextBase ctx, ScriptList<T>? list, T item)

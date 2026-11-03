@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // The array without the item at index; removed is false, and the array as it was, when the index is
 // outside it.
-[Node("JSON/Arrays/Remove At")]
+[Node("Data/JSON/Arrays/Remove At", Description = "The array without the item at index; removed is false, and the array as it was, when the index is outside it.")]
 public sealed class JsonRemoveAt : ReadNode
 {
     public static ScriptJsonArray Run(ScriptContextBase ctx, ScriptJsonArray? array, int index, out bool removed)

@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // An object with nothing in it, to set keys on.
-[Node("JSON/Objects/Empty Object")]
+[Node("Data/JSON/Objects/Empty Object", Description = "An object with nothing in it, to set keys on.")]
 public sealed class JsonEmptyObject : ValueNode
 {
     [return: Port("object")]

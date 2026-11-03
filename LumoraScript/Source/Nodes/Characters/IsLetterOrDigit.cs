@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the character is a letter or a decimal digit, in any script.
-[Node("Strings/Characters/Is Letter Or Digit")]
+[Node("Strings/Characters/Is Letter Or Digit", Description = "Whether the character is a letter or a decimal digit, in any script.")]
 public sealed class IsLetterOrDigit : ValueNode
 {
     public static bool Run(char character) => char.IsLetterOrDigit(character);

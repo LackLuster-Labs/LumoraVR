@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Where the first item equal to item sits, 0 first; -1 when no item is, or there is no list.
-[Node("Lists/Index Of")]
+[Node("Data/Lists/Index Of", Description = "Where the first item equal to item sits, 0 first; -1 when no item is, or there is no list.",
+    Keywords = "find, search, position")]
 public sealed class ListIndexOf<T> : ReadNode
 {
     [return: Port("index")]

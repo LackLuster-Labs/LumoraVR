@@ -8,7 +8,7 @@ namespace Lumora.Script;
 // Spherical harmonics from the coefficients, band by band: sh0 is band 0, sh1 to sh3 band 1, sh4 to sh8
 // band 2 and on. Four coefficients make sh1, nine sh2, sixteen sh3 and twenty-five sh4; numbers make the
 // harmonics of a number, sh1f to sh4f, and colors those of a color, sh1c to sh4c.
-[Node("Math/Spherical Harmonics/Pack")]
+[Node("Math/Spherical Harmonics/Pack", Description = "Spherical harmonics from the coefficients, band by band: sh0 is band 0, sh1 to sh3 band 1, sh4 to sh8 band 2 and on.")]
 public sealed class PackSH : ValueNode
 {
     [return: Port("sh")]

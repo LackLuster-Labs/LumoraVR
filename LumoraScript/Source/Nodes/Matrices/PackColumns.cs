@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // A matrix from its columns, left first. In a transform matrix the first three columns are where x, y
 // and z point and the last is the position.
-[Node("Math/Matrices/Pack Columns")]
+[Node("Math/Matrices/Pack Columns", Description = "A matrix from its columns, left first.",
+    Keywords = "make matrix, build matrix, compose matrix, matrix from vectors")]
 public sealed class PackColumns : ValueNode
 {
     [return: Port("matrix")]

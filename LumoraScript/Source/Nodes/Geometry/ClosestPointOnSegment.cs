@@ -9,7 +9,8 @@ namespace Lumora.Script;
 // The point of the segment from a to b nearest to point, and how far along it that is: 0 at a, 1 at b.
 // A segment with no length is the point a. For the nearest point of an endless line, Sphere For Tangent
 // Line gives it as the tangent point.
-[Node("Math/Geometry 3D/Closest Point On Segment")]
+[Node("Math/Geometry 3D/Closest Point On Segment", Description = "The point of the segment from a to b nearest to point, and how far along it that is: 0 at a, 1 at b.",
+    Keywords = "nearest point, project point, point to line, line")]
 public sealed class ClosestPointOnSegment : ValueNode
 {
     [return: Port("closest")]

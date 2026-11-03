@@ -9,7 +9,8 @@ namespace Lumora.Script;
 // spectrum: pure red up to about 800, through orange to white near 6500 and pale blue when very hot, with
 // no top end. Linear channels scaled so the brightest is 1, the hue of the glow and not how bright it is;
 // To sRGB it for a light or material tint. 0 K or below, or NaN, gives black.
-[Node("Color/Black Body Color")]
+[Node("Color/Black Body Color", Description = "Calculates the glow colour of a hot object from its temperature in kelvin.",
+    Keywords = "temperature, kelvin")]
 public sealed class BlackBodyColor : ValueNode
 {
     [return: Port("color")]

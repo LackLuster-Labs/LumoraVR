@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // Rounds to the nearest half, ties to even. A value that rounds past the largest half, 65504, is
 // infinity, the same as To Float gives for a double too big for a float, and NaN stays NaN.
-[Node("Math/Convert/To Half")]
+[Node("Math/Conversion/To Half", Description = "Rounds to the nearest half, ties to even.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToHalf : ValueNode
 {
     public static Half Run(float value) => (Half)value;

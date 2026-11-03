@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Whether an object input holds nothing: unbound, gone, or never set. A number is never null.
-[Node("Logic/Is Null")]
+[Node("Logic/Is Null", Description = "Whether an object input holds nothing: unbound, gone, or never set.",
+    Keywords = "null check, exists, missing, valid")]
 public sealed class IsNull<T> : ValueNode
 {
     [return: Port("null")]

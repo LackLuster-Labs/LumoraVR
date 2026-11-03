@@ -10,16 +10,16 @@ namespace Lumora.Script;
 // from the cone, 0 inside. The cone stands on its base with its tip up the rotation's +y and center half
 // way between, the way the cone mesh builds one, so a cone mesh's slot position, rotation, height and
 // radius describe the same cone. A point inside is nearest to the base or to the sloped side, whichever
-// is closer. A negative height or radius counts as its size.
+// is closer. A negative height or radius counts as its size. Unwired, height is 1 and radius 0.5.
 //
 // Everything happens in the half plane through the axis and the point, where the cone is a triangle and
 // its surface two segments: the base from the axis out to the rim and the side from the rim to the tip.
 // The axis itself is inside the cone, never its surface. -xlinka
-[Node("Math/Geometry 3D/Closest Point On Cone")]
+[Node("Math/Geometry 3D/Closest Point On Cone", Description = "The point of a solid cone's surface nearest to point, whether point is inside, and how far point is from the cone, 0 inside.")]
 public sealed class ClosestPointOnCone : ValueNode
 {
-    public static void Run(float3 center, floatQ rotation, float height, float radius, float3 point, out float3 closest,
-        out float distance, out bool inside)
+    public static void Run(float3 center, [Default(0, 0, 0, 1)] floatQ rotation, [Default(1)] float height, [Default(0.5)] float radius,
+        float3 point, out float3 closest, out float distance, out bool inside)
     {
         var turn = Turns.Unit(rotation);
         float h = MathF.Abs(height), r = MathF.Abs(radius);

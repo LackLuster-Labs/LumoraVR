@@ -6,7 +6,8 @@ using System.Globalization;
 namespace Lumora.Script;
 
 // The whole number in text; ok is false, and the value 0, when it is not one.
-[Node("Strings/Parse Int")]
+[Node("Strings/Parse Int", Description = "The whole number in text; ok is false, and the value 0, when it is not one.",
+    Keywords = "to int, text to int, string to integer, convert")]
 public sealed class ParseInt : ValueNode
 {
     [return: Port("value")]

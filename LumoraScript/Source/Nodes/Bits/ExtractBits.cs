@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // The eight bits of a byte or an sbyte, bit0 the lowest. An sbyte's bit7 is its sign.
-[Node("Math/Bits/Extract Bits")]
+[Node("Math/Bits/Extract Bits", Description = "The eight bits of a byte or an sbyte, bit0 the lowest.",
+    Keywords = "unpack bits, byte to bits, byte to booleans, bitfield")]
 public sealed class ExtractBits : ValueNode
 {
     public static void Run(byte value, out bool bit0, out bool bit1, out bool bit2, out bool bit3, out bool bit4, out bool bit5,

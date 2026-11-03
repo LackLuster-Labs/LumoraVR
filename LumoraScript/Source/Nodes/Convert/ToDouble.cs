@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // Exact from every float and every whole number up to 2^53; a bigger whole number rounds to the nearest
 // double, ties to even.
-[Node("Math/Convert/To Double")]
+[Node("Math/Conversion/To Double", Description = "Exact from every float and every whole number up to 2^53; a bigger whole number rounds to the nearest double, ties to even.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToDouble : ValueNode
 {
     [Wasm(WasmOp.F64PromoteF32)] public static double Run(float value) => value;
@@ -25,4 +26,6 @@ public sealed class ToDouble : ValueNode
     // which rounds once and the same everywhere; the direct unsigned cast rounds twice on some machines.
     [Wasm(WasmOp.F64ConvertI64U)]
     public static double Run(ulong value) => value <= long.MaxValue ? (long)value : 2d * (long)((value >> 1) | (value & 1));
+
+    public static double Run(ScriptBigInt? value) => ScriptBigInt.ToDouble(value);
 }

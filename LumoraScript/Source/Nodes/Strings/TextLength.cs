@@ -3,7 +3,8 @@
 
 namespace Lumora.Script;
 
-[Node("Strings/Length")]
+[Node("Strings/Length", Description = "Returns the number of UTF-16 characters in the text.",
+    Keywords = "text length, character count, size, string")]
 public sealed class TextLength : ValueNode
 {
     public static int Run(string? text) => text?.Length ?? 0;

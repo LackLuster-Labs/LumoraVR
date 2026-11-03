@@ -8,7 +8,8 @@ namespace Lumora.Script;
 // The address text writes out, when it is a whole one that names its scheme, like
 // https://example.com/page; valid is false, and the url nothing, for anything else: a partial address,
 // a bare file path, or text that is no address at all. Spaces at either end are dropped.
-[Node("URLs/Text To URL")]
+[Node("Network/URLs/Text To URL", Description = "Reads an absolute URL from text, including its scheme, and reports whether it is valid.",
+    Keywords = "uri, parse url, link, string to uri")]
 public sealed class TextToUrl : ValueNode
 {
     [return: Port("url")]

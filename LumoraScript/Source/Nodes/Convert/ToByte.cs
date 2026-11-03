@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // Rounds toward zero. Below 0 it is 0, past 255 it holds there, and NaN is 0.
-[Node("Math/Convert/To Byte")]
+[Node("Math/Conversion/To Byte", Description = "Converts a value to an unsigned 8-bit integer, dropping any fractional part toward zero.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToByte : ValueNode
 {
     public static byte Run(int value) => byte.CreateSaturating(value);

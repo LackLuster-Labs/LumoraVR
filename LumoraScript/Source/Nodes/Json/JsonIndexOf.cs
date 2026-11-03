@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // Where the first item equal to value is, 0 first, or -1. Equal is the same JSON: numbers by value,
 // objects whatever the order of their keys.
-[Node("JSON/Arrays/Index Of")]
+[Node("Data/JSON/Arrays/Index Of", Description = "Where the first item equal to value is, 0 first, or -1.")]
 public sealed class JsonIndexOf<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

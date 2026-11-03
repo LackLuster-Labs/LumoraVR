@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Takes out the first item equal to item: the same text exactly, the same numbers, the same object. An item
 // that was not there is no failure, since it is out of the list either way; no list is.
-[Node("Lists/Remove")]
+[Node("Data/Lists/Remove", Description = "Takes out the first item equal to item: the same text exactly, the same numbers, the same object.",
+    Keywords = "delete, erase")]
 public sealed class ListRemove<T> : ActionNode
 {
     [return: Port("removed")]

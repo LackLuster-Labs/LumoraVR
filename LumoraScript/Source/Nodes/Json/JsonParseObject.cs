@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // Text read as a JSON object. ok is false, the object nothing and error why, when the text is not JSON or is
 // JSON that is not an object.
-[Node("JSON/Parse Object")]
+[Node("Data/JSON/Parse Object", Description = "Text read as a JSON object. ok is false, the object nothing and error why, when the text is not JSON or is JSON that is not an object.")]
 public sealed class JsonParseObject : ReadNode
 {
     [return: Port("object")]

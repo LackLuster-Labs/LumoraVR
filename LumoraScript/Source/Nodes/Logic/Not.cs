@@ -7,7 +7,8 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // A bool vector flips lane by lane; a whole number flips every bit.
-[Node("Logic/Not")]
+[Node("Logic/Not", Description = "Inverts a boolean or flips every bit of an integer.",
+    Keywords = "invert, negate, flip, complement, bitwise not")]
 public sealed class Not : ValueNode
 {
     [Wasm(WasmOp.I32Eqz)] public static bool Run(bool value) => !value;

@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // True for a list with no items, and for no list.
-[Node("Lists/Is Empty")]
+[Node("Data/Lists/Is Empty", Description = "True for a list with no items, and for no list.",
+    Keywords = "has items, zero length")]
 public sealed class ListIsEmpty<T> : ReadNode
 {
     [return: Port("empty")]

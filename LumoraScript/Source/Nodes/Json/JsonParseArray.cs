@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // Text read as a JSON array. ok is false, the array nothing and error why, when the text is not JSON or is
 // JSON that is not an array.
-[Node("JSON/Parse Array")]
+[Node("Data/JSON/Parse Array", Description = "Text read as a JSON array. ok is false, the array nothing and error why, when the text is not JSON or is JSON that is not an array.")]
 public sealed class JsonParseArray : ReadNode
 {
     [return: Port("array")]

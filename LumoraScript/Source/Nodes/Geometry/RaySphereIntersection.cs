@@ -9,11 +9,13 @@ namespace Lumora.Script;
 // Where a ray from origin along direction first reaches a sphere's surface, and how far along the ray:
 // on the way in from outside, or on the way out when it starts inside. The direction's length does not
 // matter. A negative radius counts as its size. No hit, or a zero direction, reads zeros.
-[Node("Math/Geometry 3D/Ray Sphere Intersection")]
+[Node("Math/Geometry 3D/Ray Sphere Intersection", Description = "Where a ray from origin along direction first reaches a sphere's surface, and how far along the ray: on the way in from outside, or on the way out when it starts inside.")]
 public sealed class RaySphereIntersection : ValueNode
 {
-    public static void Run(float3 origin, float3 direction, float3 center, float radius, out float3 point, out float distance,
-        out bool hit)
+    // The outputs sit before radius only so radius can have a default, the size of a new sphere mesh; the
+    // port order is unchanged. -xlinka
+    public static void Run(float3 origin, [Default(0, 0, 1)] float3 direction, float3 center, out float3 point, out float distance, out bool hit,
+        float radius = 0.5f)
     {
         point = float3.Zero;
         distance = 0f;

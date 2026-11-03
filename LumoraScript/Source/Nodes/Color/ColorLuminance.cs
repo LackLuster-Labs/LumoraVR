@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // Relative luminance, 0.2126 red + 0.7152 green + 0.0722 blue. The weights are for linear channels, so To
 // Linear an sRGB color first. Alpha plays no part.
-[Node("Color/Luminance")]
+[Node("Color/Luminance", Description = "Relative luminance, 0.2126 red + 0.7152 green + 0.0722 blue.",
+    Keywords = "brightness, grayscale, luma, lightness")]
 public sealed class ColorLuminance : ValueNode
 {
     [return: Port("luminance")]

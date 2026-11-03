@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // A quantity from a number in the kind's base unit: metres, radians, kilograms, metres per second,
 // kelvin, bytes.
-[Node("Math/Quantities/From Base Value")]
+[Node("Math/Quantities/From Base Value", Description = "A quantity from a number in the kind's base unit: metres, radians, kilograms, metres per second, kelvin, bytes.")]
 public sealed class QuantityFromBaseValue<T> : ValueNode where T : struct, IScriptQuantity<T>
 {
     [return: Port("quantity")]

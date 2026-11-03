@@ -9,14 +9,14 @@ namespace Lumora.Script;
 // Where the endless line through a and b crosses a circle: 0, 1 where it only touches, or 2, first the
 // one met first going from a toward b. A crossing that is not there reads zero, and a touch gives the
 // same point twice. a and b at one point make no line and cross nothing.
-[Node("Math/Geometry 2D/Line Circle Intersections")]
+[Node("Math/Geometry 2D/Line Circle Intersections", Description = "Where the endless line through a and b crosses a circle: 0, 1 where it only touches, or 2, first the one met first going from a toward b.")]
 public sealed class LineCircleIntersections : ValueNode
 {
     // Within a millionth of the radius squared, a near miss or a near double crossing is a touch.
     private const float Touch = 1e-6f;
 
     [return: Port("count")]
-    public static int Run(float2 center, float radius, float2 a, float2 b, out float2 first, out float2 second)
+    public static int Run(float2 center, [Default(1)] float radius, float2 a, float2 b, out float2 first, out float2 second)
     {
         first = float2.Zero;
         second = float2.Zero;

@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // Exact and case sensitive. An empty part is always found.
-[Node("Strings/Contains")]
+[Node("Strings/Contains", Description = "Checks whether text contains the given text. Matching is case-sensitive.",
+    Keywords = "includes, has, find in text")]
 public sealed class TextContains : ValueNode
 {
     public static bool Run(string? text, string? part)

@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Every char of text in order. A character that takes two chars comes out as both, and Characters To
 // Text puts it back together.
-[Node("Lists/Text/Text To Characters")]
+[Node("Strings/Collections/Text To Characters", Description = "Every char of text in order.",
+    Keywords = "chars, string to chars, explode")]
 public sealed class TextToCharacters : ReadNode
 {
     [return: Port("characters")]

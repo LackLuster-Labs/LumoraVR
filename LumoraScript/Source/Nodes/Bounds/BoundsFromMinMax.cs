@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // The box between two opposite corners, which may come in either order.
-[Node("Math/Bounds/Bounds From Min Max")]
+[Node("Math/Bounds/Bounds From Min Max", Description = "The box between two opposite corners, which may come in either order.",
+    Keywords = "bounding box, aabb, box")]
 public sealed class BoundsFromMinMax : ValueNode
 {
     [return: Port("bounds")]

@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // Every find in text swapped for with. Exact and case sensitive.
-[Node("Strings/Replace")]
+[Node("Strings/Replace", Description = "Every find in text swapped for with.",
+    Keywords = "substitute, swap, replace all")]
 public sealed class Replace : ValueNode
 {
     public static string Run(string? text, string? find, string? with)

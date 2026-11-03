@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the character is a decimal digit, 0 to 9 in any script.
-[Node("Strings/Characters/Is Digit")]
+[Node("Strings/Characters/Is Digit", Description = "Whether the character is a decimal digit, 0 to 9 in any script.")]
 public sealed class IsDigit : ValueNode
 {
     public static bool Run(char character) => char.IsDigit(character);

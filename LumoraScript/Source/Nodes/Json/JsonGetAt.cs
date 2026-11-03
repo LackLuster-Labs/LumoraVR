@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // The item at index, 0 first, read as the node's type the way Get reads a key. found is false, and the
 // value the type's default, when the index is outside the array or the item does not read as that type.
-[Node("JSON/Arrays/Get At")]
+[Node("Data/JSON/Arrays/Get At", Description = "The item at index, 0 first, read as the node's type the way Get reads a key. found is false, and the value the type's default, when the index is outside the array or the item does not read as that type.",
+    Keywords = "item, element, index, array get")]
 public sealed class JsonGetAt<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

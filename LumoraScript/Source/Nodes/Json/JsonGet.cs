@@ -7,7 +7,8 @@ namespace Lumora.Script;
 // object has no such key or its value does not read as that type. Numbers read across number types, whole
 // ones only into whole types; text reads as the type's text form; an array of numbers reads as a vector;
 // and anything reads as text.
-[Node("JSON/Objects/Get")]
+[Node("Data/JSON/Objects/Get", Description = "The value under key, read as the node's type. found is false, and the value the type's default, when the object has no such key or its value does not read as that type.",
+    Keywords = "read key, property, field, member, value of key")]
 public sealed class JsonGet<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

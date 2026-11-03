@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // How many keys a dictionary holds; 0 for no dictionary.
-[Node("Dictionaries/Count")]
+[Node("Data/Dictionaries/Count", Description = "How many keys a dictionary holds; 0 for no dictionary.",
+    Keywords = "size, length, map, hashmap, key value")]
 public sealed class DictCount<TKey, TValue> : ReadNode where TKey : notnull
 {
     [return: Port("count")]

@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // The same channels as an HDR color, free to go past 1 from here on.
-[Node("Color/To HDR")]
+[Node("Color/Conversion/To HDR", Description = "The same channels as an HDR color, free to go past 1 from here on.",
+    Keywords = "color to hdr, overbright")]
 public sealed class ColorToHdr : ValueNode
 {
     [return: Port("color")]

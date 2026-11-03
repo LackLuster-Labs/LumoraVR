@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // Whether a and b are the same: the same object for slots, users and the like, the same value for
 // anything else.
-[Node("Logic/Is Same")]
+[Node("Logic/Is Same", Description = "Whether a and b are the same: the same object for slots, users and the like, the same value for anything else.",
+    Keywords = "equals, same object, identity, compare")]
 public sealed class IsSame<T> : ValueNode
 {
     [return: Port("same")]

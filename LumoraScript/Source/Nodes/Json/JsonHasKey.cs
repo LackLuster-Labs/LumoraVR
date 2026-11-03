@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the object has key, whatever is under it, null included.
-[Node("JSON/Objects/Has Key")]
+[Node("Data/JSON/Objects/Has Key", Description = "Whether the object has key, whatever is under it, null included.")]
 public sealed class JsonHasKey : ValueNode
 {
     [return: Port("has")]

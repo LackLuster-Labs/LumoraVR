@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Whether an item equal to item is in the list.
-[Node("Lists/Contains")]
+[Node("Data/Lists/Contains", Description = "Whether an item equal to item is in the list.",
+    Keywords = "has, includes, find")]
 public sealed class ListContains<T> : ReadNode
 {
     [return: Port("found")]

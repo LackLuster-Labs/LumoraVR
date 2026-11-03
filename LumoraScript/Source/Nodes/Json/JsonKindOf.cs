@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // What a JSON value is: Null, Bool, Number, String, Array or Object. No value reads as Null.
-[Node("JSON/Values/Kind")]
+[Node("Data/JSON/Values/Kind", Description = "What a JSON value is: Null, Bool, Number, String, Array or Object.",
+    Keywords = "type, typeof, value kind")]
 public sealed class JsonKindOf : ValueNode
 {
     [return: Port("kind")]

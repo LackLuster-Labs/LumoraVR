@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // format such as "0.##" or "N1" is used instead when one is given, and one that is not faults. A blank unit
 // is the base unit and "auto" picks the plainest (1500 m is "1.5 km", 0.02 m "2 cm"); one the kind does not
 // have faults, saying which it has. Long names write the unit out: "1.5 kilometres", "1 metre".
-[Node("Math/Quantities/Format Quantity")]
+[Node("Math/Quantities/Format Quantity", Description = "Text such as \"1.50 km\": the number in the named unit and the unit's symbol.",
+    Keywords = "units, measurement, distance text, unit text")]
 public sealed class FormatQuantity<T> : ValueNode where T : struct, IScriptQuantity<T>
 {
     [return: Port("text")]

@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // One key read straight from JSON text: Parse Object and Get in one. found is false when the text is not a
 // JSON object, has no such key, or the key's value does not read as the node's type.
-[Node("JSON/Quick Get")]
+[Node("Data/JSON/Quick Get", Description = "One key read straight from JSON text: Parse Object and Get in one. found is false when the text is not a JSON object, has no such key, or the key's value does not read as the node's type.")]
 public sealed class JsonQuickGet<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

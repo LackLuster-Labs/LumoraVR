@@ -8,7 +8,7 @@ namespace Lumora.Script;
 
 // The point a fraction of a turn round a circle about zero: 0 is +x and a quarter is +y, the way Atan2
 // measures angles, so Atan2 of the point over two pi gives the turn back. Whole turns come round again.
-[Node("Math/Geometry 2D/Point On Circle")]
+[Node("Math/Geometry 2D/Point On Circle", Description = "The point a fraction of a turn round a circle about zero: 0 is +x and a quarter is +y, the way Atan2 measures angles, so Atan2 of the point over two pi gives the turn back.")]
 public sealed class PointOnCircle : ValueNode
 {
     [return: Port("point")]

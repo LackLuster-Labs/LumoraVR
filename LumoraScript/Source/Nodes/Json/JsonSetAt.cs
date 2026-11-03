@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // The array with the item at index replaced by value; replaced is false, and the array as it was, when the
 // index is outside it.
-[Node("JSON/Arrays/Set At")]
+[Node("Data/JSON/Arrays/Set At", Description = "The array with the item at index replaced by value; replaced is false, and the array as it was, when the index is outside it.")]
 public sealed class JsonSetAt<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

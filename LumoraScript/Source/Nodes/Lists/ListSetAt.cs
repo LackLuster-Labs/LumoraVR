@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // Puts item in place of the one at index. Outside the list nothing changes, replaced is false and the call
 // fails, as it does without a list.
-[Node("Lists/Set At")]
+[Node("Data/Lists/Set At", Description = "Puts item in place of the one at index.")]
 public sealed class ListSetAt<T> : ActionNode
 {
     [return: Port("replaced")]

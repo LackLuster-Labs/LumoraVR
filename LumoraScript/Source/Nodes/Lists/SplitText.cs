@@ -8,7 +8,8 @@ namespace Lumora.Script;
 // text cut at every separator, exact and case sensitive, empty pieces kept: "a,,b" by "," gives "a", ""
 // and "b", and empty text one empty piece. An empty separator gives every character on its own, a
 // character that takes two chars kept whole, and empty text no pieces.
-[Node("Lists/Text/Split Text")]
+[Node("Strings/Collections/Split Text", Description = "Text cut at every separator, exact and case sensitive, empty pieces kept: \"a,,b\" by \",\" gives \"a\", \"\" and \"b\", and empty text one empty piece.",
+    Keywords = "explode, tokenize, string to list")]
 public sealed class SplitText : ReadNode
 {
     [return: Port("parts")]

@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Without the spaces and line breaks at either end.
-[Node("Strings/Trim")]
+[Node("Strings/Trim", Description = "Without the spaces and line breaks at either end.",
+    Keywords = "strip, whitespace, spaces")]
 public sealed class Trim : ValueNode
 {
     public static string Run(string? text) => (text ?? string.Empty).Trim();

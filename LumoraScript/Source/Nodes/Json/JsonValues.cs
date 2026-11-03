@@ -6,7 +6,7 @@ using System.Linq;
 namespace Lumora.Script;
 
 // Every value in key order, as an array.
-[Node("JSON/Objects/Values")]
+[Node("Data/JSON/Objects/Values", Description = "Every value in key order, as an array.")]
 public sealed class JsonValues : ReadNode
 {
     [return: Port("values")]

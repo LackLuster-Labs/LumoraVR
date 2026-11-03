@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // The byte eight bits make, bit0 the lowest. Signed is the same eight bits as an sbyte, bit7 its sign.
-[Node("Math/Bits/Compose Bits")]
+[Node("Math/Bits/Compose Bits", Description = "The byte eight bits make, bit0 the lowest.",
+    Keywords = "pack bits, bits to byte, booleans to byte, bitfield")]
 public sealed class ComposeBits : ValueNode
 {
     [return: Port("value")]

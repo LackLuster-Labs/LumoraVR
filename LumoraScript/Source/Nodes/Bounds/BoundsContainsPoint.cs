@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // A point on a face counts as inside. An empty box contains nothing.
-[Node("Math/Bounds/Contains Point")]
+[Node("Math/Bounds/Contains Point", Description = "Checks whether a point is inside or on the edge of a bounding box.",
+    Keywords = "bounding box, aabb, box, inside")]
 public sealed class BoundsContainsPoint : ValueNode
 {
     [return: Port("contains")]

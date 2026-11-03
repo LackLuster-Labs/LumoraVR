@@ -6,7 +6,7 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Rows become columns. For a pure rotation matrix this is also its inverse.
-[Node("Math/Matrices/Transpose")]
+[Node("Math/Matrices/Transpose", Description = "Rows become columns.")]
 public sealed class MatrixTranspose : ValueNode
 {
     [return: Port("transposed")] public static float2x2 Run(float2x2 matrix) => matrix.Transposed;

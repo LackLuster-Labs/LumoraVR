@@ -11,7 +11,8 @@ namespace Lumora.Script;
 // 1 - (1 - source)(1 - destination) on channels held to 0 to 1, a lighten that never passes 1. Both add the
 // alphas, at most 1. Multiply multiplies all four channels. A color comes out held to 0 to 1; an HDR color's
 // red, green and blue may pass 1. A mode it does not know gives the destination back.
-[Node("Color/Blend")]
+[Node("Color/Blend", Description = "Blends the source colour over the destination using the selected blending mode.",
+    Keywords = "additive, screen, soft additive, multiply, layer, composite, over, alpha")]
 public sealed class BlendColors : ValueNode
 {
     [return: Port("color")]

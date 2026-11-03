@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // The matrix that undoes this one: the two multiplied give the identity. A 4x4 matrix is inverted whole,
 // bottom row and all. A matrix that flattens something has no inverse and gives the zero matrix.
-[Node("Math/Matrices/Inverse")]
+[Node("Math/Matrices/Inverse", Description = "The matrix that undoes this one: the two multiplied give the identity.",
+    Keywords = "invert, inverse matrix, undo transform")]
 public sealed class MatrixInverse : ValueNode
 {
     [return: Port("inverse")] public static float2x2 Run(float2x2 matrix) => matrix.Inverse;

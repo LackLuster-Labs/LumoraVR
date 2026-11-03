@@ -6,7 +6,8 @@ namespace Lumora.Script;
 // The Unicode number of the character at index. Where a surrogate pair starts, the one character the
 // pair makes; any other surrogate half, the second of a pair included, reads as itself. 0 when index is
 // outside the text.
-[Node("Strings/Characters/Code Point At")]
+[Node("Strings/Characters/Code Point At", Description = "The Unicode number of the character at index.",
+    Keywords = "utf32, unicode, char code at, rune")]
 public sealed class CodePointAt : ValueNode
 {
     [return: Port("codePoint")]

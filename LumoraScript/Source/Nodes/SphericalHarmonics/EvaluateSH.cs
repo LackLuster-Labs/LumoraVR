@@ -10,13 +10,18 @@ namespace Lumora.Script;
 // The value the harmonics hold toward a direction: each coefficient times its real basis function there,
 // summed. The direction is normalized first; a zero direction leaves only band 0. Harmonics of a number give
 // a number, and of a color a color, alpha summed like the rest.
-[Node("Math/Spherical Harmonics/Evaluate")]
+[Node("Math/Spherical Harmonics/Evaluate", Description = "The value the harmonics hold toward a direction: each coefficient times its real basis function there, summed.",
+    Keywords = "SH, sample sh, ambient light, irradiance, lighting")]
 public sealed class EvaluateSH : ValueNode
 {
-    [return: Port("value")] public static float3 Run(SphericalHarmonicsL1 sh, float3 direction) => sh.Evaluate(direction);
-    [return: Port("value")] public static float3 Run(SphericalHarmonicsL2 sh, float3 direction) => sh.Evaluate(direction);
-    [return: Port("value")] public static float3 Run(SphericalHarmonicsL3 sh, float3 direction) => sh.Evaluate(direction);
-    [return: Port("value")] public static float3 Run(SphericalHarmonicsL4 sh, float3 direction) => sh.Evaluate(direction);
+    // Normalized, a zero direction is zero, and there the zonal terms of bands 2 and 4 do not vanish; band 0
+    // is all that has a meaning without a direction. -xlinka
+    private const float Band0 = 0.2820948f;
+
+    [return: Port("value")] public static float3 Run(SphericalHarmonicsL1 sh, float3 direction) => Toward(direction) ? sh.Evaluate(direction) : sh.sh0 * Band0;
+    [return: Port("value")] public static float3 Run(SphericalHarmonicsL2 sh, float3 direction) => Toward(direction) ? sh.Evaluate(direction) : sh.sh0 * Band0;
+    [return: Port("value")] public static float3 Run(SphericalHarmonicsL3 sh, float3 direction) => Toward(direction) ? sh.Evaluate(direction) : sh.sh0 * Band0;
+    [return: Port("value")] public static float3 Run(SphericalHarmonicsL4 sh, float3 direction) => Toward(direction) ? sh.Evaluate(direction) : sh.sh0 * Band0;
 
     [return: Port("value")]
     public static float Run(SphericalHarmonicsL1<float> sh, float3 direction)
@@ -54,8 +59,12 @@ public sealed class EvaluateSH : ValueNode
     private static ReadOnlySpan<T> Coefficients<T>(ref T first, int count) where T : unmanaged
         => MemoryMarshal.CreateReadOnlySpan(ref first, count);
 
+    private static bool Toward(float3 direction) => direction.Length > 0f;
+
     private static float Sum(float3 direction, ReadOnlySpan<float> coefficients)
     {
+        if (!Toward(direction))
+            return coefficients[0] * Band0;
         Span<float> basis = stackalloc float[coefficients.Length];
         SphericalHarmonics.Basis(direction, basis);
         float sum = 0f;
@@ -66,6 +75,8 @@ public sealed class EvaluateSH : ValueNode
 
     private static color Sum(float3 direction, ReadOnlySpan<color> coefficients)
     {
+        if (!Toward(direction))
+            return coefficients[0] * Band0;
         Span<float> basis = stackalloc float[coefficients.Length];
         SphericalHarmonics.Basis(direction, basis);
         var sum = new color(0f, 0f, 0f, 0f);

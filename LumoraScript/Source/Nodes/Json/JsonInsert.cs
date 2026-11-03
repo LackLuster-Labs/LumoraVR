@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // The array with value put in at index, 0 first, which may be one past the end. inserted is false, and the
 // array as it was, for any other index. No array starts from an empty one.
-[Node("JSON/Arrays/Insert")]
+[Node("Data/JSON/Arrays/Insert", Description = "The array with value put in at index, 0 first, which may be one past the end. inserted is false, and the array as it was, for any other index.")]
 public sealed class JsonInsert<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

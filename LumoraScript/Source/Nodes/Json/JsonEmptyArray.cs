@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // An array with nothing in it, to add items to.
-[Node("JSON/Arrays/Empty Array")]
+[Node("Data/JSON/Arrays/Empty Array", Description = "An array with nothing in it, to add items to.")]
 public sealed class JsonEmptyArray : ValueNode
 {
     [return: Port("array")]

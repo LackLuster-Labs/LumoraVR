@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // The character as one-character text. To Text writes the typed form instead, "space" for a space.
-[Node("Strings/Characters/Char To Text")]
+[Node("Strings/Characters/Char To Text", Description = "The character as one-character text.")]
 public sealed class CharToText : ValueNode
 {
     public static string Run(char character) => character.ToString();

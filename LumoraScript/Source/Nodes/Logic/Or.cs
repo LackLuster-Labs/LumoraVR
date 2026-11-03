@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // A bool vector goes lane by lane; a whole number bit by bit.
 [Variadic]
-[Node("Logic/Or")]
+[Node("Logic/Or", Description = "Returns true when any input is true. Integer inputs use bitwise OR.",
+    Keywords = "either, any true, bitwise or")]
 public sealed class Or : ValueNode
 {
     [Wasm(WasmOp.I32Or)] public static bool Run(bool a, bool b) => a | b;

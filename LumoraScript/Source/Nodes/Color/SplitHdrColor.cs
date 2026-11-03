@@ -5,7 +5,8 @@ using Lumora.Core.Math;
 
 namespace Lumora.Script;
 
-[Node("Color/Split HDR Color")]
+[Node("Color/Packing/Split HDR Color", Description = "Separates an HDR colour into its red, green, blue and alpha channels.",
+    Keywords = "rgba, decompose color, channels")]
 public sealed class SplitHdrColor : ValueNode
 {
     public static void Run(colorHDR value, out float r, out float g, out float b, out float a)

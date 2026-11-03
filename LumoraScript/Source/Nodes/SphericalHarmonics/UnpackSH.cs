@@ -7,7 +7,7 @@ namespace Lumora.Script;
 
 // The coefficients, band by band: sh0 is band 0, sh1 to sh3 band 1, sh4 to sh8 band 2 and on. Each is an RGB
 // float3, a number or a color, whichever the harmonics hold.
-[Node("Math/Spherical Harmonics/Unpack")]
+[Node("Math/Spherical Harmonics/Unpack", Description = "The coefficients, band by band: sh0 is band 0, sh1 to sh3 band 1, sh4 to sh8 band 2 and on.")]
 public sealed class UnpackSH : ValueNode
 {
     public static void Run(SphericalHarmonicsL1 sh, out float3 sh0, out float3 sh1, out float3 sh2, out float3 sh3)

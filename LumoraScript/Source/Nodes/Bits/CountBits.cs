@@ -7,7 +7,8 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // How many bits of value are set, counted across its own width: -1 as an sbyte has 8, as an int 32.
-[Node("Math/Bits/Count Bits")]
+[Node("Math/Bits/Count Bits", Description = "How many bits of value are set, counted across its own width: -1 as an sbyte has 8, as an int 32.",
+    Keywords = "popcount, population count, hamming weight, set bits, bit count")]
 public sealed class CountBits : ValueNode
 {
     [Wasm(WasmOp.I32Popcnt)] public static int Run(int value) => BitOperations.PopCount((uint)value);

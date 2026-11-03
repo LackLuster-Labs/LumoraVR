@@ -9,7 +9,7 @@ namespace Lumora.Script;
 // The unit normal of the triangle a, b, c: Cross of b - a and c - a, at length one. valid is false, and
 // the normal zero, for a triangle too flat to have one. Flat is judged by the triangle's shape, not its
 // size, so a millimetre triangle has a normal as surely as a kilometre one.
-[Node("Math/Geometry 3D/Triangle Normal")]
+[Node("Math/Geometry 3D/Triangle Normal", Description = "The unit normal of the triangle a, b, c: Cross of b - a and c - a, at length one. valid is false, and the normal zero, for a triangle too flat to have one.")]
 public sealed class TriangleNormal : ValueNode
 {
     // The squared sine of the triangle's angle at a, below which float rounding makes up the normal.

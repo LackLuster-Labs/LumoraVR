@@ -23,7 +23,8 @@ internal static class Turns
         => 2f * MathF.Acos(MathF.Min(1f, MathF.Abs(floatQ.Dot(Unit(a), Unit(b)))));
 
     // The shortest turn that carries the direction from onto the direction to. Opposite directions turn
-    // half way round about a fixed axis square to them; a zero direction is no turn.
+    // half way round about up made square to them, the way From To Rotation does, so a level direction
+    // stays the right way up; along up they turn about a fixed axis square to it. A zero direction is no turn.
     public static floatQ FromTo(float3 from, float3 to)
     {
         from = from.Normalized;
@@ -34,7 +35,10 @@ internal static class Turns
         if (dot >= 1f - 1e-7f)
             return floatQ.Identity;
         if (dot <= -1f + 1e-7f)
-            return floatQ.AxisAngle(Square(from), MathF.PI);
+        {
+            var level = float3.Up - from * from.y;
+            return floatQ.AxisAngle(level.LengthSquared > 1e-6f ? level : Square(from), MathF.PI);
+        }
         var axis = float3.Cross(from, to);
         return Unit(new floatQ(axis.x, axis.y, axis.z, 1f + dot));
     }

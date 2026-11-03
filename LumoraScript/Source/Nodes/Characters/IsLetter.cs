@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the character is a letter, in any script.
-[Node("Strings/Characters/Is Letter")]
+[Node("Strings/Characters/Is Letter", Description = "Whether the character is a letter, in any script.")]
 public sealed class IsLetter : ValueNode
 {
     public static bool Run(char character) => char.IsLetter(character);

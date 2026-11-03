@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // An empty list. It is in the flow, so every node after it that reads its list reads this one list.
-[Node("Lists/New List")]
+[Node("Data/Lists/New List", Description = "An empty list.",
+    Keywords = "create list, array, empty list")]
 public sealed class NewList<T> : ActionNode
 {
     [return: Port("list")]

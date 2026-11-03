@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Whether the two share some area. Rects that only touch along an edge do not overlap.
-[Node("Math/Rects/Overlaps")]
+[Node("Math/Rects/Overlaps", Description = "Whether the two share some area.",
+    Keywords = "rectangle, intersects, collide")]
 public sealed class RectsOverlap : ValueNode
 {
     [return: Port("overlap")]

@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Channels 0 to 1.
-[Node("Color/Make Color")]
+[Node("Color/Packing/Make Color", Description = "Combines red, green, blue and alpha channels into a colour, using values from 0 to 1.",
+    Keywords = "rgb, rgba, compose color, construct color")]
 public sealed class MakeColor : ValueNode
 {
     [return: Port("color")]

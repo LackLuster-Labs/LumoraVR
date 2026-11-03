@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // How many unset bits come above the highest set one, counted across value's own width, so 0 gives the
 // whole width: 8 for a byte, 32 for an int.
-[Node("Math/Bits/Leading Zeros")]
+[Node("Math/Bits/Leading Zeros", Description = "How many unset bits come above the highest set one, counted across value's own width, so 0 gives the whole width: 8 for a byte, 32 for an int.",
+    Keywords = "clz, count leading zeros, highest bit")]
 public sealed class LeadingZeros : ValueNode
 {
     [Wasm(WasmOp.I32Clz)] public static int Run(int value) => BitOperations.LeadingZeroCount((uint)value);

@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // The number behind an enum value. An enum wider than an int gives its low 32 bits.
-[Node("Enums/Enum To Number")]
+[Node("Data/Enums/Enum To Number", Description = "The number behind an enum value.",
+    Keywords = "cast, underlying value, integer")]
 public sealed class EnumToNumber<T> : ValueNode where T : struct, Enum
 {
     [return: Port("number")]

@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // The value under key; found is false, and the value the type's default, when there is none.
-[Node("Dictionaries/Get Key")]
+[Node("Data/Dictionaries/Get Key", Description = "The value under key; found is false, and the value the type's default, when there is none.",
+    Keywords = "lookup, get value, map, hashmap, key value")]
 public sealed class DictGetKey<TKey, TValue> : ReadNode where TKey : notnull
 {
     [return: Port("value")]

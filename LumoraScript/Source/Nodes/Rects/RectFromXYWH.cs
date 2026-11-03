@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // x and y are the corner the width and height are measured from.
-[Node("Math/Rects/Rect From XYWH")]
+[Node("Math/Rects/Rect From XYWH", Description = "X and y are the corner the width and height are measured from.",
+    Keywords = "rectangle")]
 public sealed class RectFromXYWH : ValueNode
 {
     [return: Port("rect")]

@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // Every coefficient of a band times that band's factor: band 0 is the average, the higher bands ever
 // finer detail, so shrinking them blurs. An unset factor is 1 and leaves its band alone.
-[Node("Math/Spherical Harmonics/Scale Orders")]
+[Node("Math/Spherical Harmonics/Scale Orders", Description = "Every coefficient of a band times that band's factor: band 0 is the average, the higher bands ever finer detail, so shrinking them blurs.",
+    Keywords = "SH, bands, blur, windowing, filter")]
 public sealed class ScaleSHOrders : ValueNode
 {
     [return: Port("scaled")]

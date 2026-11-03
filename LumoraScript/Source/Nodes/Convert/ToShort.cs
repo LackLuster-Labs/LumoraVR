@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // Rounds toward zero. Past the ends of short, -32768 and 32767, it holds at the end, and NaN is 0.
-[Node("Math/Convert/To Short")]
+[Node("Math/Conversion/To Short", Description = "Converts a value to a signed 16-bit integer, dropping any fractional part toward zero.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToShort : ValueNode
 {
     public static short Run(int value) => short.CreateSaturating(value);

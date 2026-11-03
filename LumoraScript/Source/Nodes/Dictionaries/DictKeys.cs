@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Every key, in the order they were first added, as a new list. Later changes to the dictionary do not
 // reach it. No dictionary gives an empty list.
-[Node("Dictionaries/Keys")]
+[Node("Data/Dictionaries/Keys", Description = "Every key, in the order they were first added, as a new list.",
+    Keywords = "map, hashmap, key value")]
 public sealed class DictKeys<TKey, TValue> : ReadNode where TKey : notnull
 {
     [return: Port("keys")]

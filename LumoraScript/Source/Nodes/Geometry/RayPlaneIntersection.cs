@@ -11,11 +11,11 @@ namespace Lumora.Script;
 // even when that is behind the origin, distance then below zero, so the node also serves as a line and
 // plane test. A ray lying in the plane hits at its origin; one running beside it, a zero direction or a
 // zero normal meets it nowhere and reads zeros.
-[Node("Math/Geometry 3D/Ray Plane Intersection")]
+[Node("Math/Geometry 3D/Ray Plane Intersection", Description = "Finds where a ray meets a plane. Hit is true only when the intersection is ahead of the ray's origin.")]
 public sealed class RayPlaneIntersection : ValueNode
 {
-    public static void Run(float3 origin, float3 direction, float3 planePoint, float3 planeNormal, out float3 point,
-        out float distance, out bool hit)
+    public static void Run(float3 origin, [Default(0, -1, 0)] float3 direction, float3 planePoint, [Default(0, 1, 0)] float3 planeNormal,
+        out float3 point, out float distance, out bool hit)
     {
         point = float3.Zero;
         distance = 0f;

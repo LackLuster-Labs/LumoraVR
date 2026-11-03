@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // The code point a high and a low surrogate make together. When the two are not a pair, high's own
 // number, so a character up to U+FFFF with the null character as low reads back as itself.
-[Node("Strings/Characters/From UTF-16")]
+[Node("Strings/Characters/Surrogates To Code Point", Description = "The code point a high and a low surrogate make together.",
+    Keywords = "surrogate pair, utf16, utf32, combine surrogates")]
 public sealed class FromUtf16 : ValueNode
 {
     [return: Port("codePoint")]

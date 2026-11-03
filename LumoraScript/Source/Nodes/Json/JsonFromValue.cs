@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // A value as JSON: a number, true or false, text, an array for a vector, list or other struct, an object for
 // a dictionary. JSON has no NaN or infinity, so a number that is not finite is null.
-[Node("JSON/Values/From Value")]
+[Node("Data/JSON/Values/From Value", Description = "A value as JSON: a number, true or false, text, an array for a vector, list or other struct, an object for a dictionary.")]
 public sealed class JsonFromValue<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

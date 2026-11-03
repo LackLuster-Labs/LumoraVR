@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // A matrix's columns, left first. In a transform matrix the first three are where x, y and z point and
 // the last is the position.
-[Node("Math/Matrices/Unpack Columns")]
+[Node("Math/Matrices/Unpack Columns", Description = "A matrix's columns, left first.",
+    Keywords = "split matrix, matrix to vectors, basis vectors")]
 public sealed class UnpackColumns : ValueNode
 {
     public static void Run(float2x2 matrix, out float2 column0, out float2 column1)

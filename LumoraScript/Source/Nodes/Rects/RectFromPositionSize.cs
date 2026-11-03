@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Position is the corner the size is measured from.
-[Node("Math/Rects/Rect From Position Size")]
+[Node("Math/Rects/Rect From Position Size", Description = "Creates a rectangle from a corner position and its width and height.",
+    Keywords = "rectangle")]
 public sealed class RectFromPositionSize : ValueNode
 {
     [return: Port("rect")]

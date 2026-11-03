@@ -8,7 +8,8 @@ namespace Lumora.Script;
 // The channels read as sRGB and given back linear, on the exact sRGB curve. Hex codes and the tints of
 // lights and materials are sRGB; blends and luminance are right in linear. Alpha is left alone, and past 1
 // the curve carries on.
-[Node("Color/To Linear")]
+[Node("Color/Conversion/To Linear", Description = "The channels read as sRGB and given back linear, on the exact sRGB curve.",
+    Keywords = "gamma, linearize, srgb to linear, linear to srgb, color space")]
 public sealed class ColorToLinear : ValueNode
 {
     [return: Port("color")]

@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether a JSON value is null, or there is no value at all.
-[Node("JSON/Values/Is Null")]
+[Node("Data/JSON/Values/Is Null", Description = "Whether a JSON value is null, or there is no value at all.")]
 public sealed class JsonIsNull : ValueNode
 {
     [return: Port("null")]

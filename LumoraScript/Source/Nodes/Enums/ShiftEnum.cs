@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // Steps through the values in number order, wrapping round either end: 1 is Next Value, -1 Previous
 // Value, and a step count past the number of values goes round again.
-[Node("Enums/Shift Enum")]
+[Node("Data/Enums/Shift Enum", Description = "Steps through the values in number order, wrapping round either end: 1 is Next Value, -1 Previous Value, and a step count past the number of values goes round again.",
+    Keywords = "cycle, step enum, offset enum")]
 public sealed class ShiftEnum<T> : ValueNode where T : struct, Enum
 {
     [return: Port("shifted")]

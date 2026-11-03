@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the character is a symbol: math, currency, modifier and other symbols such as + $ ^ ©.
-[Node("Strings/Characters/Is Symbol")]
+[Node("Strings/Characters/Is Symbol", Description = "Whether the character is a symbol: math, currency, modifier and other symbols such as + $ ^ ©.")]
 public sealed class IsSymbol : ValueNode
 {
     public static bool Run(char character) => char.IsSymbol(character);

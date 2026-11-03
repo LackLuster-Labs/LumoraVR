@@ -6,7 +6,7 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // The 2x2 matrix that changes nothing it is multiplied with.
-[Node("Math/Matrices/Identity 2x2")]
+[Node("Math/Matrices/Identity 2x2", Description = "The 2x2 matrix that changes nothing it is multiplied with.")]
 public sealed class Identity2x2 : ValueNode
 {
     [return: Port("matrix")] public static float2x2 Run() => float2x2.Identity;

@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // A list as a JSON array, each item in its JSON form. Later changes to the list do not reach it. No list
 // gives an empty array.
-[Node("JSON/Arrays/From List")]
+[Node("Data/JSON/Arrays/From List", Description = "A list as a JSON array, each item in its JSON form.")]
 public sealed class JsonFromList<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

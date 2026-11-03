@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // JSON null, for a key or item that is there with nothing in it.
-[Node("JSON/Values/Null")]
+[Node("Data/JSON/Values/Null", Description = "JSON null, for a key or item that is there with nothing in it.")]
 public sealed class JsonNull : ValueNode
 {
     [return: Port("json")]

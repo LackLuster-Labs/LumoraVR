@@ -10,10 +10,10 @@ namespace Lumora.Script;
 // or on the way out when it starts inside, so a ray from a rect's middle finds where its border lies in
 // that direction. distance is how far along the ray. A rect of negative size spans the same ground as
 // its flipped self. No hit, or a zero direction, reads zeros.
-[Node("Math/Geometry 2D/Ray Rect Intersection")]
+[Node("Math/Geometry 2D/Ray Rect Intersection", Description = "Finds where a 2D ray first reaches a rectangle's edge, entering from outside or leaving from inside.")]
 public sealed class RayRectIntersection : ValueNode
 {
-    public static void Run(float2 origin, float2 direction, Rect rect, out float2 point, out float distance, out bool hit)
+    public static void Run(float2 origin, [Default(1, 0)] float2 direction, Rect rect, out float2 point, out float distance, out bool hit)
     {
         point = float2.Zero;
         distance = 0f;

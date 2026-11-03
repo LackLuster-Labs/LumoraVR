@@ -4,6 +4,7 @@
 using System;
 using System.Globalization;
 using System.Text;
+using Lumora.Core.Math;
 
 namespace Lumora.Script;
 
@@ -15,6 +16,12 @@ internal static class TextFormat
     {
         null => string.Empty,
         bool flag => flag ? "true" : "false",
+        // The vectors' own ToString writes the machine's decimal comma; text a graph makes must read the
+        // same everywhere. -xlinka
+        float2 v => string.Create(CultureInfo.InvariantCulture, $"({v.x}, {v.y})"),
+        float3 v => string.Create(CultureInfo.InvariantCulture, $"({v.x}, {v.y}, {v.z})"),
+        float4 v => string.Create(CultureInfo.InvariantCulture, $"({v.x}, {v.y}, {v.z}, {v.w})"),
+        color c => string.Create(CultureInfo.InvariantCulture, $"({c.r:F3}, {c.g:F3}, {c.b:F3}, {c.a:F3})"),
         IFormattable formattable => formattable.ToString(null, CultureInfo.InvariantCulture),
         _ => value.ToString() ?? string.Empty,
     };

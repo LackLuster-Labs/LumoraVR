@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the character is an upper case letter.
-[Node("Strings/Characters/Is Upper")]
+[Node("Strings/Characters/Is Upper", Description = "Whether the character is an upper case letter.")]
 public sealed class IsUpper : ValueNode
 {
     public static bool Run(char character) => char.IsUpper(character);

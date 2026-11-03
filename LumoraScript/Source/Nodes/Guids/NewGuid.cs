@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // A fresh random guid every time it is read. Seed Random does not make it repeat.
-[Node("Guids/New Guid")]
+[Node("Data/IDs/New Guid", Description = "A fresh random guid every time it is read.",
+    Keywords = "uuid, unique id, random id")]
 public sealed class NewGuid : ReadNode
 {
     [return: Port("guid")] public static Guid Run() => Guid.NewGuid();

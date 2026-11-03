@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // One number by row and column, 0 first; 0 for a row or column outside the matrix.
-[Node("Math/Matrices/Get Entry")]
+[Node("Math/Matrices/Get Entry", Description = "One number by row and column, 0 first; 0 for a row or column outside the matrix.",
+    Keywords = "cell, row column, element")]
 public sealed class MatrixEntry : ValueNode
 {
     [return: Port("value")]

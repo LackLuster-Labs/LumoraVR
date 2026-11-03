@@ -7,7 +7,7 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // A turn in the plane, in degrees, counterclockwise from x toward y.
-[Node("Math/Matrices/Compose Rotation 2x2")]
+[Node("Math/Matrices/Compose Rotation 2x2", Description = "A turn in the plane, in degrees, counterclockwise from x toward y.")]
 public sealed class ComposeRotation2x2 : ValueNode
 {
     [return: Port("matrix")]

@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // How many members an object has or items an array has; 0 for any other value, or none.
-[Node("JSON/Count")]
+[Node("Data/JSON/Count", Description = "How many members an object has or items an array has; 0 for any other value, or none.",
+    Keywords = "length, size, item count, key count")]
 public sealed class JsonCount : ValueNode
 {
     [return: Port("count")]

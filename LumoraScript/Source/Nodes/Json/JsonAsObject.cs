@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // A JSON value that is an object, as one; ok is false, and the object nothing, for any other.
-[Node("JSON/Values/As Object")]
+[Node("Data/JSON/Values/As Object", Description = "A JSON value that is an object, as one; ok is false, and the object nothing, for any other.")]
 public sealed class JsonAsObject : ValueNode
 {
     [return: Port("object")]

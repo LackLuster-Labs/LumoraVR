@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // ignored. Alpha is 1 when the code has none. The channels come out as written: a code off a web page is
 // sRGB, so To Linear it where a linear color is wanted. parsed is false, and the color clear black, when
 // the text is not a code.
-[Node("Color/From Hex")]
+[Node("Color/Conversion/From Hex", Description = "Reads a colour from hexadecimal text, with optional alpha and a # or 0x prefix.",
+    Keywords = "hex code, html color, web color, hexadecimal")]
 public sealed class ColorFromHex : ValueNode
 {
     [return: Port("color")]

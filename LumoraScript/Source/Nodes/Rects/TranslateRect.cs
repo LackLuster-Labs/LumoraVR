@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Moved by offset, its size unchanged.
-[Node("Math/Rects/Translate")]
+[Node("Math/Rects/Translate", Description = "Moved by offset, its size unchanged.",
+    Keywords = "rectangle, move, offset")]
 public sealed class TranslateRect : ValueNode
 {
     [return: Port("moved")]

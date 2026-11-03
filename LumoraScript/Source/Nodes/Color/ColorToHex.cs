@@ -12,7 +12,8 @@ namespace Lumora.Script;
 // channel is held to 0 to 1 and rounded to the nearest step, so a color read from a code writes back the
 // same code, and NaN writes as 0. The channels go out as they are; codes are usually sRGB, so To sRGB a
 // linear color first.
-[Node("Color/To Hex")]
+[Node("Color/Conversion/To Hex", Description = "Two hex digits a channel, or one in the short form, alpha last when asked for, after the prefix.",
+    Keywords = "hex code, html color, web color, hexadecimal")]
 public sealed class ColorToHex : ValueNode
 {
     [return: Port("hex")]

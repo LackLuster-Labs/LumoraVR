@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Takes out the item at index and moves the rest back. Outside the list nothing changes, removed is false
 // and the call fails, as it does without a list.
-[Node("Lists/Remove At")]
+[Node("Data/Lists/Remove At", Description = "Takes out the item at index and moves the rest back.",
+    Keywords = "delete at, erase at")]
 public sealed class ListRemoveAt<T> : ActionNode
 {
     [return: Port("removed")]

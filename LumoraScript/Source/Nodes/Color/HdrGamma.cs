@@ -10,7 +10,7 @@ namespace Lumora.Script;
 // the rest as they are, so only the overbright part of an HDR color bends. Alpha is left alone. A gamma of 0
 // or below, or not a finite number, gives the color back as it is, and a channel raised past the largest
 // float holds there.
-[Node("Color/HDR Gamma")]
+[Node("Color/Conversion/HDR Gamma", Description = "Raises each of red, green and blue that is past 1 to the gamma, or to 1 / gamma when inverse, and leaves the rest as they are, so only the overbright part of an HDR color bends.")]
 public sealed class HdrGamma : ValueNode
 {
     [return: Port("color")]

@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // another scheme included. example.com:8080 is a host and a port here, never an address whose scheme is
 // "example.com", and text that starts with a scheme of its own, like mailto: or data:, is not made into a
 // web address. Spaces at either end are dropped.
-[Node("URLs/Text To Web Address")]
+[Node("Network/URLs/Text To Web Address", Description = "Reads an HTTP or HTTPS address from text. Adds http:// when the scheme is missing.",
+    Keywords = "uri, website, link, http, parse url")]
 public sealed class TextToWebAddress : ValueNode
 {
     [return: Port("url")]

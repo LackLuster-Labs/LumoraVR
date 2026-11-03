@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // The UTF-16 unit with that number, 0 to 65535; the null character for any other number.
-[Node("Strings/Characters/Code To Char")]
+[Node("Strings/Characters/Code To Char", Description = "The UTF-16 unit with that number, 0 to 65535; the null character for any other number.",
+    Keywords = "chr, ascii, from code, utf16, number to character")]
 public sealed class CodeToChar : ValueNode
 {
     [return: Port("character")]

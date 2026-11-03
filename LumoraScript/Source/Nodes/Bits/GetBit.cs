@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Whether bit index of value is set, 0 the lowest. An index outside the number's width reads as unset.
-[Node("Math/Bits/Get Bit")]
+[Node("Math/Bits/Get Bit", Description = "Whether bit index of value is set, 0 the lowest.",
+    Keywords = "test bit, check bit, read flag, bitmask")]
 public sealed class GetBit : ValueNode
 {
     [return: Port("bit")] public static bool Run(int value, int index) => (uint)index < 32 && ((value >> index) & 1) != 0;

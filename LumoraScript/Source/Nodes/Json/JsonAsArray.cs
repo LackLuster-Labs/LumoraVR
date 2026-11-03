@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // A JSON value that is an array, as one; ok is false, and the array nothing, for any other.
-[Node("JSON/Values/As Array")]
+[Node("Data/JSON/Values/As Array", Description = "A JSON value that is an array, as one; ok is false, and the array nothing, for any other.")]
 public sealed class JsonAsArray : ValueNode
 {
     [return: Port("array")]

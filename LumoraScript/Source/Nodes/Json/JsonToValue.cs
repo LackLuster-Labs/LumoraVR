@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // A JSON value read as the node's type, the way Get reads a key; ok is false, and the value the type's
 // default, when it does not read as that type.
-[Node("JSON/Values/To Value")]
+[Node("Data/JSON/Values/To Value", Description = "A JSON value read as the node's type, the way Get reads a key; ok is false, and the value the type's default, when it does not read as that type.")]
 public sealed class JsonToValue<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

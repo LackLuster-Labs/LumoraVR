@@ -8,7 +8,8 @@ namespace Lumora.Script;
 // Empty: min is past max on some axis, so the box holds no point, as Empty Bounds gives. Valid: not empty
 // and every corner a finite number, so the box can be measured and moved. A box holding a number that is not
 // finite is neither.
-[Node("Math/Bounds/Bounds State")]
+[Node("Math/Bounds/Bounds State", Description = "Reports whether a bounding box is empty, valid and finite.",
+    Keywords = "bounding box, aabb, box")]
 public sealed class BoundsState : ValueNode
 {
     public static void Run(BoundingBox bounds, out bool valid, out bool empty)

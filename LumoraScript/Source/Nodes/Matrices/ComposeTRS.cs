@@ -7,9 +7,10 @@ namespace Lumora.Script;
 
 // A transform matrix: scaled, then turned, then moved, the way a slot is placed in its parent. The
 // rotation is normalized first, and a zero rotation turns nothing.
-[Node("Math/Matrices/Compose TRS")]
+[Node("Math/Matrices/Compose TRS", Description = "A transform matrix: scaled, then turned, then moved, the way a slot is placed in its parent.",
+    Keywords = "transform matrix, position rotation scale, translation, local to parent")]
 public sealed class ComposeTRS : ValueNode
 {
     [return: Port("matrix")]
-    public static float4x4 Run(float3 position, floatQ rotation, float3 scale) => float4x4.TRS(position, rotation.Normalized, scale);
+    public static float4x4 Run(float3 position, [Default(0, 0, 0, 1)] floatQ rotation, [Default(1)] float3 scale) => float4x4.TRS(position, rotation.Normalized, scale);
 }

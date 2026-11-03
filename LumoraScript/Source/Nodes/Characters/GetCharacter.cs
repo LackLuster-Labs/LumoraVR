@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // The character at index, 0 first. Indexes count UTF-16 units, so an emoji takes two. The null
 // character when index is outside the text.
-[Node("Strings/Characters/Get Character")]
+[Node("Strings/Characters/Get Character", Description = "The character at index, 0 first.",
+    Keywords = "char at, character at, letter at")]
 public sealed class GetCharacter : ValueNode
 {
     [return: Port("character")]

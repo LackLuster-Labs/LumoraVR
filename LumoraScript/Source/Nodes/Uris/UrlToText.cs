@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // An address as it was written; empty for no url.
-[Node("URLs/URL To Text")]
+[Node("Network/URLs/URL To Text", Description = "An address as it was written; empty for no url.",
+    Keywords = "uri, url to string, link text")]
 public sealed class UrlToText : ValueNode
 {
     [return: Port("text")]

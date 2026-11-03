@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 [Variadic]
-[Node("Strings/Concat")]
+[Node("Strings/Concat", Description = "Joins text values together in order.",
+    Keywords = "concatenate, join, combine, append, plus, merge text")]
 public sealed class Concat : ValueNode
 {
     public static string Run(string? a, string? b) => TextFormat.Join(a, b);

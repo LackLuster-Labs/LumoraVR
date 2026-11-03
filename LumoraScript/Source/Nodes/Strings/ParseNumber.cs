@@ -6,7 +6,8 @@ using System.Globalization;
 namespace Lumora.Script;
 
 // The number in text, with a point for decimals; ok is false, and the value 0, when it is not one.
-[Node("Strings/Parse Number")]
+[Node("Strings/Parse Number", Description = "The number in text, with a point for decimals; ok is false, and the value 0, when it is not one.",
+    Keywords = "to number, text to float, string to number, convert")]
 public sealed class ParseNumber : ValueNode
 {
     [return: Port("value")]

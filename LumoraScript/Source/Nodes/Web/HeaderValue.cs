@@ -9,7 +9,7 @@ namespace Lumora.Script;
 // One header's value out of headers text, one "Name: value" per line as HTTP Request gives them, the
 // name matched whatever its case. A header given on several lines comes back joined by ", ", the way HTTP
 // folds them. found is false when there is none.
-[Node("Web/Header Value")]
+[Node("Network/HTTP/Header Value", Description = "One header's value out of headers text, one \"Name: value\" per line as HTTP Request gives them, the name matched whatever its case.")]
 public sealed class HeaderValue : ValueNode
 {
     [return: Port("value")]

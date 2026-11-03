@@ -7,7 +7,7 @@ namespace Lumora.Script;
 // an array for index 0, and an index one past the end appends. ok is false, and the object as it was, when
 // the path is not one or would have to go through a value of the wrong kind. No object starts from an
 // empty one.
-[Node("JSON/Paths/Set Path")]
+[Node("Data/JSON/Paths/Set Path", Description = "Returns JSON with a value changed at the given path, creating missing objects or array entries where possible.")]
 public sealed class JsonSetPath<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

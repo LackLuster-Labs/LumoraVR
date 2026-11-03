@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Takes out every item equal to item; removed is how many went. None is no failure; no list is.
-[Node("Lists/Remove All")]
+[Node("Data/Lists/Remove All", Description = "Takes out every item equal to item; removed is how many went.",
+    Keywords = "delete all, erase all, filter out")]
 public sealed class ListRemoveAll<T> : ActionNode
 {
     [return: Port("removed")]

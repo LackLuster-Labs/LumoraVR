@@ -5,11 +5,13 @@ using System;
 
 namespace Lumora.Script;
 
-// length characters from start, cut short at the end of the text rather than failing.
-[Node("Strings/Substring")]
+// length characters from start, cut short at the end of the text rather than failing. Left alone, length
+// takes the rest of the text.
+[Node("Strings/Substring", Description = "Length characters from start, cut short at the end of the text rather than failing. Left alone, length takes the rest of the text.",
+    Keywords = "slice, part, cut, mid, left, right")]
 public sealed class Substring : ValueNode
 {
-    public static string Run(string? text, int start, int length)
+    public static string Run(string? text, int start, int length = int.MaxValue)
     {
         text ??= string.Empty;
         start = Math.Clamp(start, 0, text.Length);

@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Size is the full width, height and depth; a negative one counts as its length.
-[Node("Math/Bounds/Bounds From Center Size")]
+[Node("Math/Bounds/Bounds From Center Size", Description = "Creates a bounding box from its centre and full width, height and depth.",
+    Keywords = "bounding box, aabb, box")]
 public sealed class BoundsFromCenterSize : ValueNode
 {
     [return: Port("bounds")]

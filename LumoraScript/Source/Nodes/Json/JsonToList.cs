@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // A JSON array as a new list, each item read as the node's type the way Get reads a key. An item that does
 // not read is the type's default in its place, and ok is then false. No array gives an empty list.
-[Node("JSON/Arrays/To List")]
+[Node("Data/JSON/Arrays/To List", Description = "A JSON array as a new list, each item read as the node's type the way Get reads a key.")]
 public sealed class JsonToList<T> : ReadNode
 {
     private static readonly ScriptType Type = ScriptTypes.Get(typeof(ScriptList<T>));

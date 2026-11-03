@@ -8,7 +8,7 @@ namespace Lumora.Script;
 // The nearest pair of points on two endless lines, each a point on it and a direction, and how far apart
 // they are. Parallel lines have no one nearest pair: parallel says so, and the pair is pointA with the
 // point across from it on line B. A zero direction makes that line its point.
-[Node("Math/Geometry 3D/Closest Points Between Lines")]
+[Node("Math/Geometry 3D/Closest Points Between Lines", Description = "The nearest pair of points on two endless lines, each a point on it and a direction, and how far apart they are.")]
 public sealed class ClosestPointsBetweenLines : ValueNode
 {
     // Lines closer to parallel than this, as the squared sine of the angle between them, are parallel:

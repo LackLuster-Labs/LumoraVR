@@ -7,7 +7,7 @@ namespace Lumora.Script;
 
 // The first value a JSONPath query finds, as Select would list it; found is false when it finds nothing or
 // is not a query.
-[Node("JSON/Paths/Select One")]
+[Node("Data/JSON/Paths/Select One", Description = "The first value a JSONPath query finds, as Select would list it; found is false when it finds nothing or is not a query.")]
 public sealed class JsonSelectOne : ValueNode
 {
     [return: Port("match")]

@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Whether every lane of a bool vector is true.
-[Node("Logic/All")]
+[Node("Logic/All", Description = "Returns true when every component of a boolean vector is true.",
+    Keywords = "every, all true, bool vector")]
 public sealed class All : ValueNode
 {
     public static bool Run(bool2 value) => value.All;

@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // An empty dictionary. It is in the flow, so every node after it that reads its dictionary reads this
 // one.
-[Node("Dictionaries/New Dictionary")]
+[Node("Data/Dictionaries/New Dictionary", Description = "An empty dictionary.",
+    Keywords = "create map, hashmap, lookup table, map, key value")]
 public sealed class NewDictionary<TKey, TValue> : ActionNode where TKey : notnull
 {
     [return: Port("dictionary")]

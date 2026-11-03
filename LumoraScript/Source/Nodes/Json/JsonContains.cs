@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the array has an item equal to value, the way Index Of finds one.
-[Node("JSON/Arrays/Contains")]
+[Node("Data/JSON/Arrays/Contains", Description = "Whether the array has an item equal to value, the way Index Of finds one.")]
 public sealed class JsonContains<T> : ReadNode
 {
     public static bool IsValidGenericType => ScriptJsonConvert.Carries(typeof(T));

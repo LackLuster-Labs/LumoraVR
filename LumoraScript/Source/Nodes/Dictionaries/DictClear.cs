@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Empties the dictionary and gives the room its keys and values took back to the budget. No dictionary
 // fails.
-[Node("Dictionaries/Clear")]
+[Node("Data/Dictionaries/Clear", Description = "Removes every key and value from the dictionary.",
+    Keywords = "map, hashmap, key value")]
 public sealed class DictClear<TKey, TValue> : ActionNode where TKey : notnull
 {
     public static void Run(ScriptContextBase ctx, ScriptDictionary<TKey, TValue>? dictionary)

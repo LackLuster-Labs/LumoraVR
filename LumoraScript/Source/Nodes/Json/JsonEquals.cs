@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // Whether two JSON values hold the same thing: numbers by value, so 1 and 1.0 are equal, text exactly,
 // arrays item by item, objects key by key whatever their order. No value equals only no value.
-[Node("JSON/Values/Equals")]
+[Node("Data/JSON/Values/Equals", Description = "Whether two JSON values hold the same thing: numbers by value, so 1 and 1.0 are equal, text exactly, arrays item by item, objects key by key whatever their order.")]
 public sealed class JsonEquals : ValueNode
 {
     [return: Port("equal")]

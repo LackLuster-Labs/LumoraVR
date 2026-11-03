@@ -6,7 +6,8 @@ namespace Lumora.Script;
 // Text read as JSON: an object, an array or a single value. ok is false, the value nothing and error what is
 // wrong and where, when the text is not JSON. Comments and a comma before a closing bracket are let
 // through.
-[Node("JSON/Parse")]
+[Node("Data/JSON/Parse", Description = "Text read as JSON: an object, an array or a single value. ok is false, the value nothing and error what is wrong and where, when the text is not JSON.",
+    Keywords = "deserialize, decode, read json, from text")]
 public sealed class JsonParse : ReadNode
 {
     [return: Port("json")]

@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // The object without key; removed is false, and the object as it was, when it had no such key. The object
 // given is not changed.
-[Node("JSON/Objects/Remove Key")]
+[Node("Data/JSON/Objects/Remove Key", Description = "The object without key; removed is false, and the object as it was, when it had no such key.")]
 public sealed class JsonRemoveKey : ReadNode
 {
     public static ScriptJsonObject Run(ScriptContextBase ctx, ScriptJsonObject? @object, string? key, out bool removed)

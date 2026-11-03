@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // Rounds toward zero. Past the ends of sbyte, -128 and 127, it holds at the end, and NaN is 0.
-[Node("Math/Convert/To SByte")]
+[Node("Math/Conversion/To SByte", Description = "Converts a value to a signed 8-bit integer, dropping any fractional part toward zero.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToSByte : ValueNode
 {
     public static sbyte Run(int value) => sbyte.CreateSaturating(value);

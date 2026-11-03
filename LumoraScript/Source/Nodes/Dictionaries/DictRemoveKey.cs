@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Takes out key and its value; removed is false when the dictionary did not have it, which is no failure,
 // since the key is gone either way. No dictionary fails.
-[Node("Dictionaries/Remove Key")]
+[Node("Data/Dictionaries/Remove Key", Description = "Takes out key and its value; removed is false when the dictionary did not have it, which is no failure, since the key is gone either way.",
+    Keywords = "delete key, erase key, map, hashmap, key value")]
 public sealed class DictRemoveKey<TKey, TValue> : ActionNode where TKey : notnull
 {
     [return: Port("removed")]

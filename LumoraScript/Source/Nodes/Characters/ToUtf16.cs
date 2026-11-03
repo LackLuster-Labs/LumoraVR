@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // A code point as UTF-16 units. Past U+FFFF, a high and a low surrogate; up to U+FFFF, its one unit in
 // high and the null character in low. Two null characters for a number below 0 or past U+10FFFF.
-[Node("Strings/Characters/To UTF-16")]
+[Node("Strings/Characters/Code Point To Surrogates", Description = "A code point as UTF-16 units.",
+    Keywords = "surrogate pair, utf16, split code point, utf32 to utf16")]
 public sealed class ToUtf16 : ValueNode
 {
     [return: Port("high")]

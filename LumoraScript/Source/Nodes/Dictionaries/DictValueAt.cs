@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // The value of the key at index in the order keys were first added, 0 first; the type's default outside
 // that.
-[Node("Dictionaries/Value At")]
+[Node("Data/Dictionaries/Value At", Description = "The value of the key at index in the order keys were first added, 0 first; the type's default outside that.",
+    Keywords = "map, hashmap, key value")]
 public sealed class DictValueAt<TKey, TValue> : ReadNode where TKey : notnull
 {
     [return: Port("value")]

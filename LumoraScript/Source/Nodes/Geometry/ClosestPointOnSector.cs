@@ -10,12 +10,12 @@ namespace Lumora.Script;
 // point is from the sector, 0 inside. The sector is the part of a ball about center within angle degrees
 // of direction: a cone with a rounded cap, and at 180 or more the whole ball. A point inside is nearest
 // to the cap or to the cone side, whichever is closer. A zero direction faces +z, and a negative radius
-// counts as its size.
-[Node("Math/Geometry 3D/Closest Point On Spherical Sector")]
+// counts as its size. Unwired, radius is 1 and angle 45.
+[Node("Math/Geometry 3D/Closest Point On Spherical Sector", Description = "The point of a solid spherical sector's surface nearest to point, whether point is inside, and how far point is from the sector, 0 inside.")]
 public sealed class ClosestPointOnSector : ValueNode
 {
-    public static void Run(float3 center, float3 direction, float radius, float angle, float3 point, out float3 closest,
-        out float distance, out bool inside)
+    public static void Run(float3 center, [Default(0, 0, 1)] float3 direction, [Default(1)] float radius, [Default(45)] float angle,
+        float3 point, out float3 closest, out float distance, out bool inside)
     {
         var axis = direction.Normalized;
         if (axis.LengthSquared == 0f)

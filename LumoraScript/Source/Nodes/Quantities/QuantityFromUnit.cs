@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // A quantity from a number of the named unit: 1.5 in "km" is 1500 m. The unit is a symbol or a name
 // ("ft", "feet"), a blank one is the base unit, and one the kind does not have faults, saying which it has.
-[Node("Math/Quantities/From Unit")]
+[Node("Math/Quantities/From Unit", Description = "A quantity from a number of the named unit: 1.5 in \"km\" is 1500 m.",
+    Keywords = "convert units, unit conversion, from unit")]
 public sealed class QuantityFromUnit<T> : ValueNode where T : struct, IScriptQuantity<T>
 {
     [return: Port("quantity")]

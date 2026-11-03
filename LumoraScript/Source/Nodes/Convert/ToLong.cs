@@ -7,7 +7,8 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // Rounds toward zero. Past the ends of long it holds at the end, and NaN is 0.
-[Node("Math/Convert/To Long")]
+[Node("Math/Conversion/To Long", Description = "Converts a value to a signed 64-bit integer, dropping any fractional part toward zero.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToLong : ValueNode
 {
     [Wasm(WasmOp.I64ExtendI32S)] public static long Run(int value) => value;
@@ -20,4 +21,6 @@ public sealed class ToLong : ValueNode
     [Wasm(WasmOp.I64ExtendI32U)] public static long Run(ushort value) => value;
     [Wasm(WasmOp.I64ExtendI32U)] public static long Run(uint value) => value;
     public static long Run(ulong value) => long.CreateSaturating(value);
+
+    public static long Run(ScriptBigInt? value) => ScriptBigInt.ToLong(value);
 }

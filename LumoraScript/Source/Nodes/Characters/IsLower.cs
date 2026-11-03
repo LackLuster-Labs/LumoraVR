@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Whether the character is a lower case letter.
-[Node("Strings/Characters/Is Lower")]
+[Node("Strings/Characters/Is Lower", Description = "Whether the character is a lower case letter.")]
 public sealed class IsLower : ValueNode
 {
     public static bool Run(char character) => char.IsLower(character);

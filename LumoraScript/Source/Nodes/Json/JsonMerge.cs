@@ -5,7 +5,7 @@ namespace Lumora.Script;
 
 // b's keys set on a in b's order, b's values winning. With deep, an object under a key both have is merged
 // into the one already there, all the way down; anything else is replaced whole.
-[Node("JSON/Objects/Merge")]
+[Node("Data/JSON/Objects/Merge", Description = "B's keys set on a in b's order, b's values winning.")]
 public sealed class JsonMerge : ReadNode
 {
     public static ScriptJsonObject Run(ScriptContextBase ctx, ScriptJsonObject? a, ScriptJsonObject? b, bool deep = false)

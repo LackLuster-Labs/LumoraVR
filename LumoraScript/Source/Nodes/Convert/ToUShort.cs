@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // Rounds toward zero. Below 0 it is 0, past 65535 it holds there, and NaN is 0.
-[Node("Math/Convert/To UShort")]
+[Node("Math/Conversion/To UShort", Description = "Converts a value to an unsigned 16-bit integer, dropping any fractional part toward zero.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToUShort : ValueNode
 {
     public static ushort Run(int value) => ushort.CreateSaturating(value);

@@ -3,7 +3,8 @@
 
 namespace Lumora.Script;
 
-[Node("Dictionaries/Contains Key")]
+[Node("Data/Dictionaries/Contains Key", Description = "Checks whether a dictionary contains the given key.",
+    Keywords = "has key, exists, map, hashmap, key value")]
 public sealed class DictContainsKey<TKey, TValue> : ReadNode where TKey : notnull
 {
     [return: Port("found")]

@@ -9,7 +9,8 @@ namespace Lumora.Script;
 
 // How many unset bits come below the lowest set one, so 0 gives value's whole width: 8 for a byte, 32
 // for an int.
-[Node("Math/Bits/Trailing Zeros")]
+[Node("Math/Bits/Trailing Zeros", Description = "How many unset bits come below the lowest set one, so 0 gives value's whole width: 8 for a byte, 32 for an int.",
+    Keywords = "ctz, count trailing zeros, lowest set bit")]
 public sealed class TrailingZeros : ValueNode
 {
     [Wasm(WasmOp.I32Ctz)] public static int Run(int value) => BitOperations.TrailingZeroCount(value);
