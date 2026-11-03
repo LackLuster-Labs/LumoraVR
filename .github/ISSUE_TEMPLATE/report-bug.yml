@@ -30,7 +30,6 @@ body:
       label: Labels
       multiple: true
       options:
-        - "Main Application"
         - "Loom"
         - "Meta"
         - "UI"
@@ -39,6 +38,10 @@ body:
         - "hardware"
         - "Threading"
         - "Documentation"
+        - "Performance"
+        - "Networking"
+        - "Graphics"
+        - "shader node"
     validations:
       required: true
   - type: input
