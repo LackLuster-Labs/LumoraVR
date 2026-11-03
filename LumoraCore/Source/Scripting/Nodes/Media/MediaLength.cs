@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // How long the first player's clip is, in seconds; -1 for a live stream or no clip at all. exact is the same
 // length in double precision.
-[Node("Media/Length", Capability.WorldRead)]
+[Node("Media/Length", Capability.WorldRead, Description = "How long the first player's clip is, in seconds; -1 for a live stream or no clip at all. exact is the same length in double precision.",
+    Keywords = "duration, clip length")]
 public sealed class MediaLength : ReadNode
 {
     [return: Port("seconds")]

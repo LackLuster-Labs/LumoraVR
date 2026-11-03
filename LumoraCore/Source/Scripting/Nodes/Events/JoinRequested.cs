@@ -3,5 +3,5 @@
 
 namespace Lumora.Core.Scripting;
 
-// Who took the bite, and which one, counting from zero.
-public readonly record struct EdibleBite(User? User, int Bite);
+public readonly record struct JoinRequested(JoinRequest? Request, string UserId, string Name, string MachineId, bool Guest, bool Friend,
+    bool Silenced);

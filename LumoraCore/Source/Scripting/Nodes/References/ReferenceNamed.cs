@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // A component's reference field by its name, exact and case sensitive: Clip on a clip player, Source on
 // an audio output, Texture on a material. Nothing when the component has no reference by that name, or
 // it is host-only.
-[Node("World/References/Reference Named", Capability.WorldRead)]
+[Node("World/References/Reference Named", Capability.WorldRead, Description = "A component's reference field by its name, exact and case sensitive: Clip on a clip player, Source on an audio output, Texture on a material.",
+    Keywords = "pointer, reference by name")]
 public sealed class ReferenceNamed : ReadNode
 {
     [return: Port("reference")]

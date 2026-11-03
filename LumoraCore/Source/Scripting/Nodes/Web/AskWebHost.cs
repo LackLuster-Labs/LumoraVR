@@ -14,7 +14,8 @@ namespace Lumora.Core.Scripting;
 // later ask asks again. A Shared script asks the host's user, a Local one each person on their own machine.
 // The prompt shows the engine's own words, never text from a script, and says when the host is local. An
 // address no socket can open, or text that names no host, is denied at once without asking.
-[Node("Web/Request Host Access", Capability.Web)]
+[Node("Network/Access/Request Host Access", Capability.Web, Description = "Asks the local user to allow scripts to contact a web host, reporting approval, refusal or dismissal.",
+    Keywords = "permission, allow site, web permission, ask user")]
 [Answers("allowed", "denied", "ignored")]
 public sealed class AskWebHost : AwaitNode<HostAccessAnswer>
 {

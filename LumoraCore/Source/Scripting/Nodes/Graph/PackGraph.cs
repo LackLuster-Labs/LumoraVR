@@ -6,14 +6,14 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// Packs a graph being edited into a new script of the packer's own, on a new slot beside the graph's script,
-// or in the same place under the world root where the packer may not put things there. The slot comes back
-// at once; the script appears on it once the graph has compiled on a worker and been stored, and runs as
-// whoever packed it. A world script packs only a graph open on one of the world's own scripts and makes world
-// content; a guest's packs only its author's own work and the world's, where the world lets people bring
-// things in and their role holds Spawn, and what it makes is theirs, not saved. At most ten packs a minute for
-// each author, the world's scripts between them. A Local script cannot.
-[Node("Graph/Pack Graph", Capability.WorldStructure)]
+// Packs a graph being edited in place, onto the script it is open on, and gives back that script's object.
+// The graph goes once it has compiled on a worker and been stored; the script then runs it. A graph with
+// errors packs as it is, hidden with its nodes, and its script keeps its last good graph. A world script packs
+// only a graph on one of the world's own scripts; a guest's only its author's own work on its author's own
+// scripts. At most ten packs a minute for each author, the world's scripts between them. A Local script
+// cannot.
+[Node("Graph/Pack Graph", Capability.WorldStructure, Description = "Packs a graph being edited in place, onto the script it is open on, and gives back that script's object.",
+    Keywords = "pack, close graph, compile, finish editing")]
 public sealed class PackGraph : ActionNode
 {
     [return: Port("slot")]

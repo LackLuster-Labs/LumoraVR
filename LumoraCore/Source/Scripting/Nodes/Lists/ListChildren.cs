@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // slot's children in order, as a new list; a child the script may not see is left out, and a slot it may
 // not see has none. Later changes to the slot do not reach the list.
-[Node("Lists/World/Children", Capability.WorldRead)]
+[Node("World/Slots/Hierarchy/Children", Capability.WorldRead, Description = "Slot's children in order, as a new list; a child the script may not see is left out, and a slot it may not see has none.",
+    Keywords = "child list, get children, all children, list children")]
 public sealed class ListChildren : ReadNode
 {
     [return: Port("children")]

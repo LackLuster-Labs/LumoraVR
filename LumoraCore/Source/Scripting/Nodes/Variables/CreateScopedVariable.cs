@@ -15,7 +15,8 @@ namespace Lumora.Core.Scripting;
 // under its own object for a Local script. Never on the world root, a protected slot, or anything in
 // someone's body or hands; the gate is asked as the author first. Making many is warned about, never
 // refused.
-[Node("Variables/Scoped/Create Variable", Capability.WorldStructure)]
+[Node("Variables/Scoped/Create Variable", Capability.WorldStructure, Description = "Makes a named variable in the scope a path reaches from slot, holding value: a variable component on the scope's own slot, or on slot itself with onSlot.",
+    Keywords = "add variable, new variable, make variable")]
 public sealed class CreateScopedVariable<T> : ActionNode
 {
     public static bool IsValidGenericType => ScriptScopedVariables.CanHold(typeof(T));

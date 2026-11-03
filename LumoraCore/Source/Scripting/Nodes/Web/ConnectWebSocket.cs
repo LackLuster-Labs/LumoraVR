@@ -16,7 +16,8 @@ namespace Lumora.Core.Scripting;
 // ones, hold at most four open on a machine. What comes in arrives through On WebSocket Message and the end
 // through On WebSocket Closed. headers is one "Name: value" per line; protocols a comma list the server may
 // pick one of. The socket closes when the script stops, and stays open through a live graph swap.
-[Node("Web/WebSockets/Connect", Capability.Web)]
+[Node("Network/WebSockets/Connect", Capability.Web, Description = "Opens a WebSocket connection and reports when it connects, fails or is denied by the user.",
+    Keywords = "websocket, ws, socket, realtime, server connection")]
 [Answers("connected", "failed", "denied")]
 public sealed class ConnectWebSocket : AwaitNode<SocketOpened>
 {

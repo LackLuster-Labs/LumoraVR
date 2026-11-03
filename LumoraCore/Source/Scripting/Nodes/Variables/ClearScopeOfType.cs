@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Clear Scope for the variables of one type only; the rest stay.
-[Node("Variables/Scoped/Clear Scope Of Type", Capability.WorldStructure)]
+[Node("Variables/Scoped/Clear Scope Of Type", Capability.WorldStructure, Description = "Clear Scope for the variables of one type only; the rest stay.")]
 public sealed class ClearScopeOfType<T> : ActionNode
 {
     public static bool IsValidGenericType => ScriptScopedVariables.CanHold(typeof(T));

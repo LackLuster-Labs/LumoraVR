@@ -10,15 +10,18 @@ namespace Lumora.Core.Scripting;
 // seconds; 0.05 is a short tap. pulsed says whether a controller was there to take it: nothing happens
 // without VR. Strength is clamped to 0 to 1 and seconds to 0 to 5, and a value that is not a number pulses
 // nothing. A pulse asked for in the same frame as another replaces it. No controller, or a value that is not
-// a number, fails; a pulse of no strength or no length does nothing and is no failure.
-[Node("Input/Haptic Pulse", Capability.Input)]
+// a number, fails; a pulse of no strength or no length does nothing and is no failure. A call someone set off
+// (a grab, a press, a touch) buzzes only them: an event every machine hears runs every machine's copy, and
+// only the copy on their machine pulses, with no failure on the rest.
+[Node("Input/Controllers/Haptic Pulse", Capability.Input, Description = "Vibrates a local VR controller at the given strength for a duration in seconds. A call someone set off buzzes only them.",
+    Keywords = "vibrate, vibration, rumble, buzz, haptics, feedback")]
 public sealed class HapticPulse : ActionNode
 {
     public const float MaxSeconds = 5f;
 
     [return: Port("pulsed")]
     public static bool Run(ScriptContext ctx, bool right = true, float strength = 0.5f, float seconds = 0.05f)
-        => Pulse(ctx, ScriptInput.Of(ctx), right ? Chirality.Right : Chirality.Left, strength, seconds);
+        => ctx.CausedHere && Pulse(ctx, ScriptInput.Of(ctx), right ? Chirality.Right : Chirality.Left, strength, seconds);
 
     internal static bool Pulse(ScriptContext ctx, InputInterface? input, Chirality side, float strength, float seconds)
     {

@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The frequency of a MIDI note: A4 = 69 sits at the tuning, 440 Hz unless told otherwise, and each note a
 // twelfth of an octave. A fraction of a note is cents: 60.5 is middle C and 50 cents.
-[Node("Math/Audio/Note To Frequency")]
+[Node("Audio/Signal Processing/Note To Frequency", Description = "The frequency of a MIDI note: A4 = 69 sits at the tuning, 440 Hz unless told otherwise, and each note a twelfth of an octave.",
+    Keywords = "midi, music note, pitch, semitone, hz")]
 public sealed class NoteToFrequency : ValueNode
 {
     [return: Port("hz")]

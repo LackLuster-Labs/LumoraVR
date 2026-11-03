@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The pitch an analyser hears: its fundamental in hertz, the nearest MIDI note (A4 = 69) and how sure it is,
 // 0 to 1. With nothing pitched playing, 0 Hz and note -1.
-[Node("Audio/Analysis/Pitch", Capability.WorldRead)]
+[Node("Audio/Analysis/Pitch", Capability.WorldRead, Description = "The pitch an analyser hears: its fundamental in hertz, the nearest MIDI note (A4 = 69) and how sure it is, 0 to 1.",
+    Keywords = "frequency detection, note detection, tuner, fundamental")]
 public sealed class Pitch : ReadNode
 {
     [return: Port("hz")]

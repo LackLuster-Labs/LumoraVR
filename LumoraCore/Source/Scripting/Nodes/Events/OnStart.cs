@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Once, when the script starts. A live graph swap keeps its stored values and does not start again.
-[Node("Events/On Start")]
+[Node("Flow/Events/On Start", Description = "Once, when the script starts.",
+    Keywords = "init, initialize, on load, first")]
 public sealed class OnStart : EventNode<ScriptStarted>
 {
 }

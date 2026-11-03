@@ -6,7 +6,7 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("Audio/Deconstruct Reverb Settings")]
+[Node("Audio/Reverb/Deconstruct Reverb Settings", Description = "Separates reverb settings into individual values for inspection or editing.")]
 public sealed class DeconstructReverbSettings : ValueNode
 {
     public static void Run(ReverbSettings settings, out float preDelay, out float crossover, out float lowRT60, out float midRT60,

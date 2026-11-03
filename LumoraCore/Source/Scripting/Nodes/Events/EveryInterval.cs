@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Fires every "seconds" set on the node, by the world's clock, with how many times it has fired. A frame
 // that runs long fires it once, not once for each interval it missed. -xlinka
-[Node("Events/Every N Seconds")]
+[Node("Time/Events/Every N Seconds", Description = "Fires every \"seconds\" set on the node, by the world's clock, with how many times it has fired.",
+    Keywords = "timer, interval, repeat, periodic, clock, tick")]
 [TimedEvent]
 public sealed class EveryInterval : EventNode<IntervalElapsed>
 {

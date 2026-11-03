@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The beat an analyser hears, in beats per minute, and how sure it is (0 to 1: a steady pulse near 1, noise
 // near 0). 0 BPM until a few seconds of sound have been heard. Fast tempos above about 170 read as half.
-[Node("Audio/Analysis/Tempo", Capability.WorldRead)]
+[Node("Audio/Analysis/Tempo", Capability.WorldRead, Description = "The beat an analyser hears, in beats per minute, and how sure it is (0 to 1: a steady pulse near 1, noise near 0). 0 BPM until a few seconds of sound have been heard.",
+    Keywords = "bpm, beats per minute, rhythm")]
 public sealed class Tempo : ReadNode
 {
     [return: Port("bpm")]

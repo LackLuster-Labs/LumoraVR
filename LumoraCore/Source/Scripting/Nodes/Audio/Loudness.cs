@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // reads 0.707 and 1); momentary, short-term and integrated are EBU R128 loudness in LUFS over 400 ms, 3 s
 // and everything since the analyser started, minus infinity for silence. An analyser the script cannot see
 // hears silence.
-[Node("Audio/Analysis/Loudness", Capability.WorldRead)]
+[Node("Audio/Analysis/Loudness", Capability.WorldRead, Description = "How loud an analyser hears its output.",
+    Keywords = "volume, level, how loud, rms, peak, lufs, meter, amplitude")]
 public sealed class Loudness : ReadNode
 {
     public static void Run(ScriptContext ctx, AudioAnalyzer? analyzer, out float rms, out float peak, out float momentary,

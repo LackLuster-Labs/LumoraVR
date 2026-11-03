@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Another channel raided the one the source object's stream chat reader follows. Heard like On Message.
-[Node("Events/Stream Chat/On Raid")]
+[Node("Network/Stream Chat/On Raid", Description = "Another channel raided the one the source object's stream chat reader follows.")]
 [SourcedEvent]
 public sealed class OnStreamRaid : EventNode<StreamRaid>
 {

@@ -14,7 +14,8 @@ namespace Lumora.Core.Scripting;
 // undoes the bake; a person's script makes an unsaved copy that goes when they leave and leaves their
 // originals on. Only world content from a world script, the author's own things from a person's script and
 // what a Local script made on its machine; a script baking more than a million vertices at once is warned.
-[Node("Assets/Bake Meshes", Capability.WorldStructure)]
+[Node("Assets/Meshes/Bake Meshes", Capability.WorldStructure, Description = "Combines meshes under a slot into one mesh, keeping separate material parts. Reports the result when finished.",
+    Keywords = "merge meshes, optimize, batch meshes")]
 [Answers("baked", "failed")]
 public sealed class BakeMeshesUnder : AwaitNode<MeshesBaked>
 {

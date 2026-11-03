@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Seconds the last frame took on the machine running the script, for moving things at a steady speed.
-[Node("Time/Delta Time")]
+[Node("Time/Delta Time", Description = "Seconds the last frame took on the machine running the script, for moving things at a steady speed.",
+    Keywords = "dt, frame time, time step, per frame, seconds per frame")]
 public sealed class FrameDelta : ReadNode
 {
     [return: Port("seconds")]

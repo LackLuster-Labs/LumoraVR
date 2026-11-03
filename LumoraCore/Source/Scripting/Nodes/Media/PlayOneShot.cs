@@ -24,7 +24,8 @@ namespace Lumora.Core.Scripting;
 // whether it is heard the same everywhere, and a parent it follows, with point in the parent's space. A
 // Shared script's parent is world content outside anyone's body; a Local one's is its own object or what it
 // made there.
-[Node("Media/Play One Shot", Capability.Audio)]
+[Node("Media/Play One Shot", Capability.Audio, Description = "Plays a clip the script is bound to once at a point, then the sound removes itself.",
+    Keywords = "sound effect, sfx, play sound, one shot, play clip")]
 public sealed class PlayOneShot : ActionNode
 {
     [return: Port("sound")]

@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // A message another script of the same author sent to this one's object. -xlinka
-[Node("Events/On Message")]
+[Node("Network/Messages/On Message", Description = "A message another script of the same author sent to this one's object.")]
 public sealed class OnMessage : EventNode<MessageReceived>
 {
 }

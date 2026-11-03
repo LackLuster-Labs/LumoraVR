@@ -8,7 +8,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // A reverb zone's settings as one value, as its fields hold them. All zeros for one the script cannot see.
-[Node("Audio/Reverb Zone Settings", Capability.WorldRead)]
+[Node("Audio/Reverb/Reverb Zone Settings", Capability.WorldRead, Description = "A reverb zone's settings as one value, as its fields hold them.")]
 public sealed class ReverbZoneSettings : ReadNode
 {
     [return: Port("settings")]

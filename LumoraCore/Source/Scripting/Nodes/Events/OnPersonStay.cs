@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Each time the colliders are looked into, about twenty times a second, once for every person who was
 // already touching them, as On Person Enter means it, and still is. -xlinka
-[Node("Events/On Person Stay")]
+[Node("Physics/Events/On Person Stay", Description = "Each time the colliders are looked into, about twenty times a second, once for every person who was already touching them, as On Person Enter means it, and still is.",
+    Keywords = "player, zone, area, standing in, body")]
 [SourcedEvent]
 public sealed class OnPersonStay : EventNode<PersonStaying>
 {

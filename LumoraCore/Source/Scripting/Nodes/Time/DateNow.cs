@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The date and time now, UTC, by the clock of the machine running the script, the one Unix Time reads.
 // Session Time is the one every peer agrees on.
-[Node("Time/Dates/Now")]
+[Node("Time/Dates/Now", Description = "The date and time now, UTC, by the clock of the machine running the script, the one Unix Time reads.",
+    Keywords = "current date, today, current utc, date time, datetime")]
 public sealed class DateNow : ReadNode
 {
     [return: Port("date")]

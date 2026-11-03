@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Seconds on the session clock, which every peer agrees on. For anything that has to line up across
 // machines.
-[Node("Time/Session Time")]
+[Node("Time/Session Time", Description = "Seconds on the session clock, which every peer agrees on.",
+    Keywords = "synced time, network time, shared clock, server time")]
 public sealed class SessionTime : ReadNode
 {
     [return: Port("seconds")]

@@ -16,7 +16,8 @@ namespace Lumora.Core.Scripting;
 // names it, or a local name for it, itself; a public name that leads to one is refused.
 // headers is one "Name: value" per line, for the request and for what comes back. The body goes out as UTF-8
 // with POST, PUT, PATCH and a DELETE that has one, as JSON unless a Content-Type header says otherwise.
-[Node("Web/HTTP Request", Capability.Web)]
+[Node("Network/HTTP/HTTP Request", Capability.Web, Description = "Sends a web request from the machine the script runs on and carries on through next at once.",
+    Keywords = "http get, http post, fetch, download, api, rest, web, url")]
 [Answers("response", "failed", "denied")]
 public sealed class HttpRequest : AwaitNode<HttpAnswer>
 {

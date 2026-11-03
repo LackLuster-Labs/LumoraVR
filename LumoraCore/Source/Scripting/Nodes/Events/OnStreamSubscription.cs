@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // A new subscription, a renewal, or a gifted one, to the channel the source object's stream chat reader
 // follows. A gift to many people at once arrives as one of these per person. Heard like On Message.
-[Node("Events/Stream Chat/On Subscription")]
+[Node("Network/Stream Chat/On Subscription", Description = "A new subscription, a renewal, or a gifted one, to the channel the source object's stream chat reader follows.")]
 [SourcedEvent]
 public sealed class OnStreamSubscription : EventNode<StreamSubscription>
 {

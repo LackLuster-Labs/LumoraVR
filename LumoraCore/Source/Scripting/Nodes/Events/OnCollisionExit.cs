@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Something stopped touching the object bound as its source, else the one the script sits on.
-[Node("Events/On Collision Exit")]
+[Node("Physics/Events/On Collision Exit", Description = "Something stopped touching the object bound as its source, else the one the script sits on.",
+    Keywords = "collision, collide, contact, touch, separate")]
 [SourcedEvent]
 public sealed class OnCollisionExit : EventNode<CollisionExited>
 {

@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // Someone took the seat on the object bound as its source, else on the one the script sits on, as the host
 // rules it: every machine hears the same sitter. The object needs a seat. -xlinka
-[Node("Events/On Seat Taken")]
+[Node("Interaction/Seats/On Seat Taken", Description = "Someone took the seat on the object bound as its source, else on the one the script sits on, as the host rules it: every machine hears the same sitter.")]
 [SourcedEvent]
 public sealed class OnSeatTaken : EventNode<SeatTaken>
 {

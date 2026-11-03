@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // A press on a button or touch control bound as its source, else one on the object the script sits on, coming
 // to an end: let go of, or given up, as when a drag passes on to the list the button sits in. -xlinka
-[Node("Events/On Press End")]
+[Node("UI/Buttons/On Press End", Description = "A press on a button or touch control bound as its source, else one on the object the script sits on, coming to an end: let go of, or given up, as when a drag passes on to the list the button sits in.",
+    Keywords = "click, tap, button, release, press up")]
 [SourcedEvent]
 public sealed class OnPressEnd : EventNode<PressEnded>
 {

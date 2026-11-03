@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 // Runs the body once for each child of slot, in order, with the child and its index, then completed.
 // The count is taken as flow arrives; a child added or removed by the body shifts the ones after it.
 // -xlinka
-[Node("Flow/For Each Child", Capability.WorldRead)]
+[Node("Flow/Loops/For Each Child", Capability.WorldRead, Description = "Runs the body once for each child of slot, in order, with the child and its index, then completed.",
+    Keywords = "children, iterate children, loop children, foreach slot, each child")]
 public sealed class ForEachChild : FlowNode
 {
     public override void Build(FlowBuilder f)

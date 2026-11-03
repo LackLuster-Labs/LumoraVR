@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 // did. Only in answer to something the person here did, such as their own press or grab, while this world
 // is in front of them, on a field they could type into themselves. Anywhere else it does nothing. A call
 // someone else set off is no failure, since their own machine's copy answers it; the rest are.
-[Node("Input/Text Focus/Focus Field", Capability.Input)]
+[Node("UI/Text Input/Focus Field", Capability.Input, Description = "Gives this machine's keys to the text field on the slot, the way clicking it does, and says whether it did.")]
 public sealed class FocusTextField : ActionNode
 {
     [return: Port("focused")]

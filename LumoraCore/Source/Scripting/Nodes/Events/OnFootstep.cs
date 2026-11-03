@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // worked out on each machine as it poses everyone, so they are heard only while this world is the one in
 // front of the machine running the script: the host's, for a Shared script. A foot a tracker moves takes no
 // steps here. -xlinka
-[Node("Events/On Footstep")]
+[Node("Users/Movement/On Footstep", Description = "Anyone's foot came down in this world, a step or both feet on landing.",
+    Keywords = "footstep, step, walk, foot, land, landing")]
 public sealed class OnFootstep : EventNode<Footstep>
 {
 }

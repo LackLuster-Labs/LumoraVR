@@ -12,7 +12,8 @@ namespace Lumora.Core.Scripting;
 // read -1 to 1 each axis, pressed and touched; primary and secondary are the two face buttons and menu the
 // menu button. The touched outputs say a finger rests on the trigger or a face button, on controllers that
 // sense it. Everything rests at 0 and off without VR or with no controller.
-[Node("Input/Controller", Capability.Input)]
+[Node("Input/Controllers/Controller", Capability.Input, Description = "Every control on one of this machine's VR controllers, the right unless right is off.",
+    Keywords = "gamepad, buttons, controller buttons")]
 public sealed class ControllerState : ReadNode
 {
     [return: Port("trigger")]

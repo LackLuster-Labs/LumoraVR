@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 // This machine's window and the screen it is on, in pixels, and the view's width over its height. known is
 // false, and both sizes 0, until the platform has said; the aspect is the view's own and reads 16:9 before
 // the first frame is drawn.
-[Node("Input/Display", Capability.Input)]
+[Node("Input/Display/Display", Capability.Input, Description = "Reads the window and screen size in pixels, plus the view's aspect ratio.")]
 public sealed class DisplaySize : ReadNode
 {
     [return: Port("window")]

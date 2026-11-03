@@ -5,8 +5,9 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// The first player on the slot: a video, a sound or an animation. From the start.
-[Node("Media/Play", Capability.WorldWrite)]
+// Plays the first player on the slot from the start: a video, a sound or an animation.
+[Node("Media/Play", Capability.WorldWrite, Description = "Plays the first video, sound or animation on the slot from the start.",
+    Keywords = "audio, video, sound, music, animation, playback, start")]
 public sealed class PlayMedia : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot) => ScriptMedia.Control(ctx, slot, static playable => playable.Play());

@@ -12,7 +12,8 @@ namespace Lumora.Core.Scripting;
 // already on the slot from the same address is handed back instead of a second one. Addresses, leave and
 // places as Attach Texture: local:// freely, http and https with the leave web requests ask for, only where
 // the script may already change things.
-[Node("Assets/Attach Audio Clip", Capability.WorldStructure)]
+[Node("Assets/Audio/Attach Audio Clip", Capability.WorldStructure, Description = "Attaches an audio clip from a URL to a slot. Continues immediately and reports attachment or failure separately.",
+    Keywords = "load sound, sound from url, audio from url, sound file")]
 [Answers("attached", "failed", "denied")]
 public sealed class AttachClipFrom : AwaitNode<ClipAttached>
 {

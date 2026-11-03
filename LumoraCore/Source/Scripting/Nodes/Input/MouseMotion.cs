@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // move mouse look turns by, in screen heights at this person's mouse sensitivity and smoothing, 0 while the
 // dash is open; it is the one that carries the motion while the view holds the pointer for mouse look. y
 // grows downward in both.
-[Node("Input/Mouse Movement", Capability.Input)]
+[Node("Input/Mouse/Mouse Movement", Capability.Input, Description = "Reads mouse movement this frame as screen pixels and the adjusted movement used for mouse look.",
+    Keywords = "cursor, pointer, mouse delta")]
 public sealed class MouseMotion : ReadNode
 {
     [return: Port("pixels")]

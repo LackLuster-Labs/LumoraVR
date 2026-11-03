@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 // reward by id, with what they wrote. A reward that asks for nothing never reaches the chat, and a reward's
 // title and cost are only told to the channel's own signed in tools, so neither is here. Heard like On
 // Message.
-[Node("Events/Stream Chat/On Reward Redeemed")]
+[Node("Network/Stream Chat/On Reward Redeemed", Description = "A viewer redeemed a channel reward that asks them for text, as the reader's chat feed carries it: the reward by id, with what they wrote.")]
 [SourcedEvent]
 public sealed class OnStreamReward : EventNode<StreamRewardRedeemed>
 {

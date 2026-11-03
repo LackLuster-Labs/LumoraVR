@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // Once, in the copy, when the object this script is on was duplicated: right after the copy's own start, on
 // the machine its script runs on. The original hears nothing.
-[Node("Events/On Duplicated")]
+[Node("World/Slots/Events/On Duplicated", Description = "Once, in the copy, when the object this script is on was duplicated: right after the copy's own start, on the machine its script runs on.")]
 public sealed class OnDuplicated : EventNode<ObjectDuplicated>
 {
 }

@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Where a VR controller's thumbstick points, each axis -1 to 1. On the right hand unless right is off.
-[Node("Input/Thumbstick", Capability.Input)]
+[Node("Input/Controllers/Thumbstick", Capability.Input, Description = "Where a VR controller's thumbstick points, each axis -1 to 1.",
+    Keywords = "joystick, stick, axis, gamepad")]
 public sealed class ThumbstickTilt : ReadNode
 {
     [return: Port("value")]

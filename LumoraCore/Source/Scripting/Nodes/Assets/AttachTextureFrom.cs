@@ -19,7 +19,8 @@ namespace Lumora.Core.Scripting;
 // things from a person's script, and on what a Local script made on its machine; never the world root, a
 // protected slot, or anything in someone's body or hands. Every machine in the session loads the picture
 // once something uses it.
-[Node("Assets/Attach Texture", Capability.WorldStructure)]
+[Node("Assets/Textures/Attach Texture", Capability.WorldStructure, Description = "Attaches a texture from a URL to a slot. Continues immediately and reports attachment or failure separately.",
+    Keywords = "load image, image from url, load picture, web image, texture from url")]
 [Answers("attached", "failed", "denied")]
 public sealed class AttachTextureFrom : AwaitNode<TextureAttached>
 {

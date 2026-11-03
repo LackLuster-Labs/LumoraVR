@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Someone's beam came onto the object bound as its source, else the one the script sits on, or onto
 // anything under it. -xlinka
-[Node("Events/On Hover Enter")]
+[Node("Interaction/Pointer/On Hover Enter", Description = "Someone's beam came onto the object bound as its source, else the one the script sits on, or onto anything under it.",
+    Keywords = "laser, pointer, ray, hover, mouse over, point at")]
 [SourcedEvent]
 public sealed class OnHoverEnter : EventNode<HoverStarted>
 {

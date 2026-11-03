@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // Someone pressed enter in the single line text field bound as its source, else the one on the object the
 // script sits on. The field lets go of the keys as it submits, so On Edit Ended comes just before. -xlinka
-[Node("Events/On Text Submitted")]
+[Node("UI/Text Input/On Text Submitted", Description = "Someone pressed enter in the single line text field bound as its source, else the one on the object the script sits on.")]
 [SourcedEvent]
 public sealed class OnTextSubmitted : EventNode<TextSubmitted>
 {

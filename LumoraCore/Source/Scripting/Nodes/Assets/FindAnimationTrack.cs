@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 // Which track of an animation moves property on the node called node, 0 first, or -1 when none does or
 // the animation has not loaded here. Names are exact and case sensitive, as the clip keeps them: a bone
 // or slot name, and a member such as Position, or Component.Member for one on a component.
-[Node("Assets/Find Animation Track", Capability.WorldRead)]
+[Node("Assets/Animations/Find Animation Track", Capability.WorldRead, Description = "Which track of an animation moves property on the node called node, 0 first, or -1 when none does or the animation has not loaded here.")]
 public sealed class FindAnimationTrack : ReadNode
 {
     [return: Port("track")]

@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // Whoever had the tool bound as its source, else the one the script sits on, put it away or swapped it
 // for another. -xlinka
-[Node("Events/On Tool Dequipped")]
+[Node("Interaction/Tools/On Tool Dequipped", Description = "Whoever had the tool bound as its source, else the one the script sits on, put it away or swapped it for another.")]
 [SourcedEvent]
 public sealed class OnToolDequipped : EventNode<ToolDequipped>
 {

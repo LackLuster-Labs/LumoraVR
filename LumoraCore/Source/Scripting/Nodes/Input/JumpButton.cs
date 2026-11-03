@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // The jump action, as the bindings have it. Held, and whether it went down or up this frame.
-[Node("Input/Jump", Capability.Input)]
+[Node("Input/Actions/Jump", Capability.Input, Description = "The jump action, as the bindings have it.",
+    Keywords = "action, binding, jump input")]
 public sealed class JumpButton : ReadNode
 {
     [return: Port("held")]

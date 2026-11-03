@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // pixels from the window's top left corner, and fraction runs 0 to 1 across the window, top left at 0,0.
 // Both are -1 on each axis while the platform has not said where the window is, and inWindow says whether
 // the pointer is over the window.
-[Node("Input/Mouse Position", Capability.Input)]
+[Node("Input/Mouse/Mouse Position", Capability.Input, Description = "Where this machine's mouse pointer is. desktop is in screen pixels across the whole desktop; window is in pixels from the window's top left corner, and fraction runs 0 to 1 across the window, top left at 0,0.",
+    Keywords = "cursor, pointer, cursor position")]
 public sealed class MousePointer : ReadNode
 {
     [return: Port("desktop")]

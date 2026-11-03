@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Someone picked up the object bound as its source, else the one the script sits on. The object needs to be
 // grabbable. -xlinka
-[Node("Events/On Grabbed")]
+[Node("Interaction/Grabbing/On Grabbed", Description = "Someone picked up the object bound as its source, else the one the script sits on.",
+    Keywords = "grab, grabbed, pick up, hold")]
 [SourcedEvent]
 public sealed class OnGrabbed : EventNode<GrabStarted>
 {

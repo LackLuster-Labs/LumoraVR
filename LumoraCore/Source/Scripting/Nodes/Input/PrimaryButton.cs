@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The primary action of a hand, as its bindings have it: the trigger, or the left mouse button. On the right hand unless right is off; on a desktop the right hand is the mouse and keyboard.
 // Held, and whether it went down or up this frame.
-[Node("Input/Primary", Capability.Input)]
+[Node("Input/Actions/Primary", Capability.Input, Description = "The primary action of a hand, as its bindings have it: the trigger, or the left mouse button.",
+    Keywords = "action, binding, primary input, use button")]
 public sealed class PrimaryButton : ReadNode
 {
     [return: Port("held")]

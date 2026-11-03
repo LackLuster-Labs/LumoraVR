@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // Builds a reverb settings value from delay, decay times, damping, EQ, mix and level. An unwired input is
 // the medium room a new reverb starts as. Milliseconds, hertz, seconds and decibels, as on the component.
-[Node("Audio/Construct Reverb Settings")]
+[Node("Audio/Reverb/Construct Reverb Settings", Description = "Builds a reverb settings value from delay, decay times, damping, EQ, mix and level.",
+    Keywords = "echo, room sound, reverb parameters")]
 public sealed class ConstructReverbSettings : ValueNode
 {
     [return: Port("settings")]

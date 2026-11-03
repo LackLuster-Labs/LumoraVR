@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // Every band of an analyser's spectrum, from the lowest up, as amplitudes or in decibels. Empty for an analyser the
 // script cannot see or one not listening yet.
-[Node("Audio/Analysis/Band Levels", Capability.WorldRead)]
+[Node("Audio/Analysis/Band Levels", Capability.WorldRead, Description = "Every band of an analyser's spectrum, from the lowest up, as amplitudes or in decibels.",
+    Keywords = "frequency bands, equalizer, visualizer, eq bars, bass, treble")]
 public sealed class BandLevels : ReadNode
 {
     [return: Port("levels")]

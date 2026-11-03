@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // The slot of the text field this machine is typing into, when it is one in this world the script can see,
 // and whether there is one. Nothing while this world is not the one in front of the person.
-[Node("Input/Text Focus/Focused Field", Capability.Input)]
+[Node("UI/Text Input/Focused Field", Capability.Input, Description = "The slot of the text field this machine is typing into, when it is one in this world the script can see, and whether there is one.")]
 public sealed class FocusedTextField : ReadNode
 {
     [return: Port("field")]

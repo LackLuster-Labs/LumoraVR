@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Holds the first player on the slot where it is if it is running, and otherwise sets it going from where it
 // was held; a finished clip starts over.
-[Node("Media/Toggle Playback", Capability.WorldWrite)]
+[Node("Media/Toggle Playback", Capability.WorldWrite, Description = "Holds the first player on the slot where it is if it is running, and otherwise sets it going from where it was held; a finished clip starts over.",
+    Keywords = "audio, video, sound, music, animation, playback, play pause")]
 public sealed class ToggleMedia : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot) => ScriptMedia.Control(ctx, slot, static playable =>

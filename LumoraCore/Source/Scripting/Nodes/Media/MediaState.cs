@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // it is in seconds and as a fraction of its length, the length, and its speed. fraction and length are -1
 // while the length is not known, a live stream included. With no player it is not running, does not loop,
 // sits at 0 with speed 0, and fraction and length are -1.
-[Node("Media/Playback State", Capability.WorldRead)]
+[Node("Media/Playback State", Capability.WorldRead, Description = "Reads a player's playing state, looping, position, duration and playback speed.",
+    Keywords = "playing, paused, progress, position fraction")]
 public sealed class MediaState : ReadNode
 {
     [return: Port("playing")]

@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // A collider that was inside, as On Trigger Enter means it, left. -xlinka
-[Node("Events/On Trigger Exit")]
+[Node("Physics/Events/On Trigger Exit", Description = "A collider that was inside, as On Trigger Enter means it, left.",
+    Keywords = "trigger, overlap, zone, area, volume, region, leave")]
 [SourcedEvent]
 public sealed class OnTriggerExit : EventNode<TriggerExited>
 {

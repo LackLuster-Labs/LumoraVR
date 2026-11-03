@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The secondary action of a hand, as its bindings have it. On the right hand unless right is off; on a desktop the right hand is the mouse and keyboard.
 // Held, and whether it went down or up this frame.
-[Node("Input/Secondary", Capability.Input)]
+[Node("Input/Actions/Secondary", Capability.Input, Description = "The secondary action of a hand, as its bindings have it.",
+    Keywords = "action, binding, secondary input")]
 public sealed class SecondaryButton : ReadNode
 {
     [return: Port("held")]

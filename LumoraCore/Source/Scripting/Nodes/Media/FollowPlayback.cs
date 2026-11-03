@@ -13,7 +13,7 @@ namespace Lumora.Core.Scripting;
 // the head. A looping player's position wraps into its length and any other is kept between its ends; a
 // player asked to run past the end of a clip that does not loop is left finished rather than restarted. A
 // number that is not finite is a fault.
-[Node("Media/Follow Playback", Capability.WorldWrite)]
+[Node("Media/Follow Playback", Capability.WorldWrite, Description = "Keeps playback matched to the requested position, speed, looping and playing state when called repeatedly.")]
 public sealed class FollowPlayback : ActionNode
 {
     [return: Port("moved")]

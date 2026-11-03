@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Where the first player on the slot is, in seconds.
-[Node("Media/Position", Capability.WorldRead)]
+[Node("Media/Position", Capability.WorldRead, Description = "Where the first player on the slot is, in seconds.",
+    Keywords = "playback position, progress, current time, playhead")]
 public sealed class MediaPosition : ReadNode
 {
     [return: Port("seconds")]

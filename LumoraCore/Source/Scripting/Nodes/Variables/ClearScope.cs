@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 // Removes every variable in the scope of that name reached from slot, the nearest scope that takes
 // unnamed variables when the name is empty, and answers how many went. Removed like Delete Variable, all
 // judged before any goes. found is false when no scope answers.
-[Node("Variables/Scoped/Clear Scope", Capability.WorldStructure)]
+[Node("Variables/Scoped/Clear Scope", Capability.WorldStructure, Description = "Removes every variable in the scope of that name reached from slot, the nearest scope that takes unnamed variables when the name is empty, and answers how many went.",
+    Keywords = "clear variables, remove variables")]
 public sealed class ClearScope : ActionNode
 {
     [return: Port("cleared")]

@@ -10,7 +10,7 @@ namespace Lumora.Core.Scripting;
 // true once the variable holds value either way, created when it was made now. Making it follows Create
 // Variable's rules; a variable that is there but will not take the write is left as it is. The call fails
 // whenever written is false.
-[Node("Variables/Scoped/Write Or Create Variable", Capability.WorldStructure)]
+[Node("Variables/Scoped/Write Or Create Variable", Capability.WorldStructure, Description = "Write Variable, and Create Variable when there is nothing of that name and type to write. written is true once the variable holds value either way, created when it was made now.")]
 public sealed class WriteOrCreateScopedVariable<T> : ActionNode
 {
     public static bool IsValidGenericType => ScriptScopedVariables.CanHold(typeof(T));

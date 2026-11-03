@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 // What a reference field points at, as T: a slot, a user, a component, a field or an asset. Nothing when
 // it points at nothing, at something of another kind, or at something the script cannot see, and nothing
 // from a host-only reference.
-[Node("World/References/Reference Target", Capability.WorldRead)]
+[Node("World/References/Reference Target", Capability.WorldRead, Description = "What a reference field points at, as T: a slot, a user, a component, a field or an asset.",
+    Keywords = "pointer, get reference, read reference")]
 public sealed class ReferenceTarget<T> : ReadNode where T : class, IWorldElement
 {
     [return: Port("target")]

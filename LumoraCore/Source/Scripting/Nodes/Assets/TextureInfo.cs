@@ -15,7 +15,8 @@ namespace Lumora.Core.Scripting;
 // machines, each loading the resolution its settings allow. format is how the picture is stored: as the
 // graphics card holds it once the renderer has said, else as it was decoded, and unknown for a camera's
 // or a video's picture.
-[Node("Assets/Texture Info", Capability.WorldRead)]
+[Node("Assets/Textures/Texture Info", Capability.WorldRead, Description = "What a texture is on this machine: its size in pixels, how many mip levels a pixel read gives here, whether it holds values past 1 (a half-float picture), and how many frames a strip stacks down it.",
+    Keywords = "texture size, resolution, width, height, dimensions")]
 public sealed class TextureInfo : ReadNode
 {
     [return: Port("width")]

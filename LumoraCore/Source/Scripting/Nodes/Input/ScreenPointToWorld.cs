@@ -11,7 +11,8 @@ namespace Lumora.Core.Scripting;
 // direction out through the point, and position the spot distance metres along it. Valid is false and the
 // rest zero in a headset, while this world is not the one in front of the person, and before the view is
 // known.
-[Node("Input/Screen Point To World", Capability.Input)]
+[Node("Input/Display/Screen Point To World", Capability.Input, Description = "A point on this machine's desktop view as a ray into the world: (0, 0) is the middle of the view, (-1, -1) its bottom left and (1, 1) its top right.",
+    Keywords = "mouse ray, unproject, raycast from screen, cursor ray")]
 public sealed class ScreenPointToWorld : ReadNode
 {
     public static void Run(ScriptContext ctx, float2 point, out float3 direction, out float3 position, out float3 origin,

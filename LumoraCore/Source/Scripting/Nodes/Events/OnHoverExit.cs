@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Someone's beam went off the object, as On Hover Enter means it. -xlinka
-[Node("Events/On Hover Exit")]
+[Node("Interaction/Pointer/On Hover Exit", Description = "Someone's beam went off the object, as On Hover Enter means it.",
+    Keywords = "laser, pointer, ray, hover, mouse out")]
 [SourcedEvent]
 public sealed class OnHoverExit : EventNode<HoverEnded>
 {

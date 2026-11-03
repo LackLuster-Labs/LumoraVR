@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 // Tells this author's Shared scripts on target, on the host: each hears On Message, with who sent it
 // when it comes from a Local script on someone's machine. Messages sent from one machine in the same
 // frame arrive as the last of them.
-[Node("Events/Send To Host", Capability.Events)]
+[Node("Network/Messages/Send To Host", Capability.Events, Description = "Tells this author's Shared scripts on target, on the host: each hears On Message, with who sent it when it comes from a Local script on someone's machine.")]
 public sealed class SendToHost : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? target, string? message, float value = 0f)

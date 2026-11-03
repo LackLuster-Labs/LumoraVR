@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whether the first player on the slot is running.
-[Node("Media/Is Playing", Capability.WorldRead)]
+[Node("Media/Is Playing", Capability.WorldRead, Description = "Whether the first player on the slot is running.",
+    Keywords = "playing, paused")]
 public sealed class MediaPlaying : ReadNode
 {
     [return: Port("playing")]

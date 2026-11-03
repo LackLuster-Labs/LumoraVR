@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 // A text message on any websocket this script opened, with the socket it came on so the script can answer
 // through it. Heard on the machine that opened the socket, in the order they came; binary messages are not
 // text and are not heard.
-[Node("Events/On WebSocket Message")]
+[Node("Network/WebSockets/On WebSocket Message", Description = "A text message on any websocket this script opened, with the socket it came on so the script can answer through it.")]
 public sealed class OnWebSocketMessage : EventNode<SocketMessage>
 {
 }

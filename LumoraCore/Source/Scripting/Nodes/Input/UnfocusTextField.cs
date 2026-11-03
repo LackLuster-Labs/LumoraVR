@@ -6,9 +6,9 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Takes the keys back from the text field on the slot when this machine is typing into it, keeping what was
-// typed, the way clicking away does, and says whether it had them. One that did not is no failure; no field
-// is.
-[Node("Input/Text Focus/Unfocus Field", Capability.Input)]
+// typed, the way clicking away does, and says whether it had them. One that did not is no failure, nor is a
+// call someone else set off, which their own machine's copy answers; no field is.
+[Node("UI/Text Input/Unfocus Field", Capability.Input, Description = "Takes the keys back from the text field on the slot when this machine is typing into it, keeping what was typed, the way clicking away does, and says whether it had them.")]
 public sealed class UnfocusTextField : ActionNode
 {
     [return: Port("unfocused")]
@@ -19,7 +19,7 @@ public sealed class UnfocusTextField : ActionNode
             ScriptTextFocus.Missed(ctx, slot);
             return false;
         }
-        if (!field.IsFocused)
+        if (!field.IsFocused || !ctx.CausedHere)
             return false;
         field.Unfocus();
         return true;

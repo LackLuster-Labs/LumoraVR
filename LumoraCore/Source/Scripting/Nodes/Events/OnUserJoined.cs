@@ -5,7 +5,8 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("Events/On User Joined")]
+[Node("Users/Events/On User Joined", Description = "Starts flow when a user joins the world.",
+    Keywords = "player joined, join, connect")]
 public sealed class OnUserJoined : EventNode<UserJoined>
 {
 }

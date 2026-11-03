@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whether the person here is in a headset rather than at a desktop.
-[Node("Input/In VR", Capability.Input)]
+[Node("Input/Headset/In VR", Capability.Input, Description = "Whether the person here is in a headset rather than at a desktop.",
+    Keywords = "vr mode, desktop mode, headset, hmd, is vr")]
 public sealed class InVR : ReadNode
 {
     [return: Port("vr")]

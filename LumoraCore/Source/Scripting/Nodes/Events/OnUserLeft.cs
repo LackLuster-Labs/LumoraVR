@@ -5,7 +5,8 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("Events/On User Left")]
+[Node("Users/Events/On User Left", Description = "Starts flow when a user leaves the world.",
+    Keywords = "player left, left, leave, disconnect")]
 public sealed class OnUserLeft : EventNode<UserLeft>
 {
 }

@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 // running, whether it is tracked, the interaction profile the VR runtime bound it to (a path naming its kind
 // of hardware, empty while nothing is bound), its battery 0 to 1 or -1 where the runtime does not say, and
 // whether it has face buttons and a grip force sensor.
-[Node("Input/Controller Info", Capability.Input)]
+[Node("Input/Controllers/Controller Info", Capability.Input, Description = "Reads a VR controller's availability, tracking, device profile, battery and supported controls.")]
 public sealed class ControllerInfo : ReadNode
 {
     [return: Port("present")]

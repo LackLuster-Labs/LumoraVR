@@ -13,7 +13,8 @@ namespace Lumora.Core.Scripting;
 // so on anyone else's machine the same script finds their own hand or nothing. pulsed says whether a hand
 // was found and took the pulse. Strength and seconds as Haptic Pulse. No hand holding it is no failure, since
 // another machine's may; no target, or no controller in the hand that holds it, is.
-[Node("Input/Haptic Pulse Holder", Capability.Input)]
+[Node("Input/Controllers/Haptic Pulse Holder", Capability.Input, Description = "Vibrates the controller of whichever of this machine's own hands has target: the hand holding it, or the hand it sits in.",
+    Keywords = "vibrate, vibration, rumble, buzz, haptics, feedback")]
 public sealed class HolderPulse : ActionNode
 {
     [return: Port("pulsed")]

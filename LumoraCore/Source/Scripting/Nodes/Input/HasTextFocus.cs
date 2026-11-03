@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whether this machine is typing into the text field on the slot.
-[Node("Input/Text Focus/Has Focus", Capability.Input)]
+[Node("UI/Text Input/Has Focus", Capability.Input, Description = "Whether this machine is typing into the text field on the slot.")]
 public sealed class HasTextFocus : ReadNode
 {
     [return: Port("focused")]

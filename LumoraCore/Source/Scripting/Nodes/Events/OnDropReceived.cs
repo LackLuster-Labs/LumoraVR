@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 // The drop surface bound as its source, else the one on the object the script sits on, took something
 // someone let go of above it and set it down. The drop happens on the machine of whoever let go and
 // reaches a Shared script on the host through their relay. -xlinka
-[Node("Events/On Drop Received")]
+[Node("UI/Drag and Drop/On Drop Received", Description = "The drop surface bound as its source, else the one on the object the script sits on, took something someone let go of above it and set it down.")]
 [SourcedEvent]
 public sealed class OnDropReceived : EventNode<DropReceived>
 {

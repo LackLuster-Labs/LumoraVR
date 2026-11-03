@@ -13,7 +13,8 @@ namespace Lumora.Core.Scripting;
 // read, or while a loaded picture's pixels come back from its file: the first read starts that and they
 // are there a moment later. The pixels are this machine's copy, whose size can differ from another
 // machine's.
-[Node("Assets/Get Texture Pixel", Capability.WorldRead)]
+[Node("Assets/Textures/Get Texture Pixel", Capability.WorldRead, Description = "Reads a texture pixel at the given coordinates and mip level. Reports whether the pixel data is available.",
+    Keywords = "read pixel, texel, pixel color, image pixel")]
 public sealed class GetTexturePixel : ReadNode
 {
     [return: Port("color")]

@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Runs the body once for everyone in the session, the host included, with the user and their place in
 // the list, then completed. The count is taken as flow arrives. -xlinka
-[Node("Flow/For Each User", Capability.UsersRead)]
+[Node("Flow/Loops/For Each User", Capability.UsersRead, Description = "Runs the body once for everyone in the session, the host included, with the user and their place in the list, then completed.",
+    Keywords = "everyone, all users, players, loop users, each person")]
 public sealed class ForEachUser : FlowNode
 {
     public override void Build(FlowBuilder f)

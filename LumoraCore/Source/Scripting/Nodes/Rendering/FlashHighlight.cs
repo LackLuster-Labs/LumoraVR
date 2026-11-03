@@ -14,13 +14,14 @@ namespace Lumora.Core.Scripting;
 // on the machine the script runs on and nowhere else: the host for a Shared script, each machine for a Local
 // one; nothing in the world changes. shown says how many things flashed, and a script flashing more than
 // WarnParts at once is warned. An unset colour flashes white.
-[Node("Rendering/Flash Highlight", Capability.WorldRead)]
+[Node("Rendering/Flash Highlight", Capability.WorldRead, Description = "Briefly highlights an object and its children, then fades the highlight away.",
+    Keywords = "outline, glow, indicate")]
 public sealed class FlashHighlight : ActionNode
 {
     public const int WarnParts = 512;
 
     [return: Port("shown")]
-    public static int Run(ScriptContext ctx, Slot? root, color color, float seconds = 0.5f, bool meshes = true, bool colliders = true,
+    public static int Run(ScriptContext ctx, Slot? root, [Default(1)] color color, float seconds = 0.5f, bool meshes = true, bool colliders = true,
         bool hidden = false, bool follow = true)
     {
         if (!ScriptReads.Reached(ctx, root, "root"))

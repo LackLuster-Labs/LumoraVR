@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // Track number track of an animation at time seconds, as T: before its first key it holds the first
 // value, past its last the last. ok is false, and the value T's default, when the animation has not
 // loaded here, there is no such track, or the track holds something other than T.
-[Node("Assets/Sample Animation Track", Capability.WorldRead)]
+[Node("Assets/Animations/Sample Animation Track", Capability.WorldRead, Description = "Reads an animation track at a time in seconds, using the selected value type.",
+    Keywords = "keyframes, read animation, evaluate animation")]
 public sealed class SampleAnimationTrack<T> : ReadNode
 {
     [return: Port("value")]

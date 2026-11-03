@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // A mouse button on this machine: 0 left, 1 right, 2 middle. Held, and whether it went down or up this
 // frame.
-[Node("Input/Mouse Button", Capability.Input)]
+[Node("Input/Mouse/Mouse Button", Capability.Input, Description = "A mouse button on this machine: 0 left, 1 right, 2 middle.",
+    Keywords = "click, left click, right click, middle click")]
 public sealed class MouseButtonState : ReadNode
 {
     [return: Port("held")]

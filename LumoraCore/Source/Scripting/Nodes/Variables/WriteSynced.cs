@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // Keeps a value under a name on this script's object, for every machine to read with Read Synced. Only a
 // Shared script keeps them, on the host.
-[Node("Variables/Write Synced", Capability.Events)]
+[Node("Variables/Synced/Write Synced", Capability.Events, Description = "Keeps a value under a name on this script's object, for every machine to read with Read Synced.",
+    Keywords = "replicated value, synced variable, shared value, sync, multiplayer")]
 public sealed class WriteSynced<T> : ActionNode where T : IEquatable<T>
 {
     public static void Run(ScriptContext ctx, string? name, T value)

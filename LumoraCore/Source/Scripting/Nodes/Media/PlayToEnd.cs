@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // reaches its end; stopped when it stops any other way first (held, stopped, or its player taken away), or
 // in the next frame when the slot has no player. A looping player never ends by itself. position is where it
 // was when it stopped. Watched on the machine the script runs on.
-[Node("Media/Play To End", Capability.WorldWrite)]
+[Node("Media/Play To End", Capability.WorldWrite, Description = "Starts playback from the beginning and reports when it reaches the end or stops early.",
+    Keywords = "wait, await, finished, ended, on end, done")]
 [Answers("ended", "stopped")]
 public sealed class PlayToEnd : AwaitNode<MediaStopped>
 {

@@ -11,7 +11,8 @@ namespace Lumora.Core.Scripting;
 // decided is false while nobody has said either way; an address no socket can open reads decided and not
 // allowed. A Shared script reads the host's decisions, a Local one this
 // machine's. A decision covers the whole host, whatever the port or scheme.
-[Node("Web/Is Host Allowed", Capability.Web)]
+[Node("Network/Access/Is Host Allowed", Capability.Web, Description = "Checks whether the local user has allowed scripts to contact a web host and whether a decision exists.",
+    Keywords = "permission, allow site, web permission, site allowed")]
 public sealed class WebHostAllowed : ReadNode
 {
     [return: Port("allowed")]

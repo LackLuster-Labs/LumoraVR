@@ -14,7 +14,8 @@ namespace Lumora.Core.Scripting;
 // from the same address is handed back instead of a second one. Addresses, leave and places as Attach
 // Texture: local:// freely, http and https with the leave web requests ask for, only where the script may
 // already change things.
-[Node("Assets/Attach Sprite", Capability.WorldStructure)]
+[Node("Assets/Attach Sprite", Capability.WorldStructure, Description = "Puts a picture from an address on a slot as a UI sprite: the texture, and a sprite drawing the whole of it, for images and panels to show.",
+    Keywords = "ui image from url, sprite from url, load icon")]
 [Answers("attached", "failed", "denied")]
 public sealed class AttachSpriteFrom : AwaitNode<SpriteAttached>
 {

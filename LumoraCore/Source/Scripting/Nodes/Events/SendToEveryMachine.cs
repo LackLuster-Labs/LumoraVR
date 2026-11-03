@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 
 // Tells every machine's copy of this author's Local scripts on target: each hears On Message. Only a
 // Shared script sends it. Messages sent to one object in the same frame arrive as the last of them.
-[Node("Events/Send To Every Machine", Capability.Events)]
+[Node("Network/Messages/Send To Every Machine", Capability.Events, Description = "Tells every machine's copy of this author's Local scripts on target: each hears On Message.")]
 public sealed class SendToEveryMachine : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? target, string? message, float value = 0f)

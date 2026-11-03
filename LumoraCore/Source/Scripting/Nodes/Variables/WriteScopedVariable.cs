@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // script's author. Each holder is judged first and none is written unless all may be. found is false when
 // nothing of that name and type is there; written is false as well when every holder is driven or read
 // only. A refusal is counted and leaves both false. The call fails whenever written is false.
-[Node("Variables/Scoped/Write Variable", Capability.WorldWrite)]
+[Node("Variables/Scoped/Write Variable", Capability.WorldWrite, Description = "Writes a named variable through the scope above slot, into every component that holds it, as the script's author.",
+    Keywords = "set variable, write var, scoped variable")]
 public sealed class WriteScopedVariable<T> : ActionNode
 {
     public static bool IsValidGenericType => ScriptScopedVariables.CanHold(typeof(T));

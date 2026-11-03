@@ -12,7 +12,8 @@ namespace Lumora.Core.Scripting;
 // from the same address is handed back instead of a second one. Addresses, leave and places as Attach
 // Texture: local:// freely, http and https with the leave web requests ask for, only where the script may
 // already change things.
-[Node("Assets/Attach Mesh", Capability.WorldStructure)]
+[Node("Assets/Meshes/Attach Mesh", Capability.WorldStructure, Description = "Attaches a mesh from a URL to a slot. Continues immediately and reports attachment or failure separately.",
+    Keywords = "load model, model from url, mesh from url")]
 [Answers("attached", "failed", "denied")]
 public sealed class AttachMeshFrom : AwaitNode<MeshAttached>
 {

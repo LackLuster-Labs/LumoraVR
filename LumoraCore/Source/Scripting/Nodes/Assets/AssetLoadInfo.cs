@@ -12,7 +12,8 @@ namespace Lumora.Core.Scripting;
 // (no address, or no provider the script can see). progress runs 0 to 1 while its bytes come from another
 // machine in the session, is 1 once loaded, and -1 while nothing measures it, as for a web download or a
 // decode. error says why a load failed. Each machine loads its own copy, so the answer is this machine's.
-[Node("Assets/Load State", Capability.WorldRead)]
+[Node("Assets/Load State", Capability.WorldRead, Description = "Reports whether an asset is ready on this machine, its loading state, available progress and any load error.",
+    Keywords = "is loaded, loading progress, download progress, asset ready, load failed")]
 public sealed class AssetLoadInfo : ReadNode
 {
     [return: Port("loaded")]

@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The grab action of a hand, as its bindings have it: the grip, or the right mouse button. On the right hand unless right is off; on a desktop the right hand is the mouse and keyboard.
 // Held, and whether it went down or up this frame.
-[Node("Input/Grab", Capability.Input)]
+[Node("Input/Actions/Grab", Capability.Input, Description = "The grab action of a hand, as its bindings have it: the grip, or the right mouse button.",
+    Keywords = "action, binding, grab input, grip")]
 public sealed class GrabButton : ReadNode
 {
     [return: Port("held")]

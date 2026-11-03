@@ -9,9 +9,11 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Plays a clip once at a point the way Play One Shot does and carries on through next at once. ended runs
-// once the clip has played through; failed when it does not load, or at once when the script cannot see the
-// clip, with error saying why. Watched on the machine the script runs on.
-[Node("Media/Play One Shot To End", Capability.Audio)]
+// once the clip has played through; failed when it does not load, when the sound goes before the clip has
+// played through (a one-shot lasts OneShotSound.MaxSeconds at most), or at once when the script cannot see
+// the clip, with error saying why. Watched on the machine the script runs on.
+[Node("Media/Play One Shot To End", Capability.Audio, Description = "Plays an audio clip once at a position and answers ended once it has played through, or failed when it does not load or is cut off first.",
+    Keywords = "wait, await, finished, ended, on end, done, sound effect")]
 [Answers("ended", "failed")]
 public sealed class OneShotToEnd : AwaitNode<SoundEnded>
 {
@@ -43,14 +45,24 @@ public sealed class OneShotToEnd : AwaitNode<SoundEnded>
 
         var player = sound.GetComponent<AudioClipPlayer>();
         string? error = null;
+        // When the clip would be through at the speed it plays, for a sound taken away in the same long frame it
+        // finished in, before a look saw it finished.
+        double through = double.PositiveInfinity;
         ScriptWaits.Watch(ctx, ticket, () =>
         {
+            double now = ctx.World.Time.TotalTime;
             if (player == null || player.IsDestroyed || sound.IsDestroyed)
-                return error != null ? ("failed", new SoundEnded(error)) : ("ended", new SoundEnded(string.Empty));
+            {
+                if (error == null && now >= through)
+                    return ("ended", new SoundEnded(string.Empty));
+                return ("failed", new SoundEnded(error ?? "the sound stopped before its clip played through"));
+            }
             if (player.LoadError is { } why)
                 error = "the clip does not load: " + why;
             if (player.IsFinished)
                 return ("ended", new SoundEnded(string.Empty));
+            if (player.IsPlaying && player.ClipLength > 0.0 && speed > 0f)
+                through = now + System.Math.Max(0.0, player.ClipLength - player.Position) / speed - 0.05;
             return null;
         });
     }

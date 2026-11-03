@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // How far a VR controller's trigger is pulled, 0 to 1. On the right hand unless right is off.
-[Node("Input/Trigger", Capability.Input)]
+[Node("Input/Controllers/Trigger", Capability.Input, Description = "How far a VR controller's trigger is pulled, 0 to 1.",
+    Keywords = "controller trigger, axis, gamepad")]
 public sealed class TriggerPull : ReadNode
 {
     [return: Port("value")]

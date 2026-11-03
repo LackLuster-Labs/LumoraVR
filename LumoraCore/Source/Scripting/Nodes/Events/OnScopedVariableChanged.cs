@@ -10,7 +10,7 @@ namespace Lumora.Core.Scripting;
 // source, the object moving into or out of one, brings or takes all its variables. Looked at once a frame
 // on whichever machine the script runs, once per variable however often it changed, and only in scopes
 // that moved since the last look. -xlinka
-[Node("Events/On Scoped Variable Changed")]
+[Node("Variables/Scoped/On Scoped Variable Changed", Description = "A named variable the source can reach changed value, came, or went: in the nearest scope that takes unnamed variables and the nearest scope of each name above it.")]
 [SourcedEvent]
 public sealed class OnScopedVariableChanged : EventNode<ScopedVariableChanged>
 {

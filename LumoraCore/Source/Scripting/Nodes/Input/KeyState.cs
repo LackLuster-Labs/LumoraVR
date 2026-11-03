@@ -9,11 +9,12 @@ namespace Lumora.Core.Scripting;
 
 // A key on this machine's keyboard, by name ("E", "Space", "LeftShift"): held, and whether it went down
 // or up this frame. Nothing while a text field has the keys.
-[Node("Input/Key", Capability.Input)]
+[Node("Input/Keyboard/Key", Capability.Input, Description = "A key on this machine's keyboard, by name (\"E\", \"Space\", \"LeftShift\"): held, and whether it went down or up this frame.",
+    Keywords = "keyboard, key down, keypress, pressed key, held key")]
 public sealed class KeyState : ReadNode
 {
     [return: Port("held")]
-    public static bool Run(ScriptContext ctx, string? key, out bool pressed, out bool released)
+    public static bool Run(ScriptContext ctx, out bool pressed, out bool released, string? key = "Space")
     {
         pressed = false;
         released = false;

@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // Whoever has the scripted tool bound as its source, else the one on the object the script sits on,
 // equipped let go of its primary or secondary button. -xlinka
-[Node("Events/On Tool Released")]
+[Node("Interaction/Tools/On Tool Released", Description = "Whoever has the scripted tool bound as its source, else the one on the object the script sits on, equipped let go of its primary or secondary button.")]
 [SourcedEvent]
 public sealed class OnToolReleased : EventNode<ToolReleased>
 {

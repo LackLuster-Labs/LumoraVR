@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // Sends text through a websocket and carries on through next at once. sent runs once it went out, failed
 // when it could not: the socket is closed, the text is longer than 64 Ki characters, or the send took more
 // than 30 s. Sends through one socket go out in the order they were made.
-[Node("Web/WebSockets/Send Text", Capability.Web)]
+[Node("Network/WebSockets/Send Text", Capability.Web, Description = "Sends text over a WebSocket and reports whether the send succeeded.",
+    Keywords = "ws, socket, realtime")]
 [Answers("sent", "failed")]
 public sealed class SendWebSocketText : AwaitNode<SocketSent>
 {

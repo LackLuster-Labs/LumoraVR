@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Seconds this world has run on the machine running the script. It pauses with the world.
-[Node("Time/World Time")]
+[Node("Time/World Time", Description = "Seconds this world has run on the machine running the script.",
+    Keywords = "elapsed, seconds, clock, game time, uptime")]
 public sealed class WorldTime : ReadNode
 {
     [return: Port("seconds")]

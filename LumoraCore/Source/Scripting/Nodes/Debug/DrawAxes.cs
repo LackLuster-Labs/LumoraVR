@@ -10,11 +10,12 @@ namespace Lumora.Core.Scripting;
 // right, up and forward, red, green and blue unless given colours of their own. Drawn on the machine the
 // script runs on and nowhere else, as Draw Line is. The point and rotation are in space's coordinates when a
 // space is given, else the world's. An unset rotation is none.
-[Node("Debug/Draw Axes")]
+[Node("Debug/Drawing/Draw Axes", Description = "Draws the three axes of a rotation at a point as arrows length metres long for seconds, one frame for 0: right, up and forward, red, green and blue unless given colours of their own.")]
 public sealed class DrawAxes : ActionNode
 {
-    public static void Run(ScriptContext ctx, float3 position, floatQ rotation, float length = 0.1f, color right = default,
-        color up = default, color forward = default, float seconds = 0f, Slot? space = null)
+    public static void Run(ScriptContext ctx, float3 position, [Default(0, 0, 0, 1)] floatQ rotation, float length = 0.1f,
+        [Default(1, 0, 0, 1)] color right = default, [Default(0, 1, 0, 1)] color up = default,
+        [Default(0, 0, 1, 1)] color forward = default, float seconds = 0f, Slot? space = null)
     {
         if (!(length > 0f) || !float.IsFinite(length))
             return;

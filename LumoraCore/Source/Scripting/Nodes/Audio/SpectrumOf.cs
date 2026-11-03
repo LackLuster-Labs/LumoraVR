@@ -12,7 +12,7 @@ namespace Lumora.Core.Scripting;
 // list whose length is not made of twos, threes and fives is padded with silence up to the next one that
 // is (a power of two stays as it is), which gives length / 2 + 1 bins of that padded length. Up to 65536
 // samples are used.
-[Node("Math/Audio/Spectrum Of")]
+[Node("Audio/Signal Processing/Spectrum Of", Description = "The magnitude spectrum of a list of samples, windowed before the transform: bins from 0 Hz up to half the rate the samples were taken at, as amplitudes, so a sine landing on a bin reads its amplitude there.")]
 public sealed class SpectrumOf : ReadNode
 {
     [return: Port("magnitudes")]

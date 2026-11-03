@@ -12,7 +12,8 @@ namespace Lumora.Core.Scripting;
 // number, or on a machine with no view; the last two fail as well. Each read pulls the frame back off the
 // graphics card, which stalls it: this is for a press, not for every frame, and a script reading more than
 // ten a second is warned.
-[Node("Rendering/Sample View Color", Capability.Input)]
+[Node("Rendering/Sample View Color", Capability.Input, Description = "Samples the colour rendered near a world position in this machine's view, including anything in front of it.",
+    Keywords = "pick colour, eyedropper, screen colour, colour picker")]
 public sealed class ViewColorAt : ActionNode
 {
     public const int WarnReadsPerSecond = 10;

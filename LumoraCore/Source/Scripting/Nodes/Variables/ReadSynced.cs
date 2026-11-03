@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // A value a Shared script on target keeps, by name, as this machine last heard it. Found is false when no
 // script there keeps that name, or keeps it as something this type cannot read: text reads any value,
 // numbers read across number types, whole ones only into int and long.
-[Node("Variables/Read Synced", Capability.WorldRead)]
+[Node("Variables/Synced/Read Synced", Capability.WorldRead, Description = "A value a Shared script on target keeps, by name, as this machine last heard it.",
+    Keywords = "replicated value, synced variable, shared value, sync, multiplayer")]
 public sealed class ReadSynced<T> : ReadNode where T : IEquatable<T>
 {
     [return: Port("value")]

@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Every frame, after the script's queued events.
-[Node("Events/On Update")]
+[Node("Flow/Events/On Update", Description = "Every frame, after the script's queued events.",
+    Keywords = "update, tick, every frame, each frame, per frame, game loop, frame")]
 public sealed class OnUpdate : EventNode<FrameTick>
 {
 }

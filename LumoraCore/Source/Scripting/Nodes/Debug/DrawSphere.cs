@@ -11,10 +11,10 @@ namespace Lumora.Core.Scripting;
 // the script runs on and nowhere else, as Draw Line is. The sphere is in space's coordinates when a space is
 // given, else the world's, so a scaled space stretches it. A radius of 0 or less draws nothing, and an unset
 // colour draws white.
-[Node("Debug/Draw Sphere")]
+[Node("Debug/Drawing/Draw Sphere", Description = "Draws a sphere as its three rings, one round each axis, for seconds, one frame for 0.")]
 public sealed class DrawSphere : ActionNode
 {
-    public static void Run(ScriptContext ctx, float3 center, color color, float radius = 0.1f, float thickness = ScriptDrawings.LineRadius,
+    public static void Run(ScriptContext ctx, float3 center, [Default(1)] color color, float radius = 0.1f, float thickness = ScriptDrawings.LineRadius,
         float seconds = 0f, Slot? space = null)
     {
         if (!(radius > 0f) || !float.IsFinite(radius))

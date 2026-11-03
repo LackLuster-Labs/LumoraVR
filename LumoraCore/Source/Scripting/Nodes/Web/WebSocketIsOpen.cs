@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whether a websocket is open, and once it is not, why it closed. A socket being closed reads as not open.
-[Node("Web/WebSockets/Is Open", Capability.Web)]
+[Node("Network/WebSockets/Is Open", Capability.Web, Description = "Whether a websocket is open, and once it is not, why it closed.",
+    Keywords = "ws, socket, connected")]
 public sealed class WebSocketIsOpen : ReadNode
 {
     [return: Port("open")]

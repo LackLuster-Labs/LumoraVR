@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Which way the person here is asking to walk, from whatever their bindings use: a stick, or WASD.
-[Node("Input/Move", Capability.Input)]
+[Node("Input/Actions/Move", Capability.Input, Description = "Which way the person here is asking to walk, from whatever their bindings use: a stick, or WASD.",
+    Keywords = "WASD, walk input, movement, locomotion input, action, binding")]
 public sealed class MoveInput : ReadNode
 {
     [return: Port("value")]

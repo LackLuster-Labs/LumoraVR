@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // A press on a button: the one bound as its source, else one on the object the script sits on.
-[Node("Events/On Pressed")]
+[Node("UI/Buttons/On Pressed", Description = "A press on a button: the one bound as its source, else one on the object the script sits on.",
+    Keywords = "click, tap, button, press, push, submit")]
 [SourcedEvent]
 public sealed class OnPressed : EventNode<ButtonPressed>
 {

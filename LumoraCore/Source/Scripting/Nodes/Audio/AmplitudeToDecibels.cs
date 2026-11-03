@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // 20 log10 of an amplitude's size: 1 is 0 dB, 0.5 about -6, 0 minus infinity.
-[Node("Math/Audio/Amplitude To Decibels")]
+[Node("Audio/Signal Processing/Amplitude To Decibels", Description = "20 log10 of an amplitude's size: 1 is 0 dB, 0.5 about -6, 0 minus infinity.",
+    Keywords = "db, decibel, gain, linear to db, volume to db")]
 public sealed class AmplitudeToDecibels : ValueNode
 {
     [return: Port("decibels")]

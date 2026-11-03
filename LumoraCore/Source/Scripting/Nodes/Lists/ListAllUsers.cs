@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Everyone in the session, the host included, as a new list in the order the User node reads them. Later
 // joins and leaves do not reach the list.
-[Node("Lists/World/All Users", Capability.UsersRead)]
+[Node("Users/Searching/All Users", Capability.UsersRead, Description = "Everyone in the session, the host included, as a new list in the order the User node reads them.",
+    Keywords = "players, everyone, user list, people, list users")]
 public sealed class ListAllUsers : ReadNode
 {
     [return: Port("users")]

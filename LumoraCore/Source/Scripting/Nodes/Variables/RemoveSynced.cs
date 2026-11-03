@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Drops a synced value this script keeps, freeing its place under the object's limit. Shared scripts only.
-[Node("Variables/Remove Synced", Capability.Events)]
+[Node("Variables/Synced/Remove Synced", Capability.Events, Description = "Drops a synced value this script keeps, freeing its place under the object's limit.",
+    Keywords = "synced variable, shared value, delete synced value")]
 public sealed class RemoveSynced : ActionNode
 {
     public static void Run(ScriptContext ctx, string? name)
