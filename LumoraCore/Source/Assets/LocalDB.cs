@@ -12,6 +12,7 @@ using System.Threading.Tasks;
 using Lumora.Core.Logging;
 using Lumora.Core.Persistence;
 using Lumora.Core.Phos;
+using Lumora.Nexus.Storage;
 
 namespace Lumora.Core.Assets;
 
@@ -29,27 +30,58 @@ public class LocalDB : IDisposable
     private readonly Dictionary<string, LocalAssetRecord> _assetRecords = new();
     // Rows by table and id, kept apart from the assets so a row can never resolve as a file.
     private readonly Dictionary<string, LocalAssetRecord> _rows = new();
+    // Records by the file they point at, so a reader handed only a path still finds the key that opens it.
+    private readonly Dictionary<string, LocalAssetRecord> _byPath = new(StringComparer.OrdinalIgnoreCase);
     private readonly object _lock = new();
     private readonly SemaphoreSlim _recordsGate = new(1, 1);
     private long _recordsChanged;
     private long _recordsWritten;
     private readonly TaskCompletionSource _ready = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private bool _initialized;
+    // False when an index on disk could not be read: nothing on disk may then be judged by the records alone.
+    private bool _recordsSound = true;
 
     // A received file resolved or written since this moment is in use this run, and is never let go.
     private readonly DateTime _openedUtc = DateTime.UtcNow;
 
-    // Encrypt asset cache bytes at rest (AES-GCM via LocalEncryption), the same store
-    // that already protects records.json. Reads always go through ReadAssetBytesAsync,
-    // which transparently decrypts and passes plaintext (legacy / externally-written) files through
-    // unchanged - so flipping this on is a forward migration with no rewrite of existing cache files.
+    // CACHE FILES AT REST
     //
-    // OFF by default: turning it on is only safe once every cache-byte READER goes through
-    // ReadAssetBytesAsync (the engine's local asset gather path) instead of reading the
-    // resolved FilePath directly, AND the peer asset transfer DECRYPTS
-    // before sending (the master key is machine-bound, so ciphertext can't be shipped to a joiner).
-    // Until those two sites are routed through here, leave this false. - xlinka
-    public bool EncryptAssetsAtRest { get; set; }
+    // Every file this database writes is sealed (LumoraNexus SealedFile: AES-256-GCM per 64 KiB chunk) under a
+    // random key of its own, and that key lives only in the record, inside the encrypted index. The file is
+    // named by a random id with no extension, so the folder says nothing about what is in it; the format lives
+    // in the record too. Readers never get a path to decode from: they get bytes or a decrypting stream through
+    // ReadAssetBytesAsync / OpenRead. A file from before sealing still reads (the header tells), and the
+    // background pass seals it where it lies. -xlinka
+
+    // PLAIN THEORA
+    //
+    // Godot's built-in Theora decoder opens a video only by its path, and where there is no libVLC (the
+    // Android builds: the standalone headsets and phones) it is the only decoder there is. On those platforms
+    // a Theora video stays a plain file in the store so it can still play; everything else is sealed there as
+    // anywhere. The platform is decided here and nowhere else. -xlinka
+    public static bool KeepsTheoraPlain => Engine.CurrentPlatform == Platform.Android;
+
+    // An Ogg file whose streams include Theora video: the identification header "\x80theora" sits in a
+    // beginning-of-stream page near the front (after an Ogg skeleton's page when there is one). Ogg Vorbis
+    // audio is decoded from memory like any sound and does not count.
+    public static bool IsTheoraVideo(ReadOnlySpan<byte> head)
+    {
+        if (head.Length < 4 || head[0] != 'O' || head[1] != 'g' || head[2] != 'g' || head[3] != 'S')
+            return false;
+        return head.IndexOf(TheoraMarker) >= 0;
+    }
+
+    // 0x80 then "theora". Not a u8 literal: that would write 0x80 as two UTF-8 bytes.
+    private static ReadOnlySpan<byte> TheoraMarker => [0x80, (byte)'t', (byte)'h', (byte)'e', (byte)'o', (byte)'r', (byte)'a'];
+
+    private const int TheoraHeadBytes = 4096;
+
+    private static bool StaysPlain(ReadOnlySpan<byte> head) => KeepsTheoraPlain && IsTheoraVideo(head);
+
+    // Only these are worth opening to look: the format a video is filed under is its container's.
+    private static bool MayBeTheora(string? extension)
+        => string.IsNullOrEmpty(extension) || extension.Equals(".ogv", StringComparison.OrdinalIgnoreCase)
+           || extension.Equals(".ogg", StringComparison.OrdinalIgnoreCase);
 
     public string MachineId => _machineId;
 
@@ -61,6 +93,7 @@ public class LocalDB : IDisposable
 
     public LocalDB(string? dbPath = null)
     {
+        LocalEncryption.WireSealedStorage();
         _basePath = dbPath ?? GetDefaultBasePath();
         _machineId = GetOrCreateMachineId();
     }
@@ -73,7 +106,7 @@ public class LocalDB : IDisposable
         Directory.CreateDirectory(GetAssetCachePath());
         Directory.CreateDirectory(GetTempPath());
 
-        await LoadAssetRecordsAsync();
+        await LoadAssetRecordsAsync().ConfigureAwait(false);
 
         _initialized = true;
         _ready.TrySetResult();
@@ -92,80 +125,74 @@ public class LocalDB : IDisposable
             return null!;
         }
 
-        var hash = await ComputeFileHashAsync(filePath);
+        var hash = await ComputeFileHashAsync(filePath).ConfigureAwait(false);
         var localUri = $"local://{_machineId}/{hash}";
 
         // A record whose file is gone names nothing, so the import goes ahead and writes it again. One that
         // came from elsewhere is this machine's own once it is imported here.
-        bool held = false, promoted = false;
-        lock (_lock)
+        if (await HeldAsync(hash, promote: true, writeIndex: true).ConfigureAwait(false))
         {
-            if (_assetRecords.TryGetValue(hash, out var existing) && File.Exists(existing.FilePath))
-            {
-                held = true;
-                promoted = Promote(existing);
-            }
-        }
-        if (held)
-        {
-            if (promoted)
-                await SaveAssetRecordsAsync();
+            if (location == ImportLocation.Move)
+                TryDelete(filePath);
             Logger.Debug($"LocalDB: Asset already imported: {localUri}");
             return localUri;
         }
 
         var extension = Path.GetExtension(filePath);
-        var targetPath = Path.Combine(GetAssetCachePath(), hash + extension);
-
         try
         {
-            // Original references the source in place - we don't own that file, so it stays plaintext.
-            // Copy/Move land bytes in OUR cache and get wrapped when at-rest encryption is enabled. - xlinka
-            bool encrypted = false;
-            long plainSize;
-            switch (location)
+            if (location == ImportLocation.Original)
             {
-                case ImportLocation.Original:
-                    targetPath = filePath;
-                    plainSize = new FileInfo(targetPath).Length;
-                    break;
-
-                case ImportLocation.Copy:
-                    plainSize = await WriteCacheFileAsync(targetPath, filePath, deleteSource: false);
-                    encrypted = EncryptAssetsAtRest;
-                    break;
-
-                case ImportLocation.Move:
-                    plainSize = await WriteCacheFileAsync(targetPath, filePath, deleteSource: true);
-                    encrypted = EncryptAssetsAtRest;
-                    break;
-
-                default:
-                    plainSize = 0;
-                    break;
+                // Original references the source in place. That file is the user's, not this cache's, so it
+                // stays as it is.
+                var original = new LocalAssetRecord
+                {
+                    Hash = hash,
+                    LocalUri = localUri,
+                    FilePath = filePath,
+                    OriginalPath = filePath,
+                    OriginalFileName = Path.GetFileName(filePath),
+                    Extension = extension,
+                    ImportedAt = DateTime.UtcNow,
+                    FileSize = new FileInfo(filePath).Length,
+                };
+                lock (_lock)
+                    PutLocked(original);
+                await SaveAssetRecordsAsync().ConfigureAwait(false);
+                Logger.Debug($"LocalDB: Imported '{Path.GetFileName(filePath)}' -> {localUri}");
+                return localUri;
             }
 
-            var record = new LocalAssetRecord
+            bool plain = KeepsTheoraPlain && MayBeTheora(extension)
+                && IsTheoraVideo(await ReadHeadAsync(filePath, TheoraHeadBytes).ConfigureAwait(false));
+            return await OneWrite(hash, async () =>
             {
-                Hash = hash,
-                LocalUri = localUri,
-                FilePath = targetPath,
-                OriginalPath = filePath,
-                OriginalFileName = Path.GetFileName(filePath),
-                ImportedAt = DateTime.UtcNow,
-                FileSize = plainSize,
-                Encrypted = encrypted
-            };
-
-            lock (_lock)
-            {
-                _assetRecords[hash] = record;
-            }
-
-            await SaveAssetRecordsAsync();
-
-            Logger.Debug($"LocalDB: Imported '{Path.GetFileName(filePath)}' -> {localUri}");
-            return localUri;
+                var (path, key, size) = plain
+                    ? await CopyPlainAsync(filePath).ConfigureAwait(false)
+                    : await SealFileAsync(filePath).ConfigureAwait(false);
+                if (location == ImportLocation.Move)
+                    TryDelete(filePath);
+                var record = new LocalAssetRecord
+                {
+                    Hash = hash,
+                    LocalUri = localUri,
+                    FilePath = path,
+                    OriginalPath = filePath,
+                    OriginalFileName = Path.GetFileName(filePath),
+                    Extension = extension,
+                    ImportedAt = DateTime.UtcNow,
+                    FileSize = size,
+                    Encrypted = key != null,
+                    EncryptionKey = key,
+                };
+                string? replaced;
+                lock (_lock)
+                    replaced = PutLocked(record);
+                Retire(replaced);
+                await SaveAssetRecordsAsync().ConfigureAwait(false);
+                Logger.Debug($"LocalDB: Imported '{Path.GetFileName(filePath)}' -> {localUri}");
+                return localUri;
+            }).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -177,7 +204,11 @@ public class LocalDB : IDisposable
     // Used by the mesh-as-asset path (SaveMeshAsync) but format-agnostic.
     // Received marks bytes that came from elsewhere (a cloud blob) rather than made here; those can be let go
     // to keep the cache in budget and fetched again.
-    public async Task<string> SaveAssetAsync(byte[] data, string extension = ".lmesh", bool received = false)
+    //
+    // writeIndex false leaves the index write to the caller's own SaveRecordsAsync once its batch is in. An
+    // import saving a thousand assets one after another waited for the whole index to be serialised and
+    // written after every one of them, which was most of its first ten seconds. -xlinka
+    public async Task<string> SaveAssetAsync(byte[] data, string extension = ".lmesh", bool received = false, bool writeIndex = true)
     {
         if (data == null)
         {
@@ -191,59 +222,69 @@ public class LocalDB : IDisposable
         var hash = ComputeBytesHash(data);
         var localUri = $"local://{_machineId}/{hash}";
 
-        bool held = false, promoted = false;
-        lock (_lock)
+        if (await HeldAsync(hash, promote: !received, writeIndex).ConfigureAwait(false))
         {
-            if (_assetRecords.TryGetValue(hash, out var existing) && File.Exists(existing.FilePath))
-            {
-                held = true;
-                promoted = !received && Promote(existing);
-            }
-        }
-        if (held)
-        {
-            if (promoted)
-                await SaveAssetRecordsAsync();
             Logger.Debug($"LocalDB: Asset already saved: {localUri}");
             return localUri;
         }
 
-        var targetPath = Path.Combine(GetAssetCachePath(), hash + extension);
-        bool encrypted = EncryptAssetsAtRest;
         try
         {
-            // Hash addresses the PLAINTEXT (above), so dedup stays content-stable regardless of the
-            // at-rest encryption toggle; only the bytes on disk are wrapped. - xlinka
-            var onDisk = encrypted ? LocalEncryption.Encrypt(data) : data;
-            await File.WriteAllBytesAsync(targetPath, onDisk);
+            return await OneWrite(hash, async () =>
+            {
+                // The hash addresses the PLAINTEXT, so dedup, transfer and the cloud see the same address
+                // whatever this machine keeps on disk. -xlinka
+                var (path, key) = await StoreBytesAsync(data).ConfigureAwait(false);
+                var record = new LocalAssetRecord
+                {
+                    Hash = hash,
+                    LocalUri = localUri,
+                    FilePath = path,
+                    OriginalPath = localUri,
+                    OriginalFileName = hash + extension,
+                    Extension = extension,
+                    ImportedAt = DateTime.UtcNow,
+                    FileSize = data.LongLength,
+                    Encrypted = key != null,
+                    EncryptionKey = key,
+                    Received = received
+                };
+                string? replaced;
+                lock (_lock)
+                    replaced = PutLocked(record);
+                Retire(replaced);
+
+                if (writeIndex)
+                    await SaveAssetRecordsAsync().ConfigureAwait(false);
+                else
+                    Interlocked.Increment(ref _recordsChanged);
+                Logger.Debug($"LocalDB: Saved {data.Length}-byte asset -> {localUri}");
+                return localUri;
+            }).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
             Logger.Error($"LocalDB: Failed to save asset {localUri}: {ex.Message}");
             return null!;
         }
+    }
 
-        var record = new LocalAssetRecord
-        {
-            Hash = hash,
-            LocalUri = localUri,
-            FilePath = targetPath,
-            OriginalPath = localUri,
-            OriginalFileName = hash + extension,
-            ImportedAt = DateTime.UtcNow,
-            FileSize = data.LongLength,
-            Encrypted = encrypted,
-            Received = received
-        };
-
+    // True when a record for the key has its file here. Promotion (a received file becoming this machine's
+    // own) writes the index when asked to.
+    private async Task<bool> HeldAsync(string key, bool promote, bool writeIndex)
+    {
+        bool held = false, promoted = false;
         lock (_lock)
         {
-            _assetRecords[hash] = record;
+            if (_assetRecords.TryGetValue(key, out var existing) && File.Exists(existing.FilePath))
+            {
+                held = true;
+                promoted = promote && Promote(existing);
+            }
         }
-
-        await SaveAssetRecordsAsync();
-        Logger.Debug($"LocalDB: Saved {data.Length}-byte asset -> {localUri}");
-        return localUri;
+        if (promoted && writeIndex)
+            await SaveAssetRecordsAsync().ConfigureAwait(false);
+        return held;
     }
 
     public Task<string> SaveMeshAsync(PhosMesh mesh)
@@ -284,13 +325,13 @@ public class LocalDB : IDisposable
         LocalAssetRecord? record;
         lock (_lock)
         {
-            if (!_assetRecords.Remove(key!, out record))
+            if (!DropLocked(key!, out record))
                 return true;
         }
 
         if (!await SaveAssetRecordsAsync().ConfigureAwait(false))
             return false;
-        if (!string.IsNullOrEmpty(record.FilePath) && record.FilePath.StartsWith(GetAssetCachePath(), StringComparison.OrdinalIgnoreCase))
+        if (!string.IsNullOrEmpty(record!.FilePath) && IsInAssetCache(record.FilePath))
         {
             try { File.Delete(record.FilePath); } catch { /* a stray file now, but nothing names it */ }
         }
@@ -341,7 +382,7 @@ public class LocalDB : IDisposable
             {
                 return false;
             }
-            _assetRecords.Remove(key);
+            DropLocked(key, out _);
             return true;
         }
     }
@@ -398,7 +439,7 @@ public class LocalDB : IDisposable
     // of derived assets has to be replicated anywhere. -xlinka
 
     // '~' is URI-unreserved and filename-safe, and never appears in a hex hash, so it is an
-    // unambiguous split point in both a URI and a cache filename.
+    // unambiguous split point in a URI.
     private const char DerivedSeparator = '~';
 
     // The URI of a derived asset: the base URI with suffix appended to its
@@ -427,30 +468,45 @@ public class LocalDB : IDisposable
     // matches, the newer computation supersedes the older one.
     // A derivative is received when it came from elsewhere or its base did: either way it can be made or
     // fetched again.
-    public async Task<string> SaveDerivedAssetAsync(string baseLocalUri, string suffix, byte[] data, string extension, bool received = false)
+    //
+    // One write per address at a time. A guest's avatar arriving asks for each texture's sidecar and rungs from
+    // several loads at once, and a re-ask after a slow answer brings the same bytes twice. A second save of an
+    // address already being written waits for that one instead: same address, same bytes. -xlinka
+    public Task<string> SaveDerivedAssetAsync(string baseLocalUri, string suffix, byte[] data, string extension, bool received = false,
+        bool writeIndex = true)
     {
         var uri = DeriveUri(baseLocalUri, suffix);
-        if (uri == null || data == null)
+        var key = uri == null ? null : ExtractKey(uri);
+        if (uri == null || data == null || string.IsNullOrEmpty(key))
         {
             Logger.Error($"LocalDB: cannot derive asset '{suffix}' from '{baseLocalUri}'");
-            return null!;
+            return Task.FromResult<string>(null!);
         }
+        return OneWrite(key!, () => WriteDerivedAssetAsync(baseLocalUri, uri, key!, data, extension, received, writeIndex));
+    }
 
-        var key = ExtractKey(uri);
-        if (string.IsNullOrEmpty(key))
-            return null!;
-
+    private async Task<string> WriteDerivedAssetAsync(string baseLocalUri, string uri, string key, byte[] data, string extension,
+        bool received, bool writeIndex)
+    {
         if (!string.IsNullOrEmpty(extension) && !extension.StartsWith("."))
             extension = "." + extension;
 
-        // The key can be long-ish (hash + suffix); it is still well inside path limits, and keeping
-        // it readable makes the cache directory diagnosable by eye.
-        var targetPath = Path.Combine(GetAssetCachePath(), key + extension);
-        bool encrypted = EncryptAssetsAtRest;
+        // Something received from its owner is often here already: the transfer adopts the file under this very
+        // address before the load that asked for it gets to file it again. Those are the same bytes, so the
+        // second write is skipped.
+        if (received)
+        {
+            LocalAssetRecord? had;
+            lock (_lock)
+                _assetRecords.TryGetValue(key, out had);
+            if (had != null && had.FileSize == data.LongLength && File.Exists(had.FilePath))
+                return uri;
+        }
+
+        (string Path, byte[]? Key) written;
         try
         {
-            var onDisk = encrypted ? LocalEncryption.Encrypt(data) : data;
-            await File.WriteAllBytesAsync(targetPath, onDisk);
+            written = await StoreBytesAsync(data).ConfigureAwait(false);
         }
         catch (Exception ex)
         {
@@ -462,21 +518,26 @@ public class LocalDB : IDisposable
         {
             Hash = key,
             LocalUri = uri,
-            FilePath = targetPath,
+            FilePath = written.Path,
             OriginalPath = baseLocalUri,
             OriginalFileName = key + extension,
+            Extension = extension,
             ImportedAt = DateTime.UtcNow,
             FileSize = data.LongLength,
-            Encrypted = encrypted,
+            Encrypted = written.Key != null,
+            EncryptionKey = written.Key,
             Received = received || IsReceived(baseLocalUri),
         };
 
+        string? replaced;
         lock (_lock)
-        {
-            _assetRecords[key] = record;
-        }
+            replaced = PutLocked(record);
+        Retire(replaced);
 
-        await SaveAssetRecordsAsync();
+        if (writeIndex)
+            await SaveAssetRecordsAsync().ConfigureAwait(false);
+        else
+            Interlocked.Increment(ref _recordsChanged);
         return uri;
     }
 
@@ -489,10 +550,13 @@ public class LocalDB : IDisposable
     // The window that opens is narrow and bounded: a peer that serves bytes not matching the hash it was
     // asked for gets one load out of it, then loses both the record and the file.
     //
-    // Synchronous on purpose. The caller reads the returned path and hands the bytes to a decoder that
-    // resolves the format from this record, so the record has to exist by the time this returns or the
-    // very first load after a transfer races the write that would have told it what it is. -xlinka
-    public string? AdoptGatheredAsset(string localUri, string filePath, string? format = null)
+    // The transfer lands its bytes sealed already (SealedScatterWriter) and hands the key over with the file,
+    // so adopting stays a rename.
+    //
+    // Synchronous on purpose. The caller decodes straight after and the decoder resolves the format from this
+    // record, so the record has to exist by the time this returns or the very first load after a transfer
+    // races the write that would have told it what it is. -xlinka
+    public string? AdoptGatheredAsset(string localUri, string filePath, string? format = null, byte[]? sealedWith = null)
     {
         var key = ExtractKey(localUri);
         if (string.IsNullOrEmpty(key) || string.IsNullOrEmpty(filePath) || !File.Exists(filePath))
@@ -513,20 +577,51 @@ public class LocalDB : IDisposable
             }
         }
 
+        if (sealedWith == null && SealedFile.IsSealed(filePath))
+        {
+            Logger.Error($"LocalDB: {localUri} arrived sealed with no key to open it");
+            TryDelete(filePath);
+            return null;
+        }
+
         var extension = format;
         if (string.IsNullOrEmpty(extension))
             extension = Path.GetExtension(filePath);
         if (!string.IsNullOrEmpty(extension) && !extension!.StartsWith("."))
             extension = "." + extension;
 
-        var targetPath = Path.Combine(GetAssetCachePath(), key + extension);
+        if (sealedWith != null && KeepsTheoraPlain && MayBeTheora(extension))
+        {
+            try
+            {
+                if (IsTheoraVideo(SealedHead(filePath, sealedWith)))
+                {
+                    var plainTemp = GetTempFilePath();
+                    using (var source = SealedFile.OpenRead(filePath, sealedWith))
+                    using (var target = new FileStream(plainTemp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1 << 16))
+                        source.CopyTo(target, 1 << 20);
+                    TryDelete(filePath);
+                    filePath = plainTemp;
+                    sealedWith = null;
+                }
+            }
+            catch (Exception ex) when (ex is IOException or CryptographicException or InvalidDataException)
+            {
+                Logger.Error($"LocalDB: could not open {localUri} as it arrived: {ex.Message}");
+                TryDelete(filePath);
+                return null;
+            }
+        }
+
+        var targetPath = NewCachePath();
         long size;
         try
         {
             // A rename inside our own base path, not a copy: the temp directory and the cache are the
             // same volume by construction.
-            File.Move(filePath, targetPath, true);
-            size = new FileInfo(targetPath).Length;
+            File.Move(filePath, targetPath);
+            long onDisk = new FileInfo(targetPath).Length;
+            size = sealedWith != null ? SealedFile.PlainLength(onDisk, SealedFile.HeaderLength) : onDisk;
         }
         catch (Exception ex)
         {
@@ -541,23 +636,24 @@ public class LocalDB : IDisposable
             FilePath = targetPath,
             OriginalPath = localUri,
             OriginalFileName = key + extension,
+            Extension = extension,
             ImportedAt = DateTime.UtcNow,
             FileSize = size,
-            // Adoption moves the bytes as they arrived. At-rest wrapping would mean reading and rewriting
-            // the whole file here, which is the cost this path exists to avoid; reads detect the header
-            // either way, so a plaintext entry in an otherwise encrypted cache still loads.
-            Encrypted = false,
+            Encrypted = sealedWith != null,
+            EncryptionKey = sealedWith,
             Verified = false,
             Received = true
         };
 
+        string? replaced;
         lock (_lock)
-        {
-            _assetRecords[key!] = record;
-        }
+            replaced = PutLocked(record);
+        Retire(replaced);
 
         _ = SaveAssetRecordsAsync();
-        VerifyAdoptedInBackground(key!, targetPath);
+        VerifyAdoptedInBackground(key!, targetPath, sealedWith);
+        if (sealedWith == null)
+            CacheSealing.Nudge();
 
         Logger.Debug($"LocalDB: adopted gathered asset -> {localUri} ({size} bytes, '{extension}')");
         return targetPath;
@@ -578,7 +674,7 @@ public class LocalDB : IDisposable
         return true;
     }
 
-    private void VerifyAdoptedInBackground(string key, string path)
+    private void VerifyAdoptedInBackground(string key, string path, byte[]? fileKey)
     {
         if (!IsContentHashKey(key))
             return;
@@ -587,7 +683,9 @@ public class LocalDB : IDisposable
         {
             try
             {
-                var actual = await ComputeFileHashAsync(path);
+                string actual;
+                await using (var stream = AssetFiles.Open(path, fileKey))
+                    actual = Convert.ToHexString(await SHA256.HashDataAsync(stream).ConfigureAwait(false)).ToLowerInvariant();
                 if (actual == key)
                 {
                     lock (_lock)
@@ -607,7 +705,7 @@ public class LocalDB : IDisposable
                     // the same hash can have replaced it while this was hashing, and that one is sound.
                     dropped = _assetRecords.TryGetValue(key, out var record)
                         && string.Equals(record.FilePath, path, StringComparison.OrdinalIgnoreCase)
-                        && _assetRecords.Remove(key);
+                        && DropLocked(key, out _);
                 }
 
                 if (!dropped)
@@ -638,7 +736,7 @@ public class LocalDB : IDisposable
     }
 
     // No-op when the asset is not in this database (a peer-owned asset we never received).
-    public async Task SetAssetMetadataAsync(string localUri, Action<IDictionary<string, string>> mutate)
+    public async Task SetAssetMetadataAsync(string localUri, Action<IDictionary<string, string>> mutate, bool writeIndex = true)
     {
         var key = ExtractKey(localUri);
         if (string.IsNullOrEmpty(key) || mutate == null)
@@ -648,11 +746,18 @@ public class LocalDB : IDisposable
         {
             if (!_assetRecords.TryGetValue(key, out var record))
                 return;
-            record.Metadata ??= new Dictionary<string, string>();
-            mutate(record.Metadata);
+            // Replaced, never changed in place: the index writer serialises its snapshot and GetAssetMetadata's
+            // callers read theirs outside the lock, and a bag that grew under them threw "collection was modified"
+            // and dropped that index write. -xlinka
+            var metadata = record.Metadata == null ? new Dictionary<string, string>() : new Dictionary<string, string>(record.Metadata);
+            mutate(metadata);
+            record.Metadata = metadata;
         }
 
-        await SaveAssetRecordsAsync();
+        if (writeIndex)
+            await SaveAssetRecordsAsync().ConfigureAwait(false);
+        else
+            Interlocked.Increment(ref _recordsChanged);
     }
 
     // ROWS
@@ -714,28 +819,27 @@ public class LocalDB : IDisposable
         return parts.Length < 2 ? null : parts[1];
     }
 
+    // Where the file behind an address sits, for existence checks and bookkeeping. Its bytes on disk are sealed:
+    // read them through ReadAssetBytesAsync or OpenRead, never from this path.
     public string GetFilePath(string localUri)
     {
-        if (!localUri.StartsWith("local://"))
-            return null!;
+        var record = Touch(localUri);
+        return record?.FilePath!;
+    }
 
-        // Parse URI: local://[machineId]/[hash]
-        var parts = localUri.Substring(8).Split('/');
-        if (parts.Length < 2)
-            return null!;
-
-        var hash = parts[1];
-
+    // The record behind an address, marked as wanted now.
+    private LocalAssetRecord? Touch(string localUri)
+    {
+        var key = ExtractKey(localUri);
+        if (string.IsNullOrEmpty(key))
+            return null;
         lock (_lock)
         {
-            if (_assetRecords.TryGetValue(hash, out var record))
-            {
-                record.LastUsedUtc = DateTime.UtcNow;
-                return record.FilePath;
-            }
+            if (!_assetRecords.TryGetValue(key!, out var record))
+                return null;
+            record.LastUsedUtc = DateTime.UtcNow;
+            return record;
         }
-
-        return null!;
     }
 
     public bool Exists(string localUri)
@@ -744,14 +848,68 @@ public class LocalDB : IDisposable
         return path != null && File.Exists(path);
     }
 
-    // Whether the file behind an address is wrapped at rest, so its bytes on disk are not the asset's.
-    public bool IsStoredEncrypted(string localUri)
+    // The format an asset was filed as, with its dot ("" when unknown). A sealed file's name has no extension,
+    // so the record is the only place that knows.
+    public string GetExtension(string localUri)
     {
         var key = ExtractKey(localUri);
         if (string.IsNullOrEmpty(key))
+            return string.Empty;
+        lock (_lock)
+            return _assetRecords.TryGetValue(key!, out var record) ? ExtensionOf(record) : string.Empty;
+    }
+
+    // The name the file went by before cache files were sealed: its key, or for an import left where the user
+    // keeps it, that file's own name. The cloud's list of a save's parts records it.
+    public string? GetStoredName(string localUri)
+    {
+        var key = ExtractKey(localUri);
+        if (string.IsNullOrEmpty(key))
+            return null;
+        lock (_lock)
+        {
+            if (!_assetRecords.TryGetValue(key!, out var record))
+                return null;
+            return IsInAssetCache(record.FilePath) ? record.Hash : Path.GetFileNameWithoutExtension(record.FilePath);
+        }
+    }
+
+    public static string ExtensionOf(LocalAssetRecord record)
+    {
+        if (!string.IsNullOrEmpty(record.Extension))
+            return record.Extension!;
+        var fromPath = string.IsNullOrEmpty(record.FilePath) ? null : Path.GetExtension(record.FilePath);
+        if (!string.IsNullOrEmpty(fromPath))
+            return fromPath!;
+        return string.IsNullOrEmpty(record.OriginalFileName) ? string.Empty : Path.GetExtension(record.OriginalFileName) ?? string.Empty;
+    }
+
+    // The plaintext length of an asset held here, -1 when there is none.
+    public long GetPlainSize(string localUri)
+    {
+        var key = ExtractKey(localUri);
+        if (string.IsNullOrEmpty(key))
+            return -1;
+        lock (_lock)
+            return _assetRecords.TryGetValue(key!, out var record) ? record.FileSize : -1;
+    }
+
+    // The key that opens a file this database wrote, found by its path; null for a file it does not know or
+    // one it keeps unsealed.
+    public byte[]? KeyForPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+        lock (_lock)
+            return _byPath.TryGetValue(PathKey(path), out var record) ? record.EncryptionKey : null;
+    }
+
+    public bool OwnsPath(string path)
+    {
+        if (string.IsNullOrEmpty(path))
             return false;
         lock (_lock)
-            return _assetRecords.TryGetValue(key!, out var record) && record.Encrypted;
+            return _byPath.ContainsKey(PathKey(path));
     }
 
     // The local:// address of a record this machine holds for a content hash, or null. A cloud
@@ -886,56 +1044,559 @@ public class LocalDB : IDisposable
         }
     }
 
-    // Write a source file into the cache at targetPath, encrypting at rest when enabled, and return the
-    // PLAINTEXT byte length. With encryption off we keep the cheap File.Copy/Move (no read-into-memory).
-    // With it on we must read -> wrap -> write, since copy alone can't transform the bytes. - xlinka
-    private async Task<long> WriteCacheFileAsync(string targetPath, string sourcePath, bool deleteSource)
-    {
-        if (!EncryptAssetsAtRest)
-        {
-            if (deleteSource)
-                await Task.Run(() => File.Move(sourcePath, targetPath, true));
-            else
-                await Task.Run(() => File.Copy(sourcePath, targetPath, true));
-            return new FileInfo(targetPath).Length;
-        }
+    // WRITING SEALED FILES
+    //
+    // Every write lands under a fresh random name, so a file and the key in its record always come from the
+    // same write: two writes of one address race only over which record wins, never over one file. The file a
+    // record no longer names is retired, and deleted a little later so a reader that looked it up a moment ago
+    // can still open it. -xlinka
 
-        var plain = await File.ReadAllBytesAsync(sourcePath);
-        await File.WriteAllBytesAsync(targetPath, LocalEncryption.Encrypt(plain));
-        if (deleteSource)
+    private readonly Dictionary<string, Task<string>> _writes = new(StringComparer.Ordinal);
+
+    private Task<string> OneWrite(string key, Func<Task<string>> write)
+    {
+        Task<string> task;
+        lock (_writes)
         {
-            try { File.Delete(sourcePath); } catch { /* best effort - source already consumed */ }
+            // A finished write whose entry has not been cleared yet is not running any more.
+            if (_writes.TryGetValue(key, out var running) && !running.IsCompleted)
+                return running;
+            task = Task.Run(write);
+            _writes[key] = task;
         }
-        return plain.LongLength;
+        _ = task.ContinueWith(_ =>
+        {
+            lock (_writes)
+            {
+                if (_writes.TryGetValue(key, out var kept) && kept == task)
+                    _writes.Remove(key);
+            }
+        }, TaskScheduler.Default);
+        return task;
     }
 
-    // Read a cached asset's bytes, transparently decrypting if it was stored encrypted. A plaintext or
-    // legacy file is returned as-is (Decrypt detects the header), so this
-    // is safe to call for every local:// read and doubles as the migration path. Returns null when the
-    // URI doesn't resolve. - xlinka
-    public async Task<byte[]?> ReadAssetBytesAsync(string localUri)
-    {
-        var path = GetFilePath(localUri);
-        if (string.IsNullOrEmpty(path) || !File.Exists(path))
-            return null;
+    private string NewCachePath() => Path.Combine(GetAssetCachePath(), Guid.NewGuid().ToString("N"));
 
-        var raw = await File.ReadAllBytesAsync(path);
+    // Sealed, unless it is a video this platform keeps plain. A null key means plain.
+    private async Task<(string Path, byte[]? Key)> StoreBytesAsync(byte[] data)
+    {
+        if (!StaysPlain(data.AsSpan(0, System.Math.Min(data.Length, TheoraHeadBytes))))
+            return await SealBytesAsync(data).ConfigureAwait(false);
+        var temp = GetTempFilePath();
         try
         {
-            return LocalEncryption.Decrypt(raw);
+            await File.WriteAllBytesAsync(temp, data).ConfigureAwait(false);
+            var target = NewCachePath();
+            File.Move(temp, target);
+            return (target, null);
         }
-        catch (Exception ex)
+        catch
         {
-            Logger.Error($"LocalDB: failed to decrypt cached asset '{localUri}': {ex.Message}");
+            TryDelete(temp);
+            throw;
+        }
+    }
+
+    private async Task<(string Path, byte[]? Key, long Size)> CopyPlainAsync(string source)
+    {
+        var temp = GetTempFilePath();
+        try
+        {
+            await Task.Run(() => File.Copy(source, temp)).ConfigureAwait(false);
+            var target = NewCachePath();
+            File.Move(temp, target);
+            return (target, null, new FileInfo(target).Length);
+        }
+        catch
+        {
+            TryDelete(temp);
+            throw;
+        }
+    }
+
+    private static byte[] SealedHead(string path, byte[] key)
+    {
+        using var stream = SealedFile.OpenRead(path, key);
+        var head = new byte[(int)System.Math.Min(stream.Length, TheoraHeadBytes)];
+        stream.ReadExactly(head);
+        return head;
+    }
+
+    private async Task<(string Path, byte[] Key)> SealBytesAsync(byte[] data)
+    {
+        var key = SealedKeys.NewKey();
+        var temp = GetTempFilePath();
+        try
+        {
+            await SealedFile.WriteAllBytesAsync(temp, data, key).ConfigureAwait(false);
+            var target = NewCachePath();
+            File.Move(temp, target);
+            return (target, key);
+        }
+        catch
+        {
+            TryDelete(temp);
+            throw;
+        }
+    }
+
+    // Streams a file into a sealed cache file, a megabyte at a time, so an import of a big model never holds
+    // it whole. Returns the plaintext length.
+    private async Task<(string Path, byte[]? Key, long Size)> SealFileAsync(string source)
+    {
+        var key = SealedKeys.NewKey();
+        var temp = GetTempFilePath();
+        try
+        {
+            long size;
+            await using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 1,
+                FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                var output = new SealedWriteStream(new FileStream(temp, FileMode.Create, FileAccess.Write, FileShare.None, 1,
+                    FileOptions.Asynchronous), key, leaveOpen: false);
+                await using (output.ConfigureAwait(false))
+                {
+                    await input.CopyToAsync(output, 1 << 20).ConfigureAwait(false);
+                    size = output.Length;
+                    await output.CompleteAsync().ConfigureAwait(false);
+                }
+            }
+            var target = NewCachePath();
+            File.Move(temp, target);
+            return (target, key, size);
+        }
+        catch
+        {
+            TryDelete(temp);
+            throw;
+        }
+    }
+
+    private static void TryDelete(string? path)
+    {
+        if (string.IsNullOrEmpty(path))
+            return;
+        try { File.Delete(path); } catch { /* the stray sweep gets it */ }
+    }
+
+    private static readonly TimeSpan RetireDelay = TimeSpan.FromMinutes(2);
+
+    private void Retire(string? path)
+    {
+        if (string.IsNullOrEmpty(path) || !IsInAssetCache(path))
+            return;
+        _ = Task.Delay(RetireDelay).ContinueWith(_ =>
+        {
+            lock (_lock)
+            {
+                // Named again since (a re-root or an import of the same file): it stays.
+                if (_byPath.ContainsKey(PathKey(path!)))
+                    return;
+            }
+            TryDelete(path);
+        }, TaskScheduler.Default);
+    }
+
+    // Under _lock. Files a record and returns the cache file it replaced, when that was a different one.
+    private string? PutLocked(LocalAssetRecord record)
+    {
+        string? replaced = null;
+        if (_assetRecords.TryGetValue(record.Hash, out var old) && !string.IsNullOrEmpty(old.FilePath))
+        {
+            var oldKey = PathKey(old.FilePath);
+            if (_byPath.TryGetValue(oldKey, out var holder) && holder == old)
+                _byPath.Remove(oldKey);
+            if (!string.Equals(old.FilePath, record.FilePath, StringComparison.OrdinalIgnoreCase))
+                replaced = old.FilePath;
+        }
+        _assetRecords[record.Hash] = record;
+        if (!string.IsNullOrEmpty(record.FilePath))
+            _byPath[PathKey(record.FilePath)] = record;
+        return replaced;
+    }
+
+    // Under _lock.
+    private bool DropLocked(string key, out LocalAssetRecord? record)
+    {
+        if (!_assetRecords.Remove(key, out record))
+            return false;
+        if (!string.IsNullOrEmpty(record.FilePath))
+        {
+            var pathKey = PathKey(record.FilePath);
+            if (_byPath.TryGetValue(pathKey, out var holder) && holder == record)
+                _byPath.Remove(pathKey);
+        }
+        return true;
+    }
+
+    // Records name their files by absolute paths written however the data folder was spelled that run.
+    private static string PathKey(string path)
+    {
+        try
+        {
+            return Path.GetFullPath(path);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return path;
+        }
+    }
+
+    // READING
+
+    // A cached asset's bytes, decrypted. A file from before sealing comes back as it is. Null when the address
+    // does not resolve or the file will not open. A received file that fails its seal is dropped, so the next
+    // load fetches it again instead of failing on the same bytes forever. - xlinka
+    public async Task<byte[]?> ReadAssetBytesAsync(string localUri)
+    {
+        var record = Touch(localUri);
+        if (record == null || string.IsNullOrEmpty(record.FilePath) || !File.Exists(record.FilePath))
+            return null;
+
+        try
+        {
+            return await AssetFiles.ReadAllBytesAsync(record.FilePath, record.EncryptionKey).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is CryptographicException or InvalidDataException or EndOfStreamException)
+        {
+            Unreadable(record, ex);
+            return null;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Logger.Error($"LocalDB: could not read cached asset '{localUri}': {ex.Message}");
             return null;
         }
     }
 
-    private async Task<string> ComputeFileHashAsync(string filePath)
+    // A seekable stream of an asset's plaintext, for whatever reads a file as it goes (a video, a font table,
+    // a peer being sent the file). Null when the address does not resolve.
+    public Stream? OpenRead(string localUri)
     {
-        using var sha256 = SHA256.Create();
-        await using var stream = File.OpenRead(filePath);
-        var hashBytes = await Task.Run(() => sha256.ComputeHash(stream));
+        var record = Touch(localUri);
+        if (record == null || string.IsNullOrEmpty(record.FilePath) || !File.Exists(record.FilePath))
+            return null;
+        try
+        {
+            return AssetFiles.Open(record.FilePath, record.EncryptionKey);
+        }
+        catch (Exception ex) when (ex is FileNotFoundException or DirectoryNotFoundException)
+        {
+            return null;
+        }
+        catch (Exception ex) when (ex is CryptographicException or InvalidDataException or EndOfStreamException)
+        {
+            Unreadable(record, ex);
+            return null;
+        }
+    }
+
+    private void Unreadable(LocalAssetRecord record, Exception ex)
+    {
+        Logger.Error($"LocalDB: cached asset '{record.Hash}' does not open ({ex.Message})");
+        if (!record.Received)
+            return;
+        bool dropped;
+        lock (_lock)
+            dropped = _assetRecords.TryGetValue(record.Hash, out var current) && current == record && DropLocked(record.Hash, out _);
+        if (!dropped)
+            return;
+        TryDelete(record.FilePath);
+        _ = SaveAssetRecordsAsync();
+    }
+
+    // SEALING OLDER FILES
+    //
+    // A file written before sealing (or adopted from a peer on an older path) is sealed where it lies, one
+    // file at a time at a bounded rate, so the pass never competes with a load. Each step is safe to stop at:
+    // the sealed copy goes under a new name, the record moves to it, the index is written, and only then is the
+    // old file retired. A stop before the index write leaves an unnamed sealed file for the stray sweep; a stop
+    // after it leaves the old file, which the sweep also takes. -xlinka
+
+    // The records this pass would seal, the ones it has not tried yet.
+    private List<LocalAssetRecord> Unsealed(HashSet<string> tried)
+    {
+        var list = new List<LocalAssetRecord>();
+        lock (_lock)
+        {
+            foreach (var record in _assetRecords.Values)
+            {
+                if (record.EncryptionKey == null && !tried.Contains(record.Hash) && IsInAssetCache(record.FilePath))
+                    list.Add(record);
+            }
+        }
+        return list;
+    }
+
+    // The index is written every so many files, not after each one: it is the whole store, and writing it two
+    // thousand times over was most of what the pass cost. The old files wait for the write that drops them.
+    private const int SealsPerIndexWrite = 64;
+
+    public async Task<(int Sealed, long Bytes)> SealOlderFilesAsync(Func<long, Task> pace, CancellationToken ct)
+    {
+        await Ready.ConfigureAwait(false);
+        int count = 0;
+        long bytes = 0;
+        var tried = new HashSet<string>(StringComparer.Ordinal);
+        var unnamed = new List<string>();
+        if (KeepsTheoraPlain)
+            count += await UnsealTheoraAsync(unnamed, pace, ct).ConfigureAwait(false);
+        while (!ct.IsCancellationRequested)
+        {
+            var batch = Unsealed(tried);
+            if (batch.Count == 0)
+                break;
+            foreach (var record in batch)
+            {
+                if (ct.IsCancellationRequested)
+                    break;
+                tried.Add(record.Hash);
+                if (!File.Exists(record.FilePath))
+                    continue;
+                try
+                {
+                    var oldPath = record.FilePath;
+                    if (KeepsTheoraPlain && MayBeTheora(ExtensionOf(record))
+                        && IsTheoraVideo(await ReadHeadAsync(oldPath, TheoraHeadBytes).ConfigureAwait(false)))
+                        continue;
+                    long size = await SealOneAsync(record, SealInPlaceAsync).ConfigureAwait(false);
+                    if (size < 0)
+                        continue;
+                    unnamed.Add(oldPath);
+                    count++;
+                    bytes += size;
+                    if (unnamed.Count >= SealsPerIndexWrite)
+                        await WriteIndexThenRetire(unnamed).ConfigureAwait(false);
+                    await pace(size).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.Warn($"LocalDB: could not seal cached asset '{record.Hash}' yet: {ex.Message}");
+                }
+            }
+        }
+        await WriteIndexThenRetire(unnamed).ConfigureAwait(false);
+        if (!ct.IsCancellationRequested)
+            SweepStrays();
+        return (count, bytes);
+    }
+
+    private async Task WriteIndexThenRetire(List<string> unnamed)
+    {
+        if (unnamed.Count == 0)
+            return;
+        if (await SaveAssetRecordsAsync().ConfigureAwait(false))
+        {
+            foreach (var path in unnamed)
+                Retire(path);
+        }
+        unnamed.Clear();
+    }
+
+    // Theora videos sealed here before this platform kept them plain, or by a build that did not: written out
+    // plain again under a new name, the sealed copy retired with the rest. The number opened up.
+    private async Task<int> UnsealTheoraAsync(List<string> unnamed, Func<long, Task> pace, CancellationToken ct)
+    {
+        var sealedVideos = new List<LocalAssetRecord>();
+        lock (_lock)
+        {
+            foreach (var record in _assetRecords.Values)
+            {
+                if (record.EncryptionKey != null && IsInAssetCache(record.FilePath) && MayBeTheora(ExtensionOf(record)))
+                    sealedVideos.Add(record);
+            }
+        }
+        int count = 0;
+        foreach (var record in sealedVideos)
+        {
+            if (ct.IsCancellationRequested)
+                break;
+            try
+            {
+                if (!File.Exists(record.FilePath) || !IsTheoraVideo(SealedHead(record.FilePath, record.EncryptionKey!)))
+                    continue;
+                var oldPath = record.FilePath;
+                long size = await SealOneAsync(record, UnsealInPlaceAsync).ConfigureAwait(false);
+                if (size < 0)
+                    continue;
+                unnamed.Add(oldPath);
+                count++;
+                await pace(size).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is IOException or CryptographicException or InvalidDataException)
+            {
+                Logger.Warn($"LocalDB: could not open up stored video '{record.Hash}' yet: {ex.Message}");
+            }
+        }
+        return count;
+    }
+
+    private async Task<long> UnsealInPlaceAsync(LocalAssetRecord record)
+    {
+        lock (_lock)
+        {
+            if (!_assetRecords.TryGetValue(record.Hash, out var current) || current != record || record.EncryptionKey == null)
+                return -1;
+        }
+        var temp = GetTempFilePath();
+        string newPath;
+        try
+        {
+            await using (var source = SealedFile.OpenRead(record.FilePath, record.EncryptionKey))
+            await using (var target = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None, 1, FileOptions.Asynchronous))
+                await source.CopyToAsync(target, 1 << 20).ConfigureAwait(false);
+            newPath = NewCachePath();
+            File.Move(temp, newPath);
+        }
+        catch
+        {
+            TryDelete(temp);
+            throw;
+        }
+
+        var plainRecord = record.Copy();
+        plainRecord.FilePath = newPath;
+        plainRecord.Encrypted = false;
+        plainRecord.EncryptionKey = null;
+        plainRecord.Extension = ExtensionOf(record);
+        lock (_lock)
+        {
+            if (!_assetRecords.TryGetValue(record.Hash, out var current) || current != record)
+            {
+                TryDelete(newPath);
+                return -1;
+            }
+            PutLocked(plainRecord);
+        }
+        Interlocked.Increment(ref _recordsChanged);
+        return plainRecord.FileSize;
+    }
+
+    // The plaintext length moved, or -1 when the record changed under the pass or another write of the same
+    // address is running (a later pass gets it).
+    private async Task<long> SealOneAsync(LocalAssetRecord record, Func<LocalAssetRecord, Task<long>> work)
+    {
+        var turn = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+        lock (_writes)
+        {
+            if (_writes.TryGetValue(record.Hash, out var running) && !running.IsCompleted)
+                return -1;
+            _writes[record.Hash] = turn.Task;
+        }
+        try
+        {
+            return await work(record).ConfigureAwait(false);
+        }
+        finally
+        {
+            lock (_writes)
+            {
+                if (_writes.TryGetValue(record.Hash, out var kept) && kept == turn.Task)
+                    _writes.Remove(record.Hash);
+            }
+            turn.TrySetResult(record.LocalUri);
+        }
+    }
+
+    private async Task<long> SealInPlaceAsync(LocalAssetRecord record)
+    {
+        lock (_lock)
+        {
+            if (!_assetRecords.TryGetValue(record.Hash, out var current) || current != record)
+                return -1;
+        }
+        string oldPath = record.FilePath;
+        string newPath;
+        byte[]? key;
+        long size;
+        if (LocalEncryption.IsEncrypted(await ReadHeadAsync(oldPath, 4).ConfigureAwait(false)))
+        {
+            var plain = LocalEncryption.Decrypt(await File.ReadAllBytesAsync(oldPath).ConfigureAwait(false));
+            (newPath, key) = await SealBytesAsync(plain).ConfigureAwait(false);
+            size = plain.LongLength;
+        }
+        else
+        {
+            (newPath, key, size) = await SealFileAsync(oldPath).ConfigureAwait(false);
+        }
+
+        var sealedRecord = record.Copy();
+        sealedRecord.FilePath = newPath;
+        sealedRecord.Encrypted = true;
+        sealedRecord.EncryptionKey = key;
+        sealedRecord.Extension = ExtensionOf(record);
+        sealedRecord.FileSize = size;
+        lock (_lock)
+        {
+            if (!_assetRecords.TryGetValue(record.Hash, out var current) || current != record)
+            {
+                TryDelete(newPath);
+                return -1;
+            }
+            PutLocked(sealedRecord);
+        }
+        Interlocked.Increment(ref _recordsChanged);
+        return size;
+    }
+
+    private static async Task<byte[]> ReadHeadAsync(string path, int count)
+    {
+        var head = new byte[count];
+        await using var file = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete, 1, FileOptions.Asynchronous);
+        int got = await file.ReadAtLeastAsync(head, head.Length, throwOnEndOfStream: false).ConfigureAwait(false);
+        return got == head.Length ? head : head.AsSpan(0, got).ToArray();
+    }
+
+    // Files in the asset folder no record names, a day old or more: an older run's leftovers, a retired file
+    // a reader held open, the plain original of a sealed one. Never run on an index that did not read, which
+    // would make every file look unnamed. The age keeps it off a file another instance on this folder has
+    // just written and not filed yet.
+    private void SweepStrays()
+    {
+        if (!_recordsSound)
+            return;
+        var cutoff = DateTime.UtcNow - TimeSpan.FromDays(1);
+        int removed = 0;
+        try
+        {
+            foreach (var file in Directory.EnumerateFiles(GetAssetCachePath()))
+            {
+                bool named;
+                lock (_lock)
+                    named = _byPath.ContainsKey(PathKey(file));
+                if (named)
+                    continue;
+                try
+                {
+                    if (File.GetLastWriteTimeUtc(file) >= cutoff)
+                        continue;
+                    File.Delete(file);
+                    removed++;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            Logger.Warn($"LocalDB: could not sweep the asset folder: {ex.Message}");
+        }
+        if (removed > 0)
+            Logger.Log($"LocalDB: swept {removed} unnamed file(s) from the asset folder");
+    }
+
+    private static async Task<string> ComputeFileHashAsync(string filePath)
+    {
+        var hashBytes = await Task.Run(() =>
+        {
+            using var stream = File.OpenRead(filePath);
+            return SHA256.HashData(stream);
+        }).ConfigureAwait(false);
         return Convert.ToHexString(hashBytes).ToLower();
     }
 
@@ -955,7 +1616,7 @@ public class LocalDB : IDisposable
         try
         {
             // Transparently handle both the encrypted store and a plain/legacy records.json.
-            var raw = await File.ReadAllBytesAsync(recordsPath);
+            var raw = await File.ReadAllBytesAsync(recordsPath).ConfigureAwait(false);
             var json = Encoding.UTF8.GetString(LocalEncryption.Decrypt(raw));
             var records = JsonSerializer.Deserialize<List<LocalAssetRecord>>(json);
             if (records == null) return;
@@ -982,7 +1643,7 @@ public class LocalDB : IDisposable
                         if (File.Exists(rerooted))
                             record.FilePath = rerooted;
                     }
-                    _assetRecords[record.Hash] = record;
+                    PutLocked(record);
                 }
             }
 
@@ -990,6 +1651,7 @@ public class LocalDB : IDisposable
         }
         catch (Exception ex)
         {
+            _recordsSound = false;
             Logger.Warn($"LocalDB: Failed to load records: {ex.Message}");
         }
     }
@@ -997,10 +1659,21 @@ public class LocalDB : IDisposable
     // One write at a time, each of a snapshot taken in its own turn, so an older snapshot can never land
     // on top of a newer one. A writer whose change an earlier turn already wrote skips its own. The index
     // is written beside itself and moved over the old one, so a crash leaves one or the other whole.
-    // True once the caller's change is on disk. -xlinka
-    private async Task<bool> SaveAssetRecordsAsync()
+    // True once the caller's change is on disk.
+    //
+    // Always written from the thread pool. The index of a store that has had a few avatars through it is
+    // twelve thousand records and more, over 50 ms to serialise and encrypt, and a caller on the main
+    // thread (an import's continuation comes back there) was paying all of it inside its frame. -xlinka
+    private Task<bool> SaveAssetRecordsAsync()
     {
         long wanted = Interlocked.Increment(ref _recordsChanged);
+        return Task.Run(() => WriteAssetRecordsAsync(wanted));
+    }
+
+    private static readonly JsonSerializerOptions RecordsJson = new();
+
+    private async Task<bool> WriteAssetRecordsAsync(long wanted)
+    {
         var recordsPath = Path.Combine(_basePath, "records.json");
         await _recordsGate.WaitAsync().ConfigureAwait(false);
         try
@@ -1018,9 +1691,11 @@ public class LocalDB : IDisposable
                 snapshot.AddRange(_rows.Values);
             }
 
-            var json = JsonSerializer.Serialize(snapshot, new JsonSerializerOptions { WriteIndented = true });
+            // Straight to UTF-8 and not indented: nobody reads it by eye through the encryption, and the
+            // indented text was most of what each write cost and allocated.
+            var json = JsonSerializer.SerializeToUtf8Bytes(snapshot, RecordsJson);
             // The records store (asset list, original paths, per-asset keys) is encrypted at rest.
-            var bytes = LocalEncryption.Encrypt(Encoding.UTF8.GetBytes(json));
+            var bytes = LocalEncryption.Encrypt(json);
             var tempPath = recordsPath + ".tmp";
             await File.WriteAllBytesAsync(tempPath, bytes).ConfigureAwait(false);
             for (int attempt = 0; ; attempt++)
@@ -1065,13 +1740,19 @@ public class LocalAssetRecord
     public string OriginalPath { get; set; } = null!;
     public string OriginalFileName { get; set; } = null!;
     public DateTime ImportedAt { get; set; }
+    // The PLAINTEXT length.
     public long FileSize { get; set; }
 
-    // True when this cache file is wrapped with LocalEncryption (AES-GCM) at rest.
-    // Stored in the encrypted records store. Reads go through ReadAssetBytesAsync,
-    // which detects the encryption header regardless of this flag, so a plaintext/legacy file still
-    // reads correctly even if the flag is stale. FileSize is the PLAINTEXT length.
+    // True when the file is sealed at rest. Readers go by the file's own header, so a stale flag never
+    // decides how a file is opened.
     public bool Encrypted { get; set; }
+
+    // The random key the file is sealed under (AES-256), null for a file kept as it is: one from before
+    // sealing, or an import left where the user keeps it. Only ever stored inside the encrypted index.
+    public byte[]? EncryptionKey { get; set; }
+
+    // The format the asset was filed as, with its dot. A sealed file's name has none.
+    public string? Extension { get; set; }
 
     // False only between a peer-gathered file being adopted under the hash in its URI and the background
     // check confirming the bytes hash to that. Defaults true so every record written before this existed,
@@ -1085,13 +1766,11 @@ public class LocalAssetRecord
     // When a load last resolved this file, for which received file goes first.
     public DateTime LastUsedUtc { get; set; }
 
-    // Reserved. The current model uses a single machine-bound master key (see LocalEncryption),
-    // not a per-asset key, so this stays null. Kept for a future per-asset / server-issued key scheme.
-    public byte[]? EncryptionKey { get; set; }
-
     public Dictionary<string, string> Metadata { get; set; } = new();
 
     // Null for an asset. For a row (see LocalDB.PutRowAsync) the table it is filed under: Hash is then
     // the row's id, Metadata its fields, and there is no file.
     public string? Table { get; set; }
+
+    internal LocalAssetRecord Copy() => (LocalAssetRecord)MemberwiseClone();
 }
