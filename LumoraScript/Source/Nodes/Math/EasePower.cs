@@ -9,7 +9,7 @@ namespace Lumora.Script;
 // Quadratic, 3 Cubic, and any power between or past them works, 1 being no easing. OutIn mirrors the curve
 // about the middle, rushing out of 0 and into 1. Time outside 0 to 1 holds at the nearer end; a power of 0
 // or below is a sudden jump rather than a curve.
-[Node("Math/Easing/Ease Power")]
+[Node("Math/Easing/Ease Power", Description = "A time from 0 to 1 eased along time to the power, turned by direction the way Ease turns its curves: 2 is Quadratic, 3 Cubic, and any power between or past them works, 1 being no easing.")]
 public sealed class EasePower : ValueNode
 {
     public static float Run(float time, float power = 2f, EaseDirection direction = EaseDirection.InOut)

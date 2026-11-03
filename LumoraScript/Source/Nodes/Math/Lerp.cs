@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Unclamped: t outside 0 to 1 carries on past the ends.
-[Node("Math/Lerp")]
+[Node("Math/Interpolation/Lerp", Description = "Blends from the first value at 0 to the second at 1. Amounts outside that range extend past the endpoints.",
+    Keywords = "blend, mix, interpolate, linear")]
 public sealed class Lerp : ValueNode
 {
     public static float Run(float a, float b, float t) => a + (b - a) * t;
@@ -37,6 +38,9 @@ public sealed class Lerp : ValueNode
 
     public static float4x4 Run(float4x4 a, float4x4 b, float t)
         => new(Run(a.c0, b.c0, t), Run(a.c1, b.c1, t), Run(a.c2, b.c2, t), Run(a.c3, b.c3, t));
+
+    // A rotation blends the shorter way round at an even rate, as Slerp does, and always at length one.
+    public static floatQ Run(floatQ a, floatQ b, float t) => SphericalBlend.Rotations(a, b, t);
 
     // Worked from the nearer end, so t of 0 and 1 land exactly on a and b however far apart they are, and
     // rounded on the whole result rather than the step.

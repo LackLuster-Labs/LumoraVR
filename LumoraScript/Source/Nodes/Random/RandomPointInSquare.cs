@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // A random point of a square of side size centred on zero, every point as likely: anywhere inside, or
 // on its edge alone when edge is true.
-[Node("Math/Random/Random Point In Square")]
+[Node("Math/Random/Points/Random Point In Square", Description = "A random point of a square of side size centred on zero, every point as likely: anywhere inside, or on its edge alone when edge is true.",
+    Keywords = "on edge")]
 public sealed class RandomPointInSquare : ReadNode
 {
     [return: Port("point")]

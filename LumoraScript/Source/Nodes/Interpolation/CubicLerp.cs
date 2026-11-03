@@ -9,7 +9,8 @@ namespace Lumora.Script;
 // those carrying the curve on. tangent is how fast the value moves as t grows. Each value's tangent is
 // an input of its own, and Cubic Lerp Along takes a list of tangents beside the list of values, so no
 // packed value and tangent type is needed. Vectors and colors go lane by lane. -xlinka
-[Node("Math/Interpolation/Cubic Lerp")]
+[Node("Math/Interpolation/Cubic Lerp", Description = "A cubic Hermite blend: from at 0 leaving with fromTangent, to at 1 arriving with toTangent, t past those carrying the curve on. tangent is how fast the value moves as t grows.",
+    Keywords = "hermite, spline, tangent lerp")]
 public sealed class CubicLerp : ValueNode
 {
     public static float Run(float from, float fromTangent, float to, float toTangent, float t, out float tangent)

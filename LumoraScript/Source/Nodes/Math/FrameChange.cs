@@ -8,9 +8,11 @@ namespace Lumora.Script;
 
 // How much value has changed since the frame before it was last worked out: this value minus last
 // frame's for numbers, vectors and colors, and for a rotation the turn from last frame's to this. Unlike
-// Delta it needs no flow, so a drive can use it, and worked out again in the same frame it gives the same
-// change. The first time the change is none. -xlinka
-[Node("Math/Frame Change")]
+// Change Since Last Run (the Delta class) it needs no flow, so a drive can use it, and worked out again in
+// the same frame it gives the same change. The first time the change is none. Filed as Delta, the name
+// people look for it by; the class name stays, so saved graphs keep it. -xlinka
+[Node("Math/Delta", Description = "How much a value changed since last frame, with no flow needed: this value minus last frame's, or for a rotation the turn from last frame's to this. None the first time.",
+    Keywords = "frame change, change since last frame, difference, per frame")]
 public sealed class FrameChange<T> : MemoryNode
 {
     public static bool IsValidGenericType

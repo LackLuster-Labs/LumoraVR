@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Radians. Vectors and colors go lane by lane.
-[Node("Math/Trig/Sin")]
+[Node("Math/Trigonometry/Sin", Description = "Returns the sine of an angle in radians.",
+    Keywords = "sine, wave, radians")]
 public sealed class Sin : ValueNode
 {
     public static float Run(float radians) => MathF.Sin(radians);

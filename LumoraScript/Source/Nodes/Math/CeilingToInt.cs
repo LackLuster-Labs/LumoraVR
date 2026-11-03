@@ -8,13 +8,14 @@ namespace Lumora.Script;
 
 // A number, or each lane of a float vector, rounded up to a whole number. Past the ends of int it holds
 // at the end, and NaN is 0.
-[Node("Math/Convert/Ceiling To Int")]
+[Node("Math/Conversion/Ceiling To Int", Description = "A number, or each lane of a float vector, rounded up to a whole number.",
+    Keywords = "integer, whole number, cast")]
 public sealed class CeilingToInt : ValueNode
 {
     public static int2 Run(float2 value) => new(Lane(value.x), Lane(value.y));
     public static int3 Run(float3 value) => new(Lane(value.x), Lane(value.y), Lane(value.z));
     public static int4 Run(float4 value) => new(Lane(value.x), Lane(value.y), Lane(value.z), Lane(value.w));
-    public static int Run(float value) => Lane(value);
+    [Preferred] public static int Run(float value) => Lane(value);
     public static int Run(double value) => Saturate.Whole<int>(Math.Ceiling(value));
 
     private static int Lane(float value)

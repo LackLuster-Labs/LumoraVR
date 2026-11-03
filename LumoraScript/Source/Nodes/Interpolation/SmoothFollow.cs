@@ -9,7 +9,8 @@ namespace Lumora.Script;
 // of its gap to value each frame, the way Smooth Toward steps, and the result closes as much of its gap to
 // the middle. No Stored Value or event steps it. It remembers between frames and starts where value first
 // is; worked out twice in a frame it moves once. A rotation turns the shorter way. -xlinka
-[Node("Math/Interpolation/Smooth Follow")]
+[Node("Math/Interpolation/Smooth Follow", Description = "Follows a changing value smoothly over time, easing both the start and the end of the movement.",
+    Keywords = "damping, ease toward, follow, towards, smoothing")]
 public sealed class SmoothFollow<T> : MemoryNode
 {
     public static bool IsValidGenericType

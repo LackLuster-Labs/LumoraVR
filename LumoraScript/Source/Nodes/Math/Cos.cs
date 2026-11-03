@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Radians. Vectors and colors go lane by lane.
-[Node("Math/Trig/Cos")]
+[Node("Math/Trigonometry/Cos", Description = "Returns the cosine of an angle in radians.",
+    Keywords = "cosine, radians")]
 public sealed class Cos : ValueNode
 {
     public static float Run(float radians) => MathF.Cos(radians);

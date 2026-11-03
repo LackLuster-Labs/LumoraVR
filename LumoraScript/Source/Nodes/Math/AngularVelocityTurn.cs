@@ -9,7 +9,8 @@ namespace Lumora.Script;
 // How far a steady spin turns in seconds. The angular velocity points along the axis it spins about, the
 // way the right hand's fingers curl round the thumb, and its length is the speed in degrees a second. No
 // spin, or no time, turns nothing; a time below 0 turns back.
-[Node("Math/Rotations/Angular Velocity Turn")]
+[Node("Math/Rotations/Angular Velocity Turn", Description = "How far a steady spin turns in seconds.",
+    Keywords = "delta rotation, spin, rotation per second")]
 public sealed class AngularVelocityTurn : ValueNode
 {
     [return: Port("rotation")]

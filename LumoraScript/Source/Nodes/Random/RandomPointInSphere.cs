@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // when surface is true, which makes it a random direction at radius 1. Three random lanes normalized
 // would crowd toward the corners of the cube they fill; this draws the height and the turn about it
 // evenly instead.
-[Node("Math/Random/Random Point In Sphere")]
+[Node("Math/Random/Points/Random Point In Sphere", Description = "A random point of a ball about zero, every point as likely: anywhere inside, or on the surface alone when surface is true, which makes it a random direction at radius 1.",
+    Keywords = "random direction, random unit vector, on surface")]
 public sealed class RandomPointInSphere : ReadNode
 {
     [return: Port("point")]

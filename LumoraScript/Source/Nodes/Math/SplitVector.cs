@@ -6,7 +6,8 @@ using Lumora.Wasm;
 
 namespace Lumora.Script;
 
-[Node("Math/Vectors/Split Vector")]
+[Node("Math/Vectors/Split Vector", Description = "Separates a vector into its individual components.",
+    Keywords = "unpack, components, decompose, x y z")]
 public sealed class SplitVector : ValueNode
 {
     [WasmBody(nameof(Two))]

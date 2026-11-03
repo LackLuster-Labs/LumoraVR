@@ -7,7 +7,7 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Degrees about x, y and z, the way a rotation is typed in.
-[Node("Math/Rotations/From Euler")]
+[Node("Math/Rotations/From Euler", Description = "Degrees about x, y and z, the way a rotation is typed in.")]
 public sealed class FromEuler : ValueNode
 {
     [return: Port("rotation")]

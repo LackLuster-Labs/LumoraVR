@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // e to the power: the growth that undoes Log. Vectors and colors go lane by lane.
-[Node("Math/Exp")]
+[Node("Math/Exp", Description = "E to the power: the growth that undoes Log.",
+    Keywords = "exponential, e to the power")]
 public sealed class Exp : ValueNode
 {
     public static float Run(float power) => MathF.Exp(power);

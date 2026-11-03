@@ -8,8 +8,10 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // Vectors and colors go lane by lane. A date or span of time pushed past the ends of its range holds at
-// the end. Two dates are apart by their ticks, whatever their kinds.
-[Node("Math/Subtract")]
+// the end. Two dates are apart by their ticks, whatever their kinds. More inputs come off in turn, a - b - c.
+[Variadic]
+[Node("Math/Subtract", Description = "Subtracts the second value, and then each further input, from the first.",
+    Keywords = "minus, difference, take away")]
 public sealed class Subtract : ValueNode
 {
     [Wasm(WasmOp.I32Sub)] public static int Run(int a, int b) => unchecked(a - b);
@@ -29,4 +31,6 @@ public sealed class Subtract : ValueNode
     public static TimeSpan Run(DateTime a, DateTime b) => a - b;
     public static DateTime Run(DateTime a, TimeSpan b) => ClampedTime.Date((Int128)a.Ticks - b.Ticks, a.Kind);
     public static TimeSpan Run(TimeSpan a, TimeSpan b) => ClampedTime.Span((Int128)a.Ticks - b.Ticks);
+
+    public static ScriptBigInt Run(ScriptBigInt? a, ScriptBigInt? b) => ScriptBigInt.Subtract(a, b);
 }

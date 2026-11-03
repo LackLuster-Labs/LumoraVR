@@ -9,7 +9,8 @@ namespace Lumora.Script;
 
 // Vectors and colors go lane by lane.
 [Variadic]
-[Node("Math/Max")]
+[Node("Math/Max", Description = "Returns the larger value, comparing corresponding vector or colour components separately.",
+    Keywords = "largest, biggest, highest")]
 public sealed class Max : ValueNode
 {
     public static int Run(int a, int b) => Math.Max(a, b);
@@ -30,4 +31,6 @@ public sealed class Max : ValueNode
 
     [Wasm(WasmOp.F32Max, Lanes = 4)]
     public static colorHDR Run(colorHDR a, colorHDR b) => new(Run(a.r, b.r), Run(a.g, b.g), Run(a.b, b.b), Run(a.a, b.a));
+
+    public static ScriptBigInt Run(ScriptBigInt? a, ScriptBigInt? b) => ScriptBigInt.Max(a, b);
 }

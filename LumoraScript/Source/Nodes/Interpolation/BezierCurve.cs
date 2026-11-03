@@ -8,7 +8,7 @@ namespace Lumora.Script;
 // A cubic Bezier from from to to, pulled toward the two control points between: 0 is from, 1 is to, and
 // t past those carries the curve on. tangent is how fast the point moves as t grows, pointing the way the
 // curve heads. Vectors and colors go lane by lane. Bezier Path runs one through a list of points.
-[Node("Math/Interpolation/Bezier Curve")]
+[Node("Math/Interpolation/Bezier Curve", Description = "Finds a position and tangent along a cubic Bezier curve defined by two endpoints and two control points.")]
 public sealed class BezierCurve : ValueNode
 {
     public static float Run(float from, float fromControl, float toControl, float to, float t, out float tangent)

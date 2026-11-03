@@ -8,7 +8,8 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // Vectors and colors go lane by lane.
-[Node("Math/Floor")]
+[Node("Math/Floor", Description = "Rounds downward to the previous whole number.",
+    Keywords = "round down")]
 public sealed class Floor : ValueNode
 {
     [Wasm(WasmOp.F32Floor)] public static float Run(float value) => MathF.Floor(value);

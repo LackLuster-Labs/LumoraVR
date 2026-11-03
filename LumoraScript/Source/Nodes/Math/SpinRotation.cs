@@ -11,7 +11,8 @@ namespace Lumora.Script;
 // Velocity Turn reads it. Drag slows it in proportion to its speed: at a drag of 1 a second leaves e^-1,
 // about 37%, of it, so the spin fades rather than stops. No drag spins on steadily. The turn is taken about
 // the one axis, not read as angles about x, y and z.
-[Node("Math/Physics/Spin Rotation")]
+[Node("Math/Physics/Spin Rotation", Description = "Where a spin has turned to after seconds while drag slows it, and the spin left by then.",
+    Keywords = "torque, angular drag, spin down")]
 public sealed class SpinRotation : ValueNode
 {
     [return: Port("rotation")]

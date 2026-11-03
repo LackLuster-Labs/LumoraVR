@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // favour the turns toward the corners of the box they fill; here one draw shares the length between two
 // pairs of parts by a square root and two more set the angle within each pair, which spreads evenly.
 // -xlinka
-[Node("Math/Random/Random Rotation")]
+[Node("Math/Random/Random Rotation", Description = "A rotation with every orientation as likely as any other.",
+    Keywords = "random orientation, random quaternion, random floatQ")]
 public sealed class RandomRotation : ReadNode
 {
     [return: Port("rotation")]

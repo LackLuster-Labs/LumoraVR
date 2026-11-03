@@ -9,7 +9,8 @@ namespace Lumora.Script;
 
 // Halves go to the even neighbour, the same on both sides of the module boundary. Vectors and colors go
 // lane by lane.
-[Node("Math/Round")]
+[Node("Math/Round", Description = "Rounds to the nearest whole number.",
+    Keywords = "nearest, round off")]
 public sealed class Round : ValueNode
 {
     [Wasm(WasmOp.F32Nearest)] public static float Run(float value) => MathF.Round(value);

@@ -9,7 +9,8 @@ namespace Lumora.Script;
 
 // The smallest integer has no positive twin and comes back as itself, where Math.Abs would throw.
 // Vectors, colors and the four numbers of a rotation go lane by lane; a rotation is not normalised after.
-[Node("Math/Abs")]
+[Node("Math/Abs", Description = "Returns the absolute value, turning negative numbers positive.",
+    Keywords = "absolute, magnitude, positive")]
 public sealed class Abs : ValueNode
 {
     public static int Run(int value) => value == int.MinValue ? value : Math.Abs(value);
@@ -31,4 +32,6 @@ public sealed class Abs : ValueNode
 
     [Wasm(WasmOp.F32Abs, Lanes = 4)]
     public static floatQ Run(floatQ value) => new(Run(value.x), Run(value.y), Run(value.z), Run(value.w));
+
+    public static ScriptBigInt Run(ScriptBigInt? value) => ScriptBigInt.Abs(value);
 }

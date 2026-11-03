@@ -9,7 +9,8 @@ namespace Lumora.Script;
 // vectors turn in direction along the great circle while the length goes straight, so a list of
 // unit directions gives unit directions and any other list blends lengths too. A color turns as a four
 // lane vector. An empty list of rotations gives no turn.
-[Node("Math/Interpolation/Slerp Along")]
+[Node("Math/Interpolation/Slerp Along", Description = "Blends along a list of rotations or directions using spherical interpolation.",
+    Keywords = "lerp list, gradient, spline path, path, many points")]
 public sealed class SlerpAlong : ReadNode
 {
     public static floatQ Run(ScriptList<floatQ>? values, float position)

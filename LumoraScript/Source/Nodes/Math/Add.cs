@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // Vectors and colors go lane by lane. A date or span of time pushed past the ends of its range holds at
 // the end.
 [Variadic]
-[Node("Math/Add")]
+[Node("Math/Add", Description = "Adds the input values together.",
+    Keywords = "plus, sum, total")]
 public sealed class Add : ValueNode
 {
     [Wasm(WasmOp.I32Add)] public static int Run(int a, int b) => unchecked(a + b);
@@ -29,4 +30,6 @@ public sealed class Add : ValueNode
     [Wasm(WasmOp.I64Add)] public static ulong Run(ulong a, ulong b) => unchecked(a + b);
     public static TimeSpan Run(TimeSpan a, TimeSpan b) => ClampedTime.Span((Int128)a.Ticks + b.Ticks);
     public static DateTime Run(DateTime a, TimeSpan b) => ClampedTime.Date((Int128)a.Ticks + b.Ticks, a.Kind);
+
+    public static ScriptBigInt Run(ScriptBigInt? a, ScriptBigInt? b) => ScriptBigInt.Add(a, b);
 }

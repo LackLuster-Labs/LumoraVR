@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Lane by lane: whenTrue's lane where the mask's lane is set, whenFalse's where it is not.
-[Node("Math/Vectors/Mask")]
+[Node("Math/Vectors/Mask", Description = "Lane by lane: whenTrue's lane where the mask's lane is set, whenFalse's where it is not.",
+    Keywords = "select per lane, choose, per component")]
 public sealed class Mask : ValueNode
 {
     public static float2 Run(bool2 mask, float2 whenTrue, float2 whenFalse)

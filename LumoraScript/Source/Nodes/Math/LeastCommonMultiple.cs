@@ -8,7 +8,8 @@ namespace Lumora.Script;
 // The smallest whole number both divide into, never below 0: 4 and 6 give 12. Signs do not matter. Either
 // one 0 gives 0, and so does a multiple too big for the type, which would otherwise wrap round into a number
 // that is no multiple at all.
-[Node("Math/Least Common Multiple")]
+[Node("Math/Least Common Multiple", Description = "The smallest whole number both divide into, never below 0: 4 and 6 give 12.",
+    Keywords = "lcm, lowest common multiple")]
 public sealed class LeastCommonMultiple : ValueNode
 {
     public static int Run(int a, int b)

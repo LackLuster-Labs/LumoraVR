@@ -8,7 +8,8 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // Vectors and colors go lane by lane.
-[Node("Math/Ceiling")]
+[Node("Math/Ceiling", Description = "Rounds upward to the next whole number.",
+    Keywords = "ceil, round up")]
 public sealed class Ceiling : ValueNode
 {
     [Wasm(WasmOp.F32Ceil)] public static float Run(float value) => MathF.Ceiling(value);

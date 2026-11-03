@@ -9,9 +9,11 @@ namespace Lumora.Script;
 // Remainder would keep -10. The answer is never length itself. Length defaults to 1, which keeps what is past
 // the whole number below, so -0.25 gives 0.75. A length of 0 gives 0, and one below 0 wraps into length up
 // to 0. Vectors and colors go lane by lane; a number for length serves every lane.
-[Node("Math/Repeat")]
+[Node("Math/Shaping/Repeat", Description = "Wraps value into 0 up to length, the way an angle wraps into a turn: 370 by 360 is 10, and -10 is 350 where Remainder would keep -10.",
+    Keywords = "wrap, loop, cycle, modulo")]
 public sealed class Repeat : ValueNode
 {
+    [Gpu("({length} == 0.0 ? 0.0 : {value} - {length} * floor({value} / {length}))")]
     public static float Run(float value, float length = 1f)
     {
         if (length == 0f)
@@ -56,16 +58,19 @@ public sealed class Repeat : ValueNode
 
     public static uint Run(uint value, uint length = 1u) => length == 0u ? 0u : value % length;
     public static ulong Run(ulong value, ulong length = 1ul) => length == 0ul ? 0ul : value % length;
+    [Gpu("({length} == 0.0 ? vec2(0.0) : {value} - {length} * floor({value} / {length}))")]
     public static float2 Run(float2 value, float length = 1f) => new(Run(value.x, length), Run(value.y, length));
+    [Gpu("({length} == 0.0 ? vec3(0.0) : {value} - {length} * floor({value} / {length}))")]
     public static float3 Run(float3 value, float length = 1f) => new(Run(value.x, length), Run(value.y, length), Run(value.z, length));
 
+    [Gpu("({length} == 0.0 ? vec4(0.0) : {value} - {length} * floor({value} / {length}))")]
     public static float4 Run(float4 value, float length = 1f)
         => new(Run(value.x, length), Run(value.y, length), Run(value.z, length), Run(value.w, length));
 
-    public static float2 Run(float2 value, float2 length) => new(Run(value.x, length.x), Run(value.y, length.y));
-    public static float3 Run(float3 value, float3 length) => new(Run(value.x, length.x), Run(value.y, length.y), Run(value.z, length.z));
+    public static float2 Run(float2 value, [Default(1)] float2 length) => new(Run(value.x, length.x), Run(value.y, length.y));
+    public static float3 Run(float3 value, [Default(1)] float3 length) => new(Run(value.x, length.x), Run(value.y, length.y), Run(value.z, length.z));
 
-    public static float4 Run(float4 value, float4 length)
+    public static float4 Run(float4 value, [Default(1)] float4 length)
         => new(Run(value.x, length.x), Run(value.y, length.y), Run(value.z, length.z), Run(value.w, length.w));
 
     public static int2 Run(int2 value, int length = 1) => new(Run(value.x, length), Run(value.y, length));
@@ -74,10 +79,10 @@ public sealed class Repeat : ValueNode
     public static int4 Run(int4 value, int length = 1)
         => new(Run(value.x, length), Run(value.y, length), Run(value.z, length), Run(value.w, length));
 
-    public static int2 Run(int2 value, int2 length) => new(Run(value.x, length.x), Run(value.y, length.y));
-    public static int3 Run(int3 value, int3 length) => new(Run(value.x, length.x), Run(value.y, length.y), Run(value.z, length.z));
+    public static int2 Run(int2 value, [Default(1)] int2 length) => new(Run(value.x, length.x), Run(value.y, length.y));
+    public static int3 Run(int3 value, [Default(1)] int3 length) => new(Run(value.x, length.x), Run(value.y, length.y), Run(value.z, length.z));
 
-    public static int4 Run(int4 value, int4 length)
+    public static int4 Run(int4 value, [Default(1)] int4 length)
         => new(Run(value.x, length.x), Run(value.y, length.y), Run(value.z, length.z), Run(value.w, length.w));
 
     public static color Run(color value, float length = 1f)
@@ -86,9 +91,9 @@ public sealed class Repeat : ValueNode
     public static colorHDR Run(colorHDR value, float length = 1f)
         => new(Run(value.r, length), Run(value.g, length), Run(value.b, length), Run(value.a, length));
 
-    public static color Run(color value, color length)
+    public static color Run(color value, [Default(1)] color length)
         => new(Run(value.r, length.r), Run(value.g, length.g), Run(value.b, length.b), Run(value.a, length.a));
 
-    public static colorHDR Run(colorHDR value, colorHDR length)
+    public static colorHDR Run(colorHDR value, [Default(1)] colorHDR length)
         => new(Run(value.r, length.r), Run(value.g, length.g), Run(value.b, length.b), Run(value.a, length.a));
 }

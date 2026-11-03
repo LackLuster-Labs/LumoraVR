@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // A random point of a cube of side size centred on zero, every point as likely: anywhere inside, or on
 // its surface alone when surface is true, each face as likely as the others.
-[Node("Math/Random/Random Point In Cube")]
+[Node("Math/Random/Points/Random Point In Cube", Description = "A random point of a cube of side size centred on zero, every point as likely: anywhere inside, or on its surface alone when surface is true, each face as likely as the others.",
+    Keywords = "box, on surface")]
 public sealed class RandomPointInCube : ReadNode
 {
     [return: Port("point")]

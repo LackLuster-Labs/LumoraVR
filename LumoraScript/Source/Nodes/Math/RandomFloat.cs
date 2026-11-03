@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // From min up to but not including max.
-[Node("Math/Random/Random Float")]
+[Node("Math/Random/Random Float", Description = "From min up to but not including max.")]
 public sealed class RandomFloat : ReadNode
 {
     public static float Run(ScriptContextBase ctx, float min = 0f, float max = 1f)

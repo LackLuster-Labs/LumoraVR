@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // Rounds to the nearest float, ties to even. A double too big for a float is infinity. A narrow whole
 // number rides its lane already widened, so the one signed conversion serves sbyte through ushort.
-[Node("Math/Convert/To Float")]
+[Node("Math/Conversion/To Float", Description = "Converts a number to a float, rounding to the nearest float, ties to even.",
+    Keywords = "cast, convert, number type")]
 public sealed class ToFloat : ValueNode
 {
     [Wasm(WasmOp.F32ConvertI32S)] public static float Run(int value) => value;
@@ -25,4 +26,6 @@ public sealed class ToFloat : ValueNode
     // which rounds once and the same everywhere; the direct unsigned cast rounds twice on some machines.
     [Wasm(WasmOp.F32ConvertI64U)]
     public static float Run(ulong value) => value <= long.MaxValue ? (long)value : 2f * (long)((value >> 1) | (value & 1));
+
+    public static float Run(ScriptBigInt? value) => (float)ScriptBigInt.ToDouble(value);
 }

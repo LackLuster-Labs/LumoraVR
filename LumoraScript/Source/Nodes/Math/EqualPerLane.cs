@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Each lane of a against the same lane of b, one flag per lane. A NaN lane is false, even against NaN.
-[Node("Math/Compare/Per Lane/Equal")]
+[Node("Logic/Comparison/Per Component/Equal", Description = "Each lane of a against the same lane of b, one flag per lane.",
+    Keywords = "per component, per lane, componentwise, vector compare")]
 public sealed class EqualPerLane : ValueNode
 {
     public static bool2 Run(float2 a, float2 b) => new(a.x == b.x, a.y == b.y);

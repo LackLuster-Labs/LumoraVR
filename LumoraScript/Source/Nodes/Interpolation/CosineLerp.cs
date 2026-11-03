@@ -7,7 +7,7 @@ namespace Lumora.Script;
 
 // From a to b along half a cosine wave: slow away from a, fastest half way, slow into b. t is held to 0
 // to 1, since past the ends the wave would turn back. Vectors and colors go lane by lane.
-[Node("Math/Interpolation/Cosine Lerp")]
+[Node("Math/Interpolation/Cosine Lerp", Description = "From a to b along half a cosine wave: slow away from a, fastest half way, slow into b. t is held to 0 to 1, since past the ends the wave would turn back.")]
 public sealed class CosineLerp : ValueNode
 {
     public static float Run(float a, float b, float t) => a + (b - a) * CurveWeights.Cosine(t);

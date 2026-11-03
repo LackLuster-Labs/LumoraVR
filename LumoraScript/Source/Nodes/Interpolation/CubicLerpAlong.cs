@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // first item and 1 at the second, held at the ends. tangent is how fast the value moves as position
 // grows. A tangent the list is too short to have is zero. An empty list gives the empty value, one item
 // is that item everywhere, and a position that is not a number is the first item.
-[Node("Math/Interpolation/Cubic Lerp Along")]
+[Node("Math/Interpolation/Cubic Lerp Along", Description = "Interpolates smoothly along a list of values using a matching list of tangents.",
+    Keywords = "lerp list, gradient, spline path, path, many points")]
 public sealed class CubicLerpAlong : ReadNode
 {
     public static float Run(ScriptList<float>? values, ScriptList<float>? tangents, float position, out float tangent)

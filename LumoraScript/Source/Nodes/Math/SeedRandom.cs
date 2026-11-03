@@ -4,7 +4,7 @@
 namespace Lumora.Script;
 
 // Restarts this script's random numbers from a seed, so the same seed gives the same run.
-[Node("Math/Random/Seed Random")]
+[Node("Math/Random/Seed Random", Description = "Restarts this script's random numbers from a seed, so the same seed gives the same run.")]
 public sealed class SeedRandom : ActionNode
 {
     public static void Run(ScriptContextBase ctx, int seed) => ctx.SeedRandom(seed);

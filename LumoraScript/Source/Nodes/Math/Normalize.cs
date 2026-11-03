@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // The same direction at length one. A zero vector stays zero.
-[Node("Math/Vectors/Normalize")]
+[Node("Math/Vectors/Normalize", Description = "Keeps a vector's direction while making its length 1. A zero vector has no direction to keep.",
+    Keywords = "normalized, unit vector, direction")]
 public sealed class Normalize : ValueNode
 {
     public static float2 Run(float2 vector) => vector.Normalized;

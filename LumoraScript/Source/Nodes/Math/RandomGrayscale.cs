@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // One random level, from 0 up to but not including 1, in red, green and blue; alpha 1.
-[Node("Math/Random/Random Grayscale")]
+[Node("Math/Random/Colors/Random Grayscale", Description = "One random level, from 0 up to but not including 1, in red, green and blue; alpha 1.",
+    Keywords = "random color, random colour, random grey, random gray")]
 public sealed class RandomGrayscale : ReadNode
 {
     [return: Port("color")]

@@ -8,7 +8,8 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // Vectors and colors go lane by lane.
-[Node("Math/Sqrt")]
+[Node("Math/Sqrt", Description = "Returns the square root of each input value or component.",
+    Keywords = "square root, root")]
 public sealed class Sqrt : ValueNode
 {
     [Wasm(WasmOp.F32Sqrt)] public static float Run(float value) => MathF.Sqrt(value);

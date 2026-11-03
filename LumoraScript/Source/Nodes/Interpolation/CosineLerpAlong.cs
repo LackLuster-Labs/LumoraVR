@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // Lerp Along with each step between two items eased by half a cosine wave, so the value slows at every
 // item and passes through each without a jolt in speed.
-[Node("Math/Interpolation/Cosine Lerp Along")]
+[Node("Math/Interpolation/Cosine Lerp Along", Description = "Lerp Along with each step between two items eased by half a cosine wave, so the value slows at every item and passes through each without a jolt in speed.",
+    Keywords = "lerp list, gradient, spline path, path, many points")]
 public sealed class CosineLerpAlong : ReadNode
 {
     public static float Run(ScriptList<float>? values, float position)

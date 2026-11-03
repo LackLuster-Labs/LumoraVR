@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // Text of length characters, each drawn from characters with every one as likely. A character made of
 // two UTF-16 units, an emoji say, is drawn whole and never split into halves that are not text. No
 // characters given draws from a to z, A to Z and 0 to 9. A length of 0 or less gives empty text.
-[Node("Math/Random/Random Text")]
+[Node("Math/Random/Random Text", Description = "Text of length characters, each drawn from characters with every one as likely.",
+    Keywords = "password, random characters, string")]
 public sealed class RandomText : ReadNode
 {
     private const string LettersAndDigits = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -19,7 +20,7 @@ public sealed class RandomText : ReadNode
     private const int MostUnits = 0x3FFFFFDF;
 
     [return: Port("text")]
-    public static string Run(ScriptContextBase ctx, int length, string? characters)
+    public static string Run(ScriptContextBase ctx, int length = 8, string? characters = null)
     {
         if (length <= 0)
             return string.Empty;

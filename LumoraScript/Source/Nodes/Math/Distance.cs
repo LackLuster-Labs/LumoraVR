@@ -8,7 +8,7 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // Two numbers are as far apart as their difference without its sign.
-[Node("Math/Vectors/Distance")]
+[Node("Math/Vectors/Distance", Description = "Returns the distance between two points.")]
 public sealed class Distance : ValueNode
 {
     [WasmBody(nameof(Two))] [return: Port("distance")] public static float Run(float2 a, float2 b) => float2.Distance(a, b);

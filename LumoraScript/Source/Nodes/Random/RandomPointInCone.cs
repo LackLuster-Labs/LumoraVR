@@ -10,7 +10,8 @@ namespace Lumora.Script;
 // the cone mesh builds one, every point as likely: anywhere inside, or on the surface alone, base
 // included, when surface is true. The base takes its share of the surface points by its share of the
 // area, so neither the base nor the sloped side comes out crowded.
-[Node("Math/Random/Random Point In Cone")]
+[Node("Math/Random/Points/Random Point In Cone", Description = "Picks a random point inside a cone, or on its surface when surface is enabled.",
+    Keywords = "on surface")]
 public sealed class RandomPointInCone : ReadNode
 {
     [return: Port("point")]

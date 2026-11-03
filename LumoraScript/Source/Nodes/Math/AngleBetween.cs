@@ -8,7 +8,7 @@ namespace Lumora.Script;
 
 // The angle between two directions in degrees, 0 to 180, whichever way round. A zero vector has no direction
 // and reads as at right angles to anything. -xlinka
-[Node("Math/Vectors/Angle Between")]
+[Node("Math/Vectors/Angle Between", Description = "The angle between two directions, or two rotations, in degrees, 0 to 180, whichever way round.")]
 public sealed class AngleBetween : ValueNode
 {
     [return: Port("degrees")]
@@ -19,6 +19,13 @@ public sealed class AngleBetween : ValueNode
         float dot = Math.Clamp(x.x * y.x + x.y * y.y + x.z * y.z, -1f, 1f);
         return MathF.Acos(dot) * (180f / MathF.PI);
     }
+
+    [return: Port("degrees")]
+    public static float Run(float2 a, float2 b) => Run(new float3(a.x, a.y, 0f), new float3(b.x, b.y, 0f));
+
+    // How far apart two rotations are, along the shorter turn. A zero rotation counts as no turn.
+    [return: Port("degrees")]
+    public static float Run([Default(0, 0, 0, 1)] floatQ a, [Default(0, 0, 0, 1)] floatQ b) => Turns.Between(a, b) * (180f / MathF.PI);
 
     private static float3 Unit(float3 v)
     {

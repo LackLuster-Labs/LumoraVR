@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Radians. Vectors and colors go lane by lane.
-[Node("Math/Trig/Tan")]
+[Node("Math/Trigonometry/Tan", Description = "Returns the tangent of an angle in radians.",
+    Keywords = "tangent")]
 public sealed class Tan : ValueNode
 {
     public static float Run(float radians) => MathF.Tan(radians);

@@ -7,7 +7,7 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // An integer dot product wraps past the ends of int.
-[Node("Math/Vectors/Dot")]
+[Node("Math/Vectors/Dot", Description = "Returns the dot product of two vectors, useful for comparing directions or finding projections.")]
 public sealed class Dot : ValueNode
 {
     [WasmBody(nameof(Float2))] public static float Run(float2 a, float2 b) => float2.Dot(a, b);

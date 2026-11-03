@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Radians. A value outside -1 to 1 has no angle and gives NaN. Vectors and colors go lane by lane.
-[Node("Math/Trig/Acos")]
+[Node("Math/Trigonometry/Acos", Description = "Returns the angle whose cosine is the input, in radians.",
+    Keywords = "arccosine, inverse cosine")]
 public sealed class Acos : ValueNode
 {
     [return: Port("radians")] public static float Run(float value) => MathF.Acos(value);

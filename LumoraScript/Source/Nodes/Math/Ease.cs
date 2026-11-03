@@ -11,7 +11,8 @@ namespace Lumora.Script;
 // settings Ease Rebound and Ease Elastic start from. Time outside 0 to 1 holds at the nearer end and NaN
 // reads as the start. Exponential is scaled to meet 0 and 1 exactly, so it has no step at either end. Sine
 // Out is the quarter sine wave that shapes a 0 to 1 value.
-[Node("Math/Easing/Ease")]
+[Node("Math/Easing/Ease", Description = "A time from 0 to 1 eased along a curve: 0 at the start, 1 at the end, the curve setting the pace between.",
+    Keywords = "ease in, ease out, ease in out, tween, easing curve, sine, quad, quadratic, cubic, quart, quint, expo, exponential, circ, circular, back, elastic, bounce")]
 public sealed class Ease : ValueNode
 {
     public static float Run(float time, EaseCurve curve = EaseCurve.Sine, EaseDirection direction = EaseDirection.InOut)

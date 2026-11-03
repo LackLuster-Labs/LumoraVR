@@ -7,7 +7,8 @@ using Lumora.Wasm;
 namespace Lumora.Script;
 
 // Dates compare by their ticks, whatever their kinds.
-[Node("Math/Compare/Less Or Equal")]
+[Node("Logic/Comparison/Less Or Equal", Description = "Checks whether the first value is less than or equal to the second.",
+    Keywords = "at most")]
 public sealed class LessOrEqual : ValueNode
 {
     [Wasm(WasmOp.I32LeS)] public static bool Run(int a, int b) => a <= b;
@@ -18,4 +19,6 @@ public sealed class LessOrEqual : ValueNode
     [Wasm(WasmOp.I64LeU)] public static bool Run(ulong a, ulong b) => a <= b;
     public static bool Run(DateTime a, DateTime b) => a <= b;
     public static bool Run(TimeSpan a, TimeSpan b) => a <= b;
+
+    public static bool Run(ScriptBigInt? a, ScriptBigInt? b) => ScriptBigInt.Compare(a, b) <= 0;
 }

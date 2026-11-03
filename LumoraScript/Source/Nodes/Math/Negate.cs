@@ -9,7 +9,8 @@ namespace Lumora.Script;
 
 // The smallest integer wraps back to itself. The most negative span of time turns into the longest one,
 // a tick short of its true opposite. Colors go lane by lane, alpha included.
-[Node("Math/Negate")]
+[Node("Math/Negate", Description = "Reverses the sign of a value.",
+    Keywords = "minus, invert, flip sign, opposite")]
 public sealed class Negate : ValueNode
 {
     public static int Run(int value) => unchecked(-value);
@@ -29,4 +30,6 @@ public sealed class Negate : ValueNode
 
     [Wasm(WasmOp.F32Neg, Lanes = 4)]
     public static colorHDR Run(colorHDR value) => new(Run(value.r), Run(value.g), Run(value.b), Run(value.a));
+
+    public static ScriptBigInt Run(ScriptBigInt? value) => ScriptBigInt.Negate(value);
 }

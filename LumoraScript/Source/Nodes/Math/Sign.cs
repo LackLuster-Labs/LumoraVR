@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // 1, -1 or 0. NaN gives 0. Vectors and colors go lane by lane.
-[Node("Math/Sign")]
+[Node("Math/Sign", Description = "Returns -1 for a negative value, 0 for zero, or 1 for a positive value.",
+    Keywords = "positive, negative, direction")]
 public sealed class Sign : ValueNode
 {
     public static int Run(int value) => value > 0 ? 1 : value < 0 ? -1 : 0;
@@ -21,4 +22,6 @@ public sealed class Sign : ValueNode
     public static int4 Run(int4 value) => new(Run(value.x), Run(value.y), Run(value.z), Run(value.w));
     public static color Run(color value) => new(Run(value.r), Run(value.g), Run(value.b), Run(value.a));
     public static colorHDR Run(colorHDR value) => new(Run(value.r), Run(value.g), Run(value.b), Run(value.a));
+
+    public static int Run(ScriptBigInt? value) => ScriptBigInt.Sign(value);
 }

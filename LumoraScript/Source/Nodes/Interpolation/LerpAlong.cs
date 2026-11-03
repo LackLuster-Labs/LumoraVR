@@ -8,7 +8,8 @@ namespace Lumora.Script;
 // The value at position along a list: 0 is the first item, 1 the second, and between two items the
 // straight blend of the pair. Held at the first and last items. An empty list gives the empty value, one
 // item is that item everywhere, and a position that is not a number is the first item.
-[Node("Math/Interpolation/Lerp Along")]
+[Node("Math/Interpolation/Lerp Along", Description = "The value at position along a list: 0 is the first item, 1 the second, and between two items the straight blend of the pair.",
+    Keywords = "lerp list, gradient, spline path, path, many points")]
 public sealed class LerpAlong : ReadNode
 {
     public static float Run(ScriptList<float>? values, float position)

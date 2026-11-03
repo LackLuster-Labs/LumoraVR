@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Red, green, blue and alpha each random, from 0 up to but not including 1.
-[Node("Math/Random/Random RGBA")]
+[Node("Math/Random/Colors/Random RGBA", Description = "Red, green, blue and alpha each random, from 0 up to but not including 1.",
+    Keywords = "random color, random colour")]
 public sealed class RandomRgba : ReadNode
 {
     [return: Port("color")]

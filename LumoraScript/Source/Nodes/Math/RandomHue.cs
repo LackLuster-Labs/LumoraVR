@@ -6,7 +6,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // A random hue at the saturation and brightness given, both 0 to 1 and full unless set; alpha 1.
-[Node("Math/Random/Random Hue")]
+[Node("Math/Random/Colors/Random Hue", Description = "A random hue at the saturation and brightness given, both 0 to 1 and full unless set; alpha 1.",
+    Keywords = "random color, random colour, rainbow")]
 public sealed class RandomHue : ReadNode
 {
     [return: Port("color")]

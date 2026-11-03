@@ -6,7 +6,8 @@ using Lumora.Wasm;
 
 namespace Lumora.Script;
 
-[Node("Math/Vectors/Make Vector")]
+[Node("Math/Vectors/Make Vector", Description = "Combines individual components into a vector.",
+    Keywords = "pack, construct vector, float2, float3, float4, compose")]
 public sealed class MakeVector : ValueNode
 {
     [WasmBody(nameof(Two))] [return: Port("vector")] public static float2 Run(float x, float y) => new(x, y);

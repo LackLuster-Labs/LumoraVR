@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // A random point of a circle about zero, every point as likely: anywhere inside, or on the edge alone
 // when edge is true.
-[Node("Math/Random/Random Point In Circle")]
+[Node("Math/Random/Points/Random Point In Circle", Description = "A random point of a circle about zero, every point as likely: anywhere inside, or on the edge alone when edge is true.",
+    Keywords = "disk, ring, on edge")]
 public sealed class RandomPointInCircle : ReadNode
 {
     [return: Port("point")]

@@ -8,7 +8,8 @@ namespace Lumora.Script;
 
 // The angle of the point (x, y) from the +x axis, in radians, -pi to pi. Vectors and colors go lane by
 // lane: each lane of y with the same lane of x.
-[Node("Math/Trig/Atan2")]
+[Node("Math/Trigonometry/Atan2", Description = "The angle of the point (x, y) from the +x axis, in radians, -pi to pi.",
+    Keywords = "arctangent, atan, angle of vector, heading")]
 public sealed class Atan2 : ValueNode
 {
     [return: Port("radians")] public static float Run(float y, float x) => MathF.Atan2(y, x);

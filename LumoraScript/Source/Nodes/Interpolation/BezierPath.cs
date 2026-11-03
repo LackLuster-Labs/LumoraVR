@@ -11,7 +11,8 @@ namespace Lumora.Script;
 // Controls set per end give a sharp corner or a smooth pass as they are placed. Points past the last
 // whole curve are left out; a list too short for one curve gives its first point, and an empty one the
 // empty value.
-[Node("Math/Interpolation/Bezier Path")]
+[Node("Math/Interpolation/Bezier Path", Description = "Follows connected cubic Bezier curves from a list of endpoints and control points, returning a position and tangent.",
+    Keywords = "lerp list, gradient, spline path, path, many points")]
 public sealed class BezierPath : ReadNode
 {
     public static float Run(ScriptList<float>? points, float position, out float tangent)

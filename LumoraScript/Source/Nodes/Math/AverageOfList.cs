@@ -8,7 +8,7 @@ namespace Lumora.Script;
 
 // The mean of however many values a list holds: the sum over the count, added up in double so a long
 // list keeps its precision. An empty list, or none, gives 0. Vectors and colors go lane by lane.
-[Node("Math/Average Of List")]
+[Node("Math/Average Of List", Description = "The mean of however many values a list holds: the sum over the count, added up in double so a long list keeps its precision.")]
 public sealed class AverageOfList : ReadNode
 {
     public static float Run(ScriptList<float>? values) => (float)Mean(values, v => new float4(v, 0f, 0f, 0f)).X;

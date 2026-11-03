@@ -7,7 +7,8 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // Radians. A value outside -1 to 1 has no angle and gives NaN. Vectors and colors go lane by lane.
-[Node("Math/Trig/Asin")]
+[Node("Math/Trigonometry/Asin", Description = "Returns the angle whose sine is the input, in radians.",
+    Keywords = "arcsine, inverse sine")]
 public sealed class Asin : ValueNode
 {
     [return: Port("radians")] public static float Run(float value) => MathF.Asin(value);

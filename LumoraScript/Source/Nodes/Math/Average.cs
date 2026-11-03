@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // Halfway between a and b. Each is halved before they are added, so two huge numbers do not overflow on the
 // way. Vectors and colors go lane by lane.
-[Node("Math/Average")]
+[Node("Math/Average", Description = "Halfway between a and b.",
+    Keywords = "mean, midpoint, halfway")]
 public sealed class Average : ValueNode
 {
     public static float Run(float a, float b) => a * 0.5f + b * 0.5f;

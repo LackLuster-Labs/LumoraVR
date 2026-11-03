@@ -7,10 +7,11 @@ using Lumora.Core.Math;
 namespace Lumora.Script;
 
 // The shortest turn that points from along to. Lengths do not matter, and a zero vector gives no turn.
-// Opposite directions have many shortest turns; this is the half turn about the axis square to both from and
-// +x, or to from and +y when from lies along x. Between two rotations it is the turn that takes from to to:
-// Combine from with it and you get to.
-[Node("Math/Rotations/From To Rotation")]
+// Opposite directions have many shortest turns; this is the half turn about up made square to from, so a
+// level direction turns round about up and stays the right way up, and from along up turns about the axis
+// square to it and +x. Between two rotations it is the turn that takes from to to: Combine from with it
+// and you get to. A zero rotation counts as no turn.
+[Node("Math/Rotations/From To Rotation", Description = "The shortest turn that points from along to.")]
 public sealed class FromToRotation : ValueNode
 {
     // Past this the directions count as opposite, and the cross product is too small to trust as an axis.
@@ -28,10 +29,10 @@ public sealed class FromToRotation : ValueNode
         double w = 1d + ax * bx + ay * by + az * bz;
         if (w < Opposite)
         {
-            // The axis square to from and +x, or to from and +y when from lies along x.
-            double px = 0d, py = az, pz = -ay;
-            if (py * py + pz * pz < 1e-6d)
-                (px, py, pz) = (-az, 0d, ax);
+            // Up with its share along from taken out, or the axis square to from and +x when from lies along up.
+            double px = -ax * ay, py = 1d - ay * ay, pz = -az * ay;
+            if (px * px + py * py + pz * pz < 1e-6d)
+                (px, py, pz) = (0d, az, -ay);
             return RotationMath.FromAxis(px, py, pz, Math.PI);
         }
         double cx = ay * bz - az * by, cy = az * bx - ax * bz, cz = ax * by - ay * bx;
@@ -40,5 +41,5 @@ public sealed class FromToRotation : ValueNode
     }
 
     [return: Port("rotation")]
-    public static floatQ Run(floatQ from, floatQ to) => to * from.Inverse;
+    public static floatQ Run([Default(0, 0, 0, 1)] floatQ from, [Default(0, 0, 0, 1)] floatQ to) => Turns.Unit(to) * Turns.Unit(from).Conjugate;
 }
