@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Everyone in the session, the host included.
-[Node("Users/User Count", Capability.UsersRead)]
+[Node("Users/Searching/User Count", Capability.UsersRead, Description = "Everyone in the session, the host included.",
+    Keywords = "player count, number of users, how many people, population, players")]
 public sealed class UserCount : ReadNode
 {
     [return: Port("count")]

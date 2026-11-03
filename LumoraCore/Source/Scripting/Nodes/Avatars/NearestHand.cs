@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // Whose hand is nearest a point: the user, the hand's slot, which side and how far. Left and right say which
 // hands count. The ignored user is left out, and with presentOnly so is anyone whose world is not in front
 // of them or whose headset is off. Nobody gives no user, side None and an infinite distance.
-[Node("Avatars/Nearest Hand", Capability.UsersRead)]
+[Node("Avatars/Nearest Hand", Capability.UsersRead, Description = "Whose hand is nearest a point: the user, the hand's slot, which side and how far.",
+    Keywords = "closest user, closest player, nearest player, nearest user, proximity")]
 public sealed class NearestHand : ReadNode
 {
     [return: Port("user")]

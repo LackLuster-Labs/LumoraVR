@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // The user whose body or hands a slot is in: themselves for their user root, and anything they wear or
 // hold; nobody otherwise. A component asks for the slot it is on.
-[Node("Users/User Of", Capability.UsersRead)]
+[Node("Users/Searching/User Of", Capability.UsersRead, Description = "The user whose body or hands a slot is in: themselves for their user root, and anything they wear or hold; nobody otherwise.",
+    Keywords = "owner, who is holding, holder, wearer, user from slot")]
 public sealed class UserOf : ReadNode
 {
     [return: Port("user")]

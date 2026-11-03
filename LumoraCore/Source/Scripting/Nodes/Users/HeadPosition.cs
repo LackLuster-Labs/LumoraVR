@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // World space. Zero for a user who has no body in the world yet.
-[Node("Users/Head Position", Capability.UsersRead)]
+[Node("Users/Body/Head Position", Capability.UsersRead, Description = "Reads the world-space position of a user's head.",
+    Keywords = "camera position, eye position, player position")]
 public sealed class HeadPosition : ReadNode
 {
     [return: Port("position")]

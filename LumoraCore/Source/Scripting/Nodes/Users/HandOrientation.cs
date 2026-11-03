@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // World space: which way the user's hand is turned. Identity for a hand the user's body does not have.
-[Node("Users/Hand Rotation", Capability.UsersRead)]
+[Node("Users/Body/Hand Rotation", Capability.UsersRead, Description = "World space: which way the user's hand is turned.",
+    Keywords = "hand orientation, controller rotation")]
 public sealed class HandOrientation : ReadNode
 {
     [return: Port("rotation")]

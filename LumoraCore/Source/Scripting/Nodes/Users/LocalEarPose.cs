@@ -13,7 +13,8 @@ namespace Lumora.Core.Scripting;
 // is their head's unless another ear given to them has taken over (overridden says so), and that ear's world
 // scale. Their head, not overridden, while no ear of theirs is listening. For a Local script, the way the
 // Input nodes are.
-[Node("Users/Local Ears", Capability.Input)]
+[Node("Users/Body/Local Ears", Capability.Input, Description = "Reads the world position, rotation and scale of the viewpoint this local user hears from.",
+    Keywords = "listener, ears, hearing position")]
 public sealed class LocalEarPose : ReadNode
 {
     [ThreadStatic]

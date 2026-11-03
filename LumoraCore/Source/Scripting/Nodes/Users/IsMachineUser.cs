@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whether the user is the one on the machine running the script, as Local User means it.
-[Node("Users/Is Local User", Capability.UsersRead)]
+[Node("Users/Status/Is Local User", Capability.UsersRead, Description = "Whether the user is the one on the machine running the script, as Local User means it.")]
 public sealed class IsMachineUser : ReadNode
 {
     [return: Port("local")]

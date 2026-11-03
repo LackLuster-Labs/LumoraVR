@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // the camera a screen shows (first person, third person or a free camera; FirstPerson in a headset), and
 // the app and runtime versions. The versions read empty until their machine has sent them, and everything
 // reads its first value and empty text for a user the script cannot see.
-[Node("Users/Info/Device", Capability.UsersRead)]
+[Node("Users/Info/Device", Capability.UsersRead, Description = "Reads the user's reported device, platform, view mode and app versions.",
+    Keywords = "vr or desktop, desktop mode, headset, platform, view mode, third person, version")]
 public sealed class UserDevice : ReadNode
 {
     [return: Port("headDevice")]

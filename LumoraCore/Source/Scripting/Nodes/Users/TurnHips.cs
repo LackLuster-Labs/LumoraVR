@@ -6,21 +6,32 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// Turns the user at this machine so their hips face a rotation, the whole body turning about where it stands.
-// The hips face where Users/Body Pose says they do. Anyone else stays as they are.
-[Node("Users/Turn Hips", Capability.UsersAffect)]
+// Turns a user so their hips face a rotation, the whole body turning about where it stands. The hips face where
+// Users/Body Pose says they do. A Local script turns only the user at its machine. A Shared script turns anyone, a
+// person's only its author, on that user's own machine. An unset rotation faces straight ahead; one that is not a
+// finite number fails and turns nobody.
+[Node("Users/Movement/Turn Hips", Capability.UsersAffect, Description = "Turns a user so their hips face a rotation, the whole body turning about where it stands. A Shared script reaches anyone, on their own machine.",
+    Keywords = "rotate user, set facing, turn player, face direction")]
 public sealed class TurnHips : ActionNode
 {
-    public static void Run(ScriptContext ctx, User? user, floatQ rotation)
+    public static void Run(ScriptContext ctx, User? user, [Default(0, 0, 0, 1)] floatQ rotation)
     {
-        if (!ScriptReads.HereFor(ctx, user))
+        bool away = ScriptUserAsks.Away(ctx, user);
+        if (!away && !ScriptReads.HereFor(ctx, user))
             return;
-        if (user.Root is not { IsDestroyed: false } root)
+        if (user!.Root is not { IsDestroyed: false } root)
         {
             ctx.Fail("the user has no body here");
             return;
         }
-        using (ctx.AsSelf(user))
-            root.TurnBy(rotation.Normalized * root.HipsRotation.Inverse);
+        if (!float.IsFinite(rotation.x * rotation.x + rotation.y * rotation.y + rotation.z * rotation.z + rotation.w * rotation.w))
+        {
+            ctx.Fail("the rotation is not a finite number");
+            return;
+        }
+        if (away)
+            ScriptUserAsks.Send(ctx, user, new ScriptUserAsks.Request(ScriptUserAskKind.TurnHips) { Rotation = rotation });
+        else
+            ScriptUserActions.TurnHips(ctx.World, user, root, rotation);
     }
 }

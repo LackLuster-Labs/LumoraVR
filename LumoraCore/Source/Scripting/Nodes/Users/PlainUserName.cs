@@ -13,7 +13,8 @@ namespace Lumora.Core.Scripting;
 
 // A user's name as text shows it, as plain text: the markup tags read and taken out the way a text component
 // reads them, sprites dropped, spaces at the ends trimmed. Users/Name gives the name as written.
-[Node("Users/Plain Name", Capability.UsersRead)]
+[Node("Users/Info/Plain Name", Capability.UsersRead, Description = "A user's name as text shows it, as plain text: the markup tags read and taken out the way a text component reads them, sprites dropped, spaces at the ends trimmed.",
+    Keywords = "sanitized name, name without formatting, strip tags, clean name")]
 public sealed class PlainUserName : ReadNode
 {
     [ThreadStatic]

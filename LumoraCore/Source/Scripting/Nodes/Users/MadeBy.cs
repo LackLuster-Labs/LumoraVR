@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 // The user whose machine made a slot or component: the one whose share of ids it was given from. What the
 // host made, the world's own content among it, is the host's. Nobody for something made on one machine only,
 // or by someone who has left. A component asks for itself, not its slot.
-[Node("Users/Made By", Capability.UsersRead)]
+[Node("Users/Info/Made By", Capability.UsersRead, Description = "The user whose machine made a slot or component: the one whose share of ids it was given from.",
+    Keywords = "creator, author, spawned by, who made, owner")]
 public sealed class MadeBy : ReadNode
 {
     [return: Port("user")]

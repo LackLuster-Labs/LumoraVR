@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // The hand a user leads with, as they set it, told by their own machine. None for a user the script cannot see.
-[Node("Users/Primary Hand", Capability.UsersRead)]
+[Node("Users/Body/Primary Hand", Capability.UsersRead, Description = "The hand a user leads with, as they set it, told by their own machine.",
+    Keywords = "dominant hand, handedness, left handed, main hand")]
 public sealed class PrimaryHand : ReadNode
 {
     [return: Port("hand")]

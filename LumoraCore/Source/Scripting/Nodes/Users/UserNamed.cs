@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // The user in the session with that username, capitals aside. Null when no one here has it. The second form
 // matches capitals too with ignoreCase off, and with partial on also takes a name that starts with the text:
 // a whole name still wins, then the shortest name that starts with it, the closest fit.
-[Node("Users/User From Name", Capability.UsersRead)]
+[Node("Users/Searching/User From Name", Capability.UsersRead, Description = "The user in the session with that username, capitals aside.",
+    Keywords = "find user by name, username lookup, user by name, player by name")]
 public sealed class UserNamed : ReadNode
 {
     [return: Port("user")]

@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whether a person has their context menu open, as their machine last said.
-[Node("Users/Context Menu Open", Capability.UsersRead)]
+[Node("Users/Status/Context Menu Open", Capability.UsersRead, Description = "Whether a person has their context menu open, as their machine last said.")]
 public sealed class ContextMenuOpen : ReadNode
 {
     [return: Port("open")]

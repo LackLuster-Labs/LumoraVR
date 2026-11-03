@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 
 // The hand pose source a user's avatar publishes their finger data through, for Finger Pose to read. Null
 // for a user with nothing to publish.
-[Node("Avatars/Hand Pose Source", Capability.UsersRead)]
+[Node("Avatars/Hand Pose Source", Capability.UsersRead, Description = "The hand pose source a user's avatar publishes their finger data through, for Finger Pose to read.")]
 public sealed class HandPoseSourceOf : ReadNode
 {
     [return: Port("source")]

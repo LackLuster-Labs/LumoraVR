@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // World space. Zero for a hand the user's body does not have.
-[Node("Users/Hand Position", Capability.UsersRead)]
+[Node("Users/Body/Hand Position", Capability.UsersRead, Description = "Reads the world-space position of a user's hand.",
+    Keywords = "controller position, left hand, right hand, hand location")]
 public sealed class HandPosition : ReadNode
 {
     [return: Port("position")]

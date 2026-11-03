@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 // The person whose body a slot is part of: their user root, which is what a ray for people strikes and a
 // trigger names, or something they wear. Unlike User Of, a thing they only hold is not their body, so a
 // ray that hits a held prop says nobody here.
-[Node("Users/Body Owner", Capability.UsersRead)]
+[Node("Users/Body/Body Owner", Capability.UsersRead, Description = "The person whose body a slot is part of: their user root, which is what a ray for people strikes and a trigger names, or something they wear.",
+    Keywords = "whose body, user from collider, user hit, who is this")]
 public sealed class BodyOwner : ReadNode
 {
     [return: Port("user")]

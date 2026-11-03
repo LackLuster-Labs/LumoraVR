@@ -5,7 +5,8 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("Users/Name", Capability.UsersRead)]
+[Node("Users/Info/Name", Capability.UsersRead, Description = "Returns a user's display name.",
+    Keywords = "username, display name, player name, nickname, user name")]
 public sealed class UserName : ReadNode
 {
     [return: Port("name")]

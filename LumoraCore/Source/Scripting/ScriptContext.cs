@@ -32,6 +32,10 @@ public sealed class ScriptContext : ScriptContextBase
     // The scopes this script's variable paths reached, kept by ScriptScopedVariables.
     internal object? ScopeLookups;
 
+    // What its searches under slots found, until the tree changes.
+    internal ScriptSearchCache Searches => _searches ??= new ScriptSearchCache();
+    private ScriptSearchCache? _searches;
+
     // Rays one script casts in a frame, slots it makes in a second and slots in one copy, past which it is
     // warned. What its author's scripts do between them is counted too: the world's ScriptAuthorLedger.
     public const int WarnRaysPerFrame = 512;
@@ -77,17 +81,45 @@ public sealed class ScriptContext : ScriptContextBase
     // Null when its event names nobody, and for what runs after a Delay. Set as each event is raised.
     public User? Cause { get; internal set; }
 
-    private static readonly ConcurrentDictionary<Type, PropertyInfo?> _causes = new();
 
     private ScriptUndoRecorder? _undo;
 
     // What this script's undo nodes record.
     internal ScriptUndoRecorder Undo => _undo ??= new ScriptUndoRecorder(this);
 
-    // The user a payload names, if it names one.
-    internal static User? CauseOf<T>(in T payload) where T : struct
-        => _causes.GetOrAdd(typeof(T), static type => Array.Find(type.GetProperties(BindingFlags.Public | BindingFlags.Instance),
-            static property => property.PropertyType == typeof(User) && property.GetIndexParameters().Length == 0))?.GetValue(payload) as User;
+    // The user a payload names, if it names one: the first User property, read through a getter made once per
+    // payload type, since every update and press asks.
+    internal static User? CauseOf<T>(in T payload) where T : struct => Causes<T>.Read?.Invoke(payload);
+
+    // The getter made ahead, on a compile's worker, rather than as the first event of that payload is raised.
+    internal static void WarmCause(Type payload)
+    {
+        if (payload.IsValueType)
+            System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(Causes<>).MakeGenericType(payload).TypeHandle);
+    }
+
+    private static class Causes<T> where T : struct
+    {
+        public static readonly Func<T, User?>? Read = Make();
+
+        private static Func<T, User?>? Make()
+        {
+            var property = Array.Find(typeof(T).GetProperties(BindingFlags.Public | BindingFlags.Instance),
+                static property => property.PropertyType == typeof(User) && property.GetIndexParameters().Length == 0);
+            if (property?.GetMethod == null)
+                return null;
+            try
+            {
+                var payload = System.Linq.Expressions.Expression.Parameter(typeof(T), "payload");
+                return System.Linq.Expressions.Expression.Lambda<Func<T, User?>>(
+                    System.Linq.Expressions.Expression.Property(payload, property), payload).Compile();
+            }
+            catch (Exception ex) when (ex is ArgumentException or InvalidOperationException or PlatformNotSupportedException)
+            {
+                return payload => property.GetValue(payload) as User;
+            }
+        }
+    }
 
     // Around every call the scheduler makes. A batch the call left open closes as it ends.
     internal void BeginCall()
@@ -102,6 +134,56 @@ public sealed class ScriptContext : ScriptContextBase
         Cause = null;
     }
 
+    // The slot the script runs on, or one above it, that a Destroy asked for in the call running now. Destroyed
+    // inside the call, the host would be marked gone and taken apart under the flow still running, which goes on
+    // to use the host's synced values, inbox and drives, and the slot. It goes as the call returns instead,
+    // judged again by the same checks as the same writer; from then on nothing more of the script runs, and the
+    // host's teardown lets go of whatever the call left. -xlinka
+    private Slot? _ownDestroy;
+    private bool _ownDestroyKeepsAssets;
+
+    internal void DestroyOwn(Slot slot, bool keepAssets)
+    {
+        if (Host == null)
+            throw new UnauthorizedAccessException("a script cannot destroy the slot it runs on");
+        if (_ownDestroy is { IsDestroyed: false } asked && (ReferenceEquals(asked, slot) || slot.IsDescendantOf(asked)))
+            return;
+        _ownDestroy = slot;
+        _ownDestroyKeepsAssets = keepAssets;
+    }
+
+    // As the scheduler's call returns.
+    internal void RunOwnDestroy()
+    {
+        var slot = _ownDestroy;
+        if (slot == null)
+            return;
+        _ownDestroy = null;
+        if (slot.IsDestroyed)
+            return;
+        bool entered = EnterWholeCall(out var mark);
+        try
+        {
+            if (_ownDestroyKeepsAssets)
+            {
+                ScriptSlotWrites.DestroyOwnKeepingAssets(this, slot);
+            }
+            else
+            {
+                ScriptWrites.CheckDestroy(this, slot, own: true);
+                slot.Destroy();
+            }
+        }
+        catch (Exception ex) when (ex is UnauthorizedAccessException or InvalidOperationException)
+        {
+            Warn(ScriptWarning.Fault, $"its own slot was not destroyed: {ex.Message}");
+        }
+        finally
+        {
+            LeaveWholeCall(entered, mark);
+        }
+    }
+
     public ScriptContext(World world, ScriptPrincipal principal, Slot? self = null, bool local = false, bool authorMachine = false)
     {
         World = world;
@@ -109,7 +191,12 @@ public sealed class ScriptContext : ScriptContextBase
         Self = self;
         IsLocal = local;
         OnAuthorMachine = authorMachine && !local;
+        Actor = principal.IsWorldContent && !local ? ScriptPrincipal.WorldContentAt(self) : principal;
     }
+
+    // Who the gate takes this script for: its principal, and for a world script on the host the same with the
+    // slot it sits on, so its own worn or held object stays its own.
+    internal ScriptPrincipal Actor { get; }
 
     public override double Now => World.Time.TotalTime;
 
@@ -135,7 +222,7 @@ public sealed class ScriptContext : ScriptContextBase
     }
 
     // Who the gate takes this script's changes for, as EnterWriter says.
-    private Lumora.Warden.IPermissionActor? Writer => !WritesAsMachineUser ? Principal : MachineUser;
+    private Lumora.Warden.IPermissionActor? Writer => !WritesAsMachineUser ? Actor : MachineUser;
 
     // The writer for a whole call the scheduler makes, put back with LeaveWholeCall. False when there is no
     // gate to tell.
@@ -176,7 +263,7 @@ public sealed class ScriptContext : ScriptContextBase
     // Who the gate takes this script's changes for: the user at this machine for a world's Local script, with
     // nobody there for one that has no user here, and its author for every other.
     internal IDisposable? EnterWriter()
-        => !WritesAsMachineUser ? World.DataModelPermissions?.EnterActor(Principal)
+        => !WritesAsMachineUser ? World.DataModelPermissions?.EnterActor(Actor)
             : World.DataModelPermissions?.EnterActor(MachineUser);
 
     protected override void CallScriptFunction(CallTicket ticket, object? target, string function, FunctionSignature signature,
@@ -185,22 +272,55 @@ public sealed class ScriptContext : ScriptContextBase
 
     // A destroyed slot, component, field or user reads as nothing to every node.
     protected override bool IsGone(object value)
-        => value is IWorldElement { IsDestroyed: true } || value is User { IsDestroyed: true };
+        => value is IWorldElement { IsDestroyed: true } || value is User { IsDestroyed: true }
+            || (value is Networking.Sync.SyncElement element && OwnerGone(element));
+
+    protected override string GoneWords(string port, object value)
+        => value is User ? $"the {port} has left" : $"the {port} is gone";
+
+    // A destroyed component's fields are only taken apart at the end of its frame, and read as there until
+    // then, so whatever holds them is asked as well.
+    private static bool OwnerGone(Networking.Sync.SyncElement element)
+    {
+        var owner = element.Parent;
+        for (int depth = 0; owner is Networking.Sync.SyncElement member && depth < 8; depth++)
+            owner = member.Parent;
+        return owner is { IsDestroyed: true };
+    }
+
+    // What a Tree read hangs on: slots and components coming, going, moving or reordering, names and tags.
+    protected override long TreeStamp => ((long)Slot.StructureEpoch << 32) | (uint)Slot.LabelEpoch;
+
+    // What a Field read hangs on: how many times its field has changed, and whether it is still there.
+    protected override ulong? FieldStamp(object field)
+        => (field as Networking.Sync.SyncElement ?? (field as IFieldView)?.Member) is { } element
+            ? (element.IsDestroyed || field is IField { IsDestroyed: true } ? ulong.MaxValue : element.Version)
+            : null;
 
     // Whether this script may use what nodes of that capability do, asked outside a node call.
     internal bool MayUse(Capability capability) => AllowsCapability(capability);
 
-    // The user at this machine: the only one a script running here can move, scale or seat.
-    internal bool IsMachineUser(User? user) => user is { IsDestroyed: false } && ReferenceEquals(user, World.LocalUser);
+    // Whom a script may move, scale or seat at all: anyone for the world's, only its own author for a person's. A
+    // guest's Shared script runs on the host's machine, and the host's body would otherwise be its to push. -xlinka
+    internal bool MayActOn(User? user) => user is { IsDestroyed: false } && (Principal.IsWorldContent || ReferenceEquals(user, Principal.Author));
+
+    // The user at this machine, when this script may act on them: the one a script moves itself. Anyone else a
+    // script on the host moves through their own machine, ScriptUserAsks.
+    internal bool IsMachineUser(User? user) => MayActOn(user) && ReferenceEquals(user, World.LocalUser);
+
+    // Whether the call running now is for the person at this machine: one nobody set off, or one they did. An event
+    // every machine hears runs every machine's copy of a Local script, and only the copy where its cause is acts
+    // for them.
+    internal bool CausedHere => Cause == null || ReferenceEquals(Cause, MachineUser);
 
     // A script never holds rights over anyone's body, its author's included; what it does to the user here it
     // does as them, the way their own movement does it.
     internal IDisposable? AsSelf(User user) => World.DataModelPermissions?.EnterActor(user);
 
     // The groups whose rules exist. Input is the viewer's own, so only a Local script reads it, or an Author
-    // script on its author's machine. Affecting users is any script's, and its nodes touch only the user at the
-    // machine it runs on, as that user's own movement would, inside their role and the world's locomotion
-    // rules. UI links for nobody until its quotas and world settings do.
+    // script on its author's machine. Affecting users is any script's, and its nodes act on a person only on that
+    // person's own machine, as their own movement would, inside their role and the world's locomotion rules: a
+    // script on the host asks theirs. UI links for nobody until its quotas and world settings do.
     protected override bool AllowsCapability(Capability capability) => capability switch
     {
         Capability.Core or Capability.WorldRead or Capability.WorldWrite or Capability.WorldStructure

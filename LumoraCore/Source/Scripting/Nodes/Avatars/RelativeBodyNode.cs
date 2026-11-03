@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 
 // The body node a node's pose is kept relative to: a finger bone or a palm to its hand, an eye to the head,
 // every other node to the root. NONE stays NONE.
-[Node("Avatars/Body Nodes/Relative Node")]
+[Node("Avatars/Body Nodes/Relative Node", Description = "The body node a node's pose is kept relative to: a finger bone or a palm to its hand, an eye to the head, every other node to the root.")]
 public sealed class RelativeBodyNode : ValueNode
 {
     [return: Port("relativeTo")]

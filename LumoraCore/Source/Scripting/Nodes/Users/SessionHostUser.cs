@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whoever hosts the session. Null for a moment while the host is still arriving.
-[Node("Users/Host User", Capability.UsersRead)]
+[Node("Users/Searching/Host User", Capability.UsersRead, Description = "Whoever hosts the session.",
+    Keywords = "host, session owner, world owner, server")]
 public sealed class SessionHostUser : ReadNode
 {
     [return: Port("user")]

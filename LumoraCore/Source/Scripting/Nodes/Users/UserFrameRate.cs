@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // The frame rate the user's own machine reports, whole frames, refreshed about twice a second.
-[Node("Users/User FPS", Capability.UsersRead)]
+[Node("Users/Info/User FPS", Capability.UsersRead, Description = "The frame rate the user's own machine reports, whole frames, refreshed about twice a second.",
+    Keywords = "framerate, frame rate, performance")]
 public sealed class UserFrameRate : ReadNode
 {
     [return: Port("fps")]

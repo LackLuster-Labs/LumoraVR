@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // World space: which way the user's head faces. Identity for a user who has no body in the world yet.
-[Node("Users/Head Rotation", Capability.UsersRead)]
+[Node("Users/Body/Head Rotation", Capability.UsersRead, Description = "World space: which way the user's head faces.",
+    Keywords = "head orientation, look direction, facing")]
 public sealed class HeadOrientation : ReadNode
 {
     [return: Port("rotation")]

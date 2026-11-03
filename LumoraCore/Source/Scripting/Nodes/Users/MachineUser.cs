@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // The user on the machine running the script. A Shared script runs on the host, so for one this is the
 // host; a Local script runs on every machine, so for one it is whoever is at this one.
-[Node("Users/Local User", Capability.UsersRead)]
+[Node("Users/Searching/Local User", Capability.UsersRead, Description = "The user on the machine running the script: the host for a Shared script, and each person on their own machine for a Local one.",
+    Keywords = "me, myself, player, self, this user, viewer")]
 public sealed class MachineUser : ReadNode
 {
     [return: Port("user")]

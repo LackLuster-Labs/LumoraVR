@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The slot of the seat a user sits in, found the way a seat finds its own occupant: their body hangs straight
 // from the seat's space. Seated is whether they sit anywhere; no slot and false for someone standing.
-[Node("Avatars/Seats/User Seat", Capability.UsersRead)]
+[Node("Interaction/Seats/User Seat", Capability.UsersRead, Description = "The slot of the seat a user sits in, found the way a seat finds its own occupant: their body hangs straight from the seat's space.",
+    Keywords = "is seated, is sitting, current seat, anchor of user")]
 public sealed class UserSeat : ReadNode
 {
     [return: Port("seat")]

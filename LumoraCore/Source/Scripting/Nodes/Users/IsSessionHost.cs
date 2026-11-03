@@ -5,7 +5,7 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("Users/Is Host", Capability.UsersRead)]
+[Node("Users/Status/Is Host", Capability.UsersRead, Description = "Checks whether the given user is the world's host.")]
 public sealed class IsSessionHost : ReadNode
 {
     [return: Port("host")]

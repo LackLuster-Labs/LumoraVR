@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // Whose head is nearest a point, its slot, and how far, leaving out the ignored user and, with presentOnly,
 // anyone whose world is not in front of them or whose headset is off. Nobody gives no user and an infinite
 // distance, so a distance test never passes for nobody.
-[Node("Avatars/Nearest Head", Capability.UsersRead)]
+[Node("Avatars/Nearest Head", Capability.UsersRead, Description = "Whose head is nearest a point, its slot, and how far, leaving out the ignored user and, with presentOnly, anyone whose world is not in front of them or whose headset is off.",
+    Keywords = "closest user, closest player, nearest player, nearest user, proximity")]
 public sealed class NearestHead : ReadNode
 {
     [return: Port("user")]

@@ -11,7 +11,8 @@ namespace Lumora.Core.Scripting;
 // else the foot bone of the avatar they wear, so someone with neither has no feet to count. Left and right
 // say which feet count. The ignored user is left out, and with presentOnly so is anyone whose world is not
 // in front of them or whose headset is off. Nobody gives no user, side None and an infinite distance.
-[Node("Avatars/Nearest Foot", Capability.UsersRead)]
+[Node("Avatars/Nearest Foot", Capability.UsersRead, Description = "Whose foot is nearest a point: the user, the foot's slot, which side and how far.",
+    Keywords = "closest user, closest player, nearest player, nearest user, proximity")]
 public sealed class NearestFoot : ReadNode
 {
     [return: Port("user")]

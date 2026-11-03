@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 
 // The user in the session with an account id, the one Users/User ID gives, which follows a person from
 // session to session. Null for an empty id or when no one here has it; guests have none.
-[Node("Users/User From ID", Capability.UsersRead)]
+[Node("Users/Searching/User From ID", Capability.UsersRead, Description = "The user in the session with an account id, the one Users/User ID gives, which follows a person from session to session.")]
 public sealed class UserFromId : ReadNode
 {
     [return: Port("user")]

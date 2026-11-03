@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // them; vr is being in a headset rather than at a screen; inHeadset is wearing it with the session in front;
 // present is focused and, in VR, wearing it. DashOpen is their dash being open. The headset flags and the
 // dash follow within a second. All false for a user the script cannot see.
-[Node("Users/Status/Presence", Capability.UsersRead)]
+[Node("Users/Status/Presence", Capability.UsersRead, Description = "Whether a user is here, as their own machine reports it.",
+    Keywords = "afk, away, idle, in headset, vr active, dash open")]
 public sealed class UserPresence : ReadNode
 {
     [return: Port("present")]

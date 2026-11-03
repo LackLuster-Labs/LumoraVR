@@ -6,17 +6,19 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// Moves the user at this machine so their hips are at a point, carrying the whole body along. The hips are
-// where Users/Body Pose says they are. Anyone else stays where they are. A point that is not a finite
-// number fails.
-[Node("Users/Place Hips", Capability.UsersAffect)]
+// Moves a user so their hips are at a point, carrying the whole body along. The hips are where Users/Body Pose
+// says they are. A Local script moves only the user at its machine. A Shared script moves anyone, a person's only
+// its author, on that user's own machine. A point that is not a finite number fails.
+[Node("Users/Movement/Place Hips", Capability.UsersAffect, Description = "Moves a user so their hips are at a point, carrying the whole body along. A Shared script reaches anyone, on their own machine.",
+    Keywords = "teleport, move user, set user position, warp, respawn")]
 public sealed class PlaceHips : ActionNode
 {
     public static void Run(ScriptContext ctx, User? user, float3 position)
     {
-        if (!ScriptReads.HereFor(ctx, user))
+        bool away = ScriptUserAsks.Away(ctx, user);
+        if (!away && !ScriptReads.HereFor(ctx, user))
             return;
-        if (user.Root is not { IsDestroyed: false } root)
+        if (user!.Root is not { IsDestroyed: false } root)
         {
             ctx.Fail("the user has no body here");
             return;
@@ -26,7 +28,9 @@ public sealed class PlaceHips : ActionNode
             ctx.Fail("the position is not a finite number");
             return;
         }
-        using (ctx.AsSelf(user))
-            root.HipsPosition = position;
+        if (away)
+            ScriptUserAsks.Send(ctx, user, new ScriptUserAsks.Request(ScriptUserAskKind.PlaceHips) { Vector = position });
+        else
+            ScriptUserActions.PlaceHips(ctx.World, user, root, position);
     }
 }

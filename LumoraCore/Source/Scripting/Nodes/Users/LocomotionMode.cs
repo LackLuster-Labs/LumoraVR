@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // The locomotion module a person has active, the name their menu shows for it, and the kind of movement
 // it is. Their own machine picks it and tells everyone else, so a change reaches other machines a moment late.
 // Nothing, empty and None for someone whose body has no locomotion.
-[Node("Users/Locomotion Mode", Capability.UsersRead)]
+[Node("Users/Movement/Locomotion Mode", Capability.UsersRead, Description = "The locomotion module a person has active, the name their menu shows for it, and the kind of movement it is.",
+    Keywords = "active locomotion, movement mode, fly, noclip, walk")]
 public sealed class LocomotionMode : ReadNode
 {
     [return: Port("module")]

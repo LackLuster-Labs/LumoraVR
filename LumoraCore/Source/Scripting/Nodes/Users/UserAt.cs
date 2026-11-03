@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // The session's users by position, 0 to User Count - 1. Null past the end. The order changes as people
 // join and leave.
-[Node("Users/User", Capability.UsersRead)]
+[Node("Users/Searching/User", Capability.UsersRead, Description = "The session's users by position, 0 to User Count - 1.",
+    Keywords = "user at index, get user, nth user, user by index, player by index")]
 public sealed class UserAt : ReadNode
 {
     [return: Port("user")]

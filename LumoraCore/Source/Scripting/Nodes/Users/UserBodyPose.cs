@@ -12,7 +12,8 @@ namespace Lumora.Core.Scripting;
 // way up from the feet to the head and a little behind it. Each rotation faces along its forward (-Z): tracked
 // feet the way they point, a hips tracker as it turns, and otherwise the head's level facing.
 // Zeros and identity for a user with no body in the world yet.
-[Node("Users/Body Pose", Capability.UsersRead)]
+[Node("Users/Body/Body Pose", Capability.UsersRead, Description = "Where a user's body is, in world space, as the user root reads it.",
+    Keywords = "feet, hips, facing direction, forward direction, ground position, where standing")]
 public sealed class UserBodyPose : ReadNode
 {
     [return: Port("facing")]

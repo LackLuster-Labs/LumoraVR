@@ -13,7 +13,8 @@ namespace Lumora.Core.Scripting;
 // The source is a hand pose source component, or a user for the one their avatar publishes. Tracked is false,
 // with identity and zero, for a node that is no finger bone, a hand the source does not track, or a bone it
 // has nothing for; the position is zero from a source that keeps rotations only.
-[Node("Avatars/Finger Pose", Capability.UsersRead)]
+[Node("Avatars/Finger Pose", Capability.UsersRead, Description = "Reads the pose of a finger bone relative to the wrist from a hand pose source.",
+    Keywords = "finger tracking, finger rotation, hand tracking, finger bone")]
 public sealed class FingerPose : ReadNode
 {
     [return: Port("rotation")]

@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // This machine's time zone: how far its clock is from UTC right now, and the local date and time. A machine's
 // zone is its own and is never put on anyone's record, so only a Local script reads it, for the person at
 // that machine; a Shared script runs on the host and is refused rather than handed the host's zone.
-[Node("Users/Info/Local Time Offset")]
+[Node("Users/Info/Local Time Offset", Description = "This machine's time zone: how far its clock is from UTC right now, and the local date and time.",
+    Keywords = "timezone, time zone, utc offset, local time")]
 public sealed class LocalTimeOffset : ReadNode
 {
     [return: Port("offset")]

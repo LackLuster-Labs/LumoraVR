@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // Mute while they are muted or silenced; a listener's own override on their machine is left out. Muted is
 // their own mute or the host's; silenced is the host's silence, which only the host can lift. Mute and
 // false for a user the script cannot see.
-[Node("Users/Status/Voice", Capability.UsersRead)]
+[Node("Users/Status/Voice", Capability.UsersRead, Description = "How a user is heard.",
+    Keywords = "muted, mute, whisper, shout, broadcast, silenced")]
 public sealed class UserVoice : ReadNode
 {
     [return: Port("mode")]

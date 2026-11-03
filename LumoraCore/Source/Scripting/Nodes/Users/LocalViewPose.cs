@@ -11,7 +11,8 @@ namespace Lumora.Core.Scripting;
 // world scale, which follows the user's. DesktopFov is the screen camera's vertical field of view in degrees.
 // The camera and its field of view count only while this world is the one in front of them; otherwise the
 // head, and a field of view of 0. For a Local script, the way the Input nodes are.
-[Node("Users/Local View", Capability.Input)]
+[Node("Users/Body/Local View", Capability.Input, Description = "Where the person at this machine sees this world from, in world space: the camera a screen shows once it has left the head (third person, a free camera; overridden says so), else their head.",
+    Keywords = "camera, field of view, fov, screen camera, third person camera")]
 public sealed class LocalViewPose : ReadNode
 {
     [return: Port("position")]

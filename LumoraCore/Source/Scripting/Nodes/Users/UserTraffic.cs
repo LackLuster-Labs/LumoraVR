@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 // second, as changes, streams and control messages; the reliable packets still waiting to go out to them;
 // and lagging once nothing has come from them for a second and a half while their world is in front of them.
 // Zeros and false for the host, and for a user the script cannot see.
-[Node("Users/Info/Messages", Capability.UsersRead)]
+[Node("Users/Info/Messages", Capability.UsersRead, Description = "Reads the host's recent message rates, queued reliable packets and lag status for a user.")]
 public sealed class UserTraffic : ReadNode
 {
     [return: Port("lagging")]

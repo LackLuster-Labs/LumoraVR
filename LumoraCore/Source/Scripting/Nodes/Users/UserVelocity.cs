@@ -11,7 +11,8 @@ namespace Lumora.Core.Scripting;
 // stick, and a fall or a jump shows as the vertical part. Measured from frame to frame and smoothed over
 // about a tenth of a second; being placed somewhere far off is not movement. Zero the first time a person
 // is asked about, and for someone with no body.
-[Node("Users/Movement/Velocity", Capability.UsersRead)]
+[Node("Users/Movement/Velocity", Capability.UsersRead, Description = "Reads a user's movement speed and direction in world space, including movement within their play space.",
+    Keywords = "speed, how fast, movement speed, user speed")]
 public sealed class UserVelocity : ReadNode
 {
     [return: Port("velocity")]

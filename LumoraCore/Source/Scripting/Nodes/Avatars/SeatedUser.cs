@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // Who is in the seat on a slot, as the seat itself says: whoever's body hangs from it, else whom the host
 // last ruled it for while that settles. Taken is whether anyone is. No user and false for a slot with no
 // seat on it.
-[Node("Avatars/Seats/Seated User", Capability.UsersRead)]
+[Node("Interaction/Seats/Seated User", Capability.UsersRead, Description = "Who is in the seat on a slot, as the seat itself says: whoever's body hangs from it, else whom the host last ruled it for while that settles.",
+    Keywords = "who is sitting, occupant, seat occupied")]
 public sealed class SeatedUser : ReadNode
 {
     [return: Port("user")]

@@ -62,6 +62,10 @@ public sealed class ScriptScheduler
     // on a guest's machine, the relay that carries them.
     public ScriptUndoHub Undo { get; }
 
+    // What scripts here asked of people at other machines: on the host, the asks it writes into each person's
+    // relay; on a guest's machine, the relay that carries them.
+    public ScriptUserAsks UserAsks { get; }
+
     // Packs one author's scripts start in a minute, the world's scripts between them, past which the script
     // packing is warned about. A packed script can pack again, and this is how that shows before it runs away.
     public const int WarnPacksPerMinute = 10;
@@ -70,11 +74,17 @@ public sealed class ScriptScheduler
 
     public int PacksWaiting => _packs.Count;
 
+    // The frame's update, raised through one delegate made once rather than a new one per script per frame.
+    private FrameTick _tick;
+    private readonly Func<ScriptRunner, ScriptCallResult> _raiseTick;
+
     internal ScriptScheduler(World world)
     {
+        _raiseTick = runner => runner.Raise(_tick);
         _world = world;
         Ledger = new ScriptAuthorLedger(world);
         Undo = new ScriptUndoHub(world);
+        UserAsks = new ScriptUserAsks(world);
         ScriptEnvironment.WarmUp();
     }
 
@@ -210,6 +220,7 @@ public sealed class ScriptScheduler
         }
 
         Undo.Update(now);
+        UserAsks.Update(now);
 
         var runtimes = Snapshot();
         if (runtimes.Length == 0)
@@ -230,6 +241,7 @@ public sealed class ScriptScheduler
 
         double shared = Pass(runtimes, local: false, now, delta);
         double local = Pass(runtimes, local: true, now, delta);
+        UserAsks.Flush();
 
         LastUpdateMs = (Stopwatch.GetTimestamp() - start) * 1000.0 / Stopwatch.Frequency;
 
@@ -265,11 +277,11 @@ public sealed class ScriptScheduler
         var updaters = _updaters[side];
         if (updaters.Length > 0)
         {
-            var tick = new FrameTick(delta);
+            _tick = new FrameTick(delta);
             foreach (var runtime in updaters)
             {
                 if (runtime.CanRun)
-                    spent += Run(runtime, runner => runner.Raise(tick));
+                    spent += Run(runtime, _raiseTick);
             }
         }
 
@@ -311,6 +323,7 @@ public sealed class ScriptScheduler
             ScriptContext.LeaveWholeCall(entered, mark);
         }
         context.EndCall();
+        context.RunOwnDestroy();
         double ms = (Stopwatch.GetTimestamp() - before) * 1000.0 / Stopwatch.Frequency;
 
         runtime.FrameMs += ms;

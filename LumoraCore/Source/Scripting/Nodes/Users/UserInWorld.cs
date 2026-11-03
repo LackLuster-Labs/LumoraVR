@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whether the user is still in the session. False once they leave, for a user kept in a Stored Value.
-[Node("Users/Is In World", Capability.UsersRead)]
+[Node("Users/Status/Is In World", Capability.UsersRead, Description = "Whether the user is still in the session.",
+    Keywords = "still here, has left, in session")]
 public sealed class UserInWorld : ReadNode
 {
     [return: Port("here")]

@@ -6,7 +6,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // The name of the role the user holds in this world.
-[Node("Users/Role", Capability.UsersRead)]
+[Node("Users/Info/Role", Capability.UsersRead, Description = "The name of the role the user holds in this world.",
+    Keywords = "permission, rank, admin, builder, moderator, access level")]
 public sealed class UserRole : ReadNode
 {
     [return: Port("role")]
