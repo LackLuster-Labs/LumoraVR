@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Runs the body count times with index going 0 to count - 1, then completed; with reverse on, index
 // goes count - 1 down to 0. Fuel is what stops a count nobody should have asked for.
-[Node("Flow/For")]
+[Node("Flow/Loops/For", Description = "Runs the body count times with index going 0 to count - 1, then completed; with reverse on, index goes count - 1 down to 0.",
+    Keywords = "loop, repeat, times, iterate, for loop")]
 public sealed class For : FlowNode
 {
     public override void Build(FlowBuilder f)

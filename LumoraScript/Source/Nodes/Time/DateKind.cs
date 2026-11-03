@@ -6,7 +6,7 @@ using System;
 namespace Lumora.Script;
 
 // 1 for a UTC date, 2 for a local one, 0 for one marked as neither.
-[Node("Time/Dates/Date Kind")]
+[Node("Time/Dates/Date Kind", Description = "1 for a UTC date, 2 for a local one, 0 for one marked as neither.")]
 public sealed class DateKind : ValueNode
 {
     [return: Port("kind")]

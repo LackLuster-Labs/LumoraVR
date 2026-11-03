@@ -15,7 +15,8 @@ namespace Lumora.Script;
 // Shared script cannot learn the host's zone through it. z, zz, zzz and K show a UTC date's zone and
 // nothing for a local or unspecified date, which carries no offset of its own; U and o do not convert
 // either, U reading as F. -xlinka
-[Node("Time/Dates/Format Date")]
+[Node("Time/Dates/Format Date", Description = "The date as text by a pattern such as \"yyyy-MM-dd HH:mm\" or a one-letter form such as \"D\", with invariant names and digits.",
+    Keywords = "date to text, date string, datetime format")]
 public sealed class FormatDate : ValueNode
 {
     private const string Plain = "yyyy-MM-dd HH:mm:ss";

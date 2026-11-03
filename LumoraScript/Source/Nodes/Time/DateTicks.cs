@@ -6,7 +6,7 @@ using System;
 namespace Lumora.Script;
 
 // The date as it reads, in 100-nanosecond ticks since the start of the year 1, whatever its kind.
-[Node("Time/Dates/Date Ticks")]
+[Node("Time/Dates/Date Ticks", Description = "The date as it reads, in 100-nanosecond ticks since the start of the year 1, whatever its kind.")]
 public sealed class DateTicks : ValueNode
 {
     [return: Port("ticks")]

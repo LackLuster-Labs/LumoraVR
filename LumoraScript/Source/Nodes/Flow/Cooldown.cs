@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Lets flow through to next at most once every seconds; flow that arrives sooner goes to cooling. A graph
 // swap keeps the clock.
-[Node("Flow/Cooldown")]
+[Node("Flow/Timing/Cooldown", Description = "Lets flow through to next at most once every seconds; flow that arrives sooner goes to cooling.",
+    Keywords = "debounce, throttle, rate limit, timeout, once every, spam")]
 public sealed class Cooldown : FlowNode
 {
     public override void Build(FlowBuilder f)

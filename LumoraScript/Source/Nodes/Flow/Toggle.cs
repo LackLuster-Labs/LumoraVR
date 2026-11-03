@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Sends flow to on and off by turns, on first. state is true after on ran. A graph swap keeps its turn.
-[Node("Flow/Toggle")]
+[Node("Flow/Toggle", Description = "Sends flow to on and off by turns, on first. state is true after on ran.",
+    Keywords = "alternate, switch, on off, every other")]
 public sealed class Toggle : FlowNode
 {
     public override void Build(FlowBuilder f)

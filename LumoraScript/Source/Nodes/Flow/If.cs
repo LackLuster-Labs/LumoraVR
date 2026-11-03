@@ -3,7 +3,8 @@
 
 namespace Lumora.Script;
 
-[Node("Flow/If")]
+[Node("Flow/If", Description = "Sends flow through true or false according to the condition.",
+    Keywords = "branch, condition, else, check, when")]
 public sealed class If : FlowNode
 {
     public override void Build(FlowBuilder f)

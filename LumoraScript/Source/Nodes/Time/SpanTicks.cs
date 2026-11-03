@@ -6,7 +6,7 @@ using System;
 namespace Lumora.Script;
 
 // The span in 100-nanosecond ticks; negative for a negative span.
-[Node("Time/Spans/Span Ticks")]
+[Node("Time/Spans/Span Ticks", Description = "The span in 100-nanosecond ticks; negative for a negative span.")]
 public sealed class SpanTicks : ValueNode
 {
     [return: Port("ticks")]

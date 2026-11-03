@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // 0 for Sunday to 6 for Saturday, from a Unix Time and an offset from UTC in hours.
-[Node("Time/Day of Week")]
+[Node("Time/Dates/Day of Week", Description = "0 for Sunday to 6 for Saturday, from a Unix Time and an offset from UTC in hours.",
+    Keywords = "weekday, day name, day of the week")]
 public sealed class WeekDay : ValueNode
 {
     public static int Run(double unixSeconds, float utcOffsetHours)

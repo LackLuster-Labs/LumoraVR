@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // A line in the host's log, under the script's author. Every line is written; past ten a second the
 // script is warned.
-[Node("Debug/Log")]
+[Node("Debug/Log", Description = "A line in the host's log, under the script's author.",
+    Keywords = "print, console, debug log, output, trace")]
 public sealed class Log : ActionNode
 {
     public static void Run(ScriptContextBase ctx, string? text) => ctx.Log(text);

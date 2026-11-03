@@ -7,7 +7,8 @@ namespace Lumora.Script;
 
 // A span of so many hours, fractions too, to the nearest tick. Past the longest span either way it holds
 // at that end, and NaN is none.
-[Node("Time/Spans/From Hours")]
+[Node("Time/Spans/From Hours", Description = "A span of so many hours, fractions too, to the nearest tick.",
+    Keywords = "duration, timespan, time span, make duration")]
 public sealed class SpanFromHours : ValueNode
 {
     [return: Port("span")]

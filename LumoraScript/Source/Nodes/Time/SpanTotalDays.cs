@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // The whole span in days, with the fraction; negative for a negative span.
-[Node("Time/Spans/Total Days")]
+[Node("Time/Spans/Total Days", Description = "The whole span in days, with the fraction; negative for a negative span.",
+    Keywords = "duration to number, timespan to number, length in days")]
 public sealed class SpanTotalDays : ValueNode
 {
     [return: Port("days")]

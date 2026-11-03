@@ -7,7 +7,7 @@ namespace Lumora.Script;
 
 // Whole milliseconds from 1 January 1970 to the date, rounded down, negative before it. The date is read
 // as UTC whatever its kind; a local one goes through To Universal Time first.
-[Node("Time/Dates/To Unix Milliseconds")]
+[Node("Time/Dates/To Unix Milliseconds", Description = "Whole milliseconds from 1 January 1970 to the date, rounded down, negative before it.")]
 public sealed class DateToUnixMilliseconds : ValueNode
 {
     [return: Port("milliseconds")]

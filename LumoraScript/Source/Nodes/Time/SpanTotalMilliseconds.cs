@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // The whole span in milliseconds, with the fraction; negative for a negative span.
-[Node("Time/Spans/Total Milliseconds")]
+[Node("Time/Spans/Total Milliseconds", Description = "The whole span in milliseconds, with the fraction; negative for a negative span.",
+    Keywords = "duration to number, timespan to number, length in milliseconds")]
 public sealed class SpanTotalMilliseconds : ValueNode
 {
     [return: Port("milliseconds")]

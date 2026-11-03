@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // One value, set on its card, for as many consumers as are wired to its result. Its value is a setting,
 // so another node cannot turn it into a relay.
-[Node("Variables/Constant")]
+[Node("Variables/Constant", Description = "One value, set on its card, for as many consumers as are wired to its result.",
+    Keywords = "literal, number, fixed value, input value")]
 public sealed class Constant<T> : ScriptNode
 {
 }

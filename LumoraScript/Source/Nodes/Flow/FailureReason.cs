@@ -6,7 +6,8 @@ namespace Lumora.Script;
 // Why the last action that left by its failed exit failed: readable along that exit and anywhere after it,
 // and kept until another action fails that way, so a Display on it shows the latest failure. Empty until one
 // has. A failure with nothing wired to failed carries on by next and leaves this as it was.
-[Node("Flow/Failure Reason")]
+[Node("Flow/Failure Reason", Description = "Why the last action that left by its failed exit failed: readable along that exit and anywhere after it, and kept until another action fails that way, so a Display on it shows the latest failure.",
+    Keywords = "error, error message, why failed, last error, exception")]
 public sealed class FailureReason : ReadNode
 {
     [return: Port("reason")]

@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // 0 to 59, from a Unix Time and an offset from UTC in hours.
-[Node("Time/Minute")]
+[Node("Time/Dates/Minute", Description = "0 to 59, from a Unix Time and an offset from UTC in hours.",
+    Keywords = "time of day, clock, minutes")]
 public sealed class MinuteOfHour : ValueNode
 {
     public static int Run(double unixSeconds, float utcOffsetHours)

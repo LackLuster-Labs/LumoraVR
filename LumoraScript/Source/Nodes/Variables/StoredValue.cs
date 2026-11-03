@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // A value that lives as long as the script instance: neither saved nor synced. Lowered to a global.
 // "name" is what a live graph swap matches it by, "initial" its starting value.
-[Node("Variables/Stored Value")]
+[Node("Variables/Stored Value", Description = "A value that lives as long as the script instance: neither saved nor synced.",
+    Keywords = "variable, store, memory, state, remember, keep")]
 public sealed class StoredValue<T> : ScriptNode
 {
 }

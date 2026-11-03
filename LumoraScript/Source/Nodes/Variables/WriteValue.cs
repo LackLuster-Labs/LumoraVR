@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Writes a stored value. "var" names the StoredValue node it writes.
-[Node("Variables/Write Value")]
+[Node("Variables/Write Value", Description = "Writes a stored value. \"var\" names the StoredValue node it writes.",
+    Keywords = "set variable, assign, store, write variable")]
 public sealed class WriteValue<T> : ScriptNode
 {
 }

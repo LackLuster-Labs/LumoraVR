@@ -7,7 +7,7 @@ namespace Lumora.Script;
 
 // The parts of a date as it reads, whatever its kind. Day of week is 0 for Sunday to 6 for Saturday, as
 // Day of Week gives it; day of year is 1 to 366.
-[Node("Time/Dates/Split Date")]
+[Node("Time/Dates/Split Date", Description = "The parts of a date as it reads, whatever its kind.")]
 public sealed class SplitDate : ValueNode
 {
     public static void Run(DateTime date, out int year, out int month, out int day, out int hour, out int minute, out int second,

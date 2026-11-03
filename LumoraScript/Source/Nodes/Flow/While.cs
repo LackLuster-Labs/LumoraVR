@@ -4,7 +4,8 @@
 namespace Lumora.Script;
 
 // Runs the body while the condition holds, reading it afresh before every turn, then completed.
-[Node("Flow/While")]
+[Node("Flow/Loops/While", Description = "Runs the body while the condition holds, reading it afresh before every turn, then completed.",
+    Keywords = "loop, repeat while, until, do while")]
 public sealed class While : FlowNode
 {
     public override void Build(FlowBuilder f)

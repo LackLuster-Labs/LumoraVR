@@ -7,11 +7,13 @@ namespace Lumora.Script;
 
 // A date from its parts, marked UTC or local. A part out of range holds at the nearer end, the day at
 // the last of its month, so 31 February 2024 is the 29th.
-[Node("Time/Dates/Construct Date")]
+[Node("Time/Dates/Construct Date", Description = "A date from its parts, marked UTC or local.",
+    Keywords = "make date, create date, datetime, new date")]
 public sealed class ConstructDate : ValueNode
 {
     [return: Port("date")]
-    public static DateTime Run(int year, int month, int day, int hour, int minute, int second, int millisecond, bool utc = true)
+    public static DateTime Run(int year = 1, int month = 1, int day = 1, int hour = 0, int minute = 0, int second = 0, int millisecond = 0,
+        bool utc = true)
     {
         year = Math.Clamp(year, 1, 9999);
         month = Math.Clamp(month, 1, 12);

@@ -7,7 +7,7 @@ namespace Lumora.Script;
 
 // The UTC date so many whole milliseconds after 1 January 1970. Past the first or last date there is it
 // holds at that end.
-[Node("Time/Dates/From Unix Milliseconds")]
+[Node("Time/Dates/From Unix Milliseconds", Description = "The UTC date so many whole milliseconds after 1 January 1970.")]
 public sealed class DateFromUnixMilliseconds : ValueNode
 {
     [return: Port("date")]

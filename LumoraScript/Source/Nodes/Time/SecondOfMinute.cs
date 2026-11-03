@@ -6,7 +6,8 @@ using System;
 namespace Lumora.Script;
 
 // 0 to 59, from a Unix Time and an offset from UTC in hours.
-[Node("Time/Second")]
+[Node("Time/Dates/Second", Description = "0 to 59, from a Unix Time and an offset from UTC in hours.",
+    Keywords = "time of day, clock, seconds")]
 public sealed class SecondOfMinute : ValueNode
 {
     public static int Run(double unixSeconds, float utcOffsetHours)

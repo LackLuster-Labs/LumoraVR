@@ -6,7 +6,7 @@ using System;
 namespace Lumora.Script;
 
 // A span of so many 100-nanosecond ticks.
-[Node("Time/Spans/From Ticks")]
+[Node("Time/Spans/From Ticks", Description = "A span of so many 100-nanosecond ticks.")]
 public sealed class SpanFromTicks : ValueNode
 {
     [return: Port("span")]

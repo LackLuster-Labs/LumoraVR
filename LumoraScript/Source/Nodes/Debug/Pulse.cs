@@ -5,7 +5,8 @@ namespace Lumora.Script;
 
 // Counts the times flow passes through it, shown on its card, and carries on to "next". The count is a
 // global the host reads. -xlinka
-[Node("Debug/Pulse")]
+[Node("Flow/Pulse", Description = "Counts the times flow passes through it, shown on its card, and carries on to \"next\".",
+    Keywords = "counter, count runs, hits, how many times, debug")]
 public sealed class Pulse : ScriptNode
 {
 }

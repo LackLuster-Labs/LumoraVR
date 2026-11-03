@@ -7,7 +7,7 @@ namespace Lumora.Script;
 
 // Seconds from 1 January 1970 to the date, with the fraction, negative before it. The date is read as
 // UTC whatever its kind; a local one goes through To Universal Time first.
-[Node("Time/Dates/To Unix Seconds")]
+[Node("Time/Dates/To Unix Seconds", Description = "Seconds from 1 January 1970 to the date, with the fraction, negative before it.")]
 public sealed class DateToUnixSeconds : ValueNode
 {
     [return: Port("seconds")]
