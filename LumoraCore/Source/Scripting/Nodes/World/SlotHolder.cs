@@ -6,16 +6,19 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// Who is holding the slot's grabbable, or nobody.
-[Node("World/Interaction/Held By", Capability.UsersRead)]
+// Who is holding the slot's grabbable, its own or the nearest one above it, as Holding Hand finds it, or
+// nobody.
+[Node("Interaction/Grabbing/Held By", Capability.UsersRead, Description = "Who is holding the slot's grabbable, its own or the nearest one above it, or nobody.",
+    Keywords = "grabber, who holds, holder, held user")]
 public sealed class SlotHolder : ReadNode
 {
     [return: Port("user")]
     public static User? Run(ScriptContext ctx, Slot? slot)
     {
-        if (!ScriptReads.Visible(ctx, slot) || slot!.GetComponent<Grabbable>() is not { IsDestroyed: false } grabbable)
+        if (!ScriptReads.Visible(ctx, slot) || ScriptHands.GrabbableAt(slot) is not { } grabbable
+            || !ScriptReads.Visible(ctx, grabbable as Component))
             return null;
-        var user = grabbable.Grabber?.OwningUser;
+        var user = grabbable.Grabber is { IsDestroyed: false } grabber ? grabber.OwningUser : null;
         return ScriptReads.Visible(ctx, user) ? user : null;
     }
 }

@@ -6,7 +6,9 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Null past the last child.
-[Node("World/Slots/Child", Capability.WorldRead)]
+[Node("World/Slots/Hierarchy/Child", Capability.WorldRead, Description = "Gets a slot's child at the given index, starting at zero. Returns null when the index is outside the child list.",
+    Keywords = "child at index, nth child")]
+[Evaluates(Evaluation.Tree)]
 public sealed class ChildAt : ReadNode
 {
     [return: Port("child")]

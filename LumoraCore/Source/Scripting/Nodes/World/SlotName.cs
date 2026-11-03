@@ -5,7 +5,8 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("World/Slots/Name", Capability.WorldRead)]
+[Node("World/Slots/Properties/Name", Capability.WorldRead, Description = "Returns a slot's name.")]
+[Evaluates(Evaluation.Tree)]
 public sealed class SlotName : ReadNode
 {
     [return: Port("name")]

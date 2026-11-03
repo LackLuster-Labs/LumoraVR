@@ -6,7 +6,9 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // The slot a component sits on. Nothing for a component the script cannot see.
-[Node("World/Components/Slot Of", Capability.WorldRead)]
+[Node("World/Components/Slot Of", Capability.WorldRead, Description = "The slot a component sits on.",
+    Keywords = "component slot, owner slot")]
+[Evaluates(Evaluation.Tree)]
 public sealed class ComponentSlot : ReadNode
 {
     [return: Port("slot")]

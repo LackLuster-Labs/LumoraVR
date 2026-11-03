@@ -7,8 +7,10 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// Kicks the slot's rigid body at once, in newton seconds, world space.
-[Node("Physics/Add Impulse", Capability.Physics)]
+// Kicks the rigid body the slot is part of, its own or the nearest above it, at once, in newton seconds,
+// world space.
+[Node("Physics/Forces/Add Impulse", Capability.Physics, Description = "Kicks the rigid body the slot is part of at once, in newton seconds, world space.",
+    Keywords = "push, launch, kick, throw, knockback, jump")]
 public sealed class AddImpulse : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot, float3 impulse)

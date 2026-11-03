@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // Judged by the gate like the author's own edit. Never the world root, a protected slot, or anything in
 // someone's body or hands.
-[Node("World/Slots/Set Tag", Capability.WorldWrite)]
+[Node("World/Slots/Properties/Set Tag", Capability.WorldWrite, Description = "Changes the text tag used to identify or find a slot.")]
 public sealed class SetSlotTag : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot, string? tag)

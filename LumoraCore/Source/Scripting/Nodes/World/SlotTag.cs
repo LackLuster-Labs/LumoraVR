@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Empty for a slot with no tag, and for one the script cannot see.
-[Node("World/Slots/Tag", Capability.WorldRead)]
+[Node("World/Slots/Properties/Tag", Capability.WorldRead, Description = "Reads the text tag a slot carries, empty when it has none.")]
 public sealed class SlotTag : ReadNode
 {
     [return: Port("tag")]

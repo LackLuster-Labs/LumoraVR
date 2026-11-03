@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // World space.
-[Node("World/Slots/Position", Capability.WorldRead)]
+[Node("Transform/Global/Position", Capability.WorldRead, Description = "Reads a slot's world-space position.",
+    Keywords = "world position, global position, location, where, get position")]
 public sealed class SlotPosition : ReadNode
 {
     [return: Port("position")]

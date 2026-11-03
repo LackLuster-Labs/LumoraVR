@@ -5,12 +5,13 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("World/Slots/Set Active", Capability.WorldWrite)]
+[Node("World/Slots/Properties/Set Active", Capability.WorldWrite, Description = "Enables or disables a slot and its contents.",
+    Keywords = "enable, disable, show, hide, toggle, visible")]
 public sealed class SetSlotActive : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot, bool active)
     {
         if (ScriptReads.Reached(ctx, slot))
-            ScriptWrites.Write(ctx, slot!.ActiveSelf, active);
+            ScriptWrites.Set(ctx, slot!.ActiveSelf, active);
     }
 }

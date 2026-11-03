@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // Takes one from a number field and writes it back, like Increment Field. Whole numbers wrap below their
 // smallest value.
-[Node("World/Fields/Decrement Field", Capability.WorldWrite)]
+[Node("World/Fields/Decrement Field", Capability.WorldWrite, Description = "Takes one from a number field and writes it back, like Increment Field.",
+    Keywords = "minus one, subtract one, count down")]
 public sealed class DecrementField<T> : ActionNode where T : struct, INumber<T>
 {
     [return: Port("value")]
@@ -21,7 +22,7 @@ public sealed class DecrementField<T> : ActionNode where T : struct, INumber<T>
             return default;
         }
         var next = unchecked(field.Value - T.One);
-        ScriptWrites.Write(ctx, field, next);
+        ScriptWrites.Set(ctx, field, next);
         written = true;
         return next;
     }

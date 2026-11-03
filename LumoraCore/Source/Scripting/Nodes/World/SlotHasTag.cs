@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 
 // Whether the slot's tag is exactly this text, case included. An empty tag asks whether it has none. False
 // for a slot the script cannot see.
-[Node("World/Slots/Has Tag", Capability.WorldRead)]
+[Node("World/Slots/Properties/Has Tag", Capability.WorldRead, Description = "Whether the slot's tag is exactly this text, case included.")]
 public sealed class SlotHasTag : ReadNode
 {
     [return: Port("has")]

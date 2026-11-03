@@ -17,11 +17,12 @@ namespace Lumora.Core.Scripting;
 // casts counts against the script's rays for the frame: one per thing struck and one more to find the
 // end, or one in all for people. Every flow step that reads it casts again, so a graph that walks the
 // hits keeps the lists in stored values first.
-[Node("Physics/Raycast All", Capability.Physics)]
+[Node("Physics/Queries/Raycast All", Capability.Physics, Description = "Every collider along a ray from origin, no further than range metres, nearest first: the slots struck, the points, the surface normals there and how far along each is, as lists that line up.",
+    Keywords = "all hits, pierce, every hit")]
 public sealed class CastRayAll : ReadNode
 {
     [return: Port("count")]
-    public static int Run(ScriptContext ctx, float3 origin, float3 direction, out ScriptList<Slot> hits, out ScriptList<float3> points,
+    public static int Run(ScriptContext ctx, float3 origin, [Default(0, 0, 1)] float3 direction, out ScriptList<Slot> hits, out ScriptList<float3> points,
         out ScriptList<float3> normals, out ScriptList<float> distances, float range = 10f, bool triggers = false, bool usersOnly = false,
         Slot? ignore = null, Slot? root = null)
     {

@@ -6,8 +6,10 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// Pushes the slot's rigid body for this step, in newtons, world space.
-[Node("Physics/Add Force", Capability.Physics)]
+// Pushes the rigid body the slot is part of, its own or the nearest above it, for this step, in newtons,
+// world space.
+[Node("Physics/Forces/Add Force", Capability.Physics, Description = "Pushes the rigid body the slot is part of for this step, in newtons, world space.",
+    Keywords = "push, thrust, physics force, propel")]
 public sealed class AddForce : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot, float3 force)

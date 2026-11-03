@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // world script copies world content, beside the original. A guest's script copies the world's things or
 // its author's, as the author's own: beside the original where that is theirs to put things, else in the
 // same place under the world root.
-[Node("World/Slots/Duplicate", Capability.WorldStructure)]
+[Node("World/Slots/Duplicate", Capability.WorldStructure, Description = "A copy of a slot and everything under it, holding no script, within the script's share of slots.",
+    Keywords = "clone, copy, spawn")]
 public sealed class DuplicateSlot : ActionNode
 {
     [return: Port("copy")]

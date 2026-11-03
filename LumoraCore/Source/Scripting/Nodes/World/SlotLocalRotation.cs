@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // In the parent's space.
-[Node("World/Slots/Local Rotation", Capability.WorldRead)]
+[Node("Transform/Local/Local Rotation", Capability.WorldRead, Description = "Reads a slot's rotation relative to its parent.")]
 public sealed class SlotLocalRotation : ReadNode
 {
     [return: Port("rotation")]

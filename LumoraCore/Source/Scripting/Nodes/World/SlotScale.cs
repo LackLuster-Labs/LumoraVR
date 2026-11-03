@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // World space: each axis times every parent's.
-[Node("World/Slots/Scale", Capability.WorldRead)]
+[Node("Transform/Global/Scale", Capability.WorldRead, Description = "Reads a slot's world-space scale.")]
 public sealed class SlotScale : ReadNode
 {
     [return: Port("scale")]

@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 
 // The slot of the tool a person has equipped in one hand, and whether they have one there. A side of None
 // looks in the right hand first, then the left. A tool only held in the hand, not equipped, is not one.
-[Node("World/Interaction/Tool In Hand", Capability.UsersRead)]
+[Node("Interaction/Tools/Tool In Hand", Capability.UsersRead, Description = "The slot of the tool a person has equipped in one hand, and whether they have one there.")]
 public sealed class ToolInHand : ReadNode
 {
     [return: Port("tool")]

@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 // Saved: whether the world keeps the slot when it saves, which takes its own persistent flag and every
 // parent's, and never holds for a slot that exists on one machine only. Self: its own flag alone. Both
 // false for a slot the script cannot see.
-[Node("World/Slots/Persistent", Capability.WorldRead)]
+[Node("World/Slots/Properties/Persistent", Capability.WorldRead, Description = "Saved: whether the world keeps the slot when it saves, which takes its own persistent flag and every parent's, and never holds for a slot that exists on one machine only.")]
 public sealed class SlotPersistent : ReadNode
 {
     [return: Port("saved")]

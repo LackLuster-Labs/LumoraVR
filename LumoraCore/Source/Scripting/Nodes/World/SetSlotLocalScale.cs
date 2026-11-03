@@ -8,12 +8,12 @@ namespace Lumora.Core.Scripting;
 
 // Relative to the parent's scale. A zero axis, or one that is not a finite number, is a fault, not a
 // write.
-[Node("World/Slots/Set Local Scale", Capability.WorldWrite)]
+[Node("Transform/Local/Set Local Scale", Capability.WorldWrite, Description = "Changes a slot's scale relative to its parent's scale.")]
 public sealed class SetSlotLocalScale : ActionNode
 {
-    public static void Run(ScriptContext ctx, Slot? slot, float3 scale)
+    public static void Run(ScriptContext ctx, Slot? slot, [Default(1)] float3 scale)
     {
         if (ScriptReads.Reached(ctx, slot))
-            ScriptWrites.Write(ctx, slot!.LocalScale, ScriptWrites.Scale(scale));
+            ScriptWrites.Set(ctx, slot!.LocalScale, ScriptWrites.Scale(scale));
     }
 }

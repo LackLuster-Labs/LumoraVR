@@ -10,7 +10,7 @@ namespace Lumora.Core.Scripting;
 // the priority that wins when a hand reaches several, whether a held one may be resized, whether a drop
 // target may take it when it is let go, whether someone may take it out of another person's hand, and
 // whether only a hand reaching it, never a beam, may pick it up. All false and zero with no grabbable.
-[Node("World/Interaction/Grab Settings", Capability.WorldRead)]
+[Node("Interaction/Grabbing/Grab Settings", Capability.WorldRead, Description = "Reads an object's grab options, including priority, scaling, remote grabbing and whether it can be taken from another hand.")]
 public sealed class GrabSettings : ReadNode
 {
     [return: Port("grabbable")]

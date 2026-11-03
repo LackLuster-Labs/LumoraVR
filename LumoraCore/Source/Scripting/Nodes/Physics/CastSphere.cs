@@ -13,11 +13,12 @@ namespace Lumora.Core.Scripting;
 // bodies the searches find them by, and nothing else stops it; the slot it gives is the person's user
 // root. Ignore leaves out a slot and everything under it: the ball sweeps on past it, at most eight
 // sweeps, and each after the first counts as a ray.
-[Node("Physics/Sphere Cast", Capability.Physics)]
+[Node("Physics/Queries/Sphere Cast", Capability.Physics, Description = "Sweeps a ball of radius metres from origin along direction, no further than range, and gives the first collider it would touch.",
+    Keywords = "sweep, thick ray, ball cast")]
 public sealed class CastSphere : ReadNode
 {
     [return: Port("hit")]
-    public static bool Run(ScriptContext ctx, float3 origin, float3 direction, out Slot? slot, out float3 point, out float3 normal,
+    public static bool Run(ScriptContext ctx, float3 origin, [Default(0, 0, 1)] float3 direction, out Slot? slot, out float3 point, out float3 normal,
         out float distance, float radius = 0.25f, float range = 10f, bool triggers = false, bool usersOnly = false, Slot? ignore = null)
     {
         if (!ScriptPhysics.CanCast(origin, direction, range) || !float.IsFinite(radius) || radius <= 0f)

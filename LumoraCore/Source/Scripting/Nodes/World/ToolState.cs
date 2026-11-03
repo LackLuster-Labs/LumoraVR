@@ -11,7 +11,7 @@ namespace Lumora.Core.Scripting;
 // whether it is being used this moment. How a hand uses its tool is only known where the person is, so
 // in use arrives from their machine a moment late everywhere else. Nothing but false, nobody and None
 // for a slot with no tool or a tool nobody has equipped.
-[Node("World/Interaction/Tool State", Capability.UsersRead)]
+[Node("Interaction/Tools/Tool State", Capability.UsersRead, Description = "Whether the tool on the slot is equipped, and if so whose, in which hand, the hand rig's slot, and whether it is being used this moment.")]
 public sealed class ToolState : ReadNode
 {
     [return: Port("equipped")]

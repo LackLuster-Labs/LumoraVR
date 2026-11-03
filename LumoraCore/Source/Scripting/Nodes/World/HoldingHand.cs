@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 
 // Whose hand holds the slot's grabbable, its own or the nearest one above it, and which hand: nobody and
 // None when it is not held. Something held by a grabber that is not a hand gives its holder and None.
-[Node("World/Interaction/Holding Hand", Capability.UsersRead)]
+[Node("Interaction/Grabbing/Holding Hand", Capability.UsersRead, Description = "Whose hand holds the slot's grabbable, its own or the nearest one above it, and which hand: nobody and None when it is not held.")]
 public sealed class HoldingHand : ReadNode
 {
     [return: Port("user")]

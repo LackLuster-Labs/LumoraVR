@@ -7,7 +7,8 @@ namespace Lumora.Core.Scripting;
 
 // Who may join the session, as the Session settings name it: private, the local network, contacts,
 // members of a group, signed in people or anyone.
-[Node("World/Session/Who Can Join", Capability.WorldRead)]
+[Node("World/Session/Who Can Join", Capability.WorldRead, Description = "Who may join the session, as the Session settings name it: private, the local network, contacts, members of a group, signed in people or anyone.",
+    Keywords = "access level, privacy, visibility, public, private")]
 public sealed class JoinAccess : ReadNode
 {
     [return: Port("access")]

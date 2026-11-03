@@ -10,7 +10,9 @@ namespace Lumora.Core.Scripting;
 // Object Root, or a Grabbable as well unless only explicit is set, the way tools pick up a whole prop by
 // any piece of it. The world root never counts. The slot itself when nothing above it does, and nothing
 // for a slot the script cannot see.
-[Node("World/Slots/Object Root", Capability.WorldRead)]
+[Node("World/Slots/Hierarchy/Object Root", Capability.WorldRead, Description = "Finds the root of the whole object containing this slot, using an Object Root marker or a grabbable parent.",
+    Keywords = "root of object, prop root, top of item")]
+[Evaluates(Evaluation.Tree)]
 public sealed class SlotObjectRoot : ReadNode
 {
     [return: Port("root")]

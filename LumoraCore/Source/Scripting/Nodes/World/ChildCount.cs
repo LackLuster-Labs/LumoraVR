@@ -5,7 +5,8 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("World/Slots/Child Count", Capability.WorldRead)]
+[Node("World/Slots/Hierarchy/Child Count", Capability.WorldRead, Description = "Returns how many direct children a slot has.")]
+[Evaluates(Evaluation.Tree)]
 public sealed class ChildCount : ReadNode
 {
     [return: Port("count")]

@@ -9,7 +9,7 @@ namespace Lumora.Core.Scripting;
 // Carries a box from one slot's space into another's: the box around its eight corners carried through,
 // so a turn between the spaces makes it grow. An empty box stays empty. From and to work as they do on
 // Convert Point.
-[Node("World/Spaces/Convert Bounds", Capability.WorldRead)]
+[Node("Transform/Conversion/Convert Bounds", Capability.WorldRead, Description = "Carries a box from one slot's space into another's: the box around its eight corners carried through, so a turn between the spaces makes it grow.")]
 public sealed class ConvertBounds : ReadNode
 {
     [return: Port("converted")]

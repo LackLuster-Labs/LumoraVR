@@ -6,7 +6,9 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // The slot everything in the world hangs from.
-[Node("World/Slots/World Root", Capability.WorldRead)]
+[Node("World/Slots/Hierarchy/World Root", Capability.WorldRead, Description = "The slot everything in the world hangs from.",
+    Keywords = "scene root, top of world")]
+[Evaluates(Evaluation.Tree)]
 public sealed class WorldRootSlot : ReadNode
 {
     [return: Port("root")]

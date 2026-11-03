@@ -12,7 +12,7 @@ namespace Lumora.Core.Scripting;
 // that would let that hand: grabbing allowed, not driven, not worn, and not already held unless it may be
 // taken, and never out of that person's own other hand. A side of None asks about either hand. It says
 // what the object allows; it does not reach for it.
-[Node("World/Interaction/Can Grab", Capability.UsersRead)]
+[Node("Interaction/Grabbing/Can Grab", Capability.UsersRead, Description = "Checks whether the specified user's hand is currently allowed to grab the object.")]
 public sealed class HandCanGrab : ReadNode
 {
     [return: Port("can")]

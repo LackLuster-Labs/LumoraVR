@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The matrix that carries the slot's local space into world space: every parent's local matrix times the
 // next, down to this slot's own. A slot the script cannot see reads as the identity.
-[Node("World/Slots/World Matrix", Capability.WorldRead)]
+[Node("Transform/Matrices/World Matrix", Capability.WorldRead, Description = "The matrix that carries the slot's local space into world space: every parent's local matrix times the next, down to this slot's own.",
+    Keywords = "transform matrix, local to world, model matrix")]
 public sealed class SlotWorldMatrix : ReadNode
 {
     [return: Port("matrix")]

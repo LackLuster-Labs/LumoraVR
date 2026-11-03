@@ -10,7 +10,8 @@ namespace Lumora.Core.Scripting;
 // field is bound or arrives on a wire. value is what was written; written is false when there was no field
 // or the write was refused, which is counted. Whole numbers wrap past their largest value the way they do in
 // math nodes.
-[Node("World/Fields/Increment Field", Capability.WorldWrite)]
+[Node("World/Fields/Increment Field", Capability.WorldWrite, Description = "Adds one to a number field and reports whether the change was allowed and written.",
+    Keywords = "add one, plus one, counter, count up")]
 public sealed class IncrementField<T> : ActionNode where T : struct, INumber<T>
 {
     [return: Port("value")]
@@ -23,7 +24,7 @@ public sealed class IncrementField<T> : ActionNode where T : struct, INumber<T>
             return default;
         }
         var next = unchecked(field.Value + T.One);
-        ScriptWrites.Write(ctx, field, next);
+        ScriptWrites.Set(ctx, field, next);
         written = true;
         return next;
     }

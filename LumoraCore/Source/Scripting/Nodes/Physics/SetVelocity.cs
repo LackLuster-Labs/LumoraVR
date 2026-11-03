@@ -6,8 +6,10 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// How the slot's rigid body is moving, in metres and radians a second, world space.
-[Node("Physics/Set Velocity", Capability.Physics)]
+// How the rigid body the slot is part of, its own or the nearest above it, is moving, in metres and radians
+// a second, world space.
+[Node("Physics/Forces/Set Velocity", Capability.Physics, Description = "Sets how the rigid body the slot is part of is moving, in metres and radians a second, world space.",
+    Keywords = "speed, physics velocity, launch, stop moving")]
 public sealed class SetVelocity : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot, float3 linear, float3 angular)

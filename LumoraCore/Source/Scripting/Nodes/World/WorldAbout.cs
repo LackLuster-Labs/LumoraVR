@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // The world's description from its settings; empty when it has none.
-[Node("World/Session/Description", Capability.WorldRead)]
+[Node("World/Session/Description", Capability.WorldRead, Description = "The world's description from its settings; empty when it has none.")]
 public sealed class WorldAbout : ReadNode
 {
     [return: Port("description")]

@@ -7,7 +7,8 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // World space.
-[Node("World/Slots/Rotation", Capability.WorldRead)]
+[Node("Transform/Global/Rotation", Capability.WorldRead, Description = "Reads a slot's world-space rotation.",
+    Keywords = "orientation, world rotation, get rotation, quaternion")]
 public sealed class SlotRotation : ReadNode
 {
     [return: Port("rotation")]

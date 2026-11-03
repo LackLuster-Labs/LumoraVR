@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 // Where a slot stands in its parent's child list, 0 for the first, the order Child, Children and For Each
 // read. -1 for the world root, for a slot the script cannot see, and for a slot kept on this machine alone
 // directly under a shared one, which that list does not hold.
-[Node("World/Slots/Child Index", Capability.WorldRead)]
+[Node("World/Slots/Hierarchy/Child Index", Capability.WorldRead, Description = "Returns a slot's position in its parent's child list, starting at zero.")]
+[Evaluates(Evaluation.Tree)]
 public sealed class SlotChildIndex : ReadNode
 {
     [return: Port("index")]

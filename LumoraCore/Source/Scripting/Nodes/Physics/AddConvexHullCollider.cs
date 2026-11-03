@@ -11,7 +11,8 @@ namespace Lumora.Core.Scripting;
 // can carry. mesh is a mesh or a renderer, whose mesh is taken; left empty, the renderer on slot is. A hull
 // collider already on slot for the same mesh is handed back instead of a second. The hull is worked out once the
 // mesh has loaded, the same on every machine. Only where the script may already change things, as Attach Mesh.
-[Node("Physics/Add Convex Hull Collider", Capability.WorldStructure)]
+[Node("Physics/Add Convex Hull Collider", Capability.WorldStructure, Description = "A solid collider shaped as the convex hull of a mesh, on slot: cheap to collide with, and a shape a rigid body can carry. mesh is a mesh or a renderer, whose mesh is taken; left empty, the renderer on slot is.",
+    Keywords = "collider from mesh, add collision, physics shape")]
 public sealed class AddConvexHullCollider : ActionNode
 {
     [return: Port("collider")]

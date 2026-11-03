@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 
 // The slot's local position, rotation and scale as one matrix, placing it in its parent's space. A slot
 // the script cannot see reads as the identity.
-[Node("World/Slots/Local Matrix", Capability.WorldRead)]
+[Node("Transform/Matrices/Local Matrix", Capability.WorldRead, Description = "The slot's local position, rotation and scale as one matrix, placing it in its parent's space.")]
 public sealed class SlotLocalMatrix : ReadNode
 {
     [return: Port("matrix")]

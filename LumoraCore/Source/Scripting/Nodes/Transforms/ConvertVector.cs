@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // Carries an offset from one slot's space into another's, turned and scaled but not moved, so its length
 // changes with the scale. From and to work as they do on Convert Point.
-[Node("World/Spaces/Convert Vector", Capability.WorldRead)]
+[Node("Transform/Conversion/Convert Vector", Capability.WorldRead, Description = "Carries an offset from one slot's space into another's, turned and scaled but not moved, so its length changes with the scale.",
+    Keywords = "local to global, global to local, offset to world")]
 public sealed class ConvertVector : ReadNode
 {
     [return: Port("converted")]

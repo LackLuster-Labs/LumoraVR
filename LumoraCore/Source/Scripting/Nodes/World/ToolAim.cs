@@ -13,7 +13,7 @@ namespace Lumora.Core.Scripting;
 // than range metres, triggers only when asked, passing over the tool itself and the body of whoever holds
 // it. It is worked out from where the tool is on this machine, which for someone else's tool is where it was
 // when its pose last arrived, not the beam their machine draws. It counts as one of the script's rays.
-[Node("World/Interaction/Tool Aim", Capability.Physics)]
+[Node("Interaction/Tools/Tool Aim", Capability.Physics, Description = "Casts a ray from a tool's tip and reports the object and point it is aimed at.")]
 public sealed class ToolAim : ReadNode
 {
     [return: Port("hit")]
@@ -30,7 +30,7 @@ public sealed class ToolAim : ReadNode
         var ignoring = new List<Slot>(2) { slot };
         if (slot.ActiveUserRoot?.Slot is { IsDestroyed: false } body)
             ignoring.Add(body);
-        bool hit = ctx.World.Physics.Raycast(origin, along.Normalized, range, ignoring, out PhysicsRaycastHit found, triggers);
+        bool hit = ScriptPhysics.StrikeFirst(ctx, origin, along.Normalized, range, triggers, ignoring, out PhysicsRaycastHit found);
         return ScriptPhysics.Report(ctx, hit, found, out struck, out point, out normal, out distance);
     }
 }

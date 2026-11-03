@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Relative to the parent's scale.
-[Node("World/Slots/Local Scale", Capability.WorldRead)]
+[Node("Transform/Local/Local Scale", Capability.WorldRead, Description = "Reads a slot's scale relative to its parent's scale.")]
 public sealed class SlotLocalScale : ReadNode
 {
     [return: Port("scale")]

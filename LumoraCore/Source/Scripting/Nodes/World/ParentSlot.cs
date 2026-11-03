@@ -5,7 +5,9 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-[Node("World/Slots/Parent", Capability.WorldRead)]
+[Node("World/Slots/Hierarchy/Parent", Capability.WorldRead, Description = "Returns the slot directly above this slot in the hierarchy.",
+    Keywords = "get parent, parent slot, up one level")]
+[Evaluates(Evaluation.Tree)]
 public sealed class ParentSlot : ReadNode
 {
     [return: Port("parent")]

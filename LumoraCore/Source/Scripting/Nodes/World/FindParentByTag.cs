@@ -8,7 +8,8 @@ namespace Lumora.Core.Scripting;
 
 // The nearest slot above slot whose tag is exactly this text, case included, its parent first. Max depth
 // stops the search that many levels up, 1 for the parent only, 0 for no limit. An empty tag finds nothing.
-[Node("World/Slots/Find Parent By Tag", Capability.WorldRead)]
+[Node("World/Slots/Searching/Find Parent By Tag", Capability.WorldRead, Description = "The nearest slot above slot whose tag is exactly this text, case included, its parent first.")]
+[Evaluates(Evaluation.Tree)]
 public sealed class FindParentByTag : ReadNode
 {
     [return: Port("parent")]

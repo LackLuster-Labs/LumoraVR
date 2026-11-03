@@ -8,10 +8,11 @@ namespace Lumora.Core.Scripting;
 
 // Carries a rotation from one slot's space into another's: the same turn, as the other slot sees it. From
 // and to work as they do on Convert Point.
-[Node("World/Spaces/Convert Rotation", Capability.WorldRead)]
+[Node("Transform/Conversion/Convert Rotation", Capability.WorldRead, Description = "Carries a rotation from one slot's space into another's: the same turn, as the other slot sees it.",
+    Keywords = "local to global, global to local, rotation to world, rotation to local")]
 public sealed class ConvertRotation : ReadNode
 {
     [return: Port("converted")]
-    public static floatQ Run(ScriptContext ctx, Slot? from, Slot? to, floatQ rotation)
+    public static floatQ Run(ScriptContext ctx, Slot? from, Slot? to, [Default(0, 0, 0, 1)] floatQ rotation)
         => ScriptSpaces.Rotation(ScriptSpaces.Space(ctx, from), ScriptSpaces.Space(ctx, to), rotation);
 }

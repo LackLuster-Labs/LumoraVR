@@ -6,8 +6,10 @@ using Lumora.Script;
 
 namespace Lumora.Core.Scripting;
 
-// Twists the slot's rigid body for this step, in newton metres, world space.
-[Node("Physics/Add Torque", Capability.Physics)]
+// Twists the rigid body the slot is part of, its own or the nearest above it, for this step, in newton
+// metres, world space.
+[Node("Physics/Forces/Add Torque", Capability.Physics, Description = "Twists the rigid body the slot is part of for this step, in newton metres, world space.",
+    Keywords = "spin, twist, rotate physics")]
 public sealed class AddTorque : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot, float3 torque)

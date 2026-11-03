@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // Judged by the gate like the author's own edit. Never the world root, a protected slot, or anything in
 // someone's body or hands.
-[Node("World/Slots/Set Order Offset", Capability.WorldWrite)]
+[Node("World/Slots/Properties/Set Order Offset", Capability.WorldWrite, Description = "Changes a slot's sorting offset among its siblings.")]
 public sealed class SetSlotOrderOffset : ActionNode
 {
     public static void Run(ScriptContext ctx, Slot? slot, long offset)

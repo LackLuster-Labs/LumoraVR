@@ -12,7 +12,8 @@ namespace Lumora.Core.Scripting;
 // while it is false, which then gives the field back to whatever writes it. With heard bound to a field it
 // holds: every other write is refused, the value tried goes into heard and heardCount counts the tries, on
 // the machine that tried, so a script anywhere can hear them. -xlinka
-[Node("World/Fields/Drive Field", Capability.WorldWrite)]
+[Node("World/Fields/Drive Field", Capability.WorldWrite, Description = "Holds a field at value while the script runs.",
+    Keywords = "bind, link, hold value, copy value, keep set, override")]
 public sealed class DriveField<T> : DriveNode
 {
     public override void Build(FlowBuilder f)

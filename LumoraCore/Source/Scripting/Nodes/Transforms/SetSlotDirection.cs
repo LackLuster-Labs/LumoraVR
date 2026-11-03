@@ -11,10 +11,11 @@ namespace Lumora.Core.Scripting;
 // near to where it pointed as they can, the other four keep its forward; when the kept axis lies along the
 // direction, the third axis is kept instead. Written as its local rotation like any other turn. A zero
 // direction changes nothing and fails, and one that is not a finite number is a fault, not a write.
-[Node("World/Slots/Set Direction", Capability.WorldWrite)]
+[Node("Transform/Directions/Set Direction", Capability.WorldWrite, Description = "Turns a slot so one of its own axes points along a world direction.",
+    Keywords = "face direction, aim, point along, aim axis")]
 public sealed class SetSlotDirection : ActionNode
 {
-    public static void Run(ScriptContext ctx, Slot? slot, SlotAxis axis, float3 direction)
+    public static void Run(ScriptContext ctx, Slot? slot, SlotAxis axis, [Default(0, 0, 1)] float3 direction)
     {
         if (!ScriptReads.Reached(ctx, slot))
             return;
@@ -28,6 +29,6 @@ public sealed class SetSlotDirection : ActionNode
         var scaled = direction / largest;
         var rotation = ScriptSpaces.Aimed(slot!.GlobalRotation, axis, scaled / scaled.Length);
         var parent = slot.Parent;
-        ScriptWrites.Write(ctx, slot.LocalRotation, ScriptWrites.Unit(parent == null ? rotation : parent.GlobalRotation.Inverse * rotation));
+        ScriptWrites.Set(ctx, slot.LocalRotation, ScriptWrites.Unit(parent == null ? rotation : parent.GlobalRotation.Inverse * rotation));
     }
 }

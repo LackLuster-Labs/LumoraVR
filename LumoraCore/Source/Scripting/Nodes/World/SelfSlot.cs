@@ -6,7 +6,9 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // The slot the script's host sits on.
-[Node("World/Slots/Self", Capability.WorldRead)]
+[Node("World/Slots/Hierarchy/Self", Capability.WorldRead, Description = "The slot the script's host sits on.",
+    Keywords = "this slot, my slot, own slot, this object, me")]
+[Evaluates(Evaluation.Tree)]
 public sealed class SelfSlot : ReadNode
 {
     [return: Port("slot")]

@@ -9,7 +9,8 @@ namespace Lumora.Core.Scripting;
 // The nearest slot above slot with exactly this name, its parent first. Partial takes any name holding it,
 // ignore case takes either case, and max depth stops the search that many levels up, 1 for the parent
 // only, 0 for no limit. An empty name finds nothing.
-[Node("World/Slots/Find Parent", Capability.WorldRead)]
+[Node("World/Slots/Searching/Find Parent", Capability.WorldRead, Description = "The nearest slot above slot with exactly this name, its parent first.")]
+[Evaluates(Evaluation.Tree)]
 public sealed class FindParent : ReadNode
 {
     [return: Port("parent")]

@@ -11,7 +11,8 @@ namespace Lumora.Core.Scripting;
 
 // The slots of the grabbables a person holds in one hand, or in either with a side of None. Read from
 // who each grabbable says holds it, so it is the same on every machine. An equipped tool is not held.
-[Node("World/Interaction/Held In Hand", Capability.UsersRead)]
+[Node("Interaction/Grabbing/Held In Hand", Capability.UsersRead, Description = "The slots of the grabbables a person holds in one hand, or in either with a side of None.",
+    Keywords = "what is held, grabbed objects")]
 public sealed class HeldInHand : ReadNode
 {
     [return: Port("held")]

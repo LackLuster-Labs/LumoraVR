@@ -11,10 +11,10 @@ namespace Lumora.Core.Scripting;
 // All three are checked before any is written, so a refusal changes nothing. A matrix with shear or a
 // projective bottom row is placed by the parts Decompose reads from it. One that flattens an axis, or
 // holds a number that is not finite, is a fault, not a write.
-[Node("World/Slots/Set Local Matrix", Capability.WorldWrite)]
+[Node("Transform/Matrices/Set Local Matrix", Capability.WorldWrite, Description = "Places a slot in its parent's space by a matrix, decomposed into the position, rotation and scale it writes, each judged exactly as Set Local Position, Set Local Rotation and Set Local Scale judge a write.")]
 public sealed class SetSlotLocalMatrix : ActionNode
 {
-    public static void Run(ScriptContext ctx, Slot? slot, float4x4 matrix)
+    public static void Run(ScriptContext ctx, Slot? slot, [Default(1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1)] float4x4 matrix)
     {
         if (!ScriptReads.Reached(ctx, slot))
             return;

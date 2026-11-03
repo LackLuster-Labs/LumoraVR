@@ -18,7 +18,8 @@ namespace Lumora.Core.Scripting;
 // bones is not what this reads. The search looks at every triangle, so it costs what the mesh is. found is
 // false, and the rest zero, for a slot with no readable mesh; uv is zero on a mesh with no texture
 // coordinates.
-[Node("Physics/Hit Mesh Point", Capability.Physics)]
+[Node("Physics/Queries/Hit Mesh Point", Capability.Physics, Description = "Finds the mesh triangle nearest a world position and returns its material part and texture coordinates.",
+    Keywords = "uv at hit, triangle index, texture coordinate, hit uv")]
 public sealed class HitMeshPoint : ReadNode
 {
     [return: Port("found")]

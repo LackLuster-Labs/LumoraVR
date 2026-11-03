@@ -7,7 +7,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // In the parent's space.
-[Node("World/Slots/Local Position", Capability.WorldRead)]
+[Node("Transform/Local/Local Position", Capability.WorldRead, Description = "Reads a slot's position relative to its parent.")]
 public sealed class SlotLocalPosition : ReadNode
 {
     [return: Port("position")]

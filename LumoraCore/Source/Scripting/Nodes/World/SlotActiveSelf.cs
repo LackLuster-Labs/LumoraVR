@@ -7,7 +7,7 @@ namespace Lumora.Core.Scripting;
 
 // The slot's own active flag, whatever its parents' are; Is Active reads the whole chain. False for a slot
 // the script cannot see.
-[Node("World/Slots/Active Self", Capability.WorldRead)]
+[Node("World/Slots/Properties/Active Self", Capability.WorldRead, Description = "The slot's own active flag, whatever its parents' are; Is Active reads the whole chain.")]
 public sealed class SlotActiveSelf : ReadNode
 {
     [return: Port("active")]

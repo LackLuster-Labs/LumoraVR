@@ -6,7 +6,7 @@ using Lumora.Script;
 namespace Lumora.Core.Scripting;
 
 // Whether the session keeps itself out of session lists.
-[Node("World/Session/Hidden From Lists", Capability.WorldRead)]
+[Node("World/Session/Hidden From Lists", Capability.WorldRead, Description = "Whether the session keeps itself out of session lists.")]
 public sealed class SessionUnlisted : ReadNode
 {
     [return: Port("hidden")]

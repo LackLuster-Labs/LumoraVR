@@ -8,7 +8,7 @@ namespace Lumora.Core.Scripting;
 
 // Whether people who sit idle get sent out of the session, and after how long: whole minutes as the
 // settings keep it, and the same as a time span. A negative setting reads as zero.
-[Node("World/Session/Idle Kick", Capability.WorldRead)]
+[Node("World/Session/Idle Kick", Capability.WorldRead, Description = "Whether people who sit idle get sent out of the session, and after how long: whole minutes as the settings keep it, and the same as a time span.")]
 public sealed class IdleKick : ReadNode
 {
     [return: Port("enabled")]
