@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dhdd0aghjqvwh"
+path="res://.godot/imported/FluidSortCell.glsl-a86b87206d267c9efa1093821623f789.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSortCell.glsl"
+dest_files=["res://.godot/imported/FluidSortCell.glsl-a86b87206d267c9efa1093821623f789.res"]
+
+[params]
+

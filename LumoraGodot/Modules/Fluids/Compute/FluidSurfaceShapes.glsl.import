@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dtq4sekehyocj"
+path="res://.godot/imported/FluidSurfaceShapes.glsl-6b73855ae3fb2199cdec8ed3e505f8fb.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSurfaceShapes.glsl"
+dest_files=["res://.godot/imported/FluidSurfaceShapes.glsl-6b73855ae3fb2199cdec8ed3e505f8fb.res"]
+
+[params]
+

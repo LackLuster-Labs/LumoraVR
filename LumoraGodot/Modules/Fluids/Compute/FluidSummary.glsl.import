@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://0ougfsdoilan"
+path="res://.godot/imported/FluidSummary.glsl-0568057b2dad7b7da7a11d36275d6f79.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSummary.glsl"
+dest_files=["res://.godot/imported/FluidSummary.glsl-0568057b2dad7b7da7a11d36275d6f79.res"]
+
+[params]
+

@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://c28v6lgb1r382"
+path="res://.godot/imported/FluidReseed.glsl-eb77201e544035dad6e20a3ecefbdcb7.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidReseed.glsl"
+dest_files=["res://.godot/imported/FluidReseed.glsl-eb77201e544035dad6e20a3ecefbdcb7.res"]
+
+[params]
+

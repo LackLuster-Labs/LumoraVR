@@ -1,0 +1,244 @@
+// Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
+// Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
+
+// Reading one brick's field slot, for the nets and the smoothing pass. Include after the kernel has declared
+// its params, field, bricks, brick chunks and mesh buffers, and set fieldBase to the slot's first int. Positions
+// here are in fine cells from the brick's node 0. -xlinka
+
+#ifndef FLUID_SURFACE_FIELD_GLSLI
+#define FLUID_SURFACE_FIELD_GLSLI
+
+uint fieldBase;
+
+float fieldNode(ivec3 n)
+{
+    return float(field[fieldBase + fluidFieldNode(n)]) / sp.fieldScale;
+}
+
+// Central differences at a node -1..8.
+vec3 fieldGradientAt(ivec3 n)
+{
+    return 0.5 * vec3(
+        fieldNode(n + ivec3(1, 0, 0)) - fieldNode(n - ivec3(1, 0, 0)),
+        fieldNode(n + ivec3(0, 1, 0)) - fieldNode(n - ivec3(0, 1, 0)),
+        fieldNode(n + ivec3(0, 0, 1)) - fieldNode(n - ivec3(0, 0, 1)));
+}
+
+float fieldSample(vec3 p)
+{
+    p = clamp(p, vec3(-2.0), vec3(9.0 - 1e-4));
+    ivec3 i = ivec3(floor(p));
+    vec3 f = p - vec3(i);
+    float c000 = fieldNode(i);
+    float c100 = fieldNode(i + ivec3(1, 0, 0));
+    float c010 = fieldNode(i + ivec3(0, 1, 0));
+    float c110 = fieldNode(i + ivec3(1, 1, 0));
+    float c001 = fieldNode(i + ivec3(0, 0, 1));
+    float c101 = fieldNode(i + ivec3(1, 0, 1));
+    float c011 = fieldNode(i + ivec3(0, 1, 1));
+    float c111 = fieldNode(i + ivec3(1, 1, 1));
+    return mix(mix(mix(c000, c100, f.x), mix(c010, c110, f.x), f.y), mix(mix(c001, c101, f.x), mix(c011, c111, f.x), f.y), f.z);
+}
+
+// The gradient at a point, blended from the central differences at the eight corners around it.
+vec3 fieldGradient(vec3 p)
+{
+    p = clamp(p, vec3(-1.0), vec3(8.0 - 1e-4));
+    ivec3 i = ivec3(floor(p));
+    vec3 f = p - vec3(i);
+    vec3 g = vec3(0.0);
+    for (int k = 0; k < 8; k++)
+    {
+        ivec3 o = ivec3(k & 1, (k >> 1) & 1, k >> 2);
+        vec3 w3 = mix(vec3(1.0) - f, f, vec3(o));
+        g += (w3.x * w3.y * w3.z) * fieldGradientAt(i + o);
+    }
+    return g;
+}
+
+// The gradient of the trilinear field inside one coarse cell (corners 2 fine cells apart), for the 2x extraction.
+vec3 fieldGradientCoarse(ivec3 cell, vec3 p)
+{
+    vec3 f = clamp(p * 0.5 - vec3(cell), vec3(0.0), vec3(1.0));
+    float c[8];
+    for (int k = 0; k < 8; k++)
+        c[k] = fieldNode((cell + ivec3(k & 1, (k >> 1) & 1, k >> 2)) * 2);
+    float gx = mix(mix(c[1] - c[0], c[3] - c[2], f.y), mix(c[5] - c[4], c[7] - c[6], f.y), f.z);
+    float gy = mix(mix(c[2] - c[0], c[3] - c[1], f.x), mix(c[6] - c[4], c[7] - c[5], f.x), f.z);
+    float gz = mix(mix(c[4] - c[0], c[5] - c[1], f.x), mix(c[6] - c[2], c[7] - c[3], f.x), f.y);
+    return vec3(gx, gy, gz);
+}
+
+// The attributes at a point: weight, then tint, speed, wetness and strandness as weighted sums.
+void fieldAttributes(vec3 p, out vec3 tint, out float speed, out float wetness, out float strand)
+{
+    vec3 a = clamp((p + 2.0) * 0.5, vec3(0.0), vec3(float(FLUID_ATTR_DIM - 1)));
+    ivec3 i = min(ivec3(floor(a)), ivec3(FLUID_ATTR_DIM - 2));
+    vec3 f = a - vec3(i);
+    float sum[7];
+    for (int c = 0; c < 7; c++) sum[c] = 0.0;
+    for (int k = 0; k < 8; k++)
+    {
+        ivec3 o = ivec3(k & 1, (k >> 1) & 1, k >> 2);
+        vec3 w3 = mix(vec3(1.0) - f, f, vec3(o));
+        float w = w3.x * w3.y * w3.z;
+        uint at = fieldBase + fluidAttrNode(i + o);
+        for (int c = 0; c < 7; c++)
+            sum[c] += w * float(field[at + uint(c)]);
+    }
+    if (sum[0] <= 1e-3 * sp.fieldScale)
+    {
+        tint = vec3(1.0);
+        speed = 0.0;
+        wetness = 1.0;
+        strand = 0.0;
+        return;
+    }
+    float inv = 1.0 / sum[0];
+    tint = clamp(vec3(sum[1], sum[2], sum[3]) * inv, vec3(0.0), vec3(1.0));
+    speed = sum[4] * inv;
+    wetness = clamp(sum[5] * inv, 0.0, 1.0);
+    strand = clamp(sum[6] * inv, 0.0, 1.0);
+}
+
+// How deep the fluid goes under a surface point, in metres, from a short march along the inward normal: a drop, a
+// stream or a film comes out at its own thickness. A march that stays in the brick's field and finds no bottom
+// within 4 steps writes FLUID_SURF_DEEP: the fluid is deep there, and a liquid reads its depth from the scene
+// behind instead. Leaving the field also means unknown depth; a brick boundary is not the liquid's bottom.
+// Shaders decode the marker before interpolation and bound the fallback when the scene is far away. -xlinka
+#define FLUID_SURF_DEEP 1.0
+float fieldThickness(vec3 p, vec3 outward, float stepCells, int steps)
+{
+    for (int j = 1; j <= steps; j++)
+    {
+        vec3 q = p - outward * (float(j) * stepCells);
+        if (any(lessThan(q, vec3(-2.0))) || any(greaterThan(q, vec3(9.0))))
+            return FLUID_SURF_DEEP;
+        if (fieldSample(q) < sp.iso)
+            return (float(j) - 0.5) * stepCells * sp.cellSize;
+    }
+    return FLUID_SURF_DEEP;
+}
+
+// Read the sampled-to-physical map in cell units. Constant-plane patches reproduce an affine map. -xlinka
+vec3 fieldDisplacement(vec3 p)
+{
+    vec3 a = clamp((p + 2.0) * 0.5, vec3(0.0), vec3(float(FLUID_ATTR_DIM - 1)));
+    ivec3 i = min(ivec3(floor(a)), ivec3(FLUID_ATTR_DIM - 2));
+    vec3 f = a - vec3(i);
+    vec3 value = vec3(0.0);
+    float weight = 0.0;
+    for (int k = 0; k < 8; k++)
+    {
+        ivec3 o = ivec3(k & 1, (k >> 1) & 1, k >> 2);
+        vec3 w3 = mix(vec3(1.0) - f, f, vec3(o));
+        float w = w3.x * w3.y * w3.z;
+        uint at = fieldBase + fluidAttrNode(i + o);
+        weight += w * float(field[at]);
+        mat3 compression = mat3(
+            field[at + 7u], field[at + 10u], field[at + 11u],
+            field[at + 10u], field[at + 8u], field[at + 12u],
+            field[at + 11u], field[at + 12u], field[at + 9u]);
+        vec3 displacement = vec3(field[at + 13u], field[at + 14u], field[at + 15u]);
+        vec3 node = vec3((i + o) * 2 - 2);
+        value += w * (displacement + compression * (p - node));
+    }
+    return weight > 1.0 ? value / weight : vec3(0.0);
+}
+
+bool fieldHasMap(vec3 p)
+{
+    vec3 a = clamp((p + 2.0) * 0.5, vec3(0.0), vec3(float(FLUID_ATTR_DIM - 1)));
+    ivec3 i = min(ivec3(floor(a)), ivec3(FLUID_ATTR_DIM - 2));
+    vec3 f = a - vec3(i);
+    float trace = 0.0;
+    for (int k = 0; k < 8; k++)
+    {
+        ivec3 o = ivec3(k & 1, (k >> 1) & 1, k >> 2);
+        vec3 w3 = mix(vec3(1.0) - f, f, vec3(o));
+        uint at = fieldBase + fluidAttrNode(i + o);
+        trace += w3.x * w3.y * w3.z * (float(field[at + 7u]) + float(field[at + 8u]) + float(field[at + 9u]));
+    }
+    return trace < -1.0;
+}
+
+mat3 fieldMapJacobian(vec3 p, vec3 cell, float stepCells)
+{
+    mat3 map;
+    for (int axis = 0; axis < 3; axis++)
+    {
+        vec3 direction = vec3(axis == 0 ? 1.0 : 0.0, axis == 1 ? 1.0 : 0.0, axis == 2 ? 1.0 : 0.0);
+        float before = min(0.5, max(p[axis] - cell[axis], 0.0));
+        float after = min(0.5, max(cell[axis] + stepCells - p[axis], 0.0));
+        map[axis] = direction + (fieldDisplacement(p + direction * after) - fieldDisplacement(p - direction * before))
+            / max(before + after, 1e-6);
+    }
+    return map;
+}
+
+vec3 fieldSampleGradient(vec3 p)
+{
+    p = clamp(p, vec3(-2.0), vec3(9.0 - 1e-4));
+    ivec3 i = ivec3(floor(p));
+    vec3 f = p - vec3(i);
+    float c[8];
+    for (int k = 0; k < 8; k++) c[k] = fieldNode(i + ivec3(k & 1, (k >> 1) & 1, k >> 2));
+    return vec3(
+        mix(mix(c[1] - c[0], c[3] - c[2], f.y), mix(c[5] - c[4], c[7] - c[6], f.y), f.z),
+        mix(mix(c[2] - c[0], c[3] - c[1], f.x), mix(c[6] - c[4], c[7] - c[5], f.x), f.z),
+        mix(mix(c[4] - c[0], c[5] - c[1], f.x), mix(c[6] - c[2], c[7] - c[3], f.x), f.y));
+}
+
+// Writes the finished vertex: renderer-local position, outward normal, tint and CUSTOM0 (thickness in metres, or
+// FLUID_SURF_DEEP, speed in m/s, wetness, strandness). The position comes from the grid-wide cell coordinate, an
+// integer cell plus the same fraction in both bricks of a seam, so the two copies of a seam vertex are the same
+// bits; p is the same point in this brick's cells, for reading the field.
+void fieldWriteVertex(uint globalVertex, vec3 gridCells, vec3 p, vec3 outward, vec3 cell, float stepCells)
+{
+    bool mapped = fieldHasMap(p);
+    mat3 map = mat3(1.0);
+    if (mapped)
+    {
+        // Smoothing must not average opposite sheet faces into one another. Return to its sampled iso first. -xlinka
+        vec3 before = p;
+        p = clamp(p, cell, cell + stepCells);
+        for (uint iteration = 0u; iteration < 3u; iteration++)
+        {
+            vec3 gradient = fieldSampleGradient(p);
+            float gradient2 = dot(gradient, gradient);
+            if (gradient2 <= 1e-12) break;
+            vec3 move = gradient * ((sp.iso - fieldSample(p)) / gradient2);
+            p = clamp(p + move * min(1.0, 0.5 / max(length(move), 1e-9)), cell, cell + stepCells);
+        }
+        gridCells += p - before;
+        vec3 gradient = fieldGradient(p);
+        if (dot(gradient, gradient) > 1e-16) outward = -normalize(gradient);
+        map = fieldMapJacobian(p, cell, stepCells);
+        atomicAdd(counters[FLUID_SC_MAPPED], 1u);
+        if (determinant(map) <= 1e-5) atomicAdd(counters[FLUID_SC_MAP_FOLDS], 1u);
+    }
+    vec3 tint;
+    float speed, wetness, strand;
+    fieldAttributes(p, tint, speed, wetness, strand);
+    float thickness = fieldThickness(p, outward, mapped ? stepCells * 0.5 : stepCells, mapped ? 8 : 4);
+    if (mapped && thickness >= FLUID_SURF_DEEP) atomicAdd(counters[FLUID_SC_MAP_DEEP], 1u);
+    vec3 displacement = mapped ? fieldDisplacement(p) : vec3(0.0);
+    vec3 normal = cross(map[1], map[2]) * outward.x + cross(map[2], map[0]) * outward.y
+        + cross(map[0], map[1]) * outward.z;
+    if (dot(normal, normal) > 1e-16)
+    {
+        normal = normalize(normal);
+        if (thickness < FLUID_SURF_DEEP) thickness *= abs(dot(normal, map * outward));
+        outward = normal;
+    }
+    vec3 position = sp.gridOrigin + (gridCells + displacement) * sp.cellSize;
+    FLUID_WRITE_VERTEX(vb, ab, sp.vertexCapacity, sp.normalWords, globalVertex, position, outward, vec4(tint, 1.0), vec4(thickness, speed, wetness, strand))
+}
+
+vec3 fieldOutward(vec3 g)
+{
+    float len = length(g);
+    return len > 1e-12 ? -g / len : vec3(0.0, 1.0, 0.0);
+}
+
+#endif

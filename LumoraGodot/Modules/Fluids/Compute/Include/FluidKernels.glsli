@@ -1,0 +1,714 @@
+// Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
+// Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
+
+// Shared kernel code: SPH kernels, the density constraint, XPBD bonds and anchors, XSPH, octahedral normals,
+// packing, then the solver's binding table and its geometry helpers. Include after FluidLayout.glsli. Functions are
+// pure, and the binding section is defines and declaration macros only: nothing here declares a buffer until a
+// kernel expands one of its FLUID_DECLARE_ macros, so any kernel can include it whatever it binds.
+// -xlinka
+
+#ifndef FLUID_KERNELS_GLSLI
+#define FLUID_KERNELS_GLSLI
+
+#ifndef FLUID_PI
+#define FLUID_PI 3.14159265358979
+#endif
+
+// s_corr against clumping (Macklin and Mueller 2013)
+#define FLUID_SCORR_K 0.1
+#define FLUID_SCORR_N 4.0
+#define FLUID_SCORR_DQ 0.2
+// Jacobi with constraint averaging, then over-relaxation
+#define FLUID_SOR 1.5
+// the density correction on its own is not over-relaxed: under a column more than ~20 layers deep, 1.5 overshot every
+// substep and the bottom pumped energy in until the speed clamp held the whole tank
+#define FLUID_DENSITY_SOR 1.0
+// A liquid's (unbonded kind's) density step is under-relaxed: neighbours correct the same compression from both
+// sides in one pass, and at 1.0 the overshoot kept a settled 9 cm tank jittering at 0.2 m/s (A1); at 0.5 it is
+// 0.02-0.03 m/s with the rest density error 1.7%, at the price of a 10-layer block settling 3.6% dense. Bonded kinds
+// keep 1.0: their bonds hold their shape, and at 0.5 a marginal slime thread (A17 at 72 Hz) pinched during its pull.
+#define FLUID_DENSITY_SOR_LIQUID 0.5
+// no particle moves more than half a spacing in one correction pass
+#define FLUID_MAX_STEP 0.5
+
+float fluidPoly6Coefficient(float h)
+{
+    float h3 = h * h * h;
+    return 315.0 / (64.0 * FLUID_PI * h3 * h3 * h3);
+}
+
+float fluidSpikyCoefficient(float h)
+{
+    float h3 = h * h * h;
+    return -45.0 / (FLUID_PI * h3 * h3);
+}
+
+// The coefficients are passed in so a kernel computes them once, not once per neighbour.
+float fluidPoly6(float r2, float h2, float poly6)
+{
+    float d = max(h2 - r2, 0.0);
+    return poly6 * d * d * d;
+}
+
+vec3 fluidSpikyGrad(vec3 r, float len, float h, float spiky)
+{
+    if (len >= h || len <= 1e-9 * h)
+        return vec3(0.0);
+    float d = h - len;
+    return spiky * d * d * (r / len);
+}
+
+// Density is volume weighted: fill = sum over j (self included) of V_j W_ij, which is about 1 at rest. The rest fill
+// comes from a lattice at the spacing (FluidSubstanceRecord.restDensity), so C = fill / restFill - 1 means the same
+// for thinned strand particles and merged ones. One sided: it only pushes apart.
+float fluidDensityConstraint(float fill, float restFill)
+{
+    return max(fill / restFill - 1.0, 0.0);
+}
+
+// lambda_i = -C_i / (sum_j |grad_j C_i|^2 + |grad_i C_i|^2 + eps), where grad_j C_i = -V_j grad W_ij / restFill
+// for each neighbour and grad_i C_i is the sum of the neighbours' terms. sumGrad2 and gradI are those sums.
+float fluidLambda(float c, float sumGrad2, vec3 gradI, float epsilon)
+{
+    return -c / (sumGrad2 + dot(gradI, gradI) + epsilon);
+}
+
+float fluidSCorr(float r2, float h2, float poly6)
+{
+    float dq = FLUID_SCORR_DQ * FLUID_SCORR_DQ * h2;
+    float wdq = fluidPoly6(dq, h2, poly6);
+    if (wdq <= 0.0)
+        return 0.0;
+    float ratio = fluidPoly6(r2, h2, poly6) / wdq;
+    return -FLUID_SCORR_K * pow(ratio, FLUID_SCORR_N);
+}
+
+// Volume weighting makes lambda a length squared (C over a sum of squared 1/m gradients), so the dimensionless
+// s_corr is scaled by the lambda a unit C gets on a calm lattice: 1 / (0.37 / d^2) = 0.676 h^2. Added raw, it pushed
+// each neighbour away by several spacings a substep.
+#define FLUID_SCORR_UNIT 0.676
+
+// One neighbour's share of the density correction:
+// dp_i = sum_j (V_j / restFill) (lambda_i + lambda_j + s_corr) grad W_ij.
+vec3 fluidDensityTerm(float lambdaI, float lambdaJ, float volumeJ, float restFill, vec3 r, float len, float h, float h2, float poly6, float spiky)
+{
+    float scorr = fluidSCorr(len * len, h2, poly6) * FLUID_SCORR_UNIT * h2;
+    return (volumeJ / restFill) * (lambdaI + lambdaJ + scorr) * fluidSpikyGrad(r, len, h, spiky);
+}
+
+// XPBD distance constraint seen from end i. d = x_i - x_j. Returns this end's position change in xyz and the
+// lambda change in w; the end with the lower id adds w to the bond's lambda.
+vec4 fluidBondCorrection(vec3 d, float restLength, float lambda, float compliance, float dt, float wI, float wJ)
+{
+    float len = length(d);
+    if (len <= 1e-12)
+        return vec4(0.0);
+    float alpha = compliance / (dt * dt);
+    float c = len - restLength;
+    float dl = (-c - alpha * lambda) / (wI + wJ + alpha);
+    return vec4(wI * dl * (d / len), dl);
+}
+
+// XPBD anchor: particle i held at a target point with its own compliance. d = x_i - target.
+vec4 fluidAnchorCorrection(vec3 d, float lambda, float compliance, float dt, float wI)
+{
+    float len = length(d);
+    if (len <= 1e-12)
+        return vec4(0.0);
+    float alpha = compliance / (dt * dt);
+    float dl = (-len - alpha * lambda) / (wI + alpha);
+    return vec4(wI * dl * (d / len), dl);
+}
+
+// Jacobi averaging: every active constraint's correction summed, divided by their count, over-relaxed, clamped.
+vec3 fluidAverage(vec3 sum, float constraints, float spacing)
+{
+    vec3 dp = sum * (FLUID_SOR / max(constraints, 1.0));
+    float m = length(dp);
+    float cap = FLUID_MAX_STEP * spacing;
+    return m > cap ? dp * (cap / m) : dp;
+}
+
+// XSPH with the substep's dt folded in: c = 1 - exp(-k dt), where k = k_v nu / d^2 is the substance's xsphFactor,
+// so the smoothing per second is the same at any substep count.
+float fluidXsphStrength(float xsphFactor, float dt)
+{
+    return 1.0 - exp(-xsphFactor * dt);
+}
+
+vec3 fluidXsphTerm(vec3 vI, vec3 vJ, float volumeJ, float r2, float h2, float poly6)
+{
+    return volumeJ * (vJ - vI) * fluidPoly6(r2, h2, poly6);
+}
+
+vec2 fluidOctEncode(vec3 n)
+{
+    n /= abs(n.x) + abs(n.y) + abs(n.z);
+    vec2 o = n.z >= 0.0 ? n.xy : (1.0 - abs(n.yx)) * vec2(n.x >= 0.0 ? 1.0 : -1.0, n.y >= 0.0 ? 1.0 : -1.0);
+    return o * 0.5 + 0.5;
+}
+
+vec3 fluidOctDecode(vec2 e)
+{
+    vec2 f = e * 2.0 - 1.0;
+    vec3 n = vec3(f, 1.0 - abs(f.x) - abs(f.y));
+    float t = clamp(-n.z, 0.0, 1.0);
+    n.xy += vec2(n.x >= 0.0 ? -t : t, n.y >= 0.0 ? -t : t);
+    return normalize(n);
+}
+
+uint fluidPackNormal(vec3 n)
+{
+    return packUnorm2x16(fluidOctEncode(n));
+}
+
+vec3 fluidUnpackNormal(uint packed)
+{
+    return fluidOctDecode(unpackUnorm2x16(packed));
+}
+
+uint fluidSubstanceOf(uint material)
+{
+    return (material >> FLUID_SUBSTANCE_SHIFT) & FLUID_BYTE_MASK;
+}
+
+uint fluidSystemOf(uint material)
+{
+    return (material >> FLUID_SYSTEM_SHIFT) & FLUID_BYTE_MASK;
+}
+
+uint fluidFrameOf(uint material)
+{
+    return (material >> FLUID_FRAME_SHIFT) & FLUID_BYTE_MASK;
+}
+
+uint fluidOriginOf(uint material)
+{
+    return (material >> FLUID_ORIGIN_SHIFT) & FLUID_BYTE_MASK;
+}
+
+uint fluidPhaseOf(uint phase)
+{
+    return phase & FLUID_PHASE_MASK;
+}
+
+vec4 fluidUnpackTint(uint tint)
+{
+    return unpackUnorm4x8(tint);
+}
+
+uint fluidPackTint(vec4 tint)
+{
+    return packUnorm4x8(tint);
+}
+
+// ---- SOLVER BINDINGS ----
+// Set 0 of every solver kernel. The solver builds each kernel's uniform set from the whole table and a kernel
+// declares only what it touches (the device ignores the rest), so a binding number never moves. FluidGpuBuffers
+// carries the same numbers. Particle arrays A/B are in sorted slot order; everything "by id" survives the sort.
+#define FLUID_B_PA 0
+#define FLUID_B_PB 1
+#define FLUID_B_IDA 2
+#define FLUID_B_IDB 3
+#define FLUID_B_ID_TO_SLOT 4
+#define FLUID_B_BONDS 5
+#define FLUID_B_ANCHORS 6
+#define FLUID_B_ACC 7
+#define FLUID_B_GRID 8
+#define FLUID_B_KEYS 9
+#define FLUID_B_CURSOR 10
+#define FLUID_B_LISTS 11
+#define FLUID_B_SLOTS 12
+#define FLUID_B_AUX 13
+#define FLUID_B_HEADER 14
+#define FLUID_B_SUBSTANCES 15
+#define FLUID_B_SYSTEMS 16
+#define FLUID_B_FRAMES 17
+#define FLUID_B_COLLIDERS 18
+#define FLUID_B_COMMANDS 19
+#define FLUID_B_COUNTERS 20
+#define FLUID_B_STATS 21
+#define FLUID_B_BY_ID 22
+#define FLUID_B_CANDIDATES 23
+#define FLUID_B_FREE_IDS 24
+#define FLUID_B_SUMMARY 25
+#define FLUID_B_TRIANGLES 26
+#define FLUID_B_TRI_GRIDS 27
+#define FLUID_B_TRI_CELLS 28
+#define FLUID_B_TRI_INDEX 29
+#define FLUID_B_PEOPLE 30
+#define FLUID_B_BONES 31
+#define FLUID_B_PROXIES 32
+#define FLUID_B_CONTACT_VERTS 33
+#define FLUID_B_CONTACT_INDEX 34
+#define FLUID_B_BLENDS 35
+#define FLUID_B_BLEND_WEIGHTS 36
+#define FLUID_B_SKINNED 37
+#define FLUID_B_SOFT 38
+#define FLUID_B_QUERIES 39
+#define FLUID_B_REGIONS 40
+#define FLUID_B_HIDDEN 41
+#define FLUID_B_ARGS 42
+#define FLUID_B_COUNT 43
+
+#define FLUID_DECLARE_PA layout(set = 0, binding = FLUID_B_PA, std430) buffer FluidPA { FluidParticle p[]; } pa;
+#define FLUID_DECLARE_PB layout(set = 0, binding = FLUID_B_PB, std430) buffer FluidPB { FluidParticle p[]; } pb;
+#define FLUID_DECLARE_IDA layout(set = 0, binding = FLUID_B_IDA, std430) buffer FluidIdA { uint v[]; } idA;
+#define FLUID_DECLARE_IDB layout(set = 0, binding = FLUID_B_IDB, std430) buffer FluidIdB { uint v[]; } idB;
+#define FLUID_DECLARE_ID_TO_SLOT layout(set = 0, binding = FLUID_B_ID_TO_SLOT, std430) buffer FluidIdToSlot { uint v[]; } idToSlot;
+#define FLUID_DECLARE_BONDS layout(set = 0, binding = FLUID_B_BONDS, std430) buffer FluidBonds { FluidBond b[]; } bonds;
+#define FLUID_DECLARE_ANCHORS layout(set = 0, binding = FLUID_B_ANCHORS, std430) buffer FluidAnchors { FluidAnchor a[]; } anchors;
+#define FLUID_DECLARE_ACC layout(set = 0, binding = FLUID_B_ACC, std430) buffer FluidAcc { FluidAccumulator a[]; } acc;
+#define FLUID_DECLARE_GRID layout(set = 0, binding = FLUID_B_GRID, std430) buffer FluidGrid { FluidGridCell c[]; } grid;
+#define FLUID_DECLARE_KEYS layout(set = 0, binding = FLUID_B_KEYS, std430) buffer FluidKeys { uint v[]; } keys;
+#define FLUID_DECLARE_CURSOR layout(set = 0, binding = FLUID_B_CURSOR, std430) buffer FluidCursor { uint v[]; } cursor;
+#define FLUID_DECLARE_LISTS layout(set = 0, binding = FLUID_B_LISTS, std430) buffer FluidLists { uint v[]; } lists;
+#define FLUID_DECLARE_SLOTS layout(set = 0, binding = FLUID_B_SLOTS, std430) buffer FluidSlots { vec4 v[]; } slots;
+#define FLUID_DECLARE_AUX layout(set = 0, binding = FLUID_B_AUX, std430) buffer FluidAux { vec4 v[]; } aux;
+#define FLUID_DECLARE_HEADER layout(set = 0, binding = FLUID_B_HEADER, std430) readonly buffer FluidHeader { FluidFrameHeader h; } hdr;
+#define FLUID_DECLARE_SUBSTANCES layout(set = 0, binding = FLUID_B_SUBSTANCES, std430) readonly buffer FluidSubstances { FluidSubstanceRecord s[]; } substances;
+#define FLUID_DECLARE_SYSTEMS layout(set = 0, binding = FLUID_B_SYSTEMS, std430) readonly buffer FluidSystems { FluidSystemRecord s[]; } systems;
+#define FLUID_DECLARE_FRAMES layout(set = 0, binding = FLUID_B_FRAMES, std430) readonly buffer FluidFrames { FluidFrameRecord f[]; } frames;
+#define FLUID_DECLARE_COLLIDERS layout(set = 0, binding = FLUID_B_COLLIDERS, std430) readonly buffer FluidColliders { FluidColliderRecord c[]; } colliders;
+#define FLUID_DECLARE_COMMANDS layout(set = 0, binding = FLUID_B_COMMANDS, std430) readonly buffer FluidCommands { FluidGpuCommand c[]; } commands;
+#define FLUID_DECLARE_COUNTERS layout(set = 0, binding = FLUID_B_COUNTERS, std430) buffer FluidCounters { uint v[]; } counters;
+#define FLUID_DECLARE_STATS layout(set = 0, binding = FLUID_B_STATS, std430) buffer FluidStats { uint v[]; } stats;
+#define FLUID_DECLARE_BY_ID layout(set = 0, binding = FLUID_B_BY_ID, std430) buffer FluidById { uint v[]; } byId;
+#define FLUID_DECLARE_CANDIDATES layout(set = 0, binding = FLUID_B_CANDIDATES, std430) buffer FluidCandidates { uint v[]; } candidates;
+#define FLUID_DECLARE_FREE_IDS layout(set = 0, binding = FLUID_B_FREE_IDS, std430) buffer FluidFreeIds { uint v[]; } freeIds;
+#define FLUID_DECLARE_SUMMARY layout(set = 0, binding = FLUID_B_SUMMARY, std430) buffer FluidSummaryBuffer { FLUID_SUMMARY_MEMBERS } summary;
+#define FLUID_DECLARE_TRIANGLES layout(set = 0, binding = FLUID_B_TRIANGLES, std430) readonly buffer FluidTriangles { FluidTriangle t[]; } triangles;
+#define FLUID_DECLARE_TRI_GRIDS layout(set = 0, binding = FLUID_B_TRI_GRIDS, std430) readonly buffer FluidTriGrids { FluidTriangleGridHeader g[]; } triGrids;
+#define FLUID_DECLARE_TRI_CELLS layout(set = 0, binding = FLUID_B_TRI_CELLS, std430) readonly buffer FluidTriCells { FluidGridCell c[]; } triCells;
+#define FLUID_DECLARE_TRI_INDEX layout(set = 0, binding = FLUID_B_TRI_INDEX, std430) readonly buffer FluidTriIndex { uint v[]; } triIndex;
+#define FLUID_DECLARE_PEOPLE layout(set = 0, binding = FLUID_B_PEOPLE, std430) readonly buffer FluidPeople { FluidPersonRecord p[]; } people;
+#define FLUID_DECLARE_BONES layout(set = 0, binding = FLUID_B_BONES, std430) readonly buffer FluidBones { FluidBoneRecord b[]; } bones;
+#define FLUID_DECLARE_PROXIES layout(set = 0, binding = FLUID_B_PROXIES, std430) readonly buffer FluidProxies { FluidProxyRecord p[]; } proxies;
+#define FLUID_DECLARE_CONTACT_VERTS layout(set = 0, binding = FLUID_B_CONTACT_VERTS, std430) readonly buffer FluidContactVerts { FluidContactVertex v[]; } contactVerts;
+#define FLUID_DECLARE_CONTACT_INDEX layout(set = 0, binding = FLUID_B_CONTACT_INDEX, std430) readonly buffer FluidContactIndex { uint v[]; } contactIndex;
+#define FLUID_DECLARE_BLENDS layout(set = 0, binding = FLUID_B_BLENDS, std430) readonly buffer FluidBlends { FluidBlendDelta d[]; } blends;
+#define FLUID_DECLARE_BLEND_WEIGHTS layout(set = 0, binding = FLUID_B_BLEND_WEIGHTS, std430) readonly buffer FluidBlendWeights { float v[]; } blendWeights;
+#define FLUID_DECLARE_SKINNED layout(set = 0, binding = FLUID_B_SKINNED, std430) buffer FluidSkinned { FluidSkinnedVertex v[]; } skinned;
+#define FLUID_DECLARE_SOFT layout(set = 0, binding = FLUID_B_SOFT, std430) readonly buffer FluidSoft { FluidSoftSphere s[]; } softSpheres;
+#define FLUID_DECLARE_QUERIES layout(set = 0, binding = FLUID_B_QUERIES, std430) readonly buffer FluidQueries { FluidQuerySphere q[]; } queries;
+#define FLUID_DECLARE_REGIONS layout(set = 0, binding = FLUID_B_REGIONS, std430) buffer FluidRegions { FluidRegion r[]; } regions;
+#define FLUID_DECLARE_HIDDEN layout(set = 0, binding = FLUID_B_HIDDEN, std430) readonly buffer FluidHidden { uint v[]; } hidden;
+#define FLUID_DECLARE_ARGS layout(set = 0, binding = FLUID_B_ARGS, std430) buffer FluidArgs { uint v[]; } args;
+#define FLUID_DECLARE_PUSH layout(push_constant, std430) uniform FluidPush { FluidPushConstants c; } pc;
+
+// Threads per particle in the gathering kernels. Each lane walks every LANES-th neighbour and the lanes reduce
+// through shared memory: at hero sizes a particle per thread leaves the GPU idle while one thread walks 60-odd
+// dependent loads, and splitting the walk halved the frame.
+#define FLUID_LANES 8
+#define FLUID_LANE_PARTICLES (FLUID_GROUP_SIZE / FLUID_LANES)
+
+// Indirect dispatch args (FLUID_B_ARGS), a buffer of their own. The render graph keeps one usage per buffer per
+// compute list, and the first one wins: a kernel that bound the args as storage and then dispatched from them would
+// get a shader-write barrier and no indirect-read one, and the command processor would read last frame's counts.
+// So only the two kernels that write args (the scatter and frame end C) declare this binding, and every kernel that
+// dispatches from it never does.
+#define FLUID_ARGS_LIVE 0
+#define FLUID_ARGS_AWAKE 3
+#define FLUID_ARGS_AWAKE_LANES 6
+#define FLUID_ARGS_WORDS 16
+
+// Counters (FLUID_B_COUNTERS). Every count the GPU owns lives here; the CPU never reads one back to record a frame.
+// The first 16 words are unused (the args moved out).
+#define FLUID_C_LIVE 16
+#define FLUID_C_AWAKE 17
+#define FLUID_C_PRESORT 18
+#define FLUID_C_FREE 19
+#define FLUID_C_FREE_BASE 20
+#define FLUID_C_DEAD 21
+#define FLUID_C_POOL 22
+#define FLUID_C_SPAWNED 23
+#define FLUID_C_GROW 24
+#define FLUID_C_REFINE_BASE 25
+#define FLUID_C_REFINE_FREE_TOP 26
+#define FLUID_C_REFINE_ACCEPTED 27
+#define FLUID_C_FRAME 28
+#define FLUID_C_SPAWN_OVERFLOW 29
+#define FLUID_C_NEIGHBOUR_OVERFLOW 30
+#define FLUID_C_POOL_EMPTY 31
+#define FLUID_C_ENERGY_PREV 32
+#define FLUID_C_WORDS 64
+
+// Stats (FLUID_B_STATS), cleared every frame. Integer atomics only: floats go in as ordered bits (min and max) or
+// fixed point (sums), so the order of the adds never changes a result.
+#define FLUID_S_SYSTEM 0
+#define FLUID_S_SYSTEM_STRIDE 16
+#define FLUID_S_SYS_MIN 0
+#define FLUID_S_SYS_MAX 3
+#define FLUID_S_SYS_VMAX 6
+#define FLUID_S_SYS_ENERGY 7
+#define FLUID_S_SYS_AWAKE 8
+#define FLUID_S_SYS_LIVE 9
+#define FLUID_S_SYS_NAN 10
+#define FLUID_S_SYS_STRANDS 11
+#define FLUID_S_SYS_ANCHORS 12
+#define FLUID_S_SYS_SNAPS 13
+#define FLUID_S_SYS_MICROLITRES 14
+#define FLUID_S_PEOPLE_MAX 32
+#define FLUID_S_PARTS 256
+#define FLUID_S_LIMBS 2304
+#define FLUID_S_IMPULSES 2816
+#define FLUID_S_QUERIES 4864
+#define FLUID_S_TARGETS 5120
+#define FLUID_S_DRAINS 6144
+#define FLUID_S_BAKES 6656
+#define FLUID_S_WORDS 6672
+#define FLUID_TARGET_PEOPLE 512
+// fixed point scales for the sums
+#define FLUID_ENERGY_UNIT 1e-6
+#define FLUID_IMPULSE_UNIT 1e-7
+#define FLUID_STUCK_UNIT 1e-4
+
+// Per id scratch (FLUID_B_BY_ID), FLUID_BY_ID_STRIDE words each.
+#define FLUID_BY_ID_STRIDE 8
+#define FLUID_ID_LABEL_NEXT 0
+#define FLUID_ID_SNAP_BEST 1
+#define FLUID_ID_PROPOSALS 2
+#define FLUID_ID_PROPOSAL_COUNT 4
+#define FLUID_ID_REFINE_CLAIM 6
+#define FLUID_ID_REFINE_KEY 7
+
+// Frame end candidates (FLUID_B_CANDIDATES): counts per 64-slot chunk, their scans, and the anchor list that the
+// next frame's FluidFrameEndC accepts per target in slot order.
+#define FLUID_K_CHUNKS_MAX ((2147483647 / (FLUID_MAX_NEIGHBOURS * 4) + FLUID_GROUP_SIZE - 1) / FLUID_GROUP_SIZE)
+#define FLUID_K_ANCHOR_COUNTS 0
+#define FLUID_K_REFINE_COUNTS FLUID_K_CHUNKS_MAX
+#define FLUID_K_ANCHOR_SCAN (2 * FLUID_K_CHUNKS_MAX)
+#define FLUID_K_REFINE_SCAN (3 * FLUID_K_CHUNKS_MAX)
+#define FLUID_K_TOTALS (4 * FLUID_K_CHUNKS_MAX)
+#define FLUID_K_LIST (FLUID_K_TOTALS + 16)
+#define FLUID_K_LIST_STRIDE 8
+#define FLUID_K_LIST_CAP 1024
+// The frame's ligaments (thread links between two bulk ends): frame end A lists them, B merges each into a parallel
+// one nearby, C empties the list. Per entry: the two ends' ids, then their positions.
+#define FLUID_K_LIGAMENTS (FLUID_K_LIST + FLUID_K_LIST_STRIDE * FLUID_K_LIST_CAP)
+#define FLUID_K_LIGAMENT_STRIDE 8
+#define FLUID_K_LIGAMENT_CAP 1024
+#define FLUID_K_LIGAMENT_COUNT (FLUID_K_TOTALS + 2)
+#define FLUID_K_WORDS (FLUID_K_LIGAMENTS + FLUID_K_LIGAMENT_STRIDE * FLUID_K_LIGAMENT_CAP)
+
+// Per slot scratch (FLUID_B_SLOTS), 4 vec4 a slot, rebuilt every substep:
+//   0  lambda, fill, list count (bits), how far the collision pushed it (friction's normal displacement)
+//   1  contact normal (frame space), contact plane offset
+//   2  surface velocity, packed contact target (bits)
+//   3  surface friction, surface stickiness, signed distance at the predict, anchor lambda
+#define FLUID_SLOT_STRIDE 4
+// Per id aux (FLUID_B_AUX), 2 vec4 an id: surface normal + density neighbours, vorticity + spare.
+#define FLUID_AUX_STRIDE 2
+
+// Bond StrainFlags: link strain as a half float in the low 16 bits, flags above. A strand link is what the surface
+// draws as a tube, its FLUID_BOND_CHAIN.
+#define FLUID_BOND_STRAND 0x10000u
+#define FLUID_BOND_ELASTO 0x20000u
+#define FLUID_BOND_MERGED 0x40000u
+// Frame end A chooses one stored row to own the link through B and D. -xlinka
+#define FLUID_BOND_OWNER 0x80000u
+// Anchor KindAge: kind in the low 4 bits, frozen at bit 4, age in frames from bit 8.
+#define FLUID_ANCHOR_FROZEN 16u
+// Particle Phase flags above the layout's: made by refinement (counts against the pool), and killed in a frame
+// end with its bonds still held (the next commands pass lets go of them).
+#define FLUID_PARTICLE_REFINED 0x100000u
+#define FLUID_PARTICLE_DYING 0x200000u
+// A piece of a snapped thread (frame end A sets it from the label's mark and keeps it while the piece is out of the deep
+// bulk). On the particle itself, so a piece stays slack after its label particle has gone back into the goo, or been
+// freed by the commands pass to start a fresh strand: a label's mark alone let hanging pieces live again and snap twice.
+#define FLUID_PARTICLE_SLACK 0x400000u
+// A strand lying in goo (frame end A counts the bulk among its neighbours): a piece of thread come to rest in a
+// puddle or on a coat, which is no thread's carrier and does not neck. Its neighbour count alone cannot say: a
+// thread refined dense in the air has as many neighbours, all of them its own.
+#define FLUID_PARTICLE_RESTING 0x800000u
+#define FLUID_MAX_SYSTEMS 16u
+// Contact target keys: kind in the top 4 bits, index below.
+#define FLUID_TARGET_KIND_SHIFT 28
+#define FLUID_TARGET_INDEX_MASK 0x0FFFFFFFu
+// A particle is in the band a surface can grab when its edge is this close, plus StickDistance.
+#define FLUID_CONTACT_SLOP 0.1
+#define FLUID_REGION_TABLE 4096u
+#define FLUID_SLEEP_SECONDS 0.5
+#define FLUID_ANCHOR_MAX_NEW 16u
+#define FLUID_STRAND_SNAP_AGE 8u
+// spacings: the shortest rest length a viscous network's bulk bond is made with or creeps to (density keeps
+// neighbours about d apart). Other kinds keep 0.25: slime pressed under a sole needs its bonds to give.
+#define FLUID_BOND_REST_MIN 0.9
+// FluidSubstanceRecord.flags: 4 is a viscous network (FluidSubstanceParams.FlagStiff), whose bonds flow past this
+// strain at once
+#define FLUID_SUBSTANCE_STIFF 4u
+// FluidViscous's Pass: this bit makes it a position pass over the bonds (recorded between Correct and Update)
+#define FLUID_PASS_POSITIONS 0x100u
+// Skin contacts: the share of the approach speed skin gives back along its normal (a collider's comes from its
+// record's Bounce), and skin's own friction factor (a contact's friction multiplies the substance's, as a collider's
+// Friction does; the person record carries neither yet)
+#define FLUID_SKIN_BOUNCE 0.0
+#define FLUID_SKIN_FRICTION 0.8
+#define FLUID_PLASTIC_STRAIN 0.15
+// FluidAccumulator.strandAge: frames in the strand phase in the low 16 bits; the top bit, on a strand's label
+// particle, says the strand has snapped. Labels never split, so both pieces of a snapped strand still read it: they
+// recoil without repeating the old elastic failure; capillary thinning can still part a depleted tail. -xlinka
+#define FLUID_STRAND_AGE_MASK 0xFFFFu
+#define FLUID_STRAND_SNAPPED 0x80000000u
+// set by the commands pass on a mark that has lived through one frame end, so every piece has read it before it can go
+#define FLUID_STRAND_SNAP_SEEN 0x40000000u
+
+// ---- SOLVER HELPERS ----
+
+// A thread label's carrier: a strand that is not resting in goo, or a bulk particle in the air (under
+// FLUID_CARRIER_NEIGHBOURS density neighbours) held by nothing, a node where ligaments meet. Labels run between
+// carriers only, so the coat on a sole and the puddle, where every thread ends, never join two threads into one, and a
+// snap marks the whole thread it parts, its ligaments and nodes included. From a phase word, which carries the
+// neighbour count and the anchored and resting bits; supported sheets are not carriers. -xlinka
+#define FLUID_CARRIER_NEIGHBOURS 8u
+
+bool fluidCarrier(uint phaseWord)
+{
+    uint ph = phaseWord & FLUID_PHASE_MASK;
+    if (ph == FLUID_PHASE_STRAND)
+        return (phaseWord & FLUID_PARTICLE_RESTING) == 0u;
+    return ph == FLUID_PHASE_BULK && (phaseWord & (FLUID_PARTICLE_ANCHORED | FLUID_PARTICLE_RESTING)) == 0u
+        && ((phaseWord >> FLUID_NEIGHBOUR_COUNT_SHIFT) & 255u) < FLUID_CARRIER_NEIGHBOURS;
+}
+
+// Floats as uints whose unsigned order is the float order, for atomicMin and atomicMax.
+uint fluidOrderedBits(float f)
+{
+    uint b = floatBitsToUint(f);
+    return (b & 0x80000000u) != 0u ? ~b : (b | 0x80000000u);
+}
+
+float fluidFromOrderedBits(uint b)
+{
+    return uintBitsToFloat((b & 0x80000000u) != 0u ? (b & 0x7FFFFFFFu) : ~b);
+}
+
+uint fluidFixed(float v, float unit)
+{
+    return uint(int(clamp(round(v / unit), -2147483000.0, 2147483000.0)));
+}
+
+float fluidFromFixed(uint v, float unit)
+{
+    return float(int(v)) * unit;
+}
+
+ivec3 fluidCellOf(vec3 x, float invCell)
+{
+    return ivec3(floor(x * invCell));
+}
+
+// Teschner et al. 2003, with the frame index mixed in so a cup's particles and the world's never share a cell.
+uint fluidHashCell(ivec3 c, uint frame, uint mask)
+{
+    return ((uint(c.x) * 73856093u) ^ (uint(c.y) * 19349663u) ^ (uint(c.z) * 83492791u) ^ (frame * 2654435761u)) & mask;
+}
+
+uint fluidHashWord(uint x)
+{
+    x ^= x >> 16;
+    x *= 0x7feb352du;
+    x ^= x >> 15;
+    x *= 0x846ca68bu;
+    x ^= x >> 16;
+    return x;
+}
+
+// A strand's snap pick: the link's badness (at least 1, so its float bits sort like it) in the high 16 bits, about 1%
+// apart, and a hash of the link below as the tie-break. Links refined out of one parent share its radius to the
+// bit, and with the badness alone every one of them won the pick and snapped in the same frame.
+uint fluidSnapKey(float badness, uint a, uint b)
+{
+    return (floatBitsToUint(badness) & 0xFFFF0000u) | (fluidHashWord(min(a, b) * 65599u + max(a, b)) & 0xFFFFu);
+}
+
+// Deterministic noise in [0, 1) from two words: same id and seed, same number, on every run.
+float fluidRandom(uint a, uint b)
+{
+    return float(fluidHashWord(a ^ fluidHashWord(b + 0x9e3779b9u)) >> 8) * (1.0 / 16777216.0);
+}
+
+vec3 fluidQuatRotate(vec4 q, vec3 v)
+{
+    vec3 t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+vec3 fluidQuatInverseRotate(vec4 q, vec3 v)
+{
+    return fluidQuatRotate(vec4(-q.xyz, q.w), v);
+}
+
+vec4 fluidQuatNlerp(vec4 a, vec4 b, float t)
+{
+    if (dot(a, b) < 0.0)
+        b = -b;
+    vec4 q = mix(a, b, t);
+    float len = length(q);
+    return len > 1e-12 ? q / len : vec4(0.0, 0.0, 0.0, 1.0);
+}
+
+vec3 fluidToLocal(vec3 w, vec4 q, vec3 position, float scale)
+{
+    return fluidQuatInverseRotate(q, w - position) / max(scale, 1e-9);
+}
+
+vec3 fluidToWorld(vec3 l, vec4 q, vec3 position, float scale)
+{
+    return position + fluidQuatRotate(q, l * scale);
+}
+
+vec3 fluidAffine(vec4 r0, vec4 r1, vec4 r2, vec3 p)
+{
+    return vec3(dot(r0.xyz, p) + r0.w, dot(r1.xyz, p) + r1.w, dot(r2.xyz, p) + r2.w);
+}
+
+vec3 fluidAffineVector(vec4 r0, vec4 r1, vec4 r2, vec3 v)
+{
+    return vec3(dot(r0.xyz, v), dot(r1.xyz, v), dot(r2.xyz, v));
+}
+
+// The inverse of a 3x4 affine transform applied to a point; bones carry scale, so this is a real inverse.
+vec3 fluidAffineInverse(vec4 r0, vec4 r1, vec4 r2, vec3 p)
+{
+    mat3 m = mat3(vec3(r0.x, r1.x, r2.x), vec3(r0.y, r1.y, r2.y), vec3(r0.z, r1.z, r2.z));
+    return inverse(m) * (p - vec3(r0.w, r1.w, r2.w));
+}
+
+// Akinci et al. 2013 cohesion spline: repulsive close in, attractive out to h.
+float fluidCohesionKernel(float r, float h)
+{
+    if (r >= h || r <= 0.0)
+        return 0.0;
+    float h3 = h * h * h;
+    float c = 32.0 / (FLUID_PI * h3 * h3 * h3);
+    float a = (h - r) * (h - r) * (h - r) * r * r * r;
+    return r > 0.5 * h ? c * a : c * (2.0 * a - h3 * h3 / 64.0);
+}
+
+float fluidSdfBox(vec3 p, vec3 halfSize)
+{
+    vec3 q = abs(p) - halfSize;
+    return length(max(q, vec3(0.0))) + min(max(q.x, max(q.y, q.z)), 0.0);
+}
+
+// Capsule along local Y: segment from -halfHeight to +halfHeight.
+float fluidSdfCapsule(vec3 p, float halfHeight, float radius)
+{
+    vec3 q = vec3(p.x, p.y - clamp(p.y, -halfHeight, halfHeight), p.z);
+    return length(q) - radius;
+}
+
+float fluidSdfSegment(vec3 p, vec3 a, vec3 b, float radius)
+{
+    vec3 ab = b - a;
+    float t = clamp(dot(p - a, ab) / max(dot(ab, ab), 1e-12), 0.0, 1.0);
+    return length(p - (a + t * ab)) - radius;
+}
+
+// Cylinder along local Y.
+float fluidSdfCylinder(vec3 p, float halfHeight, float radius)
+{
+    vec2 d = abs(vec2(length(p.xz), p.y)) - vec2(radius, halfHeight);
+    return min(max(d.x, d.y), 0.0) + length(max(d, vec2(0.0)));
+}
+
+// Ericson's closest point on a triangle.
+vec3 fluidClosestOnTriangle(vec3 p, vec3 a, vec3 b, vec3 c)
+{
+    vec3 ab = b - a, ac = c - a, ap = p - a;
+    float d1 = dot(ab, ap), d2 = dot(ac, ap);
+    if (d1 <= 0.0 && d2 <= 0.0)
+        return a;
+    vec3 bp = p - b;
+    float d3 = dot(ab, bp), d4 = dot(ac, bp);
+    if (d3 >= 0.0 && d4 <= d3)
+        return b;
+    float vc = d1 * d4 - d3 * d2;
+    if (vc <= 0.0 && d1 >= 0.0 && d3 <= 0.0)
+        return a + ab * (d1 / (d1 - d3));
+    vec3 cp = p - c;
+    float d5 = dot(ab, cp), d6 = dot(ac, cp);
+    if (d6 >= 0.0 && d5 <= d6)
+        return c;
+    float vb = d5 * d2 - d1 * d6;
+    if (vb <= 0.0 && d2 >= 0.0 && d6 <= 0.0)
+        return a + ac * (d2 / (d2 - d6));
+    float va = d3 * d6 - d5 * d4;
+    if (va <= 0.0 && (d4 - d3) >= 0.0 && (d5 - d6) >= 0.0)
+        return b + (c - b) * ((d4 - d3) / ((d4 - d3) + (d5 - d6)));
+    float denom = 1.0 / (va + vb + vc);
+    return a + ab * (vb * denom) + ac * (vc * denom);
+}
+
+// Segment p0 -> p1 against a triangle: the hit fraction, or 2 when it misses (Moeller and Trumbore).
+float fluidSegmentTriangle(vec3 p0, vec3 p1, vec3 a, vec3 b, vec3 c)
+{
+    vec3 dir = p1 - p0;
+    vec3 e1 = b - a, e2 = c - a;
+    vec3 s = cross(dir, e2);
+    float det = dot(e1, s);
+    if (abs(det) < 1e-14)
+        return 2.0;
+    float inv = 1.0 / det;
+    vec3 t0 = p0 - a;
+    float u = dot(t0, s) * inv;
+    if (u < 0.0 || u > 1.0)
+        return 2.0;
+    vec3 q = cross(t0, e1);
+    float v = dot(dir, q) * inv;
+    if (v < 0.0 || u + v > 1.0)
+        return 2.0;
+    float t = dot(e2, q) * inv;
+    return t >= 0.0 && t <= 1.0 ? t : 2.0;
+}
+
+float fluidStrainOf(uint strainFlags)
+{
+    return unpackHalf2x16(strainFlags).x;
+}
+
+uint fluidWithStrain(uint strainFlags, float strain)
+{
+    return (strainFlags & 0xFFFF0000u) | (packHalf2x16(vec2(clamp(strain, -60000.0, 60000.0), 0.0)) & 0xFFFFu);
+}
+
+// The sort's cells: awake cells first, asleep cells after them (so awake particles take slots 0..awake-1 and every
+// substep kernel dispatches over exactly them), the dead last in one bucket at 2T. The grid carries 2T + 1 cells,
+// then one entry per scan block: its sum in Count, its absolute start in Start.
+#define FLUID_SCAN_BLOCK 1024u
+#define FLUID_SCAN_THREADS 256u
+
+uint fluidSortKey(FluidParticle q, float invCell, uint tableSize)
+{
+    if (fluidPhaseOf(q.phase) == FLUID_PHASE_DEAD)
+        return 2u * tableSize;
+    uint h = fluidHashCell(fluidCellOf(q.position, invCell), fluidFrameOf(q.material), tableSize - 1u);
+    return (q.phase & FLUID_PARTICLE_ASLEEP) != 0u ? tableSize + h : h;
+}
+
+uint fluidGridCells(uint tableSize)
+{
+    return 2u * tableSize + 1u;
+}
+
+uint fluidScanBlocks(uint tableSize)
+{
+    return (fluidGridCells(tableSize) + FLUID_SCAN_BLOCK - 1u) / FLUID_SCAN_BLOCK;
+}
+
+// The ledger cell a point in its frame's space falls in, 10 signed bits per axis (x, then y from bit 10, z from
+// bit 20). Bake candidates carry it so a Pickup knows its cell; the frame's space is the world for frame 0.
+uint fluidPackLedgerCell(vec3 p, float cell)
+{
+    ivec3 c = ivec3(floor(p / max(cell, 1e-6)));
+    uvec3 u = uvec3(c) & 0x3FFu;
+    return u.x | (u.y << 10) | (u.z << 20);
+}
+
+uint fluidTargetKey(uint kind, uint index)
+{
+    return (kind << FLUID_TARGET_KIND_SHIFT) | (index & FLUID_TARGET_INDEX_MASK);
+}
+
+#endif

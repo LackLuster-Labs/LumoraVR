@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ddrig0mdr0pjk"
+path="res://.godot/imported/FluidSurfaceTubes.glsl-cfe06ce29014cf51a2bbf8d0c1c6fa3d.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSurfaceTubes.glsl"
+dest_files=["res://.godot/imported/FluidSurfaceTubes.glsl-cfe06ce29014cf51a2bbf8d0c1c6fa3d.res"]
+
+[params]
+

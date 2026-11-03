@@ -1,0 +1,720 @@
+// Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
+// Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
+
+// The fluid GPU layouts, std430, byte for byte the structs in LumoraFluids/Source/Gpu/Layout/. Every kernel
+// includes this first: Godot pastes an include in as text and does not follow an include inside it, so
+// FluidKernels.glsli and FluidThinning.glsli are included after it, never from it. Buffers and bindings are
+// declared by each kernel. -xlinka
+
+#ifndef FLUID_LAYOUT_GLSLI
+#define FLUID_LAYOUT_GLSLI
+
+#define FLUID_GROUP_SIZE 64  // workgroup width of every particle kernel
+#define FLUID_MAX_NEIGHBOURS 96  // neighbour list cap, h + skin
+#define FLUID_NONE 0xFFFFFFFFu  // empty index or id
+#define FLUID_NANOLITRES_PER_CUBIC_METRE 1e12  // the accumulators' fixed point
+#define FLUID_MAX_SUBSTANCES 16
+#define FLUID_MAX_COLLIDERS 512
+#define FLUID_MAX_IMPULSE_BODIES 256
+#define FLUID_MAX_FORCES 32  // FluidForceRecords a frame (est.)
+#define FLUID_BODY_PARTS 16
+#define FLUID_LIMBS 4
+#define FLUID_PHASE_MASK 15u
+#define FLUID_PHASE_BULK 0u
+#define FLUID_PHASE_STRAND 1u
+#define FLUID_PHASE_DROP 2u
+#define FLUID_PHASE_SPRAY 3u
+#define FLUID_PHASE_DEAD 15u  // a free slot
+#define FLUID_PARTICLE_ASLEEP 16u
+#define FLUID_PARTICLE_ANCHORED 32u
+#define FLUID_PARTICLE_FADING 64u
+#define FLUID_PARTICLE_NEW 128u
+#define FLUID_NEIGHBOUR_COUNT_SHIFT 8  // 8 bits
+#define FLUID_CHAIN_BOND_SHIFT 16  // 2 bits
+#define FLUID_SUBSTANCE_SHIFT 0
+#define FLUID_SYSTEM_SHIFT 8
+#define FLUID_FRAME_SHIFT 16
+#define FLUID_ORIGIN_SHIFT 24
+#define FLUID_BYTE_MASK 255u
+#define FLUID_ANCHOR_KIND_MASK 15u
+#define FLUID_ANCHOR_AGE_SHIFT 8
+#define FLUID_ANCHOR_NONE 0u
+#define FLUID_ANCHOR_STATIC 1u
+#define FLUID_ANCHOR_RIGID 2u
+#define FLUID_ANCHOR_BONE 3u
+#define FLUID_ANCHOR_SKIN 4u
+#define FLUID_COLLIDER_BOX 0u
+#define FLUID_COLLIDER_SPHERE 1u
+#define FLUID_COLLIDER_CAPSULE 2u
+#define FLUID_COLLIDER_CYLINDER 3u
+#define FLUID_COLLIDER_CONVEX 4u
+#define FLUID_COLLIDER_MESH 5u
+#define FLUID_PROXY_CAPSULE 0u
+#define FLUID_PROXY_BOX 1u
+#define FLUID_PROXY_SPHERE 2u
+#define FLUID_PERSON_STICK_MASK 3u  // FluidStickMode
+#define FLUID_PERSON_LOD_SHIFT 2  // 3 bits, view LOD
+#define FLUID_PERSON_LOCAL 32u
+#define FLUID_PERSON_VIEW_ONLY 64u
+#define FLUID_PERSON_FROZEN 128u  // Hidden or StandIn: anchors freeze
+#define FLUID_PERSON_DROP_ANCHORS 0x100u  // teleport, avatar swap
+#define FLUID_CONTACT_BONE_MASK 0xFFFFu  // FluidContactVertex.BoneN: the bone, relative to its person
+#define FLUID_CONTACT_PART_SHIFT 16  // FluidContactVertex.Bone0 bits 16-23: the vertex's FluidBodyParts index
+#define FLUID_SKIN_BONE_FIRST 16u  // a person's relative bones count the part bones first, so skin bones start here
+#define FLUID_CONTACT_SUBSTANCE_SHIFT 8  // FluidContactRecord.Part bits 8-15: the deepest contact's frame substance
+#define FLUID_CONTACT_FLAG_SHIFT 24  // FluidContactVertex.Bone0 bits 24-31: the vertex's surface flags
+#define FLUID_CONTACT_TWO_SIDED 0x1000000u  // Bone0 flag: an open surface (a hair card, a hem), collided from the side the fluid came from
+#define FLUID_FRAME_KEEPER 1u  // this machine keeps at least one system here
+#define FLUID_FRAME_BAKES 2u  // bake candidates are collected this frame
+#define FLUID_FRAME_FOCUSED 4u
+#define FLUID_FRAME_BACKGROUND 8u
+#define FLUID_FRAME_FIRST_OF_BLOCK 16u  // uploads and commands apply; clear on a repeated sub-frame of one block
+#define FLUID_FRAME_BIN 32u  // the keeper bins into the ledger
+#define FLUID_FRAME_RECONCILE 64u  // a machine that does not keep compares its particles with the ledger
+#define FLUID_FRAME_LITE 128u
+#define FLUID_FRAME_WATER_ONE_ITERATION 0x100u
+#define FLUID_FRAME_REMOTE_REFINE_OFF 0x200u
+#define FLUID_FRAME_HALF_RATE_BRICKS 0x400u
+#define FLUID_FRAME_NO_SURFACE 0x800u
+#define FLUID_FRAME_COMMANDS_ONLY 0x1000u  // a paused world: apply the commands, run no substep
+#define FLUID_SYSTEM_KEPT 1u
+#define FLUID_SYSTEM_PAUSED 2u
+#define FLUID_SYSTEM_CONTAINER 4u
+#define FLUID_SYSTEM_STICK_TO_PEOPLE 8u
+#define FLUID_SYSTEM_PUSH_BODIES 16u
+#define FLUID_SYSTEM_MIX_COLOURS 32u
+#define FLUID_SYSTEM_COLLIDE_WITH_WORLD 64u
+#define FLUID_FRAME_RECORD_CONTAINER 1u  // a container's frame; Container holds its index
+#define FLUID_COLLIDER_DYNAMIC 1u  // under a rigid body: pushed back through the impulse table
+#define FLUID_COLLIDER_TRIGGER 2u
+#define FLUID_COLLIDER_MOVED 4u  // moved more than a millimetre since last frame
+#define FLUID_COLLIDER_DRAIN 8u
+#define FLUID_COLLIDER_NO_STICK 16u  // fluid touches it and never anchors to it
+#define FLUID_FORCE_DIRECTIONAL 0u
+#define FLUID_FORCE_RADIAL 1u
+#define FLUID_FORCE_VORTEX 2u
+#define FLUID_FORCE_DRAG 3u
+#define FLUID_SUMMARY_ALL_ASLEEP 1u
+#define FLUID_SUMMARY_POOL_EMPTY 2u
+#define FLUID_SUMMARY_NAN_RESET 4u
+#define FLUID_SUMMARY_ENERGY_RISE 8u
+
+// FluidGpuOp
+#define FLUID_OP_NONE 0u
+#define FLUID_OP_EMIT 1u
+#define FLUID_OP_BURST 2u
+#define FLUID_OP_REMOVE 3u
+#define FLUID_OP_CLEAR_ALL 4u
+#define FLUID_OP_CLEAR_ORIGIN 5u
+#define FLUID_OP_EVAPORATE 6u
+#define FLUID_OP_FADE_ORIGIN 7u
+#define FLUID_OP_SETTLE 8u
+#define FLUID_OP_RELEASE 9u
+#define FLUID_OP_REMOVE_PARTICLES 10u
+#define FLUID_OP_RESEED 11u
+#define FLUID_OP_WAKE_BOX 12u
+#define FLUID_OP_DROP_ANCHORS 13u
+#define FLUID_OP_FREEZE_ANCHORS 14u
+#define FLUID_OP_ZERO_VELOCITY 15u
+#define FLUID_OP_REMOVE_BOX 16u
+
+#define FLUID_SUMMARY_CONTACTS_CAPACITY 64
+#define FLUID_SUMMARY_CONTACTS_OFFSET 128
+#define FLUID_SUMMARY_LIMBS_CAPACITY 32
+#define FLUID_SUMMARY_LIMBS_OFFSET 1152
+#define FLUID_SUMMARY_BAKES_CAPACITY 32
+#define FLUID_SUMMARY_BAKES_OFFSET 2176
+#define FLUID_SUMMARY_PENDING_CAPACITY 64
+#define FLUID_SUMMARY_PENDING_OFFSET 3200
+#define FLUID_SUMMARY_IMPULSES_CAPACITY 32
+#define FLUID_SUMMARY_IMPULSES_OFFSET 4224
+#define FLUID_SUMMARY_VOLUMES_CAPACITY 16
+#define FLUID_SUMMARY_VOLUMES_OFFSET 5248
+#define FLUID_SUMMARY_SYSTEMS_CAPACITY 16
+#define FLUID_SUMMARY_SYSTEMS_OFFSET 5504
+#define FLUID_SUMMARY_QUERIES_CAPACITY 128
+#define FLUID_SUMMARY_QUERIES_OFFSET 6528
+#define FLUID_SUMMARY_PROPS_CAPACITY 32
+#define FLUID_SUMMARY_PROPS_OFFSET 8576
+#define FLUID_SUMMARY_BINS_CAPACITY 192
+#define FLUID_SUMMARY_BINS_OFFSET 9600
+#define FLUID_SUMMARY_BYTES 15744
+
+// The summary buffer's members in order; std430 puts each section at its FLUID_SUMMARY_*_OFFSET:
+// layout(set = 0, binding = N, std430) buffer FluidSummaryBuffer { FLUID_SUMMARY_MEMBERS } summary;
+#define FLUID_SUMMARY_MEMBERS \
+    FluidSummaryHeader header; \
+    FluidContactRecord contacts[64]; \
+    FluidLimbRecord limbs[32]; \
+    FluidBakeCandidate bakes[32]; \
+    FluidPendingRemote pending[64]; \
+    FluidImpulseRecord impulses[32]; \
+    FluidVolumeRecord volumes[16]; \
+    FluidSystemStatus systems[16]; \
+    FluidQueryResult queries[128]; \
+    FluidPropEvent props[32]; \
+    FluidLedgerEntry bins[192];
+
+struct FluidParticle
+{
+    vec3 position;
+    float volume;
+    vec3 previous;
+    float mass;
+    vec3 velocity;
+    float wetness;
+    uint phase;
+    uint material;
+    uint tint;
+    uint region;
+    float age;
+    float bandTime;
+    float fadeTime;
+    uint reserved1;
+};
+#define FLUID_PARTICLE_SIZE 80
+
+struct FluidBond
+{
+    uint partner;
+    float restLength;
+    float radius;
+    uint strainFlags;
+    float lambda;
+};
+#define FLUID_BOND_SIZE 20
+
+struct FluidAccumulator
+{
+    int volumeNl;
+    uint label;
+    uint strandAge;
+    uint claim;
+};
+#define FLUID_ACCUMULATOR_SIZE 16
+
+struct FluidAnchor
+{
+    uint kindAge;
+    uint target;
+    uint triangle;
+    uint normal;
+    vec3 point;
+    float strength;
+};
+#define FLUID_ANCHOR_SIZE 32
+
+struct FluidGridCell
+{
+    uint start;
+    uint count;
+};
+#define FLUID_GRID_CELL_SIZE 8
+
+struct FluidFrameRecord
+{
+    vec4 rotation;
+    vec3 position;
+    float scale;
+    vec4 lastRotation;
+    vec3 lastPosition;
+    float lastScale;
+    vec3 linearAcceleration;
+    uint system;
+    vec3 angularVelocity;
+    uint flags;
+    vec3 angularAcceleration;
+    uint container;
+    uint reserved1;
+    uint reserved2;
+    uint reserved3;
+    uint reserved4;
+};
+#define FLUID_FRAME_RECORD_SIZE 128
+
+struct FluidRegion
+{
+    uint awake;
+    uint maxSpeedBits;
+    uint particles;
+    uint quietFrames;
+};
+#define FLUID_REGION_SIZE 16
+
+struct FluidSubstanceRecord
+{
+    float spacing;
+    float smoothingRadius;
+    float restDensity;
+    float particleMass;
+    float density;
+    float viscosity;
+    float xsphFactor;
+    float flowIndex;
+    float yieldStrain;
+    float bondCompliance;
+    float creepTime;
+    float relaxation;
+    float stretchLimit;
+    float minThread;
+    float surfaceTension;
+    float cohesion;
+    float adhesion;
+    float anchorStrength;
+    float anchorCompliance;
+    float stickDistance;
+    float stickTime;
+    float friction;
+    float dryTime;
+    float cureTime;
+    float washability;
+    float colorMixing;
+    float maxSpeed;
+    float sCorrK;
+    float sCorrN;
+    float sCorrDq;
+    float nearRepulsion;
+    float bendCompliance;
+    float sleepSpeed;
+    float bondRadius;
+    uint tint;
+    uint flags;
+    uint bondSlots;
+    uint viscousPasses;
+    float yieldStress;
+    uint spare[25];
+};
+#define FLUID_SUBSTANCE_RECORD_SIZE 256
+
+struct FluidSystemRecord
+{
+    vec3 boundsCenter;
+    float spacing;
+    vec3 boundsHalf;
+    float killBelow;
+    uint frame;
+    uint flags;
+    uint substanceBase;
+    uint substanceCount;
+    float ledgerCell;
+    float surfaceCell;
+    uint capacity;
+    uint reserved0;
+};
+#define FLUID_SYSTEM_RECORD_SIZE 64
+
+struct FluidColliderRecord
+{
+    vec4 rotation;
+    vec3 position;
+    float scale;
+    vec4 lastRotation;
+    vec3 lastPosition;
+    float lastScale;
+    vec3 halfExtents;
+    float radius;
+    float stickiness;
+    float wetting;
+    float friction;
+    float absorb;
+    uint kind;
+    uint gridIndex;
+    uint body;
+    uint frame;
+    uint flags;
+    uint owner;
+    float bounce;
+    uint reserved1;
+    vec3 bodyCenter;
+    uint reserved2;
+};
+#define FLUID_COLLIDER_RECORD_SIZE 144
+
+struct FluidTriangle
+{
+    float a[3];
+    float b[3];
+    float c[3];
+};
+#define FLUID_TRIANGLE_SIZE 36
+
+struct FluidTriangleGridHeader
+{
+    vec3 origin;
+    float cellSize;
+    uint dimX;
+    uint dimY;
+    uint dimZ;
+    uint triangleStart;
+    uint cellStart;
+    uint indexStart;
+    uint triangleCount;
+    uint flags;
+};
+#define FLUID_TRIANGLE_GRID_HEADER_SIZE 48
+
+struct FluidContactVertex
+{
+    vec3 position;
+    uint normal;
+    vec4 weights;
+    uint bone0;
+    uint bone1;
+    uint bone2;
+    uint bone3;
+};
+#define FLUID_CONTACT_VERTEX_SIZE 48
+
+struct FluidBlendDelta
+{
+    vec3 delta;
+    uint vertexShape;
+};
+#define FLUID_BLEND_DELTA_SIZE 16
+
+struct FluidSkinnedVertex
+{
+    vec3 position;
+    uint normal;
+    vec3 lastPosition;
+    uint region;
+};
+#define FLUID_SKINNED_VERTEX_SIZE 32
+
+struct FluidBoneRecord
+{
+    vec4 row0;
+    vec4 row1;
+    vec4 row2;
+    vec4 lastRow0;
+    vec4 lastRow1;
+    vec4 lastRow2;
+};
+#define FLUID_BONE_RECORD_SIZE 96
+
+struct FluidResidueBone
+{
+    vec4 row0;
+    vec4 row1;
+    vec4 row2;
+};
+#define FLUID_RESIDUE_BONE_SIZE 48
+
+struct FluidProxyRecord
+{
+    uint kind;
+    uint bone;
+    uint part;
+    uint person;
+    vec4 a;
+    vec4 b;
+};
+#define FLUID_PROXY_RECORD_SIZE 48
+
+struct FluidPersonRecord
+{
+    uint boneStart;
+    uint boneCount;
+    uint proxyStart;
+    uint proxyCount;
+    uint vertexStart;
+    uint vertexCount;
+    uint triangleStart;
+    uint triangleCount;
+    uint blendStart;
+    uint blendCount;
+    uint flags;
+    uint user;
+    float stickiness;
+    float soleInset;
+    uint residueBoneStart;
+    uint residueBoneCount;
+    uint skinBoneStart;
+    uint skinBoneCount;
+    float skinFriction;
+    float skinWetting;
+};
+#define FLUID_PERSON_RECORD_SIZE 80
+
+struct FluidSpotRecord
+{
+    vec3 local;
+    float volumeMl;
+    uint bone;
+    uint tint;
+    uint normalShape;
+    uint meta;
+};
+#define FLUID_SPOT_RECORD_SIZE 32
+
+struct FluidGpuCommand
+{
+    uint op;
+    uint system;
+    uint count;
+    uint seed;
+    vec4 a;
+    vec4 b;
+    vec4 c;
+};
+#define FLUID_GPU_COMMAND_SIZE 64
+
+struct FluidLedgerEntry
+{
+    uint system;
+    uint index;
+    uint tint;
+    uint flags;
+    ivec4 cell;
+};
+#define FLUID_LEDGER_ENTRY_SIZE 32
+
+struct FluidQuerySphere
+{
+    vec3 center;
+    float radius;
+};
+#define FLUID_QUERY_SPHERE_SIZE 16
+
+struct FluidSoftSphere
+{
+    vec4 now;
+    vec4 last;
+};
+#define FLUID_SOFT_SPHERE_SIZE 32
+
+struct FluidForceRecord
+{
+    vec3 center;
+    float radius;
+    vec3 direction;
+    float strength;
+    uint mode;
+    uint system;
+    uint frame;
+    uint reserved0;
+};
+#define FLUID_FORCE_RECORD_SIZE 48
+
+struct FluidSurfaceBrick
+{
+    int x;
+    int y;
+    int z;
+    uint renderer;
+    uint chunkCount;
+    uint vertices;
+    uint tableEntry;
+    uint quads;
+    uint flags;
+    uint particles;
+    uint lastFrame;
+    uint fieldSlot;
+    float cellSize;
+    uint extractFlags;
+    uint reserved1;
+    uint reserved2;
+};
+#define FLUID_SURFACE_BRICK_SIZE 64
+
+struct FluidDispatchArgs
+{
+    uint x;
+    uint y;
+    uint z;
+};
+#define FLUID_DISPATCH_ARGS_SIZE 12
+
+struct FluidPushConstants
+{
+    uint pass;
+    uint substep;
+    uint parity;
+    uint arg;
+};
+#define FLUID_PUSH_CONSTANTS_SIZE 16
+
+struct FluidFrameHeader
+{
+    vec3 gravity;
+    float dtFrame;
+    float dtSubstep;
+    float time;
+    float cellSize;
+    float invCellSize;
+    uint live;
+    uint awake;
+    uint capacity;
+    uint awakeCapacity;
+    uint substances;
+    uint systems;
+    uint colliders;
+    uint commands;
+    uint bones;
+    uint proxies;
+    uint people;
+    uint frames;
+    uint contactVertices;
+    uint contactTriangles;
+    uint softSpheres;
+    uint queries;
+    uint spots;
+    uint residueBones;
+    uint ledgerCells;
+    uint ledgerChanges;
+    uint tier;
+    uint flags;
+    uint sequence;
+    uint substeps;
+    uint bondSlots;
+    uint maxNeighbours;
+    uint gridSize;
+    uint gridMask;
+    float skin;
+    float sleepScale;
+    uint hiddenOrigins;
+    uint reserved0;
+    uint forces;
+    uint spare[23];
+};
+#define FLUID_FRAME_HEADER_SIZE 256
+
+struct FluidSummaryHeader
+{
+    uint frame;
+    uint flags;
+    uint awake;
+    uint live;
+    uint contacts;
+    uint limbs;
+    uint bakes;
+    uint pending;
+    uint impulses;
+    uint volumes;
+    uint systems;
+    uint queries;
+    uint props;
+    uint bins;
+    uint binCursor;
+    uint binTotal;
+    float vmax;
+    float kineticEnergy;
+    uint nanCount;
+    uint overflow;
+    uint neighbourOverflow;
+    uint slabOverflow;
+    uint poolEmpty;
+    uint reserved0;
+    uint submittedSequence;
+    uint spare[7];
+};
+#define FLUID_SUMMARY_HEADER_SIZE 128
+
+struct FluidContactRecord
+{
+    uint person;
+    uint part;
+    float depth;
+    float speed;
+};
+#define FLUID_CONTACT_RECORD_SIZE 16
+
+struct FluidLimbRecord
+{
+    uint person;
+    uint limb;
+    float stuck;
+    uint strands;
+    uint snaps;
+    float lastSnapLength;
+    float pull;
+    uint reserved0;
+};
+#define FLUID_LIMB_RECORD_SIZE 32
+
+struct FluidBakeCandidate
+{
+    vec3 local;
+    float volume;
+    uint id;
+    uint owner;
+    uint tint;
+    uint cell;
+};
+#define FLUID_BAKE_CANDIDATE_SIZE 32
+
+struct FluidPendingRemote
+{
+    uint person;
+    uint cell;
+    int volumeNl;
+    uint system;
+};
+#define FLUID_PENDING_REMOTE_SIZE 16
+
+struct FluidImpulseRecord
+{
+    vec3 linear;
+    uint body;
+    vec3 angular;
+    uint count;
+};
+#define FLUID_IMPULSE_RECORD_SIZE 32
+
+struct FluidVolumeRecord
+{
+    uint kind;
+    uint index;
+    float litres;
+    uint system;
+};
+#define FLUID_VOLUME_RECORD_SIZE 16
+
+struct FluidSystemStatus
+{
+    vec3 boundsMin;
+    float vmax;
+    vec3 boundsMax;
+    float kineticEnergy;
+    uint awake;
+    uint live;
+    uint nanCount;
+    uint flags;
+    uint strands;
+    uint anchors;
+    uint overflow;
+    uint snaps;
+};
+#define FLUID_SYSTEM_STATUS_SIZE 64
+
+struct FluidPropEvent
+{
+    vec3 point;
+    float amount;
+    uint kind;
+    uint system;
+    uint collider;
+    uint reserved0;
+};
+#define FLUID_PROP_EVENT_SIZE 32
+
+struct FluidQueryResult
+{
+    float localLitres;
+    float moving;
+    uint system;
+    uint reserved0;
+};
+#define FLUID_QUERY_RESULT_SIZE 16
+
+struct FluidResidueInstance
+{
+    vec4 row0;
+    vec4 row1;
+    vec4 row2;
+    vec4 color;
+    vec4 custom;
+};
+#define FLUID_RESIDUE_INSTANCE_SIZE 80
+
+#endif

@@ -1,0 +1,370 @@
+// Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
+// Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
+
+// What the surface kernels share: the renderer's parameter block, the binding numbers, the brick hash, the field
+// layout and the mesh writes. Include after FluidLayout.glsli and FluidKernels.glsli. Buffers are declared by the
+// kernel that uses them, through the FLUID_SURF_DECLARE_* lines below, so each kernel binds only what it reads and
+// the uniform set built for it carries the rest without complaint. -xlinka
+//
+// The field. Bricks are 8x8x8 cells. Each dirty brick gets a field slot for the frame holding its own node values
+// from -2 to 9 on every axis (12^3): the nets need cells -1..7 for the quads it owns and -2..8 to smooth them, and
+// central differences need one node more. Two bricks that share a seam both splat every particle near it, in fixed
+// point, so the shared nodes hold the same integers in both and the seam vertices come out bit for bit the same.
+// Colour, speed, wetness and strandness ride a grid at twice the cell (6^3), which is plenty for a tint.
+//
+// Slabs. A brick's geometry lives in chunks of 32 vertices and 32 quads drawn from one pool, at most
+// chunksPerBrick of them (16, so 512 of each). 32 and not 64: a brick rounds up to whole chunks, and at 64 a
+// puddle used about half of what it took. A settled brick keeps its chunks untouched; a dirty one gives them back (zeroed) and
+// takes what it needs again. A brick that needs more than its share extracts at twice the cell size for that frame.
+
+#ifndef FLUID_SURFACE_GLSLI
+#define FLUID_SURFACE_GLSLI
+
+struct FluidSurfaceParams
+{
+    vec4 toLocal0;
+    vec4 toLocal1;
+    vec4 toLocal2;
+    vec3 gridOrigin;
+    float cellSize;
+    float splatRadius;
+    float iso;
+    float fieldScale;
+    float smoothing;
+    uint frame;
+    uint flags;
+    uint particleCount;
+    uint system;
+    uint brickCapacity;
+    uint tableMask;
+    uint fieldCapacity;
+    uint chunkCapacity;
+    uint chunksPerBrick;
+    uint vertexCapacity;
+    uint quadCapacity;
+    uint normalWords;
+    uint tubeSides;
+    uint tubeSegments;
+    uint tubeVertexCapacity;
+    uint tubeQuadCapacity;
+    uint tubeNormalWords;
+    uint maxStrands;
+    uint bondSlots;
+    uint sprayCount;
+    float minRadius;
+    float maxRadius;
+    float sprayRadius;
+    uint sprayVertexCapacity;
+    uint sprayQuadCapacity;
+    uint sprayNormalWords;
+    uint dirtyBoxCount;
+    uint soloNeighbours;
+    uvec4 hiddenOrigins[2];
+    vec4 dirtyBoxMin[2];
+    vec4 dirtyBoxMax[2];
+    float trailTime;
+    float trailMax;
+    float trailSpeed;
+    uint reserved0;
+};
+#define FLUID_SURFACE_PARAMS_SIZE 304
+
+// FluidSurfaceParams.flags
+#define FLUID_SURF_ALL_DIRTY 1u
+#define FLUID_SURF_SMOOTH 2u
+#define FLUID_SURF_INDEX32 4u
+#define FLUID_SURF_STRANDS 8u
+#define FLUID_SURF_SPRAY 16u
+#define FLUID_SURF_REBUILD_TABLE 32u
+#define FLUID_SURF_BONDS_BY_SLOT 64u
+#define FLUID_SURF_FORCE_COARSE 128u
+#define FLUID_SURF_SKIN_CONTACTS 256u
+
+// FluidSurfaceBrick as the chunk scheme uses it: chunkCount chunks of vertices and quads, tableEntry its hash table
+// entry, fieldSlot this frame's field slot, extractFlags the flags of the last extraction (FLUID_BRICK_*).
+#define FLUID_BRICK_LIVE 1u
+#define FLUID_BRICK_DEFERRED 2u
+#define FLUID_BRICK_COARSE 4u
+#define FLUID_BRICK_NEW 8u
+
+// A strand link's flag in FluidBond.strainFlags is the solver's own FLUID_BOND_STRAND (FluidKernels.glsli, which
+// every surface kernel includes first; FluidConstants.BondStrand on the CPU). The elastic flag beside it is set on
+// bulk bonds too, so only the strand flag reads as a chain.
+#define FLUID_BOND_CHAIN FLUID_BOND_STRAND
+
+#define FLUID_BRICK_CELLS 8
+#define FLUID_FIELD_DIM 12
+#define FLUID_FIELD_NODES 1728
+#define FLUID_ATTR_DIM 6
+#define FLUID_ATTR_CHANNELS 16
+#define FLUID_ATTR_NODES 216
+#define FLUID_FIELD_INTS 5184
+#define FLUID_CELL_DIM 11
+#define FLUID_CELLS 1331
+#define FLUID_OWN_CELL_DIM 9
+#define FLUID_OWN_CELLS 729
+#define FLUID_CHUNK 32u
+// a brick's chunk list holds this many entries whatever its limit (FluidSurfaceParams.chunksPerBrick)
+#define FLUID_CHUNK_LIST 16u
+#define FLUID_KEY_EMPTY 0xFFFFFFFFu
+#define FLUID_KEY_TOMB 0xFFFFFFFEu
+#define FLUID_PROBES 64u
+
+// counters buffer, one uint each; the two indirect argument triples sit on 16 B boundaries
+#define FLUID_SC_BRICK_TOP 0
+#define FLUID_SC_BRICK_POPS 1
+#define FLUID_SC_BRICK_TAKEN 2
+#define FLUID_SC_CHUNK_TOP 3
+#define FLUID_SC_CHUNK_POPS 4
+#define FLUID_SC_CHUNK_TAKEN 5
+#define FLUID_SC_DIRTY 6
+#define FLUID_SC_LIVE 7
+#define FLUID_SC_COARSE 8
+#define FLUID_SC_CHUNK_FAIL 9
+#define FLUID_SC_FIELD_FULL 10
+#define FLUID_SC_TOMBS 11
+#define FLUID_SC_TUBE_QUADS 12
+#define FLUID_SC_TUBE_QUADS_LAST 13
+#define FLUID_SC_TUBE_VERTS 14
+#define FLUID_SC_SPRAY_QUADS 15
+#define FLUID_SC_SPRAY_QUADS_LAST 16
+#define FLUID_SC_SPRAY_VERTS 17
+#define FLUID_SC_STRANDS 18
+#define FLUID_SC_TUBE_OVERFLOW 19
+#define FLUID_SC_BRICK_FAIL 20
+#define FLUID_SC_PROBE_FAIL 21
+// set by the splat when vacant keys fill a quarter of the table; the next frame's rebuild passes act on it
+#define FLUID_SC_REBUILD 22
+#define FLUID_SC_MAP_FOLDS 23
+#define FLUID_SC_MAPPED 24
+#define FLUID_SC_MAP_DEEP 25
+#define FLUID_SC_EXTRACTED 28
+#define FLUID_SC_QUADS 29
+#define FLUID_SC_VERTS 30
+#define FLUID_SC_FRAME 31
+#define FLUID_SC_COUNT 32
+
+#define FLUID_SURF_DECLARE_PARAMS layout(set = 0, binding = 0, std430) readonly buffer SurfaceParamsBuffer { FluidSurfaceParams sp; };
+#define FLUID_SURF_DECLARE_PARTICLES layout(set = 0, binding = 1, std430) readonly buffer ParticleBuffer { FluidParticle particles[]; };
+#define FLUID_SURF_DECLARE_TABLE layout(set = 0, binding = 2, std430) buffer TableBuffer { uvec4 table[]; };
+#define FLUID_SURF_DECLARE_BRICKS layout(set = 0, binding = 3, std430) buffer BrickBuffer { FluidSurfaceBrick bricks[]; };
+#define FLUID_SURF_DECLARE_BRICK_CHUNKS layout(set = 0, binding = 4, std430) buffer BrickChunkBuffer { uint brickChunks[]; };
+#define FLUID_SURF_DECLARE_COUNTERS layout(set = 0, binding = 5, std430) buffer CounterBuffer { uint counters[]; };
+#define FLUID_SURF_DECLARE_STACKS layout(set = 0, binding = 6, std430) buffer StackBuffer { uint stacks[]; };
+#define FLUID_SURF_DECLARE_DIRTY layout(set = 0, binding = 7, std430) buffer DirtyBuffer { uint dirtyList[]; };
+#define FLUID_SURF_DECLARE_FIELD layout(set = 0, binding = 8, std430) buffer FieldBuffer { int field[]; };
+#define FLUID_SURF_DECLARE_SCRATCH layout(set = 0, binding = 9, std430) buffer ScratchBuffer { vec4 scratch[]; };
+#define FLUID_SURF_DECLARE_MESH layout(set = 0, binding = 10, std430) buffer VertexBuffer { uint vb[]; }; layout(set = 0, binding = 11, std430) buffer AttributeBuffer { uint ab[]; }; layout(set = 0, binding = 12, std430) buffer IndexBuffer { uint ib[]; };
+#define FLUID_SURF_DECLARE_INDEX layout(set = 0, binding = 12, std430) buffer IndexBuffer { uint ib[]; };
+#define FLUID_SURF_DECLARE_BONDS layout(set = 0, binding = 13, std430) readonly buffer BondBuffer { FluidBond bonds[]; }; layout(set = 0, binding = 14, std430) readonly buffer IdBuffer { uint ids[]; }; layout(set = 0, binding = 15, std430) readonly buffer IdToSlotBuffer { uint idToSlot[]; };
+#define FLUID_SURF_DECLARE_ACCUMULATORS layout(set = 0, binding = 16, std430) readonly buffer AccumulatorBuffer { FluidAccumulator accumulators[]; };
+#define FLUID_SURF_DECLARE_TUBE_MESH layout(set = 0, binding = 18, std430) buffer TubeVertexBuffer { uint tvb[]; }; layout(set = 0, binding = 19, std430) buffer TubeAttributeBuffer { uint tab[]; }; layout(set = 0, binding = 20, std430) buffer TubeIndexBuffer { uint tib[]; };
+#define FLUID_SURF_DECLARE_TUBE_INDEX layout(set = 0, binding = 20, std430) buffer TubeIndexBuffer { uint tib[]; };
+#define FLUID_SURF_DECLARE_SPRAY layout(set = 0, binding = 21, std430) readonly buffer SprayBuffer { FluidParticle sprayParticles[]; };
+#define FLUID_SURF_DECLARE_SPRAY_MESH layout(set = 0, binding = 22, std430) buffer SprayVertexBuffer { uint svb[]; }; layout(set = 0, binding = 23, std430) buffer SprayAttributeBuffer { uint sab[]; }; layout(set = 0, binding = 24, std430) buffer SprayIndexBuffer { uint sib[]; };
+#define FLUID_SURF_DECLARE_SPRAY_INDEX layout(set = 0, binding = 24, std430) buffer SprayIndexBuffer { uint sib[]; };
+// The nets' and the smoothing's dispatch size, in a buffer of its own: Godot's graph keeps one usage per buffer per
+// compute list, so an argument buffer also bound as storage in the list that dispatches from it gets no barrier
+// for the indirect read and hands the GPU last frame's count.
+#define FLUID_SURF_DECLARE_ARGS layout(set = 0, binding = 25, std430) buffer ArgsBuffer { uint netsArgs[]; };
+
+// The solver's own counters, read for its live count. The cell sort packs the live particles into the slots below
+// it; the slots past it keep whatever earlier frames left there, which drawn would be ghosts of drained or merged
+// fluid. A source without solver counters binds a stand-in that says no limit.
+#define FLUID_SURF_DECLARE_LIVE layout(set = 0, binding = 26, std430) readonly buffer SolverCounterBuffer { uint solverCounters[]; };
+#define FLUID_SURF_LIVE min(sp.particleCount, solverCounters[FLUID_C_LIVE])
+
+#define FLUID_SURF_DECLARE_PUSH layout(push_constant, std430) uniform PushBlock { FluidPushConstants pc; };
+
+vec3 fluidSurfToLocal(FluidSurfaceParams p, vec3 x)
+{
+    vec4 h = vec4(x, 1.0);
+    return vec3(dot(p.toLocal0, h), dot(p.toLocal1, h), dot(p.toLocal2, h));
+}
+
+vec3 fluidSurfDirToLocal(FluidSurfaceParams p, vec3 v)
+{
+    return vec3(dot(p.toLocal0.xyz, v), dot(p.toLocal1.xyz, v), dot(p.toLocal2.xyz, v));
+}
+
+bool fluidSurfOriginHidden(FluidSurfaceParams p, uint origin)
+{
+    uint word = p.hiddenOrigins[origin >> 7][(origin >> 5) & 3u];
+    return (word & (1u << (origin & 31u))) != 0u;
+}
+
+// x and z take 11 bits and y 10, kept off the top so no key can equal the empty or tombstone marks.
+bool fluidBrickKeyValid(ivec3 b)
+{
+    return all(greaterThanEqual(b, ivec3(-1022, -510, -1022))) && all(lessThanEqual(b, ivec3(1022, 510, 1022)));
+}
+
+uint fluidBrickKey(ivec3 b)
+{
+    return uint(b.x + 1024) | (uint(b.y + 512) << 11) | (uint(b.z + 1024) << 21);
+}
+
+ivec3 fluidBrickOfKey(uint key)
+{
+    return ivec3(int(key & 2047u) - 1024, int((key >> 11) & 1023u) - 512, int(key >> 21) - 1024);
+}
+
+uint fluidBrickHash(uint key, uint mask)
+{
+    uint h = key * 2654435761u;
+    h ^= h >> 15;
+    return h & mask;
+}
+
+// Field node (each axis -2..9) and attribute node (each axis 0..5, fine node 2a - 2) offsets within a slot.
+uint fluidFieldNode(ivec3 n)
+{
+    return uint(((n.z + 2) * FLUID_FIELD_DIM + (n.y + 2)) * FLUID_FIELD_DIM + (n.x + 2));
+}
+
+uint fluidAttrNode(ivec3 a)
+{
+    return uint(FLUID_FIELD_NODES + ((a.z * FLUID_ATTR_DIM + a.y) * FLUID_ATTR_DIM + a.x) * FLUID_ATTR_CHANNELS);
+}
+
+// Cells -2..8 on each axis (11^3), for the scratch the smoothing pass reads.
+uint fluidCellIndex(ivec3 c)
+{
+    return uint(((c.z + 2) * FLUID_CELL_DIM + (c.y + 2)) * FLUID_CELL_DIM + (c.x + 2));
+}
+
+// Cells -1..7 on each axis (9^3): the ones the brick's own quads can reach.
+uint fluidOwnCellIndex(ivec3 c)
+{
+    return uint(((c.z + 1) * FLUID_OWN_CELL_DIM + (c.y + 1)) * FLUID_OWN_CELL_DIM + (c.x + 1));
+}
+
+ivec3 fluidOwnCellOf(uint i)
+{
+    int x = int(i % 9u) - 1;
+    int y = int((i / 9u) % 9u) - 1;
+    int z = int(i / 81u) - 1;
+    return ivec3(x, y, z);
+}
+
+// How alone a particle is, 0 in a crowd to 1 with no neighbours, from the neighbour count the solver keeps in its
+// phase; 0 when the source keeps none.
+float fluidSurfAlone(FluidSurfaceParams p, uint phase)
+{
+    if (p.soloNeighbours == 0u)
+        return 0.0;
+    float n = float((phase >> FLUID_NEIGHBOUR_COUNT_SHIFT) & FLUID_BYTE_MASK);
+    return clamp(1.0 - n / float(p.soloNeighbours), 0.0, 1.0);
+}
+
+// The trail a fast particle splats along, in metres from where it is back to where it was trailTime ago, past
+// trailSpeed and at most trailMax long. The emitter lays a stream down in one packet a frame and a falling stream
+// pulls apart into drops; drawn along their own last frame of travel they join into one rope again, and a splash
+// draws as streaks instead of loose beads. Backward only, so a stream's front never reaches past where it is. Only
+// the loose ones trail (full length at half the neighbours or fewer): a crowd moving fast is whole already, and
+// trails cost splat work.
+vec3 fluidSurfTrail(FluidSurfaceParams p, vec3 velocityLocal, float alone)
+{
+    float speed = length(velocityLocal);
+    float reach = clamp(alone * 2.0, 0.0, 1.0);
+    if (speed <= p.trailSpeed || p.trailTime <= 0.0 || reach <= 0.0)
+        return vec3(0.0);
+    float len = min((speed - p.trailSpeed) * p.trailTime, p.trailMax) * reach;
+    return velocityLocal * (-len / speed);
+}
+
+// How far a resting, loose particle's kernel reaches sideways, as a multiple of its radius (1 = round). Water that
+// has run out thin lies in one sparse layer, its particles further apart than the kernel joins, and draws as beads
+// or not at all; widened across the floor at the same peak they make one sheet again, a few cells thick, which the
+// nets can hold. Only what is slow and has few neighbours spreads: a drop in the air stays round. "Across" is the
+// renderer's own horizontal plane (fluidSurfFlat).
+#define FLUID_SPREAD_MAX 1.35
+float fluidSurfSpread(float alone, float speed)
+{
+    return 1.0 + (FLUID_SPREAD_MAX - 1.0) * smoothstep(0.2, 0.6, alone) * (1.0 - smoothstep(0.3, 0.8, speed));
+}
+
+// The squared distance a kernel spread sideways by spread sees: the up part as it is, the rest shrunk.
+float fluidSurfFlat(vec3 d, vec3 up, float spread)
+{
+    float v = dot(d, up);
+    vec3 h = d - up * v;
+    return dot(h, h) / (spread * spread) + v * v;
+}
+
+// The splat kernel, normalized so a lattice of particles at any spacing with V = d^3 each fills to about 1:
+// sum V W over a lattice = integral of W = 4 pi R^3 (16 / 315) = 0.6383 R^3.
+float fluidSplatWeight(float r2, float radius)
+{
+    float q2 = r2 / (radius * radius);
+    if (q2 >= 1.0)
+        return 0.0;
+    float t = 1.0 - q2;
+    return t * t * t / (0.63832 * radius * radius * radius);
+}
+
+// Godot's tangent encoding: the octahedral direction with y folded into the upper or lower half for the
+// bitangent sign (rendering_server.cpp, octahedron_tangent_encode).
+uint fluidPackTangent(vec3 t)
+{
+    vec2 e = fluidOctEncode(t);
+    e.y = max(e.y, 1.0 / 32767.0) * 0.5 + 0.5;
+    return packUnorm2x16(e);
+}
+
+// Any unit vector at right angles to n.
+vec3 fluidAnyTangent(vec3 n)
+{
+    vec3 a = abs(n.y) < 0.99 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0);
+    return normalize(cross(a, n));
+}
+
+// One vertex into a surface laid out as FluidMeshLayout says: positions as floats, then the normal entries
+// (normalWords 1: the normal; 2: the normal and a tangent), then COLOR and CUSTOM0 in the attribute buffer.
+#define FLUID_WRITE_VERTEX(VB, AB, CAP, WORDS, V, POS, N, COL, C0) \
+    { \
+        VB[(V) * 3u + 0u] = floatBitsToUint((POS).x); \
+        VB[(V) * 3u + 1u] = floatBitsToUint((POS).y); \
+        VB[(V) * 3u + 2u] = floatBitsToUint((POS).z); \
+        VB[(CAP) * 3u + (V) * (WORDS)] = fluidPackNormal(N); \
+        if ((WORDS) == 2u) \
+            VB[(CAP) * 3u + (V) * 2u + 1u] = fluidPackTangent(fluidAnyTangent(N)); \
+        AB[(V) * 3u + 0u] = packUnorm4x8(COL); \
+        AB[(V) * 3u + 1u] = packHalf2x16((C0).xy); \
+        AB[(V) * 3u + 2u] = packHalf2x16((C0).zw); \
+    }
+
+// One quad (two triangles a b c, a c d) at quad slot Q, whole: 3 words at 16 bit, 6 at 32.
+#define FLUID_WRITE_QUAD(IB, WIDE, Q, A, B, C, D) \
+    { \
+        if (WIDE) \
+        { \
+            uint w_ = (Q) * 6u; \
+            IB[w_ + 0u] = (A); IB[w_ + 1u] = (B); IB[w_ + 2u] = (C); \
+            IB[w_ + 3u] = (A); IB[w_ + 4u] = (C); IB[w_ + 5u] = (D); \
+        } \
+        else \
+        { \
+            uint w_ = (Q) * 3u; \
+            IB[w_ + 0u] = (A) | ((B) << 16); \
+            IB[w_ + 1u] = (C) | ((A) << 16); \
+            IB[w_ + 2u] = (C) | ((D) << 16); \
+        } \
+    }
+
+#define FLUID_ZERO_QUAD(IB, WIDE, Q) \
+    { \
+        if (WIDE) \
+        { \
+            uint w_ = (Q) * 6u; \
+            IB[w_ + 0u] = 0u; IB[w_ + 1u] = 0u; IB[w_ + 2u] = 0u; \
+            IB[w_ + 3u] = 0u; IB[w_ + 4u] = 0u; IB[w_ + 5u] = 0u; \
+        } \
+        else \
+        { \
+            uint w_ = (Q) * 3u; \
+            IB[w_ + 0u] = 0u; IB[w_ + 1u] = 0u; IB[w_ + 2u] = 0u; \
+        } \
+    }
+
+#endif

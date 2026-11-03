@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://n3b8ewmqy5h8"
+path="res://.godot/imported/FluidSurfaceBricks.glsl-47a6e62cda6ca574b57df9628adef267.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSurfaceBricks.glsl"
+dest_files=["res://.godot/imported/FluidSurfaceBricks.glsl-47a6e62cda6ca574b57df9628adef267.res"]
+
+[params]
+

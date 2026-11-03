@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://povc6eqwyntd"
+path="res://.godot/imported/FluidSkinCollide.glsl-9ed9181831afb4e7836034522e9df21f.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSkinCollide.glsl"
+dest_files=["res://.godot/imported/FluidSkinCollide.glsl-9ed9181831afb4e7836034522e9df21f.res"]
+
+[params]
+

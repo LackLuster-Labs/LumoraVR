@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ru5ifc34a1pn"
+path="res://.godot/imported/FluidSortScan.glsl-8d65c2238fcaf2024b2af8f94edb62c4.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSortScan.glsl"
+dest_files=["res://.godot/imported/FluidSortScan.glsl-8d65c2238fcaf2024b2af8f94edb62c4.res"]
+
+[params]
+

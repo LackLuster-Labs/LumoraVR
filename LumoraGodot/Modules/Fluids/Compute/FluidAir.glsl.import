@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://ck458b1i1came"
+path="res://.godot/imported/FluidAir.glsl-7ccf3336fe42e65902fc7be1a9cc31ed.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidAir.glsl"
+dest_files=["res://.godot/imported/FluidAir.glsl-7ccf3336fe42e65902fc7be1a9cc31ed.res"]
+
+[params]
+

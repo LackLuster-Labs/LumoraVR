@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bmgqaxupp2rmq"
+path="res://.godot/imported/FluidViscous.glsl-53d2586e273ef65b410a23f69824ec8f.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidViscous.glsl"
+dest_files=["res://.godot/imported/FluidViscous.glsl-53d2586e273ef65b410a23f69824ec8f.res"]
+
+[params]
+

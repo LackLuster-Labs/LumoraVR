@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cdx3qkfskifm6"
+path="res://.godot/imported/FluidResidue.glsl-2aefd616bd7c2dc6b6305d05b9c74c20.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidResidue.glsl"
+dest_files=["res://.godot/imported/FluidResidue.glsl-2aefd616bd7c2dc6b6305d05b9c74c20.res"]
+
+[params]
+

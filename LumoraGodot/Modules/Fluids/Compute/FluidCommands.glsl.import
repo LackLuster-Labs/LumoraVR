@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://4eglream3fx1"
+path="res://.godot/imported/FluidCommands.glsl-e32e38e904bbbd42efb5b865539d2e4e.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidCommands.glsl"
+dest_files=["res://.godot/imported/FluidCommands.glsl-e32e38e904bbbd42efb5b865539d2e4e.res"]
+
+[params]
+

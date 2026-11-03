@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bmudbgvdibfko"
+path="res://.godot/imported/FluidFrameEndA.glsl-7d7d10eb4908179e3a4817dcd451b3d8.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidFrameEndA.glsl"
+dest_files=["res://.godot/imported/FluidFrameEndA.glsl-7d7d10eb4908179e3a4817dcd451b3d8.res"]
+
+[params]
+

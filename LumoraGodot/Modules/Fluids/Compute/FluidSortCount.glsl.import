@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cj0m3qgd5na86"
+path="res://.godot/imported/FluidSortCount.glsl-85933d44090983acbca2c716561897b2.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSortCount.glsl"
+dest_files=["res://.godot/imported/FluidSortCount.glsl-85933d44090983acbca2c716561897b2.res"]
+
+[params]
+

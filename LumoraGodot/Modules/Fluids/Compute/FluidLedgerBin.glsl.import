@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://clwxild3m2dxl"
+path="res://.godot/imported/FluidLedgerBin.glsl-6abdb113d34ff1707015f519dabf622c.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidLedgerBin.glsl"
+dest_files=["res://.godot/imported/FluidLedgerBin.glsl-6abdb113d34ff1707015f519dabf622c.res"]
+
+[params]
+

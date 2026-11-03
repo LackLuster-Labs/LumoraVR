@@ -1,0 +1,94 @@
+// Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
+// Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
+
+// The strand thinning laws, per link, per frame (Papageorgiou 1995, Eggers 1997, Entov and Hinch 1997). Include
+// after FluidLayout.glsli. A link's radius shrinks by the law of its regime and the volume it loses moves to its
+// two ends through the nL accumulators; nothing here touches a buffer. A17 checks each law against its closed form.
+// -xlinka
+
+#ifndef FLUID_THINNING_GLSLI
+#define FLUID_THINNING_GLSLI
+
+#ifndef FLUID_PI
+#define FLUID_PI 3.14159265358979
+#endif
+
+// published prefactors, never tuned by hand
+#define FLUID_INERTIO_CAPILLARY 0.4
+#define FLUID_VISCO_CAPILLARY 0.0709
+// a step moves at most this much of an end particle's volume
+#define FLUID_MAX_VOLUME_MOVE 0.25
+
+#define FLUID_REGIME_INERTIO 0u
+#define FLUID_REGIME_VISCO 1u
+#define FLUID_REGIME_ELASTO 2u
+
+// Ohnesorge number of a thread of radius r: viscosity against inertia and surface tension.
+float fluidOhnesorge(float mu, float rho, float gamma, float r)
+{
+    return mu / sqrt(max(rho * gamma * r, 1e-20));
+}
+
+// Elastocapillary once the polymer stress passes the capillary pressure, G eps > gamma / r, and only for a
+// substance with a relaxation time. A link that is in stays in (the caller keeps the flag in the bond).
+bool fluidElastoCrossed(float relaxation, float modulus, float strain, float gamma, float r)
+{
+    return relaxation > 0.0 && modulus * strain > gamma / max(r, 1e-9);
+}
+
+uint fluidThinningRegime(bool elasto, float mu, float rho, float gamma, float r)
+{
+    if (elasto)
+        return FLUID_REGIME_ELASTO;
+    return fluidOhnesorge(mu, rho, gamma, r) < 1.0 ? FLUID_REGIME_INERTIO : FLUID_REGIME_VISCO;
+}
+
+// dr/dt in m/s, never positive.
+float fluidThinningRate(uint regime, float r, float mu, float rho, float gamma, float relaxation)
+{
+    if (regime == FLUID_REGIME_ELASTO)
+        return -r / (3.0 * max(relaxation, 1e-6));
+    if (regime == FLUID_REGIME_VISCO)
+        return -FLUID_VISCO_CAPILLARY * gamma / max(mu, 1e-6);
+    return -FLUID_INERTIO_CAPILLARY * sqrt(gamma / max(rho * r, 1e-20));
+}
+
+// One frame of thinning, each law integrated exactly over the frame (an Euler step on the exponential drifts 7%
+// over a slime strand's life at 90 Hz): never below zero.
+float fluidThinnedRadius(uint regime, float r, float dt, float mu, float rho, float gamma, float relaxation)
+{
+    if (regime == FLUID_REGIME_ELASTO)
+        return r * exp(-dt / (3.0 * max(relaxation, 1e-6)));
+    if (regime == FLUID_REGIME_VISCO)
+        return max(r - FLUID_VISCO_CAPILLARY * gamma / max(mu, 1e-6) * dt, 0.0);
+    // inertio-capillary: r^(3/2) falls linearly
+    float k = 1.5 * FLUID_INERTIO_CAPILLARY * sqrt(gamma / max(rho, 1e-20));
+    float r32 = pow(max(r, 0.0), 1.5) - k * dt;
+    return r32 > 0.0 ? pow(r32, 2.0 / 3.0) : 0.0;
+}
+
+// The volume a link of length l loses going from r0 to r1, m3; each end gets half, capped by the caller at
+// FLUID_MAX_VOLUME_MOVE of that end's volume.
+float fluidLinkVolumeLoss(float r0, float r1, float l)
+{
+    return FLUID_PI * (r0 * r0 - r1 * r1) * l;
+}
+
+// Fixed point for the accumulators: int32 nanolitres, about +-2.1 L.
+int fluidToNanolitres(float cubicMetres)
+{
+    return int(round(cubicMetres * FLUID_NANOLITRES_PER_CUBIC_METRE));
+}
+
+float fluidFromNanolitres(int nl)
+{
+    return float(nl) / FLUID_NANOLITRES_PER_CUBIC_METRE;
+}
+
+// The drawn radius of a strand particle: its volume spread along half its links, never past half a spacing.
+float fluidStrandRadius(float volume, float halfLinkLength, float spacing)
+{
+    return min(sqrt(volume / (FLUID_PI * max(halfLinkLength, 1e-9))), 0.5 * spacing);
+}
+
+#endif

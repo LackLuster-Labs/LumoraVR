@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://7afbjpe0at14"
+path="res://.godot/imported/FluidLedgerReconcile.glsl-d1ecec51bb1c168491547c37f81e205e.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidLedgerReconcile.glsl"
+dest_files=["res://.godot/imported/FluidLedgerReconcile.glsl-d1ecec51bb1c168491547c37f81e205e.res"]
+
+[params]
+

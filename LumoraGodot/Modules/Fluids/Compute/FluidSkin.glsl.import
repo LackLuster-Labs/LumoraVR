@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dnythkg6lpbu3"
+path="res://.godot/imported/FluidSkin.glsl-18b5307aae935f9ecef14d820ea63ead.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSkin.glsl"
+dest_files=["res://.godot/imported/FluidSkin.glsl-18b5307aae935f9ecef14d820ea63ead.res"]
+
+[params]
+

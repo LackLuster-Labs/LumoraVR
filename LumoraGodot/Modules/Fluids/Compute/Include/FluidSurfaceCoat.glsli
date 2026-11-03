@@ -1,0 +1,94 @@
+// Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
+// Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
+
+// Live skin coats follow their posed contact plane. The oblate map has determinant one, so it changes shape
+// without adding field mass. Tubes use the same drawn centre while their lengths keep the solver positions. -xlinka
+#ifndef FLUID_SURFACE_COAT_GLSLI
+#define FLUID_SURFACE_COAT_GLSLI
+
+layout(set = 0, binding = 27, std430) readonly buffer SurfaceAnchorBuffer { FluidAnchor surfaceAnchors[]; };
+layout(set = 0, binding = 28, std430) readonly buffer SurfaceHeaderBuffer { FluidFrameHeader surfaceHeader; };
+layout(set = 0, binding = 29, std430) readonly buffer SurfacePeopleBuffer { FluidPersonRecord surfacePeople[]; };
+layout(set = 0, binding = 30, std430) readonly buffer SurfaceContactBuffer { uint surfaceContacts[]; };
+layout(set = 0, binding = 31, std430) readonly buffer SurfaceSkinBuffer { FluidSkinnedVertex surfaceSkin[]; };
+layout(set = 0, binding = 32, std430) readonly buffer SurfaceFrameBuffer { FluidFrameRecord surfaceFrames[]; };
+
+vec3 fluidSurfSkinLocal(vec3 world, uint frame)
+{
+    if (frame != 0u)
+    {
+        FluidFrameRecord f = surfaceFrames[frame];
+        world = fluidToLocal(world, f.rotation, f.position, f.scale);
+    }
+    return fluidSurfToLocal(sp, world);
+}
+
+bool fluidSurfCoat(uint slot, FluidParticle p, out vec3 centre, out vec3 normal, out vec2 scales)
+{
+    centre = fluidSurfToLocal(sp, p.position);
+    normal = vec3(0.0, 1.0, 0.0);
+    scales = vec2(1.0);
+    if ((sp.flags & FLUID_SURF_SKIN_CONTACTS) == 0u)
+        return false;
+    if ((sp.flags & FLUID_SURF_BONDS_BY_SLOT) == 0u && slot >= sp.particleCount)
+        return false;
+    // The solver uploads these buffers with this validated header; stable ids are bounded by capacity. -xlinka
+    uint key = fluidSurfKey(slot);
+    if (key >= surfaceHeader.capacity)
+        return false;
+    FluidAnchor anchor = surfaceAnchors[key];
+    if ((anchor.kindAge & FLUID_ANCHOR_KIND_MASK) != FLUID_ANCHOR_SKIN)
+        return false;
+    uint person = anchor.target >> 8;
+    if (person >= surfaceHeader.people)
+        return false;
+    FluidPersonRecord owner = surfacePeople[person];
+    uint triangleCount = surfaceHeader.contactTriangles;
+    if (anchor.triangle >= owner.triangleCount || owner.triangleStart >= triangleCount
+        || anchor.triangle >= triangleCount - owner.triangleStart)
+        return false;
+    uint triangle = owner.triangleStart + anchor.triangle;
+    uvec3 vertices = uvec3(surfaceContacts[triangle * 3u], surfaceContacts[triangle * 3u + 1u], surfaceContacts[triangle * 3u + 2u]);
+    if (any(greaterThanEqual(vertices, uvec3(surfaceHeader.contactVertices))))
+        return false;
+    uint frame = fluidFrameOf(p.material);
+    if (frame != 0u && frame >= surfaceHeader.frames)
+        return false;
+    vec3 a = fluidSurfSkinLocal(surfaceSkin[vertices.x].position, frame);
+    vec3 b = fluidSurfSkinLocal(surfaceSkin[vertices.y].position, frame);
+    vec3 c = fluidSurfSkinLocal(surfaceSkin[vertices.z].position, frame);
+    vec3 n = cross(b - a, c - a);
+    float n2 = dot(n, n);
+    if (!(n2 > 1e-20) || any(isnan(n)) || any(isinf(n)))
+        return false;
+    vec3 contact = a * (1.0 - anchor.point.x - anchor.point.y) + b * anchor.point.x + c * anchor.point.y;
+    if (any(isnan(contact)) || any(isinf(contact)))
+        return false;
+    normal = n * inversesqrt(n2);
+    scales = vec2(FLUID_SPREAD_MAX, 1.0 / (FLUID_SPREAD_MAX * FLUID_SPREAD_MAX));
+    // Compress the existing surface offset too, so flattening cannot leave the coat suspended above skin. -xlinka
+    centre -= normal * dot(centre - contact, normal) * (1.0 - scales.y);
+    return true;
+}
+
+vec3 fluidSurfDrawPosition(uint slot, FluidParticle p)
+{
+    vec3 centre, normal;
+    vec2 scales;
+    fluidSurfCoat(slot, p, centre, normal, scales);
+    return centre;
+}
+
+vec3 fluidSurfCoatReach(vec3 normal, vec2 scales)
+{
+    vec3 n2 = normal * normal;
+    return sqrt(max(vec3(scales.x * scales.x) * (vec3(1.0) - n2) + vec3(scales.y * scales.y) * n2, vec3(0.0)));
+}
+
+float fluidSurfCoatDistance(vec3 delta, vec3 normal, vec2 scales)
+{
+    float height = dot(delta, normal);
+    vec3 tangent = delta - normal * height;
+    return dot(tangent, tangent) / (scales.x * scales.x) + height * height / (scales.y * scales.y);
+}
+#endif

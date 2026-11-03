@@ -1,0 +1,340 @@
+// Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
+// Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
+
+// Bonded neighbourhoods reconstruct sheets in their own plane. Sampling can widen a subcell normal,
+// then the surface maps back to physical thickness. Each kernel retains its assigned volume integral. -xlinka
+#ifndef FLUID_SURFACE_SHAPE_GLSLI
+#define FLUID_SURFACE_SHAPE_GLSLI
+
+struct FluidSurfaceShapeRecord
+{
+    vec4 centreWeight;
+    vec4 axis0Radius;
+    vec4 axis1Radius;
+    vec4 axis2Radius;
+    vec4 trailCompression;
+    uvec4 account;
+    vec4 allocation;
+    uvec4 state;
+    vec4 seedNormalWidth;
+    vec4 seedTangentLength;
+};
+layout(set = 0, binding = 17, std430) buffer SurfaceShapeBuffer { FluidSurfaceShapeRecord surfaceShapes[]; };
+#define FLUID_SURF_SHAPE_FIELD 1u
+#define FLUID_SURF_SHAPE_FILM 2u
+#define FLUID_SURF_SHAPE_VALID 4u
+#define FLUID_SURF_VOLUME_SCALE 16777216.0
+#define FLUID_SURF_LENGTH_SCALE 1000000.0
+
+bool fluidSurfNeighbour(FluidParticle p, uint id, out uint slot)
+{
+    slot = fluidSurfSlotOf(id);
+    if (slot == FLUID_NONE || slot >= FLUID_SURF_LIVE) return false;
+    FluidParticle q = particles[slot];
+    uint phase = fluidPhaseOf(q.phase);
+    return phase != FLUID_PHASE_DEAD && phase != FLUID_PHASE_SPRAY
+        && (q.material & 0x00ffffffu) == (p.material & 0x00ffffffu)
+        && !fluidSurfOriginHidden(sp, fluidOriginOf(q.material));
+}
+
+void fluidSurfRotate(inout mat3 covariance, inout mat3 basis, int a, int b)
+{
+    float off = covariance[a][b];
+    if (abs(off) <= 1e-12 * max(covariance[a][a] + covariance[b][b], 1e-20)) return;
+    float tau = (covariance[b][b] - covariance[a][a]) / (2.0 * off);
+    float t = (tau >= 0.0 ? 1.0 : -1.0) / (abs(tau) + sqrt(1.0 + tau * tau));
+    float c = inversesqrt(1.0 + t * t);
+    float s = t * c;
+    mat3 rotation = mat3(1.0);
+    rotation[a][a] = c; rotation[b][b] = c;
+    rotation[a][b] = -s; rotation[b][a] = s;
+    covariance = transpose(rotation) * covariance * rotation;
+    basis = basis * rotation;
+}
+
+// A plane seed is measured at the branch itself, never at a remote strand endpoint. -xlinka
+bool fluidSurfPlaneSeed(uint slot, FluidParticle p, out mat3 axes, out vec2 reach, out float ratio, out uint count)
+{
+    mat3 covariance = mat3(0.0);
+    count = 0u;
+    uint base = fluidSurfBondBase(slot);
+    for (uint k = 0u; k < sp.bondSlots; k++)
+    {
+        uint other;
+        if (!fluidSurfNeighbour(p, bonds[base + k].partner, other)) continue;
+        vec3 d = fluidSurfDirToLocal(sp, particles[other].position - p.position);
+        covariance += outerProduct(d, d);
+        count++;
+    }
+    axes = mat3(1.0);
+    reach = vec2(sp.splatRadius);
+    ratio = 1.0;
+    if (count < 3u) return false;
+    covariance /= float(count);
+    for (uint sweep = 0u; sweep < 4u; sweep++)
+    {
+        fluidSurfRotate(covariance, axes, 0, 1);
+        fluidSurfRotate(covariance, axes, 0, 2);
+        fluidSurfRotate(covariance, axes, 1, 2);
+    }
+    vec3 eigen = max(vec3(covariance[0][0], covariance[1][1], covariance[2][2]), vec3(0.0));
+    for (int a = 0; a < 2; a++)
+    for (int b = a + 1; b < 3; b++)
+    {
+        if (eigen[b] <= eigen[a]) continue;
+        float value = eigen[a]; eigen[a] = eigen[b]; eigen[b] = value;
+        vec3 axis = axes[a]; axes[a] = axes[b]; axes[b] = axis;
+    }
+    float transverseFloor = sp.maxRadius * sp.maxRadius * 0.04;
+    if (eigen.y <= transverseFloor || eigen.x <= 1e-16) return false;
+    ratio = eigen.z / eigen.y;
+    axes[2] = normalize(cross(axes[0], axes[1]));
+    reach = max(vec2(sp.splatRadius * 0.5), sqrt(eigen.xy) * 2.828427125);
+    return ratio < 0.5;
+}
+
+uint fluidSurfDegree(uint slot)
+{
+    return surfaceShapes[slot].state.w >> 8;
+}
+
+bool fluidSurfBranchPlane(uint slot, out mat3 axes, out vec2 reach)
+{
+    FluidSurfaceShapeRecord record = surfaceShapes[slot];
+    vec3 normal = record.seedNormalWidth.xyz;
+    vec3 tangent = record.seedTangentLength.xyz;
+    axes = mat3(tangent, cross(normal, tangent), normal);
+    reach = vec2(record.seedTangentLength.w, record.seedNormalWidth.w);
+    if ((record.state.w & 1u) == 0u) return false;
+    if ((record.state.w & 2u) != 0u) return true;
+    vec3 sum = vec3(0.0);
+    uint matching = 0u;
+    uint base = fluidSurfBondBase(slot);
+    for (uint k = 0u; k < sp.bondSlots; k++)
+    {
+        uint other;
+        if (!fluidSurfNeighbour(particles[slot], bonds[base + k].partner, other)
+            || (surfaceShapes[other].state.w & 2u) == 0u) continue;
+        vec3 n = surfaceShapes[other].seedNormalWidth.xyz;
+        float same = dot(normal, n);
+        if (abs(same) < 0.8) continue;
+        sum += same < 0.0 ? -n : n;
+        matching++;
+    }
+    if (matching < 2u) return false;
+    normal = normalize(normal + sum / float(matching));
+    tangent = normalize(tangent - normal * dot(tangent, normal));
+    axes = mat3(tangent, cross(normal, tangent), normal);
+    return true;
+}
+
+uint fluidSurfWalkBranch(uint start, uint next, out float distanceSum)
+{
+    uint previous = start;
+    distanceSum = 0.0;
+    // This is a reconstruction search, not a particle or simulation limit. Longer unresolved chains stay tubes. -xlinka
+    for (uint step = 0u; step < 64u; step++)
+    {
+        if (next == start || next == FLUID_NONE) return FLUID_NONE;
+        distanceSum += distance(particles[previous].position, particles[next].position);
+        uint degree = fluidSurfDegree(next);
+        if (degree >= 3u) return next;
+        if (degree != 2u) return FLUID_NONE;
+        uint following = FLUID_NONE;
+        uint base = fluidSurfBondBase(next);
+        for (uint k = 0u; k < sp.bondSlots; k++)
+        {
+            uint other;
+            if (fluidSurfNeighbour(particles[next], bonds[base + k].partner, other) && other != previous)
+                following = other;
+        }
+        previous = next;
+        next = following;
+    }
+    return FLUID_NONE;
+}
+
+bool fluidSurfResolvedPlane(uint slot, out mat3 axes, out vec2 reach)
+{
+    if (fluidSurfBranchPlane(slot, axes, reach)) return true;
+    uint degree = fluidSurfDegree(slot);
+    if (degree == 0u || degree > 2u) return false;
+    uint neighbourSlots[2];
+    uint count = 0u;
+    uint base = fluidSurfBondBase(slot);
+    for (uint k = 0u; k < sp.bondSlots; k++)
+    {
+        uint other;
+        if (fluidSurfNeighbour(particles[slot], bonds[base + k].partner, other) && count < 2u)
+            neighbourSlots[count++] = other;
+    }
+    if (count == 0u) return false;
+    float lengthA = 0.0, lengthB = 0.0;
+    uint a = fluidSurfWalkBranch(slot, neighbourSlots[0], lengthA);
+    uint b = count == 2u ? fluidSurfWalkBranch(slot, neighbourSlots[1], lengthB) : FLUID_NONE;
+    mat3 axesA, axesB;
+    vec2 reachA, reachB;
+    bool planeA = a != FLUID_NONE && fluidSurfBranchPlane(a, axesA, reachA);
+    bool planeB = b != FLUID_NONE && fluidSurfBranchPlane(b, axesB, reachB);
+    if (planeA && planeB && a != b && abs(dot(axesA[2], axesB[2])) >= 0.7)
+    {
+        vec3 tangent = fluidSurfDirToLocal(sp, particles[neighbourSlots[1]].position - particles[neighbourSlots[0]].position);
+        if (dot(tangent, tangent) <= 1e-18) return false;
+        tangent = normalize(tangent);
+        vec3 normalB = dot(axesA[2], axesB[2]) < 0.0 ? -axesB[2] : axesB[2];
+        float mixB = lengthA / max(lengthA + lengthB, 1e-9);
+        vec3 normal = mix(axesA[2], normalB, mixB);
+        normal -= tangent * dot(normal, tangent);
+        if (dot(normal, normal) < 0.1) return false;
+        normal = normalize(normal);
+        vec3 transverse = cross(normal, tangent);
+        float widthA = length(vec2(dot(transverse, axesA[0]), dot(transverse, axesA[1])) * reachA);
+        float widthB = length(vec2(dot(transverse, axesB[0]), dot(transverse, axesB[1])) * reachB);
+        float localLength = distance(particles[slot].position, particles[neighbourSlots[0]].position)
+            + distance(particles[slot].position, particles[neighbourSlots[1]].position);
+        axes = mat3(tangent, transverse, normal);
+        reach = max(vec2(localLength, mix(widthA, widthB, mixB)), vec2(sp.splatRadius * 0.5));
+        return true;
+    }
+    // Only the immediate root borrows a terminal flare; a dangling thread never becomes a remote sheet. -xlinka
+    if (planeA && a == neighbourSlots[0]) { axes = axesA; reach = reachA; return true; }
+    if (planeB && b == neighbourSlots[1]) { axes = axesB; reach = reachB; return true; }
+    return false;
+}
+
+bool fluidSurfFieldOwner(uint slot, FluidParticle p)
+{
+    return (surfaceShapes[slot].state.x & FLUID_SURF_SHAPE_FIELD) != 0u && surfaceShapes[slot].allocation.y > 0.0;
+}
+
+bool fluidSurfLinkInField(uint a, uint b)
+{
+    uint keyB = fluidSurfKey(b);
+    uint base = fluidSurfBondBase(a);
+    for (uint k = 0u; k < sp.bondSlots; k++)
+        if (bonds[base + k].partner == keyB) return (surfaceShapes[a].state.y & (1u << k)) != 0u;
+    uint keyA = fluidSurfKey(a);
+    base = fluidSurfBondBase(b);
+    for (uint k = 0u; k < sp.bondSlots; k++)
+        if (bonds[base + k].partner == keyA) return (surfaceShapes[b].state.y & (1u << k)) != 0u;
+    return false;
+}
+
+uint fluidSurfTubeChain(uint slot, vec3 x, out float lengthSum, out uint partnerA, out uint partnerB)
+{
+    lengthSum = float(surfaceShapes[slot].account.z) / FLUID_SURF_LENGTH_SCALE;
+    partnerA = FLUID_NONE;
+    partnerB = FLUID_NONE;
+    uint count = 0u;
+    uint base = fluidSurfBondBase(slot);
+    for (uint k = 0u; k < sp.bondSlots; k++)
+    {
+        FluidBond bond = bonds[base + k];
+        uint other;
+        if (!fluidSurfIsChain(bond) || !fluidSurfNeighbour(particles[slot], bond.partner, other)
+            || fluidSurfLinkInField(slot, other)) continue;
+        if (count == 0u) partnerA = other;
+        else if (count == 1u) partnerB = other;
+        count++;
+    }
+    return surfaceShapes[slot].account.y;
+}
+
+float fluidSurfTubeVolume(uint slot, FluidParticle p)
+{
+    return surfaceShapes[slot].allocation.x;
+}
+
+struct FluidSurfaceShape
+{
+    vec3 centre;
+    mat3 axes;
+    vec3 radius;
+    vec3 trail;
+    float weight;
+    float compression;
+    bool film;
+};
+
+FluidSurfaceShape fluidSurfInitialShape(uint slot, FluidParticle p)
+{
+    FluidSurfaceShape shape;
+    vec3 coatNormal;
+    vec2 coatScales;
+    bool coat = fluidSurfCoat(slot, p, shape.centre, coatNormal, coatScales);
+    shape.film = false;
+    shape.compression = 1.0;
+    shape.trail = vec3(0.0);
+    shape.weight = p.volume;
+    {
+
+        float alone = fluidSurfAlone(sp, p.phase);
+        vec3 velocity = fluidSurfDirToLocal(sp, p.velocity);
+        float spread = coat ? coatScales.x : fluidSurfSpread(alone, length(velocity));
+        vec3 normal = coat ? coatNormal : normalize(fluidSurfDirToLocal(sp, vec3(0.0, 1.0, 0.0)));
+        vec3 tangent = fluidAnyTangent(normal);
+        shape.axes = mat3(tangent, cross(normal, tangent), normal);
+        shape.radius = sp.splatRadius * vec3(spread, spread, coat ? coatScales.y : 1.0);
+        shape.trail = coat ? vec3(0.0) : fluidSurfTrail(sp, velocity, alone);
+        shape.weight *= (1.0 + 2.4 * alone) * mix(inversesqrt(1.0 + 1.231 * length(shape.trail) / sp.splatRadius), 1.0, alone);
+        // Existing spread keeps its original peak; a posed coat already has determinant one. -xlinka
+        if (!coat) shape.weight *= spread * spread;
+    }
+    return shape;
+}
+
+FluidSurfaceShape fluidSurfShape(uint slot, FluidParticle p)
+{
+    FluidSurfaceShapeRecord record = surfaceShapes[slot];
+    FluidSurfaceShape shape;
+    shape.centre = record.centreWeight.xyz;
+    shape.weight = record.centreWeight.w;
+    shape.axes = mat3(record.axis0Radius.xyz, record.axis1Radius.xyz, record.axis2Radius.xyz);
+    shape.radius = vec3(record.axis0Radius.w, record.axis1Radius.w, record.axis2Radius.w);
+    shape.trail = record.trailCompression.xyz;
+    shape.compression = record.trailCompression.w;
+    shape.film = (record.state.x & FLUID_SURF_SHAPE_FILM) != 0u;
+    return shape;
+}
+
+// Support changes are read after their own dispatch; every neighbour sees the same frozen shape. -xlinka
+FluidSurfaceShape fluidSurfSupportedShape(uint slot)
+{
+    FluidSurfaceShape shape = fluidSurfShape(slot, particles[slot]);
+    if (shape.film)
+    {
+        float factor = uintBitsToFloat(surfaceShapes[slot].state.z);
+        float height = max(shape.radius.z * shape.compression * factor, 1e-9);
+        shape.radius.z = max(height, 2.0 * sp.cellSize);
+        shape.compression = height / shape.radius.z;
+        shape.weight = particles[slot].volume / shape.compression;
+    }
+    return shape;
+}
+
+vec3 fluidSurfShapeReach(FluidSurfaceShape shape)
+{
+    vec3 a = shape.axes[0] * shape.radius.x;
+    vec3 b = shape.axes[1] * shape.radius.y;
+    vec3 c = shape.axes[2] * shape.radius.z;
+    return sqrt(a * a + b * b + c * c);
+}
+
+float fluidSurfShapeWeight(FluidSurfaceShape shape, vec3 position)
+{
+    vec3 d = position - shape.centre;
+    float trail2 = dot(shape.trail, shape.trail);
+    if (trail2 > 0.0) d -= shape.trail * clamp(dot(d, shape.trail) / trail2, 0.0, 1.0);
+    vec3 q = transpose(shape.axes) * d / shape.radius;
+    float t = max(1.0 - dot(q, q), 0.0);
+    return shape.weight * t * t * t / (0.63832 * shape.radius.x * shape.radius.y * shape.radius.z);
+}
+
+void fluidSurfShapeMap(FluidSurfaceShape shape, vec3 position, out mat3 compression, out vec3 displacement)
+{
+    vec3 normal = shape.axes[2];
+    compression = outerProduct(normal, normal) * (shape.compression - 1.0);
+    displacement = compression * ((position - shape.centre) / sp.cellSize);
+}
+
+#endif

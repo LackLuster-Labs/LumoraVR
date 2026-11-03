@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://bna30ue4da8t7"
+path="res://.godot/imported/FluidStepSmall.glsl-0b1f966d22ad9d7eef1a5f8229060d64.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidStepSmall.glsl"
+dest_files=["res://.godot/imported/FluidStepSmall.glsl-0b1f966d22ad9d7eef1a5f8229060d64.res"]
+
+[params]
+

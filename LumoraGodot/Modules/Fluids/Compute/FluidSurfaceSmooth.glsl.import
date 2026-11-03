@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://cetqtfxt4yxks"
+path="res://.godot/imported/FluidSurfaceSmooth.glsl-cca409929b7e2ab87daa7d74b3fa14e2.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSurfaceSmooth.glsl"
+dest_files=["res://.godot/imported/FluidSurfaceSmooth.glsl-cca409929b7e2ab87daa7d74b3fa14e2.res"]
+
+[params]
+

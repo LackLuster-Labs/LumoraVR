@@ -1,0 +1,77 @@
+// Copyright (c) 2026 LUMORAVR LTD. All rights reserved.
+// Licensed under the LumoraVR Source Available License. See LICENSE in the project root.
+
+// Strand reads shared by the surface kernels, included after the kernel has declared its params, particles and
+// bond buffers (FLUID_SURF_DECLARE_PARAMS, _PARTICLES, _BONDS). A strand particle's drawn radius is
+// r = min(sqrt(V / (pi l)), d / 2) with l half the summed length of its chain links (plan 2.5), so a tube drawn
+// at r around each particle holds that particle's volume. -xlinka
+
+#ifndef FLUID_SURFACE_STRAND_GLSLI
+#define FLUID_SURFACE_STRAND_GLSLI
+
+// What per-particle state is keyed on: the stable id, as the solver keeps bonds and accumulators, or the slot for a
+// source that stores them by slot.
+uint fluidSurfKey(uint slot)
+{
+    return (sp.flags & FLUID_SURF_BONDS_BY_SLOT) != 0u ? slot : ids[slot];
+}
+
+uint fluidSurfBondBase(uint slot)
+{
+    return fluidSurfKey(slot) * sp.bondSlots;
+}
+
+bool fluidSurfIsChain(FluidBond b)
+{
+    return b.partner != FLUID_NONE && (b.strainFlags & FLUID_BOND_CHAIN) != 0u;
+}
+
+uint fluidSurfSlotOf(uint id)
+{
+    return id == FLUID_NONE ? FLUID_NONE : idToSlot[id];
+}
+
+// Chain links of a particle: their count, their summed length, and up to two partner slots.
+uint fluidSurfChain(uint slot, vec3 x, out float lengthSum, out uint partnerA, out uint partnerB)
+{
+    lengthSum = 0.0;
+    partnerA = FLUID_NONE;
+    partnerB = FLUID_NONE;
+    uint count = 0u;
+    uint base = fluidSurfBondBase(slot);
+    for (uint k = 0u; k < sp.bondSlots; k++)
+    {
+        FluidBond b = bonds[base + k];
+        if (!fluidSurfIsChain(b))
+            continue;
+        uint other = fluidSurfSlotOf(b.partner);
+        if (other == FLUID_NONE)
+            continue;
+        lengthSum += length(particles[other].position - x);
+        if (count == 0u)
+            partnerA = other;
+        else if (count == 1u)
+            partnerB = other;
+        count++;
+    }
+    return count;
+}
+
+float fluidSurfStrandRadius(float volume, float lengthSum, uint chainCount)
+{
+    if (chainCount == 0u)
+        return sp.maxRadius;
+    float l = max(lengthSum * 0.5, 1e-6);
+    return min(sqrt(max(volume, 0.0) / (FLUID_PI * l)), sp.maxRadius);
+}
+
+// Shared source filtering; shape ownership decides whether any volume remains in the field. -xlinka
+bool fluidSurfSplats(uint slot, FluidParticle p)
+{
+    uint phase = fluidPhaseOf(p.phase);
+    return phase != FLUID_PHASE_DEAD && phase != FLUID_PHASE_SPRAY
+        && (sp.system == FLUID_NONE || fluidSystemOf(p.material) == sp.system)
+        && !fluidSurfOriginHidden(sp, fluidOriginOf(p.material));
+}
+
+#endif

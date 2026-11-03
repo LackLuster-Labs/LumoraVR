@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://h2ceo6bdo6t3"
+path="res://.godot/imported/FluidPredictCollide.glsl-8c0d287d51bf55e2af35354fce9c6635.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidPredictCollide.glsl"
+dest_files=["res://.godot/imported/FluidPredictCollide.glsl-8c0d287d51bf55e2af35354fce9c6635.res"]
+
+[params]
+

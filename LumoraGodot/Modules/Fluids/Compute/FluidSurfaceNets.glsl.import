@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://dk411crtffj5t"
+path="res://.godot/imported/FluidSurfaceNets.glsl-a3c31905bd52fb828a4b1f3031a761ce.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSurfaceNets.glsl"
+dest_files=["res://.godot/imported/FluidSurfaceNets.glsl-a3c31905bd52fb828a4b1f3031a761ce.res"]
+
+[params]
+

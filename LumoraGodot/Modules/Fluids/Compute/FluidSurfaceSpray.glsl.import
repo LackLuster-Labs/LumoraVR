@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://du3thl7v042jo"
+path="res://.godot/imported/FluidSurfaceSpray.glsl-c23df065c82bf942c44467ea9919c0ab.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidSurfaceSpray.glsl"
+dest_files=["res://.godot/imported/FluidSurfaceSpray.glsl-c23df065c82bf942c44467ea9919c0ab.res"]
+
+[params]
+

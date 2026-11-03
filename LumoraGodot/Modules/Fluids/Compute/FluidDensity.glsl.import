@@ -1,0 +1,14 @@
+[remap]
+
+importer="glsl"
+type="RDShaderFile"
+uid="uid://b7on2hptcrg4t"
+path="res://.godot/imported/FluidDensity.glsl-02a11c71d0f9aa9babb3c8d2905f2a4d.res"
+
+[deps]
+
+source_file="res://Modules/Fluids/Compute/FluidDensity.glsl"
+dest_files=["res://.godot/imported/FluidDensity.glsl-02a11c71d0f9aa9babb3c8d2905f2a4d.res"]
+
+[params]
+
