@@ -15,7 +15,10 @@ public static class WorldStorage
     public static byte[] Serialize(World world) => DataTreeConverter.SaveToBytes(world.SaveWorld());
 
     public static void Deserialize(World world, byte[] bytes)
-        => world.LoadWorld((DataTreeDictionary)DataTreeConverter.LoadFromBytes(bytes));
+    {
+        world.LoadWorld((DataTreeDictionary)DataTreeConverter.LoadFromBytes(bytes));
+        ObjectAssetHolders.SweepRoot(world);
+    }
 
     // Write the world to path, creating directories as needed. When encrypt is set the blob is AES-GCM
     // encrypted at rest (saved worlds / inventory). The local home is left plain so it loads at startup
@@ -46,7 +49,7 @@ public static class WorldStorage
             File.WriteAllBytes(temp, bytes);
             File.Move(temp, path, overwrite: true);
             CloudAssetPacker.KeepLocalFiles(tree, Engine.Current?.LocalDB);
-            WriteThumbnailSidecar(path);
+            WriteThumbnailSidecar(path, encrypt);
             return true;
         }
         catch (Exception ex)
@@ -64,7 +67,8 @@ public static class WorldStorage
     // means no sidecar and the card falls back to its placeholder art. -xlinka
     public static string ThumbnailSidecarPath(string savePath) => savePath + ".jpg";
 
-    private static void WriteThumbnailSidecar(string path)
+    // An encrypted save gets its picture sealed too; the local home's stays plain like the home itself.
+    private static void WriteThumbnailSidecar(string path, bool encrypt)
     {
         try
         {
@@ -72,7 +76,15 @@ public static class WorldStorage
             if (input == null || !input.TryCaptureWorldView(ThumbnailWidth, ThumbnailHeight, out var jpeg)
                 || jpeg == null || jpeg.Length == 0)
                 return;
-            File.WriteAllBytes(ThumbnailSidecarPath(path), jpeg);
+            if (encrypt)
+            {
+                LocalEncryption.WireSealedStorage();
+                Lumora.Nexus.Storage.SealedFile.WriteAllBytes(ThumbnailSidecarPath(path), jpeg);
+            }
+            else
+            {
+                File.WriteAllBytes(ThumbnailSidecarPath(path), jpeg);
+            }
         }
         catch (Exception ex)
         {
@@ -121,6 +133,8 @@ public static class WorldStorage
         {
             if (!whole)
                 LumoraLogger.Error($"WorldStorage: failed to load from '{path}'");
+            else
+                ObjectAssetHolders.SweepRoot(world);
             whenDone?.Invoke(whole);
         });
     }
@@ -134,6 +148,7 @@ public static class WorldStorage
         try
         {
             world.LoadWorld(tree);
+            ObjectAssetHolders.SweepRoot(world);
             return true;
         }
         catch (Exception ex)
