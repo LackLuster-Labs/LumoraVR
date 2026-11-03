@@ -45,6 +45,7 @@ public static class LocaleManager
     public const string SettingsKey = "Engine.Interface.Locale";
 
     private const string LocaleFolder = "Locale";
+    private const string BuiltInPrefix = "Lumora.Locale.";
 
     private static readonly object _lock = new();
     private static readonly Dictionary<string, Dictionary<string, string>> _tables =
@@ -82,8 +83,7 @@ public static class LocaleManager
         }
     }
 
-    // Extra directory to scan for <code>.json. The runner points this at the shipped Assets/Locale
-    // folder; a harness points it wherever it wrote its fixtures.
+    // Extra directory to scan for <code>.json; a test points it wherever it wrote its fixtures.
     public static void AddSearchPath(string? directory)
     {
         if (string.IsNullOrWhiteSpace(directory))
@@ -237,6 +237,7 @@ public static class LocaleManager
 
             foreach (var directory in ResolveDirectories())
                 LoadDirectory(directory);
+            LoadBuiltIn();
 
             if (!_tables.ContainsKey(BaseLocale))
                 _tables[BaseLocale] = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -282,9 +283,35 @@ public static class LocaleManager
         for (int i = 0; i < _searchPaths.Count; i++)
             yield return _searchPaths[i];
 
+        // The source tree's Locale folder beside the game project, so an edited table shows on the next reload
+        // without a rebuild. An export has no such folder and gets the built-in copies instead.
         var root = Engine.Current?.ResourceRoot;
         if (!string.IsNullOrWhiteSpace(root))
-            yield return Path.Combine(root!, "Assets", LocaleFolder);
+            yield return Path.Combine(root!, "..", LocaleFolder);
+    }
+
+    // The repo's Locale/*.json are built into this assembly, so every platform and every export carries them
+    // with no file to find. Loaded after the folders: first-wins per key, so a dropped-in file still beats them.
+    private static void LoadBuiltIn()
+    {
+        var assembly = typeof(LocaleManager).Assembly;
+        foreach (var name in assembly.GetManifestResourceNames())
+        {
+            if (!name.StartsWith(BuiltInPrefix, StringComparison.Ordinal) || !name.EndsWith(".json", StringComparison.OrdinalIgnoreCase))
+                continue;
+            try
+            {
+                using var stream = assembly.GetManifestResourceStream(name);
+                if (stream == null)
+                    continue;
+                using var reader = new StreamReader(stream);
+                Ingest(reader.ReadToEnd(), name.Substring(BuiltInPrefix.Length, name.Length - BuiltInPrefix.Length - 5));
+            }
+            catch (Exception ex)
+            {
+                Logger.Warn($"LocaleManager: built-in table '{name}' did not load: {ex.Message}");
+            }
+        }
     }
 
     private static void LoadDirectory(string directory)
