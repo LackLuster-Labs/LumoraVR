@@ -1,0 +1,13 @@
+<Project>
+    <PropertyGroup>
+        <Windows>false</Windows>
+        <Linux>false</Linux>
+        <Unix>false</Unix>
+        <android>false</android>
+        <Mobile>false</Mobile>
+        <Web>false</Web>
+        <Desktop>true</Desktop>
+    </PropertyGroup>
+    <Import Condition="'$(GodotTargetPlatform)' != ''" Project="GodotPlatformDefines.props" />
+    <Import Condition="'$(GodotTargetPlatform)' == ''" Project="StandardPlatformDetect.props" />
+</Project>

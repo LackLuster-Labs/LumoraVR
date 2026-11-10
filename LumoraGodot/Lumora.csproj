@@ -4,36 +4,27 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <LangVersion>preview</LangVersion>
     <Nullable>enable</Nullable>
+    <UseAppLocalIcu>false</UseAppLocalIcu>
   </PropertyGroup>
-  <ItemGroup>
-    <PackageReference Include="DiscordRichPresence" Version="1.2.1.24" />
-    <PackageReference Include="Steamworks.NET" Version="2024.8.0" Condition="'$(GodotTargetPlatform)' != 'android' And '$(GodotTargetPlatform)' != 'ios'" />
-    <PackageReference Include="LiteNetLib" Version="2.0.2" />
-    <!-- libvlc natives for the desktop video backend. The Windows package drops libvlc/win-x64 next to
-         the assemblies; Linux has no package, so tools/libvlc_linux.py builds the bundle below. -xlinka -->
-    <PackageReference Include="LibVLCSharp" Version="3.10.1" Condition="'$(GodotTargetPlatform)' != 'android' And '$(GodotTargetPlatform)' != 'ios'" />
-    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" Condition="'$(GodotTargetPlatform)' != 'android' And '$(GodotTargetPlatform)' != 'ios'" />
-  </ItemGroup>
-  <!-- The libvlc package ships x64, x86 and arm64 side by side, 284 MB of natives of which an export
-       can only ever load one set. Everything but the architecture being built is switched off; the
-       package's own targets only fill these in when they are still empty. -xlinka -->
-  <PropertyGroup Condition="'$(GodotTargetPlatform)' != 'android' And '$(GodotTargetPlatform)' != 'ios'">
+  <PropertyGroup>
     <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
     <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
   </PropertyGroup>
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' And $(RuntimeIdentifier.Contains('arm64'))">
-    <VlcWindowsArm64Enabled>true</VlcWindowsArm64Enabled>
-    <VlcWindowsX64Enabled>false</VlcWindowsX64Enabled>
-  </PropertyGroup>
-  <!-- A Linux export carried 102 MB of Windows natives it can never load. -xlinka -->
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' != '' And $(RuntimeIdentifier.StartsWith('linux'))">
-    <VlcWindowsX64Enabled>false</VlcWindowsX64Enabled>
-    <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
-  </PropertyGroup>
+  <Import Project="../MsbuildProps/AutoDetactPlatformDefines.props"/>
+  <Import Project="../MsbuildProps/DetectWindowsVlcNatives.props" Condition="$(Windows)"/>
+  <ItemGroup>
+    <PackageReference Include="DiscordRichPresence" Version="1.2.1.24" />
+    <PackageReference Include="Steamworks.NET" Version="2024.8.0" Condition="$(Desktop)" />
+    <PackageReference Include="LiteNetLib" Version="2.0.2" />
+    <!-- libvlc natives for the desktop video backend. The Windows package drops libvlc/win-x64 next to
+         the assemblies; Linux has no package, so tools/libvlc_linux.py builds the bundle below. -xlinka -->
+    <PackageReference Include="LibVLCSharp" Version="3.10.1" Condition="$(Desktop)" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.23.1" Condition="$(Windows)" />
+  </ItemGroup>
   <!-- The Linux libvlc bundle (python tools/libvlc_linux.py) rides in data_*/libvlc/linux-x64. Players
        on SteamOS, the Frame and most distros have no libvlc to fall back on, so a Linux export without
        it plays nothing but Theora. -xlinka -->
-  <ItemGroup Condition="'$(RuntimeIdentifier)' == 'linux-x64' And Exists('..\.natives\libvlc-linux-x64\lib\libvlc.so.5')">
+  <ItemGroup Condition="$(Linux) And Exists('..\.natives\libvlc-linux-x64\lib\libvlc.so.5')">
     <None Include="..\.natives\libvlc-linux-x64\**" LinkBase="libvlc\linux-x64" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
   </ItemGroup>
   <ItemGroup>
@@ -63,7 +54,7 @@
   </PropertyGroup>
   <!-- for steam rt 4 builds -->
   <!-- run with env vars UseAppLocalIcu=true IcuVersion="72.1.0.3" replace with current version -->
-  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Linux')) And '$(UseAppLocalIcu)' == 'true'">
+  <ItemGroup Condition="$(Linux) And $(UseAppLocalIcu) And '$(IcuVersion)' != ''">
     <PackageReference Include="Microsoft.ICU.ICU4C.Runtime" Version="$(IcuVersion)" />
     <RuntimeHostConfigurationOption Include="System.Globalization.AppLocalIcu" Value="$(IcuVersion)" />
   </ItemGroup>
@@ -91,24 +82,11 @@
   <!-- The Steam native redistributables ride the build AND the publish output: an export copies the publish
        output into its data folder, where the runtime looks for them. Copied only on build, every export
        shipped without them and Steam never started outside the editor. -->
-  <ItemGroup Condition="'$(GodotTargetPlatform)' != 'android' And '$(GodotTargetPlatform)' != 'ios'">
+  <ItemGroup Condition="$(Linux)">
     <None Remove="steam_api64.dll;libsteam_api.so" />
     <None Include="steam_api64.dll" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"
           Condition="Exists('steam_api64.dll') And ('$(RuntimeIdentifier)' == '' Or $(RuntimeIdentifier.StartsWith('win')))" />
     <None Include="libsteam_api.so" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest"
           Condition="Exists('libsteam_api.so') And ('$(RuntimeIdentifier)' == '' Or $(RuntimeIdentifier.StartsWith('linux')))" />
   </ItemGroup>
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''"> 
-    <DefineConstants Condition="$(RuntimeIdentifier.Contains('linux'))">$(DefineConstants);LINUX</DefineConstants>
-    <DefineConstants Condition="$(RuntimeIdentifier.Contains('osx')) Or $(RuntimeIdentifier.Contains('mac'))">$(DefineConstants);OSX</DefineConstants>
-    <DefineConstants Condition="$(RuntimeIdentifier.Contains('win'))">$(DefineConstants);WINDOWS</DefineConstants>
-    <!-- Android had no define at all, so a build-time platform check could not be written for the one
-         platform that most needs different code. Godot exports Android as linux-bionic RIDs. -xlinka -->
-    <DefineConstants Condition="$(RuntimeIdentifier.Contains('android')) Or $(RuntimeIdentifier.Contains('bionic'))">$(DefineConstants);ANDROID</DefineConstants>
-  </PropertyGroup> 
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' == ''">
-    <DefineConstants Condition="$([MSBuild]::IsOsPlatform('Linux'))">$(DefineConstants);LINUX</DefineConstants>
-    <DefineConstants Condition="$([MSBuild]::IsOsPlatform('OSX'))">$(DefineConstants);OSX</DefineConstants>
-    <DefineConstants Condition="$([MSBuild]::IsOsPlatform('Windows'))">$(DefineConstants);WINDOWS</DefineConstants>
-  </PropertyGroup>
 </Project>
