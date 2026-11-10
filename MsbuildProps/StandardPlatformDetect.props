@@ -1,0 +1,4 @@
+<Project>
+<Import Condition="'$(RuntimeIdentifier)' != ''" Project="StandardPlatformDetectRID.props"/>
+<Import Condition="'$(RuntimeIdentifier)' == ''" Project="StandardPlatformDetectNoRID.props"/>
+</Project>

@@ -1,0 +1,34 @@
+<Project>
+    <PropertyGroup Condition="$(RuntimeIdentifier.Contains('linux'))">
+        <Unix>true</Unix>
+        <Linux>true</Linux>
+        <DefineConstants>$(DefineConstants);LINUX</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup
+        Condition="$(RuntimeIdentifier.Contains('osx')) Or $(RuntimeIdentifier.Contains('mac'))">
+        <Unix>true</Unix>
+        <macOS>true</macOS>
+        <DefineConstants>$(DefineConstants);OSX</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="$(RuntimeIdentifier.Contains('win'))">
+        <Windows>true</Windows>
+        <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+    </PropertyGroup>
+    <!-- Android had no define at all, so a build-time platform check could not be written for the
+    one
+         platform that most needs different code. Godot exports Android as linux-bionic RIDs. -xlinka -->
+    <PropertyGroup
+        Condition="$(RuntimeIdentifier.Contains('android')) Or $(RuntimeIdentifier.Contains('bionic'))">
+        <android>True</android>
+        <Mobile>true</Mobile>
+        <Desktop>false</Desktop>
+        <DefineConstants>$(DefineConstants);ANDROID</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup
+        Condition="$(RuntimeIdentifier.Contains('ios'))">
+        <android>True</android>
+        <Mobile>true</Mobile>
+        <Desktop>false</Desktop>
+        <DefineConstants>$(DefineConstants);ANDROID</DefineConstants>
+    </PropertyGroup>
+</Project>

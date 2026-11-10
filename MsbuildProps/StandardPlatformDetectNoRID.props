@@ -1,0 +1,16 @@
+<Project>
+    <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('Linux'))">
+        <Unix>true</Unix>
+        <Linux>true</Linux>
+        <DefineConstants>$(DefineConstants);LINUX</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('OSX'))">
+        <Unix>true</Unix>
+        <macOS>true</macOS>
+        <DefineConstants>$(DefineConstants);OSX</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="$([MSBuild]::IsOsPlatform('Windows'))">
+        <Windows>true</Windows>
+        <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+    </PropertyGroup>
+</Project>

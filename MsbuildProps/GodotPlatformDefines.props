@@ -1,0 +1,43 @@
+<Project>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'Windows'">
+        <Windows>true</Windows>
+        <DefineConstants>$(DefineConstants);WINDOWS</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'macOS'">
+        <Unix>true</Unix>
+        <macOS>true</macOS>
+        <DefineConstants>$(DefineConstants);OSX</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'Linux' Or '$(GodotTargetPlatform)' =='linuxbsd'">
+        <Linux>true</Linux>
+        <Unix>true</Unix>
+        <DefineConstants>$(DefineConstants);LINUX</DefineConstants>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'FreeBSD'">
+        <Unix>true</Unix>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'NetBSD'">
+        <Unix>true</Unix>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'BSD'">
+        <Unix>true</Unix>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Unix)' == 'true'">
+
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'Android'">
+        <android>true</android>
+        <DefineConstants>$(DefineConstants);ANDROID</DefineConstants>
+        <Mobile>true</Mobile>
+        <Desktop>false</Desktop>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'iOS'">
+        <macOS>true</macOS>
+        <iOS>true</iOS>
+        <Mobile>true</Mobile>
+        <Desktop>false</Desktop>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(GodotTargetPlatform)' == 'Web'">
+        <Web>true</Web>
+    </PropertyGroup>
+</Project>

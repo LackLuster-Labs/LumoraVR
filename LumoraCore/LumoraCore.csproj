@@ -19,7 +19,8 @@
 
   <ItemGroup>
     <!-- NO Godot dependencies - platform-agnostic only -->
-    <!-- At least what the social hub client in LumoraNexus asks for, or restore calls it a downgrade. -->
+    <!-- At least what the social hub client in LumoraNexus asks for, or restore calls it a
+    downgrade. -->
     <PackageReference Include="System.Threading.Channels" Version="9.0.21" />
     <PackageReference Include="K4os.Compression.LZ4" Version="1.3.8" />
     <PackageReference Include="StbImageSharp" Version="2.30.15" />
@@ -36,18 +37,10 @@
     <ProjectReference Include="..\LumoraShading\LumoraShading.csproj" />
   </ItemGroup>
 
-  <!-- Every language table in the repo's Locale folder, so a new <code>.json there ships with no other change. -->
+  <!-- Every language table in the repo's Locale folder, so a new <code>.json there ships with no
+  other change. -->
   <ItemGroup>
     <EmbeddedResource Include="..\Locale\*.json" LogicalName="Lumora.Locale.%(Filename)%(Extension)" />
   </ItemGroup>
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' != ''"> 
-    <DefineConstants Condition="$(RuntimeIdentifier.Contains('linux'))">$(DefineConstants);LINUX</DefineConstants>
-    <DefineConstants Condition="$(RuntimeIdentifier.Contains('osx')) Or $(RuntimeIdentifier.Contains('mac'))">$(DefineConstants);OSX</DefineConstants>
-    <DefineConstants Condition="$(RuntimeIdentifier.Contains('win'))">$(DefineConstants);WINDOWS</DefineConstants>
-  </PropertyGroup> 
-  <PropertyGroup Condition="'$(RuntimeIdentifier)' == ''">
-    <DefineConstants Condition="$([MSBuild]::IsOsPlatform('Linux'))">$(DefineConstants);LINUX</DefineConstants>
-    <DefineConstants Condition="$([MSBuild]::IsOsPlatform('OSX'))">$(DefineConstants);OSX</DefineConstants>
-    <DefineConstants Condition="$([MSBuild]::IsOsPlatform('Windows'))">$(DefineConstants);WINDOWS</DefineConstants>
-  </PropertyGroup>
+  <Import Project="../MsbuildProps/AutoDetactPlatformDefines.props" />
 </Project>

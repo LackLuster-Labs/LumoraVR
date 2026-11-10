@@ -1,0 +1,14 @@
+<Project>
+    <PropertyGroup>
+        <VlcWindowsX86Enabled>false</VlcWindowsX86Enabled>
+        <VlcWindowsArm64Enabled>false</VlcWindowsArm64Enabled>
+        <DetectWindowsVlcNativesRuntimeIdentifier>$(RuntimeIdentifier)</DetectWindowsVlcNativesRuntimeIdentifier>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(DetectWindowsVlcNativesRuntimeIdentifier)' == ''">
+        <DetectWindowsVlcNativesRuntimeIdentifier>$([System.Runtime.InteropServices.RuntimeInformation]::RuntimeIdentifier)</DetectWindowsVlcNativesRuntimeIdentifier>
+    </PropertyGroup>
+    <PropertyGroup>
+    <VlcWindowsX86Enabled Condition="!$(DetectWindowsVlcNativesRuntimeIdentifier.Contains('arm64'))">true</VlcWindowsX86Enabled>
+    <VlcWindowsArm64Enabled Condition="$(DetectWindowsVlcNativesRuntimeIdentifier.Contains('arm64'))">true</VlcWindowsArm64Enabled>
+    </PropertyGroup>
+</Project>
